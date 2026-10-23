@@ -770,7 +770,10 @@
   // lose their 120px cap; hops past the column edge go behind the +N pill).
   let showFullNames = localStorage.getItem('meshcore-full-names') === 'true';
   let _colFit = null; // fitColumnsToContent controller for #pktTable
-  var _pendingUrlRegion = null;
+  // Region/area filter listeners, removed in destroy() so a region change on
+  // another page doesn't reload packets and rewrite the URL to #/packets.
+  let _regionChangeHandler = null;
+  let _areaChangeHandler = null;
 
   var DEFAULT_TIME_WINDOW = 15;
 
@@ -1337,8 +1340,6 @@
       savedTimeWindowMin = _urlTimeWindow;
       localStorage.setItem('meshcore-time-window', String(_urlTimeWindow));
     }
-    var _urlRegion = _initUrlParams.get('region');
-    if (_urlRegion) _pendingUrlRegion = _urlRegion;
     var _urlHash = _initUrlParams.get('hash');
     if (_urlHash) filters.hash = _urlHash;
     var _urlNode = _initUrlParams.get('node');
@@ -1601,6 +1602,8 @@
     if (_docActionHandler) { document.removeEventListener('click', _docActionHandler); _docActionHandler = null; }
     if (_docMenuCloseHandler) { document.removeEventListener('click', _docMenuCloseHandler); _docMenuCloseHandler = null; }
     if (_docColMenuCloseHandler) { document.removeEventListener('click', _docColMenuCloseHandler); _docColMenuCloseHandler = null; }
+    if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; }
+    if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; }
     removeAllByopOverlays();
     packets = [];
     hashIndex = new Map();    selectedId = null;
@@ -1886,15 +1889,11 @@
       </table></div>
     `;
 
-    // Init shared RegionFilter component
+    // Init shared RegionFilter component (it applies a ?region= URL param itself)
     RegionFilter.init(document.getElementById('packetsRegionFilter'), { dropdown: true });
     AreaFilter.init(document.getElementById('packetsAreaFilter'));
-    if (_pendingUrlRegion) {
-      RegionFilter.setSelected(_pendingUrlRegion.split(',').filter(Boolean));
-      _pendingUrlRegion = null;
-    }
-    RegionFilter.onChange(function() { updatePacketsUrl(); loadPackets(); });
-    AreaFilter.onChange(function() { updatePacketsUrl(); loadPackets(); });
+    _regionChangeHandler = RegionFilter.onChange(function() { updatePacketsUrl(); loadPackets(); });
+    _areaChangeHandler = AreaFilter.onChange(function() { updatePacketsUrl(); loadPackets(); });
 
     // --- Packet Filter Language ---
     (function() {

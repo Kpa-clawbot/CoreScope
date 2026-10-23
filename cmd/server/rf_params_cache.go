@@ -57,6 +57,9 @@ type RfParamsConfig struct {
 	PresetsURL   string `json:"presetsUrl"`
 	RefreshHours int    `json:"refreshHours"`
 	MaxAgeDays   int    `json:"maxAgeDays"`
+	// CompareRadiusKm: nodes within this distance on the same band are
+	// the peers a node's settings are compared with. 0/missing => 50.
+	CompareRadiusKm float64 `json:"compareRadiusKm"`
 }
 
 func (c *RfParamsConfig) enabled() bool { return c != nil && c.NodesURL != "" }
@@ -108,6 +111,9 @@ type RfParamsResponse struct {
 	Source    string              `json:"source,omitempty"`
 	Presets   []RfPreset          `json:"presets"`
 	Nodes     map[string]RfParams `json:"nodes"`
+	// Deviations lists the nodes whose frequency, SF or bandwidth differs
+	// from most same-band nodes around them (rf_params_deviation.go).
+	Deviations map[string]RfDeviation `json:"deviations"`
 }
 
 // loraBandwidthsKHz are the bandwidths SX126x/SX127x radios support.
@@ -272,6 +278,7 @@ type rfParamsCache struct {
 	now    func() time.Time
 	// lastLogged is only touched by the run goroutine.
 	lastLogged time.Time
+	deviations rfDeviationCache
 }
 
 func newRfParamsCache(cfg *RfParamsConfig) *rfParamsCache {

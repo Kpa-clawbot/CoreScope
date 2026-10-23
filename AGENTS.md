@@ -211,7 +211,8 @@ All colors MUST use CSS variables. Never hardcode `#hex` values outside of `:roo
 
 ### last_heard vs last_seen
 - `last_seen` = DB timestamp, only updates on adverts/direct upserts
-- `last_heard` = from in-memory packet store, updates on ALL traffic
+- `last_heard` = the newer of `last_seen` and the certain last heard from the in-memory packet store (#2260): the node's own packets plus relay hops whose prefix can only be this node. A 1-byte hop shared with other repeaters is NOT evidence, and neither is `last_relayed` (it counts those shared prefixes too). Liveness — status, Last Heard, the notify offline check — uses only this.
+- Status from `getNodeStatus(n)` is `'active'`, `'stale'` or, for a repeater or room, `'uncertain'`: nothing certain within the silent window, but `last_relayed` (its shared prefix in a path) is. Treat `'uncertain'` as not proven alive (dim it like stale); never as active.
 - Always prefer `n.last_heard || n.last_seen` for display and status calculation
 
 ### Packet Filter (packet-filter.js)

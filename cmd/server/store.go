@@ -75,6 +75,11 @@ type StoreTx struct {
 	accountedBytes int64
 }
 
+// isOwnTransmission reports whether the observation is the observer's own
+// radio transmitting (direction "tx" from the MQTT bridge) rather than a
+// reception. Aggregates of who heard whom must skip it (#667).
+func (o *StoreObs) isOwnTransmission() bool { return o.Direction == "tx" }
+
 // StoreObs is a lean in-memory observation (no duplication of transmission fields).
 type StoreObs struct {
 	ID             int
@@ -152,10 +157,11 @@ func parseObsTimestamp(s string) (time.Time, bool) {
 
 // decodedCacheDroppedKeys are payload fields no server code reads: the
 // ciphertext and MAC of encrypted payloads, advert signatures, the ISO copy
-// of a timestamp, raw path data and control-packet details.
+// of a timestamp, raw path data and control-packet details. signatureValid
+// stays: liveness ignores adverts whose signature failed (#2260).
 // TestDecodedCacheDroppedKeysAreUnread fails if code starts naming one.
 var decodedCacheDroppedKeys = []string{
-	"encryptedData", "mac", "signature", "signatureValid", "timestampISO", "pathData",
+	"encryptedData", "mac", "signature", "timestampISO", "pathData",
 	"ctrlPubKey", "ctrlSubtype", "ctrlTag", "ctrlFlags", "ctrlZeroHop", "ctrlLength",
 }
 
@@ -251,6 +257,7 @@ type PacketStore struct {
 	byObserver    map[string][]*StoreObs      // observer_id → observations
 	byNode        map[string][]*StoreTx       // pubkey → transmissions
 	nodeHashes    map[string]map[int]struct{} // pubkey → set of tx IDs listed in byNode[pubkey]
+	certainHeard  map[string]string           // pubkey → newest FirstSeen certainly from that node (certain_heard.go)
 	byPathHop     map[string][]*StoreTx       // lowercase hop/pubkey → transmissions with that hop in path
 	byPayloadType map[int][]*StoreTx          // payload_type → transmissions
 	loaded        bool
@@ -1090,7 +1097,7 @@ func (s *PacketStore) Load() error {
 			if rpStr != "" {
 				pks := resolvedPubkeysFromJSON(rpStr)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
-				s.indexResolvedPathHops(tx, pks, hopsSeen)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM)
 			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
 				// resolved_path not persisted — reconstruct relay hops from
 				// path_json so relay-node analytics history survives a restart.
@@ -1103,9 +1110,7 @@ func (s *PacketStore) Load() error {
 				// PR #1643 R1 munger #1: gate on unique_prefix only — ambiguous
 				// hops are silently dropped (skipped counter logged at end).
 				rp := resolvePathForObsColdLoad(obsPJ, obsIDStr, tx, relayPM, &coldLoadAmbiguousHopsSkipped)
-				for _, pk := range extractResolvedPubkeys(rp) {
-					s.addToByNode(tx, pk)
-				}
+				s.indexColdLoadRelayHops(tx, extractResolvedPubkeys(rp), relayPM)
 			}
 
 			tx.addObservation(obs)
@@ -1582,14 +1587,12 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			// stats collapse after restart for relay-heavy nodes. The
 			// pubkey union was pre-built outside the lock above.
 			if pks := localResolvedPKsByTx[tx.ID]; len(pks) > 0 {
-				s.indexResolvedPathHops(tx, pks, hopsSeen)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM)
 			}
 			// path_json fallback (resolved_path NULL): byNode ONLY, so relay
 			// nodes keep their analytics history across a restart without
 			// polluting the resolved_path/path-hop indexes (#1352).
-			for _, pk := range localByNodePKsByTx[tx.ID] {
-				s.addToByNode(tx, pk)
-			}
+			s.indexColdLoadRelayHops(tx, localByNodePKsByTx[tx.ID], relayPM)
 		}
 		s.mu.Unlock()
 		runtime.Gosched()
@@ -1970,15 +1973,30 @@ func skipPlainJSONString(s string, i int) (int, bool) {
 //     idempotent per (transmission, pubkey) — byNode via nodeHashes, the
 //     resolved index via its forward-list check, byPathHop via
 //     pathHopResolved (#2108).
-func (s *PacketStore) indexResolvedPathHops(tx *StoreTx, pks []string, hopsSeen map[string]bool) {
+//   - pm decides which hops are certain liveness evidence (#2260,
+//     noteCertainRelays); nil records none.
+func (s *PacketStore) indexResolvedPathHops(tx *StoreTx, pks []string, hopsSeen map[string]bool, pm *prefixMap) {
 	if len(pks) == 0 {
 		return
 	}
 	for _, pk := range pks {
 		s.addToByNode(tx, pk)
 	}
+	s.noteCertainRelays(tx, pks, pm)
 	s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
 	s.addToResolvedPubkeyIndex(tx.ID, pks)
+}
+
+// indexColdLoadRelayHops is the byNode-only counterpart of
+// indexResolvedPathHops for relay hops re-resolved from path_json at cold
+// load (resolved_path NULL, #1352): the path-hop and resolved indexes stay
+// untouched, liveness still learns from the certain hops. Caller holds s.mu
+// for writing.
+func (s *PacketStore) indexColdLoadRelayHops(tx *StoreTx, pks []string, pm *prefixMap) {
+	for _, pk := range pks {
+		s.addToByNode(tx, pk)
+	}
+	s.noteCertainRelays(tx, pks, pm)
 }
 
 // indexByNode extracts pubkeys from decoded_json and indexes the transmission.
@@ -1999,6 +2017,12 @@ func (s *PacketStore) indexByNode(tx *StoreTx) bool {
 						foundNew = true
 					}
 					indexed[v] = true
+					// The sender's own packet is certain evidence (#2260);
+					// a destination is not, the node need not be alive, and
+					// neither is an advert whose signature failed.
+					if field != "destPubKey" && !tx.signatureFailed() {
+						s.noteCertainHeard(v, tx)
+					}
 				}
 			}
 		}
@@ -3205,7 +3229,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, cachedGraph)
 				resolvedPubkeys = extractResolvedPubkeys(rpForBroadcast)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
-				s.indexResolvedPathHops(tx, resolvedPubkeys, hopsSeen)
+				s.indexResolvedPathHops(tx, resolvedPubkeys, hopsSeen, cachedPM)
 			}
 			// Stash rpForBroadcast for later broadcast/persist (keyed by obs ID)
 			if rpForBroadcast != nil {
@@ -3519,7 +3543,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, graphRef)
 				pks := extractResolvedPubkeys(obsResolvedPath)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
-				s.indexResolvedPathHops(tx, pks, hopsSeen)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, pm)
 			}
 		}
 		// Stash for broadcast/persist
@@ -5433,6 +5457,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		}
 		if len(filtered) == 0 {
 			delete(s.byNode, nodeKey)
+			delete(s.certainHeard, nodeKey)
 		} else {
 			s.byNode[nodeKey] = filtered
 		}
@@ -7288,6 +7313,11 @@ type prefixMap struct {
 	// candidates without them; markNonRelay builds it so relayCandidates,
 	// called per hop of every observation resolved, never copies.
 	relay map[string][]nodeInfo
+	// retired holds the prefixes of path-capable nodes that retention moved
+	// to inactive_nodes. They are no resolver candidates, but such a
+	// repeater may still relay, so a hop on its prefix is not certain
+	// evidence for anyone (#2260, uniqueHopPrefix).
+	retired map[string]struct{}
 }
 
 // markNonRelay registers a set of lowercase pubkeys as listener-only.
@@ -7409,6 +7439,9 @@ func (s *PacketStore) rebuildNodeCache() ([]nodeInfo, *prefixMap) {
 			pm.markNonRelay(pks)
 		} else {
 			s.logSchemaDegradationOnce("observers.can_relay read failed; path-hop disambiguator will not filter listener-only observers: " + err.Error())
+		}
+		if err := pm.markRetired(s.db); err != nil {
+			s.logSchemaDegradationOnce("inactive_nodes read failed; certain liveness will not see retired namesake prefixes: " + err.Error())
 		}
 	}
 
@@ -9979,7 +10012,9 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 		var packetsToday int
 		var snrSum float64
 		var snrCount int
-		var lastHeard string
+		// Certain evidence only (#2260): packets merely attributed to the node
+		// (an ambiguous 1-byte hop) still count in the stats below.
+		lastHeard := s.certainHeard[n.pk]
 		// See GetNodeHealth: this set is "saw traffic involving the node",
 		// which is not "heard the node". Only the direct-RF rows below carry
 		// signal numbers.
@@ -9997,9 +10032,6 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 			if pkt.SNR != nil {
 				snrSum += *pkt.SNR
 				snrCount++
-			}
-			if lastHeard == "" || pkt.FirstSeen > lastHeard {
-				lastHeard = pkt.FirstSeen
 			}
 			if pkt.ObserverID != "" {
 				relayObservers[pkt.ObserverID] = struct{}{}
@@ -10081,7 +10113,8 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	var snrSum float64
 	var snrCount int
 	var totalHops, hopCount int
-	var lastHeard string
+	// Certain evidence only (#2260): see GetBulkHealth.
+	lastHeard := s.certainHeard[pubkey]
 	totalObservations := 0
 
 	// Observers that saw traffic involving this node — as originator, as a
@@ -10099,9 +10132,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		if pkt.SNR != nil {
 			snrSum += *pkt.SNR
 			snrCount++
-		}
-		if lastHeard == "" || pkt.FirstSeen > lastHeard {
-			lastHeard = pkt.FirstSeen
 		}
 		// Hop counting
 		hops := txGetParsedPath(pkt)
@@ -10260,6 +10290,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	fromTime := now.Add(-time.Duration(days) * 24 * time.Hour)
 	fromISO := fromTime.Format(time.RFC3339)
 	toISO := now.Format(time.RFC3339)
+	// Before s.mu: its rare inline rebuild must not run under the read lock.
+	_, pm := s.getCachedNodesAndPM()
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -10282,12 +10314,18 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	packets := s.nodeTxsSince(pubkey, coveredFrom.Format(time.RFC3339))
 	coveredHours := now.Sub(coveredFrom).Hours()
 
-	// Activity timeline (hourly buckets)
+	// Activity timeline (hourly buckets). Certain counts the packets that
+	// can only be this node (#2260); the rest were attributed to it through
+	// a hop prefix it shares, and may be another node's.
 	timelineBuckets := map[string]int{}
+	certainBuckets := map[string]int{}
 	for _, p := range packets {
 		if len(p.FirstSeen) >= 13 {
 			bucket := p.FirstSeen[:13] + ":00:00Z"
 			timelineBuckets[bucket]++
+			if certainFor(p, pubkey, pm) {
+				certainBuckets[bucket]++
+			}
 		}
 	}
 	bucketKeys := make([]string, 0, len(timelineBuckets))
@@ -10296,9 +10334,14 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	}
 	sort.Strings(bucketKeys)
 	activityTimeline := make([]TimeBucket, 0, len(bucketKeys))
+	certainKeys := make([]string, 0, len(certainBuckets))
 	for _, k := range bucketKeys {
 		b := k
-		activityTimeline = append(activityTimeline, TimeBucket{Bucket: &b, Count: timelineBuckets[k]})
+		c := certainBuckets[k]
+		activityTimeline = append(activityTimeline, TimeBucket{Bucket: &b, Count: timelineBuckets[k], Certain: &c})
+		if c > 0 {
+			certainKeys = append(certainKeys, k)
+		}
 	}
 
 	// SNR trend
@@ -10498,9 +10541,11 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		uptimeHeatmap = append(uptimeHeatmap, *cell)
 	}
 
-	// Computed stats
+	// Computed stats. Availability and the longest silence measure the node
+	// being heard, so only certain buckets count (#2260): a silent repeater
+	// must not look available through its namesake prefix.
 	totalPackets := len(packets)
-	distinctHours := len(activityTimeline)
+	distinctHours := len(certainKeys)
 	// Null under minCoveredHours: too short a window to extrapolate from.
 	var availabilityPct, avgPacketsPerDay *float64
 	if coveredHours >= minCoveredHours {
@@ -10509,29 +10554,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		availabilityPct, avgPacketsPerDay = &avail, &perDay
 	}
 
-	// Longest silence
-	var longestSilenceMs int
-	var longestSilenceStart interface{}
-	if len(activityTimeline) >= 2 {
-		for i := 1; i < len(activityTimeline); i++ {
-			var t1Str, t2Str string
-			if activityTimeline[i-1].Bucket != nil {
-				t1Str = *activityTimeline[i-1].Bucket
-			}
-			if activityTimeline[i].Bucket != nil {
-				t2Str = *activityTimeline[i].Bucket
-			}
-			t1, e1 := time.Parse(time.RFC3339, t1Str)
-			t2, e2 := time.Parse(time.RFC3339, t2Str)
-			if e1 == nil && e2 == nil {
-				gap := int(t2.Sub(t1).Milliseconds())
-				if gap > longestSilenceMs {
-					longestSilenceMs = gap
-					longestSilenceStart = t1Str
-				}
-			}
-		}
-	}
+	longestSilenceMs, longestSilenceStart := longestSilence(certainKeys, coveredFrom, now)
 
 	// Signal grade & SNR stats
 	var snrMean, snrStdDev float64

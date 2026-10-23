@@ -474,6 +474,27 @@ func applySchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_ndr_target ON node_declared_regions(target, observed_at);
 		CREATE INDEX IF NOT EXISTS idx_ndr_prune  ON node_declared_regions(observed_at);
+
+		-- Node names reported by repeaters themselves via ANON_REQ_TYPE_OWNER,
+		-- asked by a mobile companion for a node this instance had no name for.
+		-- Observations, never state, like node_declared_regions: "current" is the
+		-- greatest observed_at for a target. The server falls back to it when
+		-- nodes has no name (cmd/server/client_names.go).
+		CREATE TABLE IF NOT EXISTS client_node_names (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			target         TEXT NOT NULL,
+			rx_pubkey      TEXT NOT NULL,
+			observed_at    TEXT NOT NULL,
+			ingested_at    TEXT NOT NULL,
+			name           TEXT NOT NULL,
+			lat            REAL,
+			lon            REAL,
+			pos_acc_m      REAL,
+			repeater_clock INTEGER,
+			UNIQUE(target, rx_pubkey, observed_at)
+		);
+		CREATE INDEX IF NOT EXISTS idx_cnn_target ON client_node_names(target, observed_at);
+		CREATE INDEX IF NOT EXISTS idx_cnn_prune  ON client_node_names(observed_at);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)

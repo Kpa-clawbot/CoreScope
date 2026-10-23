@@ -180,7 +180,14 @@ async function api(path, { ttl = 0, bust = false } = {}) {
           attempt++;
           continue;
         }
-        if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
+        if (!res.ok) {
+          // status and Retry-After ride on the error so a caller can decide to
+          // retry; api() itself retries only the 503 warm-up above.
+          const err = new Error(`API ${res.status}: ${path}`);
+          err.status = res.status;
+          err.retryAfter = res.headers.get('Retry-After');
+          throw err;
+        }
         const data = await res.json();
         const ms = performance.now() - t0;
         _apiPerf.calls++;
@@ -203,7 +210,9 @@ async function api(path, { ttl = 0, bust = false } = {}) {
     }
   })();
   _inflight.set(path, promise);
-  promise.finally(() => _inflight.delete(path));
+  // The cleanup chain must not reject on its own: callers handle the error
+  // through `promise`, and an unhandled copy logs 'Uncaught (in promise)'.
+  promise.finally(() => _inflight.delete(path)).catch(() => {});
   return promise;
 }
 
@@ -1840,10 +1849,12 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!q) { searchResults.innerHTML = ''; return; }
     searchTimeout = setTimeout(async () => {
       try {
-        const [packets, nodes, channels] = await Promise.all([
+        const [packets, nodes, channels, reported] = await Promise.all([
           fetch('/api/packets?limit=5&hash=' + encodeURIComponent(q)).then(r => r.json()).catch(() => ({ packets: [] })),
           fetch('/api/nodes?search=' + encodeURIComponent(q)).then(r => r.json()).catch(() => []),
-          fetch('/api/channels').then(r => r.json()).catch(() => [])
+          fetch('/api/channels').then(r => r.json()).catch(() => []),
+          // Repeaters known only from their reported name are not in /api/nodes.
+          window.ReportedNodes ? window.ReportedNodes.load() : Promise.resolve({ nodes: [] })
         ]);
         let html = '';
         const pktList = packets.packets || packets;
@@ -1860,6 +1871,7 @@ window.addEventListener('DOMContentLoaded', () => {
               <span class="search-result-type">Node</span>${escapeHtml(n.name)} — ${truncate(n.public_key || '', 16)}</div>`;
           }
         }
+        if (window.ReportedNodes) html += window.ReportedNodes.searchItemsHtml(reported.nodes, q, 5);
         const chList = Array.isArray(channels) ? channels : [];
         for (const c of chList) {
           if (c.name && c.name.toLowerCase().includes(q.toLowerCase())) {

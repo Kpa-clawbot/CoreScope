@@ -635,7 +635,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 			rpStr := nullStrVal(resolvedPathStr)
 			if rpStr != "" {
 				pks := resolvedPubkeysFromJSON(rpStr)
-				s.indexResolvedPathHops(tx, pks, hopsSeen)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM)
 			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
 				// resolved_path is NULL on live (since #1287 relay data is
 				// persisted as neighbor_edges, not per-observation). Re-resolve
@@ -647,9 +647,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				// resolved_path/path-hop indexes must NOT be populated here.
 				// PR #1643 R1 munger #1: unique_prefix-only gate.
 				rp := resolvePathForObsColdLoad(obsPJ, obsIDStr, tx, relayPM, coldLoadAmbiguousHopsSkipped)
-				for _, pk := range extractResolvedPubkeys(rp) {
-					s.addToByNode(tx, pk)
-				}
+				s.indexColdLoadRelayHops(tx, extractResolvedPubkeys(rp), relayPM)
 			}
 
 			tx.addObservation(obs)

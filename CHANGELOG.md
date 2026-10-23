@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [3.15.0] - 2026-10-22
+
+See [docs/release-notes/v3.15.0.md](docs/release-notes/v3.15.0.md) for the full notes. 77 commits since v3.14.0: 27 fix, 23 perf, 19 feat, 3 test, 2 ci, 2 docs, 1 chore.
+
+### Highlights
+- **Last Heard and node status count only certain evidence** (#2261, #2262, closes #2260) - a shared 1-byte relay hop no longer keeps a silent repeater "Active". New status `uncertain`. **Operator awareness required**: statuses, `last_heard` and offline mails change after the upgrade.
+- **`users.db` migrates to schema v6 with user accounts on** (#2174) - a v3.14.x binary refuses it afterwards, so keep the pre-upgrade backup for a rollback.
+- **The ingestor runs a key backfill at every start** (#2133) and refreshes planner statistics at most once per 24 h (#2158).
+- **Optional LoRa radio settings per node** (#2209, #2210), observer TX airtime (#2208), companion linking (#2174 to #2176), adaptive offline mails (#2262).
+- **Packet store memory and request latency** (#2146 and 23 perf commits) - e.g. startup to ready 31 s to 21 s (#2181), `/api/nodes` p95 165.4 to 114.4 ms (#2165).
+
+No manual migration step.
+
 ## [3.14.0] - 2026-10-08
 
 See [docs/release-notes/v3.14.0.md](docs/release-notes/v3.14.0.md) for the full notes. 23 commits since v3.13.1: 13 fix, 8 feat, 1 ci, 1 docs.

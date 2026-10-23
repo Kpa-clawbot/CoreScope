@@ -60,6 +60,22 @@
   }
   window.NodeAnalyticsCoverage = { notice: coverageNotice, rateText: rateText };
 
+  // #2260: split each timeline bucket into packets that can only be this
+  // node (certain) and packets attributed to it through a hop prefix it
+  // shares with other nodes (uncertain). A server without the certain field
+  // counts everything as certain, as before.
+  function timelineSeries(tl) {
+    const certain = [], uncertain = [];
+    (tl || []).forEach(b => {
+      const count = Number(b.count) || 0;
+      const c = b.certain == null ? count : Math.min(Number(b.certain) || 0, count);
+      certain.push(c);
+      uncertain.push(count - c);
+    });
+    return { certain, uncertain };
+  }
+  window.NodeAnalyticsTimeline = { series: timelineSeries };
+
   async function loadAnalytics(container, pubkey, days) {
     const gen = viewGeneration();
     const seq = ++loadSeq;
@@ -105,7 +121,7 @@
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Availability</div>
             <div class="analytics-stat-value">${rateText(s.availabilityPct, '%')}</div>
-            <div class="analytics-stat-desc">% of time windows with at least one packet</div>
+            <div class="analytics-stat-desc">% of hours in which this node was certainly heard</div>
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Signal Grade</div>
@@ -130,14 +146,14 @@
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Longest Silence</div>
             <div class="analytics-stat-value" style="font-size:18px">${formatSilence(s.longestSilenceMs)}</div>
-            <div class="analytics-stat-desc">Longest gap between consecutive packets</div>
+            <div class="analytics-stat-desc">Longest gap without a packet certainly from this node, including one still running</div>
           </div>
         </div>
 
         <div class="analytics-charts">
           <div class="analytics-chart-card full">
             <h4>Activity Timeline</h4>
-            <div class="analytics-chart-desc">Packet count per time bucket — shows when this node is most active</div>
+            <div class="analytics-chart-desc">Packet count per time bucket. Certain: can only be this node. Uncertain: a hop prefix this node shares with others, so possibly another node.</div>
             <canvas id="activityChart" role="img" aria-label="Activity timeline chart"></canvas>
           </div>
           <div class="analytics-chart-card">
@@ -214,6 +230,10 @@
     const ctx = document.getElementById('activityChart');
     if (!ctx) return;
     const tl = data.activityTimeline;
+    const series = timelineSeries(tl);
+    const style = getComputedStyle(document.documentElement);
+    const certainColor = style.getPropertyValue('--accent').trim();
+    const uncertainColor = style.getPropertyValue('--text-muted').trim();
     const c = new Chart(ctx, {
       type: 'bar',
       data: {
@@ -221,9 +241,12 @@
           const d = new Date(b.bucket);
           return (typeof formatChartAxisLabel === 'function') ? formatChartAxisLabel(d, currentDays <= 3) : (currentDays <= 3 ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }));
         }),
-        datasets: [{ label: 'Packets', data: tl.map(b => b.count), backgroundColor: 'rgba(74,158,255,0.5)', borderColor: '#4a9eff', borderWidth: 1 }]
+        datasets: [
+          { label: 'Certain', data: series.certain, backgroundColor: certainColor, borderWidth: 0, stack: 'p' },
+          { label: 'Uncertain', data: series.uncertain, backgroundColor: uncertainColor, borderWidth: 0, stack: 'p' }
+        ]
       },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksAutoSkip: true, maxRotation: 45 } }, y: { beginAtZero: true } } }
+      options: { responsive: true, plugins: { legend: { display: true, position: 'bottom', labels: { boxWidth: 12 } } }, scales: { x: { stacked: true, ticks: { maxTicksAutoSkip: true, maxRotation: 45 } }, y: { stacked: true, beginAtZero: true } } }
     });
     charts.push(c);
   }

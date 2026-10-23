@@ -176,9 +176,11 @@ const resolvedPathBatchSize = 500
 // two queries per transmission (#2146). It takes the path of each
 // transmission's longest observation from the resolved-path LRU, as
 // bestResolvedPath does, and reads the rest in one query per
-// resolvedPathBatchSize transmissions. A transmission whose longest observation has no usable
-// stored path, or whose batch failed, goes through bestResolvedPath itself,
-// so the answer is the same. Transmissions with no stored path are absent.
+// resolvedPathBatchSize transmissions. A transmission whose longest
+// observation has no usable stored path goes through
+// loadFallbackResolvedPaths, batched the same way; one whose batch failed goes
+// through bestResolvedPath itself. Either way the answer is bestResolvedPath's.
+// Transmissions with no stored path are absent.
 // Must be called without s.mu held.
 func (s *PacketStore) loadCanonicalResolvedPaths(snapshots map[int][]rpObs) map[int][]*string {
 	out := make(map[int][]*string, len(snapshots))
@@ -223,7 +225,10 @@ func (s *PacketStore) loadCanonicalResolvedPaths(snapshots map[int][]rpObs) map[
 			strings.Repeat(",?", len(chunk)-1)+`)`, args...)
 		if err != nil {
 			for _, id := range chunk {
-				fallback = append(fallback, longestTx[id])
+				txID := longestTx[id]
+				if rp := s.bestResolvedPath(txID, snapshots[txID]); rp != nil {
+					out[txID] = rp
+				}
 			}
 			continue
 		}
@@ -244,12 +249,77 @@ func (s *PacketStore) loadCanonicalResolvedPaths(snapshots map[int][]rpObs) map[
 			}
 		}
 	}
-	for _, txID := range fallback {
-		if rp := s.bestResolvedPath(txID, snapshots[txID]); rp != nil {
+	s.loadFallbackResolvedPaths(fallback, snapshots, out)
+	return out
+}
+
+// loadFallbackResolvedPaths resolves the transmissions whose longest
+// observation has no usable stored path: the longest observation that does
+// have one, as bestResolvedPath's fallback picks it, read in one query per
+// resolvedPathBatchSize transmissions instead of two per transmission. The
+// longest observation itself was read by the caller's batch already. A batch
+// that fails goes through bestResolvedPath per transmission.
+func (s *PacketStore) loadFallbackResolvedPaths(txIDs []int, snapshots map[int][]rpObs, out map[int][]*string) {
+	sort.Ints(txIDs)
+	for start := 0; start < len(txIDs); start += resolvedPathBatchSize {
+		chunk := txIDs[start:min(start+resolvedPathBatchSize, len(txIDs))]
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		s.beforeCacheLoad("resolvedPathBatch")
+		rows, err := s.db.conn.Query(`SELECT id, transmission_id, resolved_path FROM observations
+			WHERE resolved_path IS NOT NULL AND transmission_id IN (?`+strings.Repeat(",?", len(chunk)-1)+`)`, args...)
+		if err != nil {
+			for _, txID := range chunk {
+				if rp := s.bestResolvedPath(txID, snapshots[txID]); rp != nil {
+					out[txID] = rp
+				}
+			}
+			continue
+		}
+		stored := make(map[int]map[int][]*string, len(chunk)) // tx → observation → path
+		for rows.Next() {
+			var obsID, txID int
+			var raw sql.NullString
+			if rows.Scan(&obsID, &txID, &raw) != nil || !raw.Valid || raw.String == "" {
+				continue
+			}
+			if stored[txID] == nil {
+				stored[txID] = make(map[int][]*string)
+			}
+			stored[txID][obsID] = unmarshalResolvedPath(raw.String)
+		}
+		rows.Close()
+		for _, txID := range chunk {
+			rp, obsID := longestStoredResolvedPath(snapshots[txID], stored[txID])
+			if rp == nil {
+				continue
+			}
 			out[txID] = rp
+			s.lruMu.Lock()
+			s.lruPut(obsID, rp)
+			s.lruMu.Unlock()
 		}
 	}
-	return out
+}
+
+// longestStoredResolvedPath picks, among observations, the one with the
+// longest path_json that has a stored resolved path in rpMap; the first in
+// snapshot order wins a tie. Returns that path and its observation ID.
+func longestStoredResolvedPath(observations []rpObs, rpMap map[int][]*string) ([]*string, int) {
+	var bestRP []*string
+	bestObsID, bestLen := 0, -1
+	for _, obs := range observations {
+		rp, ok := rpMap[obs.id]
+		if !ok || rp == nil {
+			continue
+		}
+		if l := pathLen(obs.pathJSON); l > bestLen {
+			bestLen, bestRP, bestObsID = l, rp, obs.id
+		}
+	}
+	return bestRP, bestObsID
 }
 
 // fetchResolvedPathsForTx fetches resolved_path from SQLite for all observations
@@ -370,20 +440,7 @@ func (s *PacketStore) bestResolvedPath(txID int, observations []rpObs) []*string
 	if len(rpMap) == 0 {
 		return nil
 	}
-	var bestRP []*string
-	bestObsID := 0
-	bestLen := -1
-	for i, obs := range observations {
-		rp, ok := rpMap[obs.id]
-		if !ok || rp == nil {
-			continue
-		}
-		if lens[i] > bestLen {
-			bestLen = lens[i]
-			bestRP = rp
-			bestObsID = obs.id
-		}
-	}
+	bestRP, bestObsID := longestStoredResolvedPath(observations, rpMap)
 	// Populate LRU so repeat lookups for this tx don't re-issue the multi-row
 	// SQL fallback (e.g. dashboard polling /api/nodes/{pk}/health).
 	if bestRP != nil && bestObsID != 0 {

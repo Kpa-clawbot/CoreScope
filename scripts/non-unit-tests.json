@@ -96,6 +96,8 @@
       "tests/e2e/test-logo-pulse-1173-e2e.js",
       "tests/e2e/test-logo-rebrand-e2e.js",
       "tests/e2e/test-logo-theme-e2e.js",
+      "tests/e2e/test-map-estimated-e2e.js",
+      "tests/e2e/test-reported-nodes-e2e.js",
       "tests/e2e/test-map-modal-fluid-e2e.js",
       "tests/e2e/test-map-nodes-pagination-e2e.js",
       "tests/e2e/test-nav-drawer-1064-e2e.js",

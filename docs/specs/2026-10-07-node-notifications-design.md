@@ -202,6 +202,9 @@ except where a ruling below changes one.
 1. "Per day" is a rolling 24 hours counted from `mail_log`, like the proposal limit.
 2. Offline uses the node page's three timestamps: `nodes.last_seen`, the packet store's
    newest packet involving the node, and for repeaters and rooms `last_relayed`.
+   Superseded by #2260: `nodes.last_seen` and the packet store's newest packet that can
+   only be this node. `last_relayed` and packets merely attributed through a shared
+   1-byte hop prefix kept a silent repeater online for days.
 3. No evaluation runs while the packet store is still loading after a restart; the first
    one runs one interval after startup.
 4. `foreign.new` keeps a per-admin baseline row (subject `*`): the first evaluation after

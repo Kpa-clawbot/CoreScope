@@ -27,6 +27,9 @@
   }
 
   _selected = loadFromStorage();
+  // A ?region= link applies before any page reads the selection, so even a
+  // page that fetches before calling init() uses it on a fresh load.
+  applyUrlRegion();
 
   /** Fetch the configured quick picks. A failure only means no quick picks. */
   async function fetchQuickPicks() {
@@ -295,13 +298,49 @@
     _listeners = _listeners.filter(function (f) { return f !== fn; });
   }
 
+  /** Region codes from a ?region= hash param ("#/live?region=SJC,SFO"), or
+   *  null when the URL doesn't set one. */
+  function regionsFromUrl() {
+    if (typeof location === 'undefined' || !location.hash) return null;
+    var raw = new URLSearchParams(location.hash.split('?')[1] || '').get('region');
+    if (!raw) return null;
+    var codes = raw.split(',').map(function (c) { return c.trim(); }).filter(Boolean);
+    return codes.length > 0 ? codes : null;
+  }
+
+  /** Apply a ?region= URL param as the selection, saved like a click in the
+   *  control. Returns true when that changed the selection. */
+  function applyUrlRegion() {
+    var codes = regionsFromUrl();
+    if (!codes) return false;
+    // Once regions have loaded, fetchRegions() no longer cleans the selection,
+    // so drop unknown codes here; with none left, that's all regions, the same
+    // as the cleanup does on a fresh load.
+    if (_loaded) codes = codes.filter(function (c) { return Object.prototype.hasOwnProperty.call(_regions, c); });
+    var next = codes.length > 0 ? new Set(codes) : null;
+    var changed = !sameSelection(_selected, next);
+    _selected = next;
+    saveToStorage();
+    return changed;
+  }
+
   /** Initialize filter in a container, fetch regions, render, return promise.
-   *  Options: { dropdown: true } to force dropdown mode regardless of region count */
+   *  Options: { dropdown: true } to force dropdown mode regardless of region count
+   *
+   *  A ?region= param in the page's URL overrides the saved selection, so any
+   *  page with a region filter can be deep-linked to a region. On a fresh load
+   *  it was already applied when this script ran. On in-app navigation it's
+   *  applied here, before the await, so a page that loads after init() uses
+   *  it; if it changed the selection, listeners are told once regions load,
+   *  which reloads a page that fetched before calling init(). Unknown codes
+   *  are dropped either way. */
   async function initFilter(container, opts) {
     _container = container;
     if (opts && opts.dropdown) container._forceDropdown = true;
+    var urlChanged = applyUrlRegion();
     await fetchRegions();
     render(container);
+    if (urlChanged) _listeners.forEach(function (fn) { fn(getSelected()); });
   }
 
   /** True when two selections (Set or null = all) hold the same codes. */

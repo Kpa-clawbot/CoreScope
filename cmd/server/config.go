@@ -350,8 +350,10 @@ type NeighborGraphConfig struct {
 
 	// CacheRecomputeIntervalSeconds: cadence for the background
 	// recomputer that rebuilds the default-shape neighbor-graph
-	// response (#1481 P0-1). 0/missing = default 300 (5 min).
-	// Lower = fresher data, more CPU per minute. #1483.
+	// response (#1481 P0-1) and the neighbor graph itself, which
+	// /api/nodes/{pk}/neighbors serves until the next tick (#2221).
+	// 0/missing = default 300 (5 min). Lower = fresher data, and a
+	// full graph build on every tick. #1483.
 	CacheRecomputeIntervalSeconds int `json:"cacheRecomputeIntervalSeconds,omitempty"`
 }
 

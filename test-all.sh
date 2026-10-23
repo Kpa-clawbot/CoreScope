@@ -107,6 +107,7 @@ node tests/unit/test-issue-1518-home-url.js
 node tests/unit/test-issue-1532-live-fullscreen.js
 node tests/unit/test-issue-1562-observers-summary.js
 node tests/unit/test-issue-748-node-analytics-coverage.js
+node tests/unit/test-node-analytics-certain-timeline.js
 node tests/unit/test-issue-661-observer-airtime.js
 node tests/unit/test-issue-1268-rf-params.js
 node tests/unit/test-issue-1563-aggregate-and-inflight.js
@@ -169,6 +170,7 @@ node tests/unit/test-live-multibyte-filter.js
 node tests/unit/test-live-region-filter.js
 node tests/unit/test-live.js
 node tests/unit/test-map-clustering.js
+node tests/unit/test-map-estimated.js
 node tests/unit/test-mqtt-status-panel.js
 node tests/unit/test-my-repeaters-dashboard.js
 node tests/unit/test-naive-banner-tone.js
@@ -203,7 +205,9 @@ node tests/unit/test-preflight-xss-gate.js
 node tests/unit/test-pull-to-reconnect-1091.js
 node tests/unit/test-pull-to-reconnect.js
 node tests/unit/test-region-filter-setselected.js
+node tests/unit/test-region-filter-url-param.js
 node tests/unit/test-repeater-metric-scatter.js
+node tests/unit/test-reported-nodes.js
 node tests/unit/test-rx-coverage-config-race.js
 node tests/unit/test-rx-coverage-mine.js
 node tests/unit/test-rx-coverage-escape.js

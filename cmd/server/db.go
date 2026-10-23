@@ -40,6 +40,8 @@ const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 type DB struct {
 	advertEvidenceTable     atomic.Bool
 	txRewriteFeedTable      atomic.Bool // tx_rewrite_feed present (#2107); re-probed while absent
+	clientNodeNamesTable    atomic.Bool // client_node_names present; re-probed while absent (clientNodeNamesPresent)
+	inactiveNodesTable      atomic.Bool // inactive_nodes present; re-probed while absent (clientNameHeard)
 	advertEvidenceReadHook  func()      // test-only: immediately before a bulk mask query
 	conn                    *sql.DB
 	path                    string // filesystem path to the database file

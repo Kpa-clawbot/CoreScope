@@ -42,6 +42,9 @@ type Server struct {
 	commit    string
 	buildTime string
 
+	// reportedNodes caches /api/nodes/reported (reported_nodes.go).
+	reportedNodes reportedNodesCache
+
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
 	memStatsMu       sync.Mutex
 	memStatsCache    runtime.MemStats
@@ -88,9 +91,13 @@ type Server struct {
 	// can't race on the .tmp file or interleave disk/memory updates.
 	saveMu sync.Mutex
 
-	// Neighbor affinity graph (lazy-built, cached with TTL)
+	// Neighbor affinity graph: built on first use, then rebuilt on every
+	// neighbor-graph recompute tick (#2221)
 	neighborMu    sync.Mutex
 	neighborGraph *NeighborGraph
+	// neighborBuildMu serializes graph builds, so a startup request and the
+	// first recompute tick do not both build (#2221).
+	neighborBuildMu sync.Mutex
 
 	// Cached /api/scope-stats response — per-window, recomputed at most once every 30s
 	scopeStatsMu       sync.Mutex
@@ -349,6 +356,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// gated by requireClientRfSamples instead.
 	r.HandleFunc("/api/rf-noise", s.handleRfNoise).Methods("GET")
 	r.HandleFunc("/api/nodes/resolve", s.handleResolvePrefix).Methods("GET")
+	r.HandleFunc("/api/nodes/reported", s.handleReportedNodes).Methods("GET")
 	r.HandleFunc("/api/rx-coverage", s.handleRxCoverage).Methods("GET")
 	r.HandleFunc("/api/rx-leaderboard", s.handleRxLeaderboard).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}", s.handleNodeDetail).Methods("GET")
@@ -1626,8 +1634,18 @@ func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 		maxUseful := maxFloat(usefulMap)
 		// #1879: which rule places each node for ?region=. Atomic snapshot.
 		placements := s.store.GetNodeRegionPlacements()
+		// #2260: last_heard is the newer of last_seen and the certain last
+		// heard. One read lock and a map lookup per node.
+		pageKeys := make([]string, 0, len(nodes))
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
+				pageKeys = append(pageKeys, pk)
+			}
+		}
+		heard, _ := s.store.LastHeardMap(pageKeys)
+		for _, node := range nodes {
+			if pk, ok := node["public_key"].(string); ok {
+				node["last_heard"] = lastHeardValue(node["last_seen"], heard[pk])
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				mbEntry, _ := s.store.GetMultibyteCapFor(pk)
 				EnrichNodeWithMultiByte(node, mbEntry)
@@ -1763,6 +1781,21 @@ func (s *Server) handleNodeSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	// #2260: same last_heard as /api/nodes, not a copy of last_seen.
+	if s.store != nil && len(nodes) > 0 {
+		keys := make([]string, 0, len(nodes))
+		for _, node := range nodes {
+			if pk, ok := node["public_key"].(string); ok {
+				keys = append(keys, pk)
+			}
+		}
+		heard, _ := s.store.LastHeardMap(keys)
+		for _, node := range nodes {
+			if pk, ok := node["public_key"].(string); ok {
+				node["last_heard"] = lastHeardValue(node["last_seen"], heard[pk])
+			}
+		}
+	}
 	// Filter blacklisted nodes from search results
 	if len(s.cfg.NodeBlacklist) > 0 {
 		filtered := make([]map[string]interface{}, 0, len(nodes))
@@ -1839,6 +1872,8 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		mbEntry, _ := s.store.GetMultibyteCapFor(pubkey)
 		EnrichNodeWithMultiByte(node, mbEntry)
 		node["region_placement"] = RegionPlacementFor(s.store.GetNodeRegionPlacements(), pubkey)
+		heard, _ := s.store.LastHeardMap([]string{pubkey})
+		node["last_heard"] = lastHeardValue(node["last_seen"], heard[pubkey])
 		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 			ht := s.cfg.GetHealthThresholds()
 			info := s.store.GetRepeaterRelayInfo(pubkey, ht.RelayActiveHours)

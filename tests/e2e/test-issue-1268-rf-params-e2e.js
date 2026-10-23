@@ -43,7 +43,7 @@ async function run() {
 
   console.log(`\nRunning #1268 RF params E2E tests against ${BASE}\n`);
 
-  await test('feature off: /api/rf-params says disabled and the detail has no LoRa row', async () => {
+  await test('feature off: /api/rf-params says disabled, no LoRa row and no LoRa filter', async () => {
     const r = await page.request.get(`${BASE}/api/rf-params`);
     const body = await r.json();
     assert(body.enabled === false && Array.isArray(body.presets) && body.nodes && typeof body.nodes === 'object',
@@ -53,6 +53,9 @@ async function run() {
     await page.goto(`${BASE}/#/nodes/${encodeURIComponent(k)}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#node-stats');
     assert(!(await page.$('[data-testid="node-detail-lora"]')), 'no LoRa row when disabled');
+    await gotoNodes(page);
+    assert(await page.$eval('#nodeLoraFilter', (s) => s.hidden), 'LoRa filter hidden when disabled');
+    assert(!(await page.$('#nodesBody .badge-lora-diff')), 'no badges when disabled');
   });
 
   await gotoNodes(page);
@@ -70,6 +73,9 @@ async function run() {
       nodes: {
         [presetKey.toLowerCase()]: { freq: 869.618, sf: 8, bw: 62.5, cr: 8, last_advert: now },
         [rawKey.toLowerCase()]: { freq: 869.618, sf: 7, bw: 62.5, cr: 5, last_advert: now },
+      },
+      deviations: {
+        [rawKey.toLowerCase()]: { majority: { freq: 869.618, sf: 8, bw: 62.5 }, agree: 12, peers: 14, fields: ['sf'] },
       },
     }),
   }));
@@ -101,6 +107,43 @@ async function run() {
       const el = document.querySelector('#nodesRight [data-testid="node-detail-lora"]');
       return el && el.textContent.includes('Not on the MeshCore map');
     });
+  });
+
+  await test('deviating node gets a badge in the list, others do not', async () => {
+    await gotoNodes(page);
+    await page.waitForSelector(`#nodesBody tr[data-key="${rawKey}"] .badge-lora-diff`);
+    const badge = await page.$eval(`#nodesBody tr[data-key="${rawKey}"] .badge-lora-diff`, (b) => ({ text: b.textContent.trim(), title: b.title }));
+    assert(badge.text === 'LoRa SF7' && badge.title.includes('12 of 14 nearby nodes'), `badge: ${JSON.stringify(badge)}`);
+    const others = await page.$$eval('#nodesBody .badge-lora-diff', (bs) => bs.length);
+    assert(others === 1, `badges in list: ${others}`);
+  });
+
+  await test('LoRa filter shows only deviating nodes and goes into the URL', async () => {
+    assert(await page.isVisible('#nodeLoraFilter'), 'filter visible when the feature is on');
+    const label = await page.$eval('#nodeLoraFilter option[value="differs"]', (o) => o.textContent);
+    assert(label.includes('(1)'), `option label: ${label}`);
+    await page.selectOption('#nodeLoraFilter', 'differs');
+    await page.waitForFunction(() => document.querySelectorAll('#nodesBody tr[data-key]').length === 1);
+    const key = await page.$eval('#nodesBody tr[data-key]', (tr) => tr.getAttribute('data-key'));
+    assert(key === rawKey, `filtered row: ${key}`);
+    assert(page.url().includes('lora=differs'), `url: ${page.url()}`);
+    await page.selectOption('#nodeLoraFilter', '');
+    await page.waitForFunction(() => document.querySelectorAll('#nodesBody tr[data-key]').length > 1);
+    assert(!page.url().includes('lora='), `url after reset: ${page.url()}`);
+  });
+
+  await test('the filter is restored from the URL', async () => {
+    await page.goto(`${BASE}/#/nodes?lora=differs`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => document.querySelectorAll('#nodesBody tr[data-key]').length === 1);
+    assert(await page.$eval('#nodeLoraFilter', (s) => s.value) === 'differs', 'select restored');
+  });
+
+  await test('detail of a deviating node explains the difference', async () => {
+    await page.goto(`${BASE}/#/nodes/${encodeURIComponent(rawKey)}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-testid="lora-deviation"]');
+    const text = await page.$eval('[data-testid="lora-deviation"]', (el) => el.textContent);
+    assert(text.includes('Differs from 12 of 14 nearby nodes on this band') && text.includes('SF8'), `deviation: ${text}`);
   });
 
   await browser.close();
