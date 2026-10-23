@@ -11,7 +11,7 @@ const script = fs.readFileSync(path.join(__dirname, '../../scripts/install-postg
 function run(mode, env = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'corescope-pg-ci-test-'));
   const stubs = [
-    'function . { ID=ubuntu; VERSION_CODENAME=noble; }',
+    'function . { ID=${RUNNER_ID:-ubuntu}; VERSION_CODENAME=${RUNNER_CODENAME-noble}; }',
     'curl() { printf "test signing key\\n"; }',
     'sudo() {',
     '  printf "%s\\n" "$*" >> commands',
@@ -58,6 +58,7 @@ for (const mode of ['client', 'server']) {
   const result = run(mode);
   assert.equal(result.status, 0, mode + ': ' + result.stderr);
   assert.match(result.files.commands, /install -m 0644 \/etc\/apt\/sources.list.d\/ubuntu.sources \/etc\/apt\/corescope-ci-sources.list.d\/ubuntu.sources/);
+  assert.equal(result.files['ubuntu.sources'], 'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n');
   assert.match(result.files['corescope-pgdg.list'], /https:\/\/apt-archive.postgresql.org\/pub\/repos\/apt noble-pgdg-archive main/);
   assert.match(result.files.commands, /apt-get install -y --no-install-recommends postgresql-client-18=18\.6-1\.pgdg24\.04\+1 sqlite3/);
   assert.equal(result.files['github-path'].trim(), '/usr/lib/postgresql/18/bin');
@@ -73,6 +74,8 @@ for (const mode of ['client', 'server']) {
 for (const [label, mode, env] of [
   ['not Actions', 'client', { GITHUB_ACTIONS: 'false' }],
   ['invalid mode', 'invalid', {}],
+  ['unsupported host', 'client', { RUNNER_ID: 'debian' }],
+  ['missing Ubuntu codename', 'client', { RUNNER_CODENAME: '' }],
   ['missing official source', 'client', { HAS_UBUNTU: '0' }],
   ['required signature failure', 'client', { REQUIRED_REPO_OK: '0' }],
   ['pinned version unavailable', 'client', { PACKAGE_VERSION: '18.7-1.pgdg24.04+1' }],
