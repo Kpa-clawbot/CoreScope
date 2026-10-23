@@ -13,18 +13,49 @@ spec.loader.exec_module(bench)
 
 class SQLiteControls(unittest.TestCase):
     def test_legacy_and_current_table_inventories_remain_complete(self):
-        for current in (False, True):
-            with self.subTest(current=current), tempfile.TemporaryDirectory() as directory:
+        additions = ["tx_rewrite_feed", "key_backfill_state", "key_backfill_done", "client_node_names"]
+        for extra_count in (0, 3, 4):
+            with self.subTest(extra_count=extra_count), tempfile.TemporaryDirectory() as directory:
                 source = Path(directory) / "corpus.sqlite"
-                names = bench.TABLES + (["tx_rewrite_feed", "key_backfill_state", "key_backfill_done"] if current else [])
+                names = bench.TABLES + additions[:extra_count]
                 with bench.sqlite3.connect(source) as db:
                     for name in names:
                         db.execute(f'CREATE TABLE "{name}"(value TEXT)')
                         db.execute(f'INSERT INTO "{name}" VALUES(?)', ("synthetic",))
                 db.close()
                 tables = bench.table_manifest(source)
-                self.assertEqual(len(tables), 21 if current else 18)
+                self.assertEqual(len(tables), 18 + extra_count)
                 self.assertEqual(set(bench.validate(source, tables)), set(names))
+
+    def test_client_name_receipts_shift_without_changing_reported_clock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "corpus.sqlite"
+            with bench.sqlite3.connect(source) as db:
+                db.executescript("CREATE TABLE client_node_names("
+                                 "id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT NOT NULL,"
+                                 "rx_pubkey TEXT NOT NULL, observed_at TEXT NOT NULL,"
+                                 "ingested_at TEXT NOT NULL, name TEXT NOT NULL, lat REAL,"
+                                 "lon REAL, pos_acc_m REAL, repeater_clock INTEGER,"
+                                 "UNIQUE(target, rx_pubkey, observed_at));")
+                db.execute("INSERT INTO client_node_names VALUES(?,?,?,?,?,?,?,?,?,?)",
+                           (1, "synthetic-target", "synthetic-receiver", "2026-01-01T00:00:00.123Z",
+                            "2026-01-01T00:00:01Z", "Synthetic node", None, None, None, 1767225590))
+            db.close()
+            with mock.patch.object(bench, "TABLES", ["client_node_names"]):
+                tables = bench.table_manifest(source)
+                before = bench.validate(source, tables)
+                bench.freshen(source, 10)
+                after = bench.validate(source, tables)
+            self.assertEqual(tables, [{"name": "client_node_names", "columns": [
+                "id", "target", "rx_pubkey", "observed_at", "ingested_at", "name",
+                "lat", "lon", "pos_acc_m", "repeater_clock"]}])
+            self.assertNotEqual(before, after)
+            with bench.sqlite3.connect(source) as db:
+                row = db.execute("SELECT * FROM client_node_names").fetchone()
+            db.close()
+            self.assertEqual(row, (1, "synthetic-target", "synthetic-receiver",
+                                   "2026-01-01T00:00:10.123Z", "2026-01-01T00:00:11Z",
+                                   "Synthetic node", None, None, None, 1767225590))
 
     def test_all_application_tables_are_freshened_and_digested(self):
         with tempfile.TemporaryDirectory() as directory:

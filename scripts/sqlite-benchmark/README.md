@@ -12,7 +12,7 @@ committed harness must pass the Linux A/A pilot before a candidate matrix.
 No new B performance result or L capacity result is claimed here.
 
 The automatic S smoke pins its baseline to upstream
-`b9593f71745b856651cfd6d6c80bb1f3f091e13e`, with the PR head as candidate and
+`7fa86fe1c1304b88e0f2a44052465dfb86abb8a6` (v3.15.0), with the PR head as candidate and
 harness. Since this PR changes only benchmark tooling, that is a contemporary
 A/A qualification. Explicit baseline, candidate and harness selections remain
 independent for requested runs. Inactive historical request markers do not
@@ -131,7 +131,8 @@ independently from SQLite. B expects 112,000 transmissions / 1,792,000 observati
 under the common seven-day retention, 2048 MiB store and 3072 MiB server limits.
 S/B coverage overrides are refused. Every application table undergoes ordered
 logical digest checks before and after replay, including the current
-`tx_rewrite_feed`, `key_backfill_state` and `key_backfill_done` tables. The original
+`tx_rewrite_feed`, `key_backfill_state`, `key_backfill_done` and `client_node_names`
+tables (22 application tables on v3.15.0). The original
 18 canonical tables remain required; additional tables are discovered from
 SQLite, and added, removed or changed column inventories fail validation.
 SQLite's internal bookkeeping tables are excluded. The source and recorded
@@ -145,6 +146,10 @@ once whether implicit or explicit, preserving the supported layout adoption
 below. Freshening applies the single pair offset to rewrite-feed `created_at`
 and backfill `started_at`/`done_at` as lifecycle times; their digests remain fully
 checked, and cursor, fingerprint and rewritten-count values are unchanged.
+Client-name `observed_at` and `ingested_at` receipt times receive the same offset;
+the reported `repeater_clock` remains unchanged. Certain-liveness timestamps are
+derived from the freshened packet receipt times, with no additional persisted
+column to shift on this upstream revision.
 
 Revisions whose archived server explicitly opens a persisted storage selection
 also build their native migrator once. Before either timed server startup, it
