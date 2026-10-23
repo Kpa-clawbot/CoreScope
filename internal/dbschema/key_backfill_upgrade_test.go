@@ -26,7 +26,8 @@ func TestPostgresV1KeyBackfillUpgradeIsAtomicAndPreservesRows(t *testing.T) {
 			if _, err := db.Exec(oldSQL); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.Exec(`CREATE TABLE corescope_schema(version INTEGER NOT NULL,kind TEXT PRIMARY KEY,ready BOOLEAN NOT NULL);
+			if _, err := db.Exec(`DROP TABLE IF EXISTS client_node_names;
+ CREATE TABLE corescope_schema(version INTEGER NOT NULL,kind TEXT PRIMARY KEY,ready BOOLEAN NOT NULL);
 				INSERT INTO corescope_schema VALUES(1,'telemetry',true);
 				INSERT INTO transmissions(id,raw_hex,hash,first_seen) VALUES(7,'00','retained','raw-date')`); err != nil {
 				t.Fatal(err)

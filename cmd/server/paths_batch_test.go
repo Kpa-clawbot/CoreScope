@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"reflect"
 	"testing"
 )
@@ -12,7 +11,7 @@ import (
 
 func newPathsBatchStore(t *testing.T) (*PacketStore, map[int][]rpObs) {
 	t.Helper()
-	conn, err := sql.Open("sqlite3", ":memory:")
+	conn, err := openPostgresTestDB(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +60,7 @@ func newPathsBatchStore(t *testing.T) (*PacketStore, map[int][]rpObs) {
 		6: {{8, `["a","b"]`}},
 		7: {{10, `["a"]`}, {11, `["a","b","c"]`}},
 	}
-	return &PacketStore{db: &DB{conn: conn}}, snapshots
+	return &PacketStore{db: &DB{conn: conn, backend: testBackendValue()}}, snapshots
 }
 
 func TestLoadCanonicalResolvedPathsMatchesBestResolvedPath(t *testing.T) {
@@ -89,7 +88,7 @@ func derefAll(rp []*string) []string {
 }
 
 func TestLoadCanonicalResolvedPathsBatchesQueries(t *testing.T) {
-	conn, err := sql.Open("sqlite3", ":memory:")
+	conn, err := openPostgresTestDB(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +105,7 @@ func TestLoadCanonicalResolvedPathsBatchesQueries(t *testing.T) {
 			i, i, `["a"]`, `["aa11aa11"]`)
 		snapshots[i] = []rpObs{{i, `["a"]`}}
 	}
-	s := &PacketStore{db: &DB{conn: conn}}
+	s := &PacketStore{db: &DB{conn: conn, backend: testBackendValue()}}
 	batched, single := 0, 0
 	s.cacheLoadHook = func(kind string) {
 		switch kind {
@@ -179,7 +178,7 @@ func TestLoadCanonicalResolvedPathsUsesLRU(t *testing.T) {
 // production database, so most /paths requests paid this per transmission.
 // The fallback is batched too.
 func TestLoadCanonicalResolvedPathsBatchesFallback(t *testing.T) {
-	conn, err := sql.Open("sqlite3", ":memory:")
+	conn, err := openPostgresTestDB(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +198,7 @@ func TestLoadCanonicalResolvedPathsBatchesFallback(t *testing.T) {
 			shorter, tx, `["a"]`, `["aa11aa11"]`)
 		snapshots[tx] = []rpObs{{longest, `["a","b"]`}, {shorter, `["a"]`}}
 	}
-	s := &PacketStore{db: &DB{conn: conn}}
+	s := &PacketStore{db: &DB{conn: conn, backend: testBackendValue()}}
 	batched, single := 0, 0
 	s.cacheLoadHook = func(kind string) {
 		switch kind {

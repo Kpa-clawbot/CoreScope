@@ -23,7 +23,7 @@ const lpRelay = "4f2a" + "555555555555555555555555555555555555555555555555555555
 func lpFixture(t *testing.T, withResolved, hopInFirstObs bool) (*DB, *sql.DB, string) {
 	t.Helper()
 	path := createTestDBWithResolvedPath(t, 1, []string{lpRelay})
-	w, err := sql.Open("sqlite3", path+"?_journal_mode=WAL")
+	w, err := openFixtureSQL(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,15 +42,15 @@ func lpFixture(t *testing.T, withResolved, hopInFirstObs bool) (*DB, *sql.DB, st
 		args []interface{}
 	}{
 		{`ALTER TABLE transmissions ADD COLUMN from_pubkey TEXT`, nil},
-		{`UPDATE transmissions SET raw_hex=?, route_type=1, payload_type=5, first_seen=?`, []interface{}{raw, at}},
-		{`UPDATE observations SET raw_hex=?, timestamp=?, path_json=?, resolved_path=?`, []interface{}{raw, at, pathJSON, resolved}},
-		{`INSERT INTO nodes (public_key, name, role) VALUES (?, 'Relay', 'repeater')`, []interface{}{lpRelay}},
+		{`UPDATE transmissions SET raw_hex=$1, route_type=1, payload_type=5, first_seen=$2`, []interface{}{raw, at}},
+		{`UPDATE observations SET raw_hex=$1, timestamp=$2, path_json=$3, resolved_path=$4`, []interface{}{raw, at, pathJSON, resolved}},
+		{`INSERT INTO nodes (public_key, name, role) VALUES ($1, 'Relay', 'repeater')`, []interface{}{lpRelay}},
 	} {
 		if _, err := w.Exec(q.sql, q.args...); err != nil {
 			t.Fatalf("%s: %v", q.sql, err)
 		}
 	}
-	db, err := OpenDB(path)
+	db, err := openFixtureReader(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestCertainHeardFedByEveryLoadPath(t *testing.T) {
 		}
 		maxObs := db.GetMaxObservationID()
 		if _, err := w.Exec(`INSERT INTO observations (id, transmission_id, observer_id, observer_name, direction, snr, rssi, score, path_json, timestamp, raw_hex, resolved_path)
-			VALUES (2, 1, 'obs2', 'Obs2', 'RX', -9, -79, 5, ?, ?, '', NULL)`, `["`+strings.ToUpper(lpRelay[:4])+`"]`, at); err != nil {
+			VALUES (2, 1, 'obs2', 'Obs2', 'RX', -9, -79, 5, $1, $2, '', NULL)`, `["`+strings.ToUpper(lpRelay[:4])+`"]`, at); err != nil {
 			t.Fatal(err)
 		}
 		s.IngestNewObservations(maxObs, 100)

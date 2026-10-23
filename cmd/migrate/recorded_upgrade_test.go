@@ -30,9 +30,9 @@ func TestRecordedPostgresUpgradeDiagnosticsKeepStatusJSON(t *testing.T) {
 		t.Fatal("upgrade messages contaminated machine-readable status", status.String())
 	}
 	for _, message := range []string{
-		"PostgreSQL telemetry schema upgrade required: 1 -> 2",
+		"PostgreSQL telemetry schema upgrade required: 1 -> 3",
 		"PostgreSQL accounts schema upgrade required: 5 -> 6",
-		"upgraded recorded PostgreSQL telemetry schema 1 -> 2",
+		"upgraded recorded PostgreSQL telemetry schema 1 -> 3",
 		"upgraded recorded PostgreSQL accounts schema 5 -> 6",
 	} {
 		if !strings.Contains(diagnostic.String(), message) {
@@ -78,6 +78,7 @@ func recordedOldPostgres(t *testing.T, accounts bool) (storageOptions, dbconfig.
 	}
 	for _, q := range []string{
 		`DROP TABLE tx_rewrite_feed,key_backfill_state,key_backfill_done`,
+		`DROP TABLE IF EXISTS client_node_names`,
 		`UPDATE corescope_schema SET version=1 WHERE kind='telemetry'`,
 		`INSERT INTO transmissions(id,raw_hex,hash,first_seen) VALUES(90,'00','preserved','raw timestamp')`,
 		`SELECT setval(pg_get_serial_sequence('transmissions','id'),10000,true)`,

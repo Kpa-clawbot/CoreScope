@@ -224,7 +224,7 @@ func TestClientNodeNamesGateOffDoesNotFallThroughToObserverPath(t *testing.T) {
 		t.Fatalf("feature OFF: rows = %d, want 0", n)
 	}
 	var observerRows int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = ?`, testCompanionPK).Scan(&observerRows); err != nil {
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = $1`, testCompanionPK).Scan(&observerRows); err != nil {
 		t.Fatal(err)
 	}
 	if observerRows != 0 {
