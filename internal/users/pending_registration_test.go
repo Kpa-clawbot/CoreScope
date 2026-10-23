@@ -1,7 +1,6 @@
 package users
 
 import (
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -61,20 +60,14 @@ func TestUpdatePendingRegistrationRejectsChangedAccount(t *testing.T) {
 	}
 }
 
-// SQLite's writer lock holds activation uncommitted while registration starts.
+// A separate writer holds activation uncommitted while registration starts.
 // Observe the store's only connection in use, then commit the winning activation.
 // The UPDATE must test the newly committed status rather than the stale snapshot.
 func TestUpdatePendingRegistrationCannotOverwriteConcurrentActivation(t *testing.T) {
-	st, _ := newTestStore(t)
+	target := testTarget(t, false)
+	st, _ := newTestStoreAt(t, target)
 	u := mustCreate(t, st, "activation@example.org", "Original")
-	var file string
-	if err := st.db.QueryRow(`PRAGMA database_list`).Scan(new(int), new(string), &file); err != nil {
-		t.Fatal(err)
-	}
-	writer, err := sql.Open("sqlite", file)
-	if err != nil {
-		t.Fatal(err)
-	}
+	writer := testOwner(t, target)
 	defer writer.Close()
 	tx, err := writer.Begin()
 	if err != nil {
@@ -82,7 +75,7 @@ func TestUpdatePendingRegistrationCannotOverwriteConcurrentActivation(t *testing
 	}
 	defer tx.Rollback()
 	activated := time.Now().Unix()
-	if _, err := tx.Exec(`UPDATE users SET status='active', role='admin', activated_at=? WHERE id=?`, activated, u.ID); err != nil {
+	if _, err := tx.Exec(`UPDATE users SET status='active', role='admin', activated_at=`+st.p(1)+` WHERE id=`+st.p(2), activated, u.ID); err != nil {
 		t.Fatal(err)
 	}
 	result := make(chan error, 1)

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -112,7 +113,7 @@ func TestObservationHops_QueryUsesPrimaryKey(t *testing.T) {
 		plan = append(plan, d)
 	}
 	sort.Strings(plan)
-	if len(plan) == 0 || !contains(plan[0], "PRIMARY KEY") || contains(plan[0], "SCAN") {
+	if len(plan) == 0 || !strings.Contains(plan[0], "PRIMARY KEY") || strings.Contains(plan[0], "SCAN") {
 		t.Fatalf("expected PK SEARCH, got %v", plan)
 	}
 }
@@ -166,9 +167,8 @@ func hopObjects(t *testing.T, db *sql.DB) []string {
 // The index is opt-in: the shared schema (Apply, used by the ingestor and the
 // migrate tool) must not install any of it.
 func TestApplyDoesNotInstallObservationHops(t *testing.T) {
-	db := minimalDB(t)
-	defer db.Close()
-	if err := Apply(db, nil); err != nil {
+	db, _ := sqliteTestDB(t)
+	if err := ApplySQLite(db, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := hopObjects(t, db); len(got) != 0 {

@@ -13,12 +13,12 @@ func evictionResolvedStore(t testing.TB, n int) (*PacketStore, []int) {
 	pk := func(i int) string { return fmt.Sprintf("%064x", i) }
 	ids := make([]int, 0, n)
 	for i := 1; i <= n; i++ {
-		if _, err := db.conn.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (?, '00', ?, '2026-01-01T00:00:00Z')`, i, fmt.Sprintf("h%015d", i)); err != nil {
+		if _, err := db.conn.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES ($1, '00', $2, '2026-01-01T00:00:00Z')`, i, fmt.Sprintf("h%015d", i)); err != nil {
 			t.Fatal(err)
 		}
 		for o := 0; o < 3; o++ {
 			rp := `["` + pk(i%9) + `",null,"` + pk(o+20) + `","` + pk(i%9) + `"]`
-			if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path) VALUES (?, 1, '["aa","bb","cc","dd"]', 0, ?)`, i, rp); err != nil {
+			if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path) VALUES ($1, 1, '["aa","bb","cc","dd"]', 0, $2)`, i, rp); err != nil {
 				t.Fatal(err)
 			}
 		}

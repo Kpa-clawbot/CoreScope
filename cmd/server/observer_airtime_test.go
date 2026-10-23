@@ -55,7 +55,7 @@ func TestGetMetricsSummaryAirtime1h(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	ins := func(obs string, minAgo, tx, rx int) {
 		ts := now.Add(-time.Duration(minAgo) * time.Minute).Format(time.RFC3339)
-		if _, err := db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs) VALUES (?, ?, ?, ?, ?)",
+		if _, err := db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs) VALUES ($1, $2, $3, $4, $5)",
 			obs, ts, -110.0, tx, rx); err != nil {
 			t.Fatal(err)
 		}

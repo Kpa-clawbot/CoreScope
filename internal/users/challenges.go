@@ -32,7 +32,7 @@ func (s *Store) CreateLinkChallenge(userID int64, pubkey string) (string, time.T
 		return "", time.Time{}, fmt.Errorf("users: challenge: %w", err)
 	}
 	exp := unix(s.now().Add(LinkChallengeTTL))
-	if _, err := s.db.Exec(`INSERT INTO link_challenges (challenge_hash, user_id, pubkey, expires_at) VALUES (?, ?, ?, ?)`,
+	if _, err := s.db.Exec(`INSERT INTO link_challenges (challenge_hash, user_id, pubkey, expires_at) VALUES (`+s.p(1)+`, `+s.p(2)+`, `+s.p(3)+`, `+s.p(4)+`)`,
 		challengeHash(raw), userID, pk, exp); err != nil {
 		return "", time.Time{}, fmt.Errorf("users: create link challenge: %w", err)
 	}
@@ -51,7 +51,7 @@ func (s *Store) ConsumeLinkChallenge(userID int64, pubkey, challenge string) err
 	}
 	var owner, exp int64
 	var pk string
-	err = s.db.QueryRow(`DELETE FROM link_challenges WHERE challenge_hash = ? RETURNING user_id, pubkey, expires_at`,
+	err = s.db.QueryRow(`DELETE FROM link_challenges WHERE challenge_hash = `+s.p(1)+` RETURNING user_id, pubkey, expires_at`,
 		challengeHash(raw)).Scan(&owner, &pk, &exp)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrChallengeMissing
@@ -71,7 +71,7 @@ func (s *Store) ConsumeLinkChallenge(userID int64, pubkey, challenge string) err
 
 // PruneLinkChallenges deletes challenges that have expired.
 func (s *Store) PruneLinkChallenges() (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM link_challenges WHERE expires_at <= ?`, unix(s.now()))
+	res, err := s.db.Exec(`DELETE FROM link_challenges WHERE expires_at <= `+s.p(1)+``, unix(s.now()))
 	if err != nil {
 		return 0, err
 	}

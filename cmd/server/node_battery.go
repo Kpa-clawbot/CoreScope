@@ -46,9 +46,9 @@ type NodeBatterySample struct {
 const nodeBatteryHistorySQL = `
 		SELECT timestamp, battery_mv
 		FROM observer_metrics
-		WHERE observer_id IN (?, ?)
+		WHERE observer_id IN ($1, $2)
 		  AND battery_mv IS NOT NULL
-		  AND timestamp >= ?
+		  AND timestamp >= $3
 		ORDER BY timestamp ASC`
 
 // GetNodeBatteryHistory returns time-ordered battery_mv samples for a node,

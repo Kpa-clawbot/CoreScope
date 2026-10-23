@@ -218,7 +218,7 @@ func (s *Server) companionLastSeen(pks []string) map[string]string {
 		args[i] = pk
 	}
 	rows, err := s.db.conn.Query(`SELECT rx_pubkey, MAX(rx_at) FROM client_receptions WHERE rx_pubkey IN (`+
-		sqlPlaceholders(len(pks))+`) GROUP BY rx_pubkey`, args...)
+		s.db.sqlPlaceholders(len(pks))+`) GROUP BY rx_pubkey`, args...)
 	if err != nil {
 		if !strings.Contains(err.Error(), "no such table") {
 			log.Printf("[users] companion last seen: %v", err)

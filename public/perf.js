@@ -117,11 +117,11 @@ function renderVersionCard(health) {
     try {
       // #1258: /api/health was awaited AFTER Promise.all, adding a full RTT
       // (~50-200ms) on every 5s refresh. Issue it in parallel with the rest.
-      const [server, client, ioStats, sqliteStats, writeSources, health] = await Promise.all([
+      const [server, client, ioStats, databaseStats, writeSources, health] = await Promise.all([
         fetch('/api/perf').then(r => r.json()),
         Promise.resolve(window.apiPerf ? window.apiPerf() : null),
         fetch('/api/perf/io').then(r => r.json()).catch(() => null),
-        fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
+        fetch('/api/perf/database').then(r => r.json()).catch(() => null),
         fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null),
         fetch('/api/health').then(r => r.json()).catch(() => null)
       ]);
@@ -213,7 +213,7 @@ function renderVersionCard(health) {
         const keys = Object.keys(src).sort((a, b) => (src[b] || 0) - (src[a] || 0));
         html += '<h3>Write Sources</h3>';
         if (keys.length === 0) {
-          html += '<p style="color:var(--text-muted)">No ingestor stats yet (waiting for /tmp/corescope-ingestor-stats.json)</p>';
+          html += '<p style="color:var(--text-muted)">No ingestor stats yet (waiting for the ingestor statistics snapshot)</p>';
         } else {
           // Anomaly detection (#1120 acceptance): flag any component whose
           // per-second write rate exceeds 10× its 5-minute rolling baseline.
@@ -246,17 +246,26 @@ function renderVersionCard(health) {
         }
       }
 
-      // SQLite perf (separate from existing SQLite block — focused on WAL + cache hit) (#1120)
-      if (sqliteStats) {
-        const walMB = sqliteStats.walSizeMB || 0;
-        const walFlag = walMB > 100 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
-        const hitRate = (sqliteStats.cacheHitRate || 0) * 100;
+      // Database-wide PostgreSQL counters and this server's connection pool.
+      if (databaseStats && databaseStats.engine === 'postgresql') {
+        const hitRate = databaseStats.cacheHitRate == null ? null : Number(databaseStats.cacheHitRate) * 100;
         const hitFlag = hitRate > 0 && hitRate < 90 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
-        html += `<h3>SQLite (WAL + Cache Hit)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-          <div class="perf-card"><div class="perf-num">${walMB.toFixed(1)}MB${walFlag}</div><div class="perf-label">WAL Size</div></div>
-          <div class="perf-card"><div class="perf-num">${(sqliteStats.pageCount || 0).toLocaleString()}</div><div class="perf-label">Page Count</div></div>
-          <div class="perf-card"><div class="perf-num">${sqliteStats.pageSize || 0}</div><div class="perf-label">Page Size</div></div>
-          <div class="perf-card"><div class="perf-num">${hitRate.toFixed(1)}%${hitFlag}</div><div class="perf-label">Cache Hit Rate</div></div>
+        const hitText = hitRate != null && Number.isFinite(hitRate) ? hitRate.toFixed(1) + '%' : '—';
+        html += `<h3>PostgreSQL connections</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          <div class="perf-card"><div class="perf-num">${Number(databaseStats.inUseConnections || 0)} / ${Number(databaseStats.openConnections || 0)}</div><div class="perf-label">Connections in use</div></div>
+          <div class="perf-card"><div class="perf-num">${Number(databaseStats.connectionWaitCount || 0).toLocaleString()}</div><div class="perf-label">Connection waits</div></div>
+          <div class="perf-card"><div class="perf-num">${Number(databaseStats.connectionWaitMs || 0).toFixed(1)}ms</div><div class="perf-label">Total connection wait</div></div>
+          <div class="perf-card"><div class="perf-num">${hitText}${hitFlag}</div><div class="perf-label">Database Block Cache Hit Rate</div></div>
+        </div>`;
+      }
+
+      if (databaseStats && databaseStats.engine === 'sqlite') {
+        const walMB = databaseStats.walSizeMB;
+        html += `<h3>SQLite storage</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          <div class="perf-card"><div class="perf-num">${walMB == null ? '—' : Number(walMB).toFixed(1) + 'MB'}</div><div class="perf-label">WAL Size</div></div>
+          <div class="perf-card"><div class="perf-num">${databaseStats.pageCount == null ? '—' : Number(databaseStats.pageCount).toLocaleString()}</div><div class="perf-label">Page Count</div></div>
+          <div class="perf-card"><div class="perf-num">${databaseStats.pageSize == null ? '—' : Number(databaseStats.pageSize)}</div><div class="perf-label">Page Size</div></div>
+          <div class="perf-card"><div class="perf-num">${databaseStats.plannerStats == null ? 'Unknown' : databaseStats.plannerStats ? 'Available' : 'Pending'}</div><div class="perf-label">Planner Statistics</div></div>
         </div>`;
       }
 
@@ -299,23 +308,29 @@ function renderVersionCard(health) {
         </div>`;
       }
 
-      // SQLite stats
-      if (server.sqlite && !server.sqlite.error) {
-        const sq = server.sqlite;
-        const walColor = sq.walSizeMB > 50 ? 'var(--status-red)' : sq.walSizeMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)';
-        const freelistColor = sq.freelistMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)';
-        html += `<h3>SQLite</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+      // Native engine sizes retain their distinct meanings; PostgreSQL excludes cluster WAL.
+      const selectedDatabase = server.database || server.sqlite || server.postgres;
+      const databaseLabel = selectedDatabase && selectedDatabase.engine === 'sqlite' ? 'SQLite' : 'PostgreSQL';
+      if (selectedDatabase && selectedDatabase.rows && selectedDatabase.dbSizeMB != null) {
+        const sq = selectedDatabase;
+        html += `<h3>${databaseLabel} data</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
           <div class="perf-card"><div class="perf-num">${sq.dbSizeMB}MB</div><div class="perf-label">DB Size</div></div>
-          <div class="perf-card"><div class="perf-num" style="color:${walColor}">${sq.walSizeMB}MB</div><div class="perf-label">WAL Size</div></div>
-          <div class="perf-card"><div class="perf-num" style="color:${freelistColor}">${sq.freelistMB}MB</div><div class="perf-label">Freelist</div></div>
           <div class="perf-card"><div class="perf-num">${(sq.rows.transmissions || 0).toLocaleString()}</div><div class="perf-label">Transmissions</div></div>
           <div class="perf-card"><div class="perf-num">${(sq.rows.observations || 0).toLocaleString()}</div><div class="perf-label">Observations</div></div>
           <div class="perf-card"><div class="perf-num">${sq.rows.nodes || 0}</div><div class="perf-label">Nodes</div></div>
           <div class="perf-card"><div class="perf-num">${sq.rows.observers || 0}</div><div class="perf-label">Observers</div></div>`;
-        if (sq.walPages) {
-          html += `<div class="perf-card"><div class="perf-num">${sq.walPages.busy}</div><div class="perf-label">WAL Busy Pages</div></div>`;
+        if (sq.engine === 'sqlite' && sq.freelistMB != null) {
+          html += `<div class="perf-card"><div class="perf-num">${Number(sq.freelistMB).toFixed(1)}MB</div><div class="perf-label">Reusable Free Space</div></div>`;
         }
         html += `</div>`;
+        if (sq.sampledAt) {
+          const sampled = new Date(sq.sampledAt);
+          const sampleTime = Number.isFinite(sampled.getTime()) ? sampled.toLocaleString() : 'unknown time';
+          const interval = Number(sq.sampleIntervalSeconds);
+          html += `<div style="font-size:11px;color:var(--text-muted)">${sq.stale ? 'Last verified ' + databaseLabel + ' sample' : databaseLabel + ' sample'}: ${sampleTime}${Number.isFinite(interval) && interval > 0 ? ' · refreshes every ' + interval + 's' : ''}${sq.stale ? ' · refresh unavailable' : ''}</div>`;
+        }
+      } else if (selectedDatabase) {
+        html += `<h3>${databaseLabel} data</h3><div style="color:var(--text-muted)">${databaseLabel} storage unavailable</div>`;
       }
 
       // Server endpoints table — sort by total time (count * avg) DESC.

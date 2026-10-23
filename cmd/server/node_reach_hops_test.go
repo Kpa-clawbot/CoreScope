@@ -7,6 +7,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema"
 )
 
@@ -22,6 +23,9 @@ func canon(rows []pathRow) []string {
 
 func newHopIndexedTestDB(t *testing.T) *DB {
 	t.Helper()
+	if testBackend(t) != dbconfig.SQLite {
+		t.Skip("the derived observation hop accelerator is SQLite-only")
+	}
 	db := newReachScanTestDB(t)
 	db.conn.SetMaxOpenConns(1)
 	// Extra rows: mixed hop widths, a path hitting two tokens, one row outside
@@ -41,6 +45,32 @@ func newHopIndexedTestDB(t *testing.T) *DB {
 		}
 	}
 	return db
+}
+
+// A similarly named table does not make the SQLite-only accelerator usable on
+// PostgreSQL. The native scan must still return complete results.
+func TestScanReachRows_PostgresIgnoresSQLiteHopCoverage(t *testing.T) {
+	if testBackend(t) != dbconfig.Postgres {
+		t.Skip("PostgreSQL native fallback")
+	}
+	db := newReachScanTestDB(t)
+	defer db.conn.Close()
+	for _, query := range []string{
+		`CREATE TABLE observation_hops_coverage (id INTEGER PRIMARY KEY, since BIGINT NOT NULL)`,
+		`INSERT INTO observation_hops_coverage VALUES (1, 0)`,
+	} {
+		if _, err := db.conn.Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Server{db: db}
+	if s.reachHopIndexCovers(context.Background(), 500) {
+		t.Fatal("PostgreSQL must not claim coverage from SQLite's derived hop index")
+	}
+	rows, err := s.scanReachRows(context.Background(), map[string]bool{"01fa": true}, 500)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("native fallback rows=%d, err=%v; want both matching observations", len(rows), err)
+	}
 }
 
 // The indexed scan must return exactly what the LIKE scan returns, for upper-

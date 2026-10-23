@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+
+	"github.com/meshcore-analyzer/dbschema/legacy"
 )
 
 // BenchmarkObservationInsert measures what the observation_hops triggers add
@@ -20,7 +22,11 @@ func BenchmarkObservationInsert(b *testing.B) {
 			name = "with_index"
 		}
 		b.Run(name, func(b *testing.B) {
-			db, err := sql.Open("sqlite3", WriterDSN(filepath.Join(b.TempDir(), "w.db")))
+			dsn, err := legacy.WriterDSN(filepath.Join(b.TempDir(), "w.db"))
+			if err != nil {
+				b.Fatal(err)
+			}
+			db, err := sql.Open("sqlite3", dsn)
 			if err != nil {
 				b.Fatal(err)
 			}

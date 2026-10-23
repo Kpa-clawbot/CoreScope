@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // #2146: the daily planner statistics refresh also ran 2 minutes after every
@@ -34,6 +36,9 @@ func TestNextPlannerStatsRefresh(t *testing.T) {
 }
 
 func TestRefreshPlannerStatsRecordsWhen(t *testing.T) {
+	if testBackend(t) != dbconfig.SQLite {
+		t.Skip("SQLite planner maintenance only")
+	}
 	s := newTestStore(t)
 	defer s.Close()
 	if !s.lastPlannerStatsRefresh().IsZero() {
@@ -60,6 +65,9 @@ func TestRefreshPlannerStatsRecordsWhen(t *testing.T) {
 }
 
 func TestRefreshPlannerStatsDisabledRecordsNothing(t *testing.T) {
+	if testBackend(t) != dbconfig.SQLite {
+		t.Skip("SQLite planner maintenance only")
+	}
 	s := newTestStore(t)
 	defer s.Close()
 	s.RefreshPlannerStats(-1)
@@ -71,6 +79,9 @@ func TestRefreshPlannerStatsDisabledRecordsNothing(t *testing.T) {
 // When the time cannot be written next to the database, the running process
 // still waits the full interval instead of refreshing again 2 minutes later.
 func TestFailedRecordStillWaitsTheInterval(t *testing.T) {
+	if testBackend(t) != dbconfig.SQLite {
+		t.Skip("SQLite planner maintenance only")
+	}
 	s := newTestStore(t)
 	defer s.Close()
 	// A directory where the temporary file should go makes the write fail.
@@ -91,6 +102,9 @@ func TestFailedRecordStillWaitsTheInterval(t *testing.T) {
 // Building statistics on a new database records the time too, so the routine
 // refresh does not run a second ANALYZE 2 minutes later.
 func TestEnsurePlannerStatsRecordsWhen(t *testing.T) {
+	if testBackend(t) != dbconfig.SQLite {
+		t.Skip("SQLite planner maintenance only")
+	}
 	s := newTestStore(t)
 	defer s.Close()
 	if !s.EnsurePlannerStats(100) {

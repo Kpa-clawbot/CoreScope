@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"reflect"
 	"testing"
 )
@@ -12,7 +11,7 @@ import (
 
 func newPathsBatchStore(t *testing.T) (*PacketStore, map[int][]rpObs) {
 	t.Helper()
-	conn, err := sql.Open("sqlite3", ":memory:")
+	conn, err := openPostgresTestDB(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +46,7 @@ func newPathsBatchStore(t *testing.T) (*PacketStore, map[int][]rpObs) {
 		{11, 7, `["a","b","c"]`, `["cc33cc33","aa11aa11","dd44dd44"]`},
 	}
 	for _, r := range rows {
-		if _, err := conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,?)`,
+		if _, err := conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES ($1,$2,$3,$4)`,
 			r.id, r.tx, r.path, r.rp); err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +60,7 @@ func newPathsBatchStore(t *testing.T) (*PacketStore, map[int][]rpObs) {
 		6: {{8, `["a","b"]`}},
 		7: {{10, `["a"]`}, {11, `["a","b","c"]`}},
 	}
-	return &PacketStore{db: &DB{conn: conn}}, snapshots
+	return &PacketStore{db: &DB{conn: conn, backend: testBackendValue()}}, snapshots
 }
 
 func TestLoadCanonicalResolvedPathsMatchesBestResolvedPath(t *testing.T) {
@@ -89,7 +88,7 @@ func derefAll(rp []*string) []string {
 }
 
 func TestLoadCanonicalResolvedPathsBatchesQueries(t *testing.T) {
-	conn, err := sql.Open("sqlite3", ":memory:")
+	conn, err := openPostgresTestDB(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,11 +101,11 @@ func TestLoadCanonicalResolvedPathsBatchesQueries(t *testing.T) {
 	const n = 2*resolvedPathBatchSize + 1
 	snapshots := make(map[int][]rpObs, n)
 	for i := 1; i <= n; i++ {
-		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,?)`,
+		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES ($1,$2,$3,$4)`,
 			i, i, `["a"]`, `["aa11aa11"]`)
 		snapshots[i] = []rpObs{{i, `["a"]`}}
 	}
-	s := &PacketStore{db: &DB{conn: conn}}
+	s := &PacketStore{db: &DB{conn: conn, backend: testBackendValue()}}
 	batched, single := 0, 0
 	s.cacheLoadHook = func(kind string) {
 		switch kind {
@@ -132,11 +131,11 @@ func TestLoadCanonicalResolvedPathsBatchesQueries(t *testing.T) {
 // both A and B are index hits, only A is on the canonical path.
 func TestHandleNodePaths_CanonicalPathDecidesIndexHits(t *testing.T) {
 	sc := setupCollisionScenario(t, false)
-	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (43, 'BEEF', 'hash_2146', ?)`, sc.recent)
+	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (43, 'BEEF', 'hash_2146', $1)`, sc.recent)
 	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (43, NULL, '["c0","aa"]', ?, ?)`, sc.recentEpoch, `["`+sc.nodeAPK+`","aaaa0000aaaa0000"]`)
+		VALUES (43, NULL, '["c0","aa"]', $1, $2)`, sc.recentEpoch, `["`+sc.nodeAPK+`","aaaa0000aaaa0000"]`)
 	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (43, NULL, '["c0"]', ?, ?)`, sc.recentEpoch-10, `["`+sc.nodeBPK+`"]`)
+		VALUES (43, NULL, '["c0"]', $1, $2)`, sc.recentEpoch-10, `["`+sc.nodeBPK+`"]`)
 	sc.reloadStore(t)
 
 	queries := 0
@@ -179,7 +178,7 @@ func TestLoadCanonicalResolvedPathsUsesLRU(t *testing.T) {
 // production database, so most /paths requests paid this per transmission.
 // The fallback is batched too.
 func TestLoadCanonicalResolvedPathsBatchesFallback(t *testing.T) {
-	conn, err := sql.Open("sqlite3", ":memory:")
+	conn, err := openPostgresTestDB(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,13 +192,17 @@ func TestLoadCanonicalResolvedPathsBatchesFallback(t *testing.T) {
 	snapshots := make(map[int][]rpObs, n)
 	for tx := 1; tx <= n; tx++ {
 		longest, shorter := 2*tx-1, 2*tx
-		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,NULL)`,
-			longest, tx, `["a","b"]`)
-		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,?)`,
-			shorter, tx, `["a"]`, `["aa11aa11"]`)
+		if _, err := conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES ($1,$2,$3,NULL)`,
+			longest, tx, `["a","b"]`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES ($1,$2,$3,$4)`,
+			shorter, tx, `["a"]`, `["aa11aa11"]`); err != nil {
+			t.Fatal(err)
+		}
 		snapshots[tx] = []rpObs{{longest, `["a","b"]`}, {shorter, `["a"]`}}
 	}
-	s := &PacketStore{db: &DB{conn: conn}}
+	s := &PacketStore{db: &DB{conn: conn, backend: testBackendValue()}}
 	batched, single := 0, 0
 	s.cacheLoadHook = func(kind string) {
 		switch kind {

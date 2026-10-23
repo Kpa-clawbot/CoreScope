@@ -1,5 +1,7 @@
 node_modules/
 data/
+postgres-data/
+*.dump
 *.bak
 *.db
 *.db-journal

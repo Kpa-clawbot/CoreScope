@@ -13,7 +13,7 @@ func TestRepeaterRelayActivity_Active(t *testing.T) {
 	defer db.conn.Close()
 
 	pubkey := "aabbccdd11223344"
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ($1, $2, $3, $4)",
 		pubkey, "RepActive", "repeater", recentTS(1))
 
 	store := NewPacketStore(db, nil)
@@ -60,7 +60,7 @@ func seedUnscopedRelayFixture(t *testing.T, hashPrefix string) (*PacketStore, st
 	t.Helper()
 	db := setupCapabilityTestDB(t)
 	pubkey := "aabbccdd11223344"
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ($1, $2, $3, $4)",
 		pubkey, "RepUnscoped", "repeater", recentTS(1))
 	store := NewPacketStore(db, nil)
 	pt := 1 // non-advert (TXT_MSG)
@@ -109,7 +109,7 @@ func TestRepeaterRelayActivity_Idle(t *testing.T) {
 	defer db.conn.Close()
 
 	pubkey := "ccddeeff55667788"
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ($1, $2, $3, $4)",
 		pubkey, "RepIdle", "repeater", recentTS(1))
 
 	store := NewPacketStore(db, nil)
@@ -134,7 +134,7 @@ func TestRepeaterRelayActivity_Stale(t *testing.T) {
 	defer db.conn.Close()
 
 	pubkey := "1122334455667788"
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ($1, $2, $3, $4)",
 		pubkey, "RepStale", "repeater", recentTS(1))
 
 	store := NewPacketStore(db, nil)
@@ -176,7 +176,7 @@ func TestRepeaterRelayActivity_IgnoresAdverts(t *testing.T) {
 	defer db.conn.Close()
 
 	pubkey := "deadbeef00000001"
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ($1, $2, $3, $4)",
 		pubkey, "RepAdvertOnly", "repeater", recentTS(1))
 
 	store := NewPacketStore(db, nil)
@@ -227,7 +227,7 @@ func TestRepeaterRelayActivity_PrefixHop(t *testing.T) {
 	defer db.conn.Close()
 
 	pubkey := "a36a21290d9c25a158130fe7c489541210d5f09f25fab997db5e942fb7680510"
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ($1, $2, $3, $4)",
 		pubkey, "RepPrefix", "repeater", recentTS(1))
 
 	store := NewPacketStore(db, nil)
@@ -274,7 +274,7 @@ func TestRepeaterRelayActivity_DedupAcrossPrefixAndFullKey(t *testing.T) {
 	defer db.conn.Close()
 
 	pubkey := "a36a21290d9c25a158130fe7c489541210d5f09f25fab997db5e942fb7680510"
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ($1, $2, $3, $4)",
 		pubkey, "RepDedup", "repeater", recentTS(1))
 
 	store := NewPacketStore(db, nil)

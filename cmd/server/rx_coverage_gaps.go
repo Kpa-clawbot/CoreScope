@@ -87,14 +87,14 @@ func aggregateGaps(track []trackPoint, receptions []coverageRow, res int) (gaps 
 // layer it keeps rows without a noise_floor reading: any sample proves the
 // companion was connected there. Read-only.
 func (s *Server) queryTrackPoints(rx string, days int, b bbox) ([]trackPoint, error) {
-	where := []string{"lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?", "stationary = 0"}
+	where := []string{"lat BETWEEN " + s.db.parameter(1) + " AND " + s.db.parameter(2), "lon BETWEEN " + s.db.parameter(3) + " AND " + s.db.parameter(4), "stationary = 0"}
 	args := []interface{}{b.MinLat, b.MaxLat, b.MinLon, b.MaxLon}
 	if rx != "" {
-		where = append(where, "rx_pubkey = ?")
+		where = append(where, "rx_pubkey = "+s.db.parameter(len(args)+1))
 		args = append(args, strings.ToLower(rx))
 	}
 	if days > 0 {
-		where = append(where, "sampled_at >= ?")
+		where = append(where, "sampled_at >= "+s.db.parameter(len(args)+1))
 		args = append(args, time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339))
 	}
 	rows, err := s.db.conn.Query("SELECT lat, lon FROM client_rf_samples WHERE "+strings.Join(where, " AND "), args...)

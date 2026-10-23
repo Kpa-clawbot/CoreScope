@@ -32,11 +32,11 @@ func TestQueryPacketsOrdersByIngestID(t *testing.T) {
 	bufferedFirstSeen := now.Add(-6 * time.Hour).Format(time.RFC3339)
 
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type)
-		VALUES ('AA', 'hashfresh00000001', ?, 4)`, freshFirstSeen); err != nil {
+		VALUES ('AA', 'hashfresh00000001', $1, 4)`, freshFirstSeen); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type)
-		VALUES ('BB', 'hashbuffered00002', ?, 4)`, bufferedFirstSeen); err != nil {
+		VALUES ('BB', 'hashbuffered00002', $1, 4)`, bufferedFirstSeen); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,24 +78,24 @@ func TestQueryPacketsSinceFilterUsesFirstSeen(t *testing.T) {
 	oldEpoch := now.Add(-6 * time.Hour).Unix()
 
 	if _, err := db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen, packet_count)
-		VALUES ('obs1', 'Obs1', ?, ?, 1)`, recent, recent); err != nil {
+		VALUES ('obs1', 'Obs1', $1, $2, 1)`, recent, recent); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type)
-		VALUES ('AA', 'recentrx00000001', ?, 4)`, recent); err != nil {
+		VALUES ('AA', 'recentrx00000001', $1, 4)`, recent); err != nil {
 		t.Fatal(err)
 	}
 	// Buffered upload — ingested SECOND, but rxTime is 6h ago.
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type)
-		VALUES ('BB', 'oldrxbuffered001', ?, 4)`, old); err != nil {
+		VALUES ('BB', 'oldrxbuffered001', $1, 4)`, old); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 10, -90, '[]', ?)`, recentEpoch); err != nil {
+		VALUES (1, 1, 10, -90, '[]', $1)`, recentEpoch); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (2, 1, 10, -90, '[]', ?)`, oldEpoch); err != nil {
+		VALUES (2, 1, 10, -90, '[]', $1)`, oldEpoch); err != nil {
 		t.Fatal(err)
 	}
 

@@ -120,22 +120,14 @@
 <p>Prefer the polygon format — it supports irregular shapes and the <code>bufferKm</code> margin.</p>
 
 <h2>Cleaning up historical nodes</h2>
-<p>The ingestor prevents new out-of-bounds nodes from being ingested, but does not retroactively remove nodes stored before the filter was configured. Use the prune script for that:</p>
-<pre><code># Dry run — shows what would be deleted without making any changes
-python3 scripts/prune-nodes-outside-geo-filter.py --dry-run
-
-# Default paths: /app/data/meshcore.db and /app/config.json
-python3 scripts/prune-nodes-outside-geo-filter.py
-
-# Custom paths
-python3 scripts/prune-nodes-outside-geo-filter.py /path/to/meshcore.db \
-  --config /path/to/config.json
-
-# In Docker — run inside the container
-docker exec -it meshcore-analyzer \
-  python3 /app/scripts/prune-nodes-outside-geo-filter.py --dry-run</code></pre>
-<p>The script reads <code>geo_filter.polygon</code> and <code>geo_filter.bufferKm</code> from config, lists nodes that fall outside, then asks for <code>yes</code> confirmation before deleting. Nodes without coordinates are always kept.</p>
-<p>This is a one-time migration tool — run it once after first configuring <code>geo_filter</code> to clean up pre-filter data.</p>
+<p>The ingestor prevents new out-of-bounds nodes from being ingested. To review older nodes, open the Customizer's Admin Geo Filter settings and save the desired polygon and buffer first.</p>
+<ol>
+  <li>In <strong>Prune historical nodes</strong>, choose <strong>Preview prune</strong>.</li>
+  <li>Review the listed nodes outside the active filter. Nodes without coordinates are kept.</li>
+  <li>Choose <strong>Delete nodes</strong> only after reviewing the preview.</li>
+</ol>
+<p>The server submits the request to the shared state-directory queue; the ingestor performs the database changes. Keep both processes on the same configured state directory and allow the ingestor to finish before checking the result.</p>
+<p>The old Python prune script is offline legacy SQLite tooling. It must not be used for PostgreSQL maintenance.</p>
 
 </main>
 </body>

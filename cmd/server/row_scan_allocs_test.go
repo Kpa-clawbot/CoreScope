@@ -1,8 +1,6 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -19,11 +17,9 @@ import (
 
 func rowScanStore(t *testing.T, n int) *PacketStore {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "rows.db")
+	dbPath := postgresTestDSN(t)
 	createTestDBAt(t, dbPath, n)
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

@@ -29,7 +29,7 @@ func seedRelayNode(t *testing.T, s *Store, pubkey, name, lastSeen string) {
 func nodeLastSeen(t *testing.T, s *Store, pubkey string) string {
 	t.Helper()
 	var ls string
-	if err := s.db.QueryRow(`SELECT COALESCE(last_seen,'') FROM nodes WHERE public_key=?`, pubkey).Scan(&ls); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(last_seen,'') FROM nodes WHERE public_key=$1`, pubkey).Scan(&ls); err != nil {
 		t.Fatalf("read last_seen for %s: %v", pubkey, err)
 	}
 	return ls

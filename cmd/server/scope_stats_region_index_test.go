@@ -60,7 +60,7 @@ func scopeStatsFixtureDB(tb testing.TB, numTx int) *DB {
 		tb.Fatal(err)
 	}
 	stmt, err := rw.Prepare(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, scope_name)
-		VALUES ('aa', ?, ?, ?, 5, ?)`)
+		VALUES ('aa', $1, $2, $3, 5, $4)`)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestScopeStatsByRegion_CountsMatchWindow(t *testing.T) {
 	since := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
 	var want int
 	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM transmissions WHERE route_type IN (0,3)
-		AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?`, since).Scan(&want); err != nil {
+		AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= $1`, since).Scan(&want); err != nil {
 		t.Fatal(err)
 	}
 	got := 0

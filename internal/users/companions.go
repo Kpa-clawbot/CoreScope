@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // NormalizePubkey returns a companion's public key as 64 lowercase hex
@@ -59,8 +61,16 @@ func (s *Store) UpsertCompanionLink(userID int64, pubkey, name string) (*Compani
 	if err != nil {
 		return nil, 0, err
 	}
+	defer tx.Rollback()
+	// A row lock cannot protect the first link. Serialize a pubkey's transfer
+	// across processes, including competing first links, before reading its owner.
+	if s.backend == dbconfig.Postgres {
+		if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':' || $1,7289041404))`, pk); err != nil {
+			return nil, 0, err
+		}
+	}
 	var prev, linkedAt int64
-	err = tx.QueryRow(`SELECT user_id, linked_at FROM companion_links WHERE pubkey = ?`, pk).Scan(&prev, &linkedAt)
+	err = tx.QueryRow(`SELECT user_id, linked_at FROM companion_links WHERE pubkey = `+s.p(1)+``, pk).Scan(&prev, &linkedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		prev, linkedAt = 0, unix(s.now())
@@ -70,7 +80,7 @@ func (s *Store) UpsertCompanionLink(userID int64, pubkey, name string) (*Compani
 	case prev != userID:
 		linkedAt = unix(s.now())
 	}
-	if _, err := tx.Exec(`INSERT INTO companion_links (pubkey, user_id, name, linked_at) VALUES (?, ?, ?, ?)
+	if _, err := tx.Exec(`INSERT INTO companion_links (pubkey, user_id, name, linked_at) VALUES (`+s.p(1)+`, `+s.p(2)+`, `+s.p(3)+`, `+s.p(4)+`)
 		ON CONFLICT(pubkey) DO UPDATE SET user_id = excluded.user_id, name = excluded.name, linked_at = excluded.linked_at`,
 		pk, userID, name, linkedAt); err != nil {
 		tx.Rollback()
@@ -87,7 +97,7 @@ func (s *Store) UpsertCompanionLink(userID int64, pubkey, name string) (*Compani
 
 // ListCompanionLinks returns a user's linked companions, newest first.
 func (s *Store) ListCompanionLinks(userID int64) ([]CompanionLink, error) {
-	rows, err := s.db.Query(`SELECT `+companionCols+` FROM companion_links WHERE user_id = ? ORDER BY linked_at DESC, pubkey`, userID)
+	rows, err := s.db.Query(`SELECT `+companionCols+` FROM companion_links WHERE user_id = `+s.p(1)+` ORDER BY linked_at DESC, pubkey`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +119,7 @@ func (s *Store) GetCompanionLink(pubkey string) (*CompanionLink, error) {
 	if err != nil {
 		return nil, err
 	}
-	l, err := scanCompanion(s.db.QueryRow(`SELECT `+companionCols+` FROM companion_links WHERE pubkey = ?`, pk))
+	l, err := scanCompanion(s.db.QueryRow(`SELECT `+companionCols+` FROM companion_links WHERE pubkey = `+s.p(1)+``, pk))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -125,7 +135,7 @@ func (s *Store) DeleteCompanionLink(userID int64, pubkey string) error {
 	if err != nil {
 		return err
 	}
-	return expectOne(s.db.Exec(`DELETE FROM companion_links WHERE pubkey = ? AND user_id = ?`, pk, userID))
+	return expectOne(s.db.Exec(`DELETE FROM companion_links WHERE pubkey = `+s.p(1)+` AND user_id = `+s.p(2)+``, pk, userID))
 }
 
 // LinkedPubkeys returns every linked pubkey, sorted. (The ingestor does not

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 func TestLinkedCompanionFilterStartup(t *testing.T) {
@@ -15,10 +17,11 @@ func TestLinkedCompanionFilterStartup(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 	usersPath := filepath.Join(t.TempDir(), "users.db")
 	setLinks(t, usersPath, testCompanionPK)
+	storage := dbconfig.Storage{Backend: approvedTestBackend(t), UsersDBPath: usersPath, ApprovedChannelsDatabaseURL: approvedFixture(t, usersPath).reader}
 	um := func(on bool) *UserManagementConfig { return &UserManagementConfig{Enabled: on, DBPath: usersPath} }
 
 	off := &Config{ClientRxCoverage: &ClientRxCoverageConfig{Enabled: true}, UserManagement: um(true)}
-	if f := newLinkedCompanionFilter(off); f != nil {
+	if f := newLinkedCompanionFilter(off, storage); f != nil {
 		t.Fatal("filter installed with the setting off")
 	}
 	if buf.Len() != 0 {
@@ -26,7 +29,7 @@ func TestLinkedCompanionFilterStartup(t *testing.T) {
 	}
 
 	ignored := &Config{ClientRxCoverage: &ClientRxCoverageConfig{RequireLinkedCompanion: true}, UserManagement: um(false)}
-	if f := newLinkedCompanionFilter(ignored); f != nil {
+	if f := newLinkedCompanionFilter(ignored, storage); f != nil {
 		t.Fatal("filter installed with user management off")
 	}
 	if !strings.Contains(buf.String(), "requireLinkedCompanion is ignored") {
@@ -34,7 +37,7 @@ func TestLinkedCompanionFilterStartup(t *testing.T) {
 	}
 
 	on := &Config{ClientRxCoverage: &ClientRxCoverageConfig{RequireLinkedCompanion: true}, UserManagement: um(true)}
-	f := newLinkedCompanionFilter(on)
+	f := newLinkedCompanionFilter(on, storage)
 	if f == nil {
 		t.Fatal("no filter with the setting and user management on")
 	}

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // The columns of companion_links in cmd/server's users.db (internal/users
@@ -51,6 +53,16 @@ func setLinks(t testing.TB, path string, pks ...string) {
 		stmts = append(stmts, fmt.Sprintf(`INSERT INTO companion_links (pubkey, user_id, linked_at) VALUES ('%s', 1, %d)`, pk, i))
 	}
 	execUsersDB(t, path, stmts...)
+	if approvedTestBackend(t) == dbconfig.SQLite {
+		execUsersDB(t, path, `CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL); DELETE FROM schema_version; INSERT INTO schema_version VALUES(6)`)
+	} else {
+		f := approvedFixture(t, path)
+		execUsersDB(t, path,
+			`CREATE TABLE IF NOT EXISTS corescope_schema(version INTEGER NOT NULL,kind TEXT PRIMARY KEY,ready BOOLEAN NOT NULL)`,
+			`INSERT INTO corescope_schema VALUES(1,'accounts',true) ON CONFLICT(kind) DO NOTHING`,
+			`CREATE OR REPLACE VIEW linked_companions AS SELECT pubkey FROM companion_links`,
+			`GRANT SELECT ON linked_companions,corescope_schema TO `+f.role)
+	}
 }
 
 // newTestLinkedSet returns a set over a fresh users.db holding pks, on a
@@ -60,7 +72,7 @@ func newTestLinkedSet(t testing.TB, pks ...string) (*linkedCompanionSet, string,
 	path := filepath.Join(t.TempDir(), "users.db")
 	setLinks(t, path, pks...)
 	clk := &linkClock{t: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)}
-	s := newLinkedCompanionSet(path)
+	s := newLinkedCompanionSet(approvedFixture(t, path).reader)
 	s.now = clk.now
 	t.Cleanup(s.Close)
 	return s, path, clk
@@ -151,7 +163,7 @@ func TestLinkedCompanionSetMissingTablePassesAndWarnsOnce(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 	path := filepath.Join(t.TempDir(), "users.db")
 	writeUsersDB(t, path) // an older users.db: proposals, no companion_links
-	s := newLinkedCompanionSet(path)
+	s := newLinkedCompanionSet(approvedFixture(t, path).reader)
 	defer s.Close()
 	s.refresh()
 	s.refresh()
@@ -172,11 +184,14 @@ func TestLinkedCompanionSetMissingTablePassesAndWarnsOnce(t *testing.T) {
 }
 
 func TestLinkedCompanionSetMissingFileLogsOnceAndRecovers(t *testing.T) {
+	if approvedTestBackend(t) != dbconfig.SQLite {
+		t.Skip("SQLite file disappearance only")
+	}
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 	path := filepath.Join(t.TempDir(), "users.db")
-	s := newLinkedCompanionSet(path)
+	s := newLinkedCompanionSet(approvedFixture(t, path).reader)
 	defer s.Close()
 	s.refresh()
 	s.refresh()
@@ -208,8 +223,12 @@ func TestLinkedCompanionSetFailsClosedOnlyAfterFirstRead(t *testing.T) {
 		t.Fatal("an unlinked pubkey passed after a successful read")
 	}
 	s.Close()
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
+	if approvedTestBackend(t) == dbconfig.SQLite {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		execUsersDB(t, path, `DROP VIEW linked_companions`)
 	}
 	clock.add(linkedCompanionsMissGap)
 	s.refresh() // fails: users.db is gone
@@ -223,14 +242,11 @@ func TestLinkedCompanionSetFailsClosedOnlyAfterFirstRead(t *testing.T) {
 }
 
 func TestLinkedCompanionSetIsReadOnly(t *testing.T) {
-	s, path, _ := newTestLinkedSet(t, testCompanionPK)
+	s, _, _ := newTestLinkedSet(t, testCompanionPK)
 	s.refresh()
-	_, err := s.db.Exec(`INSERT INTO companion_links (pubkey, user_id, linked_at) VALUES ('x', 1, 1)`)
-	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "readonly") {
+	_, err := s.reader.db.Exec(`INSERT INTO companion_links (pubkey, user_id, linked_at) VALUES ('x', 1, 1)`)
+	if err == nil || (!strings.Contains(strings.ToLower(err.Error()), "readonly") && !strings.Contains(strings.ToLower(err.Error()), "read-only")) {
 		t.Fatalf("write through the ingestor's users.db handle: err = %v; want a read-only refusal", err)
-	}
-	if !strings.Contains(usersDBReadOnlyDSN(path), "mode=ro") {
-		t.Fatal("DSN without mode=ro")
 	}
 }
 

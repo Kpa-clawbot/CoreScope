@@ -287,7 +287,7 @@ func (c *Client) writePump(pingInterval time.Duration) {
 	}
 }
 
-// Poller watches for new transmissions in SQLite and broadcasts them.
+// Poller watches for new transmissions in PostgreSQL and broadcasts them.
 type Poller struct {
 	db       *DB
 	hub      *Hub
@@ -331,9 +331,9 @@ func (p *Poller) Start() {
 				// Ingest new observations for existing transmissions (fixes #174)
 				nextObsID := lastObsID
 				if err := p.db.conn.QueryRow(`
-					SELECT COALESCE(MAX(id), ?) FROM (
+					SELECT COALESCE(MAX(id), $1) FROM (
 						SELECT id FROM observations
-						WHERE id > ?
+						WHERE id > $2
 						ORDER BY id ASC
 						LIMIT 500
 					)`, lastObsID, lastObsID).Scan(&nextObsID); err != nil {

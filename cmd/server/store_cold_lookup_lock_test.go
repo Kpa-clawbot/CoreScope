@@ -24,7 +24,9 @@ func newColdLookupStore(t *testing.T) *PacketStore {
 	s.config = &Config{Areas: map[string]AreaEntry{
 		"BAY": {Label: "Bay", Polygon: [][2]float64{{37.0, -122.5}, {38.0, -122.5}, {38.0, -121.5}, {37.0, -121.5}}},
 	}}
-	if err := s.Load(); err != nil {
+	// Exercise the real startup lifecycle: health readiness requires both
+	// initial and background loading to finish successfully.
+	if err := s.RunStartupLoad(0); err != nil {
 		t.Fatal(err)
 	}
 	return s

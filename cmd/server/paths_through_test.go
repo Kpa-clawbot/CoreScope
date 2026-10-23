@@ -28,19 +28,19 @@ func TestHandleNodePaths_PrefixCollisionExclusion(t *testing.T) {
 	nodeBPK := "7aff2222ccccdddd" // same "7a" prefix, has GPS so resolveHop("7a") picks B
 
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'NodeA', 'repeater', 0, 0, ?, '2026-01-01', 1)`, nodeAPK, recent)
+		VALUES ($1, 'NodeA', 'repeater', 0, 0, $2, '2026-01-01', 1)`, nodeAPK, recent)
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'NodeB', 'repeater', 37.5, -122.0, ?, '2026-01-01', 1)`, nodeBPK, recent)
+		VALUES ($1, 'NodeB', 'repeater', 37.5, -122.0, $2, '2026-01-01', 1)`, nodeBPK, recent)
 
 	// tx1: no resolved_path — should be excluded by hop-level check
-	db.conn.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (10, 'AA', 'hash_fp', ?)`, recent)
+	db.conn.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (10, 'AA', 'hash_fp', $1)`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (10, NULL, '["7a"]', ?, NULL)`, recentEpoch)
+		VALUES (10, NULL, '["7a"]', $1, NULL)`, recentEpoch)
 
 	// tx2: resolved_path confirms nodeA — must be included
-	db.conn.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (11, 'BB', 'hash_tp', ?)`, recent)
+	db.conn.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (11, 'BB', 'hash_tp', $1)`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (11, NULL, '["7a"]', ?, ?)`, recentEpoch, `["`+nodeAPK+`"]`)
+		VALUES (11, NULL, '["7a"]', $1, $2)`, recentEpoch, `["`+nodeAPK+`"]`)
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()

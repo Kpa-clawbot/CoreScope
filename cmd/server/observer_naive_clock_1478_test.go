@@ -30,7 +30,7 @@ func TestHandleObservers_Issue1478_SurfacesRecentNaiveSkew(t *testing.T) {
 	_, err := srv.db.conn.Exec(`INSERT INTO observers
 		(id, name, iata, last_seen, first_seen, packet_count,
 		 clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		"naive-obs-1", "California Pi", "SFO",
 		now.Format(time.RFC3339), now.Add(-7*24*time.Hour).Format(time.RFC3339),
 		42, -28800, 17, recent)
@@ -91,7 +91,7 @@ func TestHandleObservers_Issue1478_DecaysAfter24h(t *testing.T) {
 	_, err := srv.db.conn.Exec(`INSERT INTO observers
 		(id, name, iata, last_seen, first_seen, packet_count,
 		 clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		"naive-obs-old", "Fixed Pi", "LAX",
 		now.Format(time.RFC3339), now.Add(-30*24*time.Hour).Format(time.RFC3339),
 		99, -28800, 5, stale)
@@ -136,7 +136,7 @@ func TestHandleObserverDetail_Issue1478_IncludesClockNaiveFields(t *testing.T) {
 	_, err := srv.db.conn.Exec(`INSERT INTO observers
 		(id, name, iata, last_seen, first_seen, packet_count,
 		 clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		"naive-obs-detail", "Detail Pi", "SJC",
 		now.Format(time.RFC3339), now.Add(-2*24*time.Hour).Format(time.RFC3339),
 		7, 25200, 3, recent)

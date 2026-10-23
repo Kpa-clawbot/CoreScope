@@ -95,7 +95,7 @@ func TestInsertTransmissionWritesResolvedPath(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "ingest.db")
 
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestInsertTransmissionWritesResolvedPath(t *testing.T) {
 
 	// Seed nodes with unique 1-byte prefixes.
 	if _, err := store.db.Exec(
-		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		`INSERT INTO nodes (public_key, name) VALUES ($1, $2), ($3, $4)`,
 		"aaaaaaaaaa", "from-node",
 		"bbbbbbbbbb", "first-hop",
 	); err != nil {
@@ -138,7 +138,7 @@ func TestInsertTransmissionWritesResolvedPath(t *testing.T) {
 
 	var rp sql.NullString
 	if err := store.db.QueryRow(
-		`SELECT resolved_path FROM observations WHERE transmission_id = (SELECT id FROM transmissions WHERE hash = ?)`,
+		`SELECT resolved_path FROM observations WHERE transmission_id = (SELECT id FROM transmissions WHERE hash = $1)`,
 		"h-1547",
 	).Scan(&rp); err != nil {
 		t.Fatalf("query: %v", err)
@@ -374,14 +374,14 @@ func TestInsertTransmissionDoesNotClobberResolvedPathOnAllNil(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "ingest.db")
 
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	defer store.Close()
 
 	if _, err := store.db.Exec(
-		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		`INSERT INTO nodes (public_key, name) VALUES ($1, $2), ($3, $4)`,
 		"aaaaaaaaaa", "from-node",
 		"bbbbbbbbbb", "first-hop",
 	); err != nil {
@@ -412,7 +412,7 @@ func TestInsertTransmissionDoesNotClobberResolvedPathOnAllNil(t *testing.T) {
 	// Sanity: first write populated resolved_path.
 	var first sql.NullString
 	if err := store.db.QueryRow(
-		`SELECT resolved_path FROM observations WHERE transmission_id = (SELECT id FROM transmissions WHERE hash = ?)`,
+		`SELECT resolved_path FROM observations WHERE transmission_id = (SELECT id FROM transmissions WHERE hash = $1)`,
 		"h-clobber",
 	).Scan(&first); err != nil {
 		t.Fatalf("first query: %v", err)
@@ -432,7 +432,7 @@ func TestInsertTransmissionDoesNotClobberResolvedPathOnAllNil(t *testing.T) {
 
 	var after sql.NullString
 	if err := store.db.QueryRow(
-		`SELECT resolved_path FROM observations WHERE transmission_id = (SELECT id FROM transmissions WHERE hash = ?)`,
+		`SELECT resolved_path FROM observations WHERE transmission_id = (SELECT id FROM transmissions WHERE hash = $1)`,
 		"h-clobber",
 	).Scan(&after); err != nil {
 		t.Fatalf("post-reingest query: %v", err)

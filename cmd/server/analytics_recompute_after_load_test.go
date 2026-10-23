@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -51,9 +50,9 @@ func waitForTest(t *testing.T, what string, cond func() bool) {
 // still running (LoadComplete is already true at that point) and close
 // once RunStartupLoad returns.
 func TestStartupLoadDone_ClosesOnlyAfterBackgroundFill(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
+	dbPath := postgresTestDSN(t)
 	createTestDBSpreadOverDays(t, dbPath, 100, 14, time.Now().UTC().Unix())
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -85,9 +84,9 @@ func TestStartupLoadDone_ClosesOnlyAfterBackgroundFill(t *testing.T) {
 // A failed load is terminal too: nothing more will be loaded, so the
 // signal must close instead of leaving the recomputers waiting forever.
 func TestStartupLoadDone_ClosesWhenLoadFails(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
+	dbPath := postgresTestDSN(t)
 	createTestDBSpreadOverDays(t, dbPath, 10, 1, time.Now().UTC().Unix())
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -367,9 +366,9 @@ func TestDistanceIndexBuild_RefreshesRecomputerBeforeReportingBuilt(t *testing.T
 // right after the load.
 func TestAnalyticsRecomputers_FullDataRightAfterStartupLoad(t *testing.T) {
 	const totalRows = 100
-	dbPath := filepath.Join(t.TempDir(), "test.db")
+	dbPath := postgresTestDSN(t)
 	createTestDBSpreadOverDays(t, dbPath, totalRows, 14, time.Now().UTC().Unix())
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -434,9 +433,18 @@ func TestAnalyticsRecomputers_FullDataRightAfterStartupLoad(t *testing.T) {
 		t.Fatalf("fixture precondition: %d packets in memory after load, want %d", inMemory, totalRows)
 	}
 
-	waitForTest(t, "rf gate opens after full load", func() bool { return get("/api/analytics/rf").Code == http.StatusOK })
+	// Post-load passes run sequentially: RF completing does not imply that
+	// topology or channels has published its full snapshot yet.
+	for _, name := range []string{"rf", "topology", "channels"} {
+		rc := all[name]
+		waitForTest(t, name+" first full pass finishes", func() bool { return !rc.FirstPassDoneAt_1659().IsZero() })
+	}
+	rfResponse := get("/api/analytics/rf")
+	if rfResponse.Code != http.StatusOK {
+		t.Fatalf("rf after full load: got %d, want 200", rfResponse.Code)
+	}
 	var rf map[string]interface{}
-	if err := json.Unmarshal(get("/api/analytics/rf").Body.Bytes(), &rf); err != nil {
+	if err := json.Unmarshal(rfResponse.Body.Bytes(), &rf); err != nil {
 		t.Fatalf("rf body: %v", err)
 	}
 	if got, _ := rf["totalTransmissions"].(float64); int(got) != totalRows {

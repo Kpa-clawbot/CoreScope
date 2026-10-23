@@ -4,9 +4,56 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestCompanionFirstLinkAcrossPools(t *testing.T) {
+	st, _ := newTestStore(t)
+	other, err := Open(st.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	a := mustCreate(t, st, "first@example.org", "First")
+	b := mustCreate(t, st, "second@example.org", "Second")
+	pk := strings.Repeat("cd", 32)
+	start := make(chan struct{})
+	results := make(chan int64, 2)
+	var done sync.WaitGroup
+	for i, store := range []*Store{st, other} {
+		done.Add(1)
+		go func(i int, store *Store) {
+			defer done.Done()
+			<-start
+			id := a.ID
+			if i == 1 {
+				id = b.ID
+			}
+			_, prev, err := store.UpsertCompanionLink(id, pk, "Linked")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			results <- prev
+		}(i, store)
+	}
+	close(start)
+	done.Wait()
+	close(results)
+	first, transfer := 0, int64(0)
+	for prev := range results {
+		if prev == 0 {
+			first++
+		} else {
+			transfer = prev
+		}
+	}
+	if first != 1 || (transfer != a.ID && transfer != b.ID) {
+		t.Fatalf("first links=%d transfer predecessor=%d", first, transfer)
+	}
+}
 
 func TestCompanionLinkUpsertAndTransfer(t *testing.T) {
 	st, clk := newTestStore(t)
@@ -117,7 +164,7 @@ func TestCompanionDataCascadesOnUserDelete(t *testing.T) {
 		t.Fatalf("LinkedPubkeys after delete = %v", all)
 	}
 	var n int
-	if err := st.db.QueryRow(`SELECT COUNT(*) FROM link_challenges WHERE user_id = ?`, a.ID).Scan(&n); err != nil || n != 0 {
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM link_challenges WHERE user_id = $1`, a.ID).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("challenges after user delete = %d, %v", n, err)
 	}
 	if _, err := st.LookupSession(raw); !errors.Is(err, ErrNotFound) {

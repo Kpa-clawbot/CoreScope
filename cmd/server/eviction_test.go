@@ -290,9 +290,9 @@ func TestEvictStale_CleansResolvedPathNodeIndexes(t *testing.T) {
 	tx.Observations = append(tx.Observations, obs)
 
 	// Insert into DB so on-demand SQL fetch works during eviction
-	db.conn.Exec("INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (?, '', ?, ?)",
+	db.conn.Exec("INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES ($1, '', $2, $3)",
 		txID, tx.Hash, tx.FirstSeen)
-	db.conn.Exec("INSERT INTO observations (id, transmission_id, observer_idx, path_json, timestamp, resolved_path) VALUES (?, ?, 1, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO observations (id, transmission_id, observer_idx, path_json, timestamp, resolved_path) VALUES ($1, $2, 1, $3, $4, $5)",
 		obsID, txID, `["aa"]`, now.Add(-48*time.Hour).Unix(), `["`+relayPK+`"]`)
 
 	store.packets = append(store.packets, tx)
@@ -560,10 +560,11 @@ func TestEstimateStoreTxBytes(t *testing.T) {
 		PathJSON:    `["aa","bb"]`,
 	}
 	est := estimateStoreTxBytes(tx)
-	// Manual calculation: base + string lengths + index entries + perTxMaps + path hops
+	// Manual calculation: base + string lengths + index entries + decoded generation + path hops
 	// (subpaths are counted per request, so they cost the store nothing)
 	hops := int64(len(txGetParsedPath(tx)))
 	manualCalc := int64(storeTxBaseBytes) + int64(len(tx.RawHex)+len(tx.Hash)+len(tx.DecodedJSON)+len(tx.PathJSON)) + int64(numIndexesPerTx*indexEntryBytes)
+	manualCalc += decodedCacheGenerationBytes
 	manualCalc += int64(decodedCacheFactor * len(tx.DecodedJSON))
 	manualCalc += hops * perPathHopBytes
 	if est != manualCalc {

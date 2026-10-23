@@ -35,18 +35,15 @@ const pruneBatchTransmissions = 250
 // set: nothing modifies `transmissions` between them inside the transaction.
 //
 // The ORDER BY must be satisfiable from idx_transmissions_first_seen. That
-// index carries the rowid as its tiebreaker, so "first_seen, id" is walked
-// straight off it and the LIMIT stays deterministic even when timestamps tie.
-// Ordering by id alone looks equivalent but makes SQLite abandon the index for
-// a rowid SCAN. That is harmless while rows are being deleted — the oldest
-// rows have the lowest rowids and match at once — but the batch that finds
-// nothing, which is the steady state whenever nothing has aged out, walks the
-// whole table under writerMu. TestPruneAgedTransmissionIDsUsesFirstSeenIndex
-// pins the plan.
-const pruneAgedTransmissionIDs = `SELECT id FROM transmissions WHERE first_seen < ? ORDER BY first_seen, id LIMIT ?`
+// PostgreSQL index explicitly includes id as the tiebreaker (SQLite carried
+// its rowid implicitly). This lets the LIMIT stop the ordered scan even when
+// timestamps tie. Ordering by id alone could scan the entire table when no
+// rows have aged out. TestPruneAgedTransmissionIDsHasOrderedIndex pins ordered
+// index eligibility for both the batch query and its DELETE callers.
+const pruneAgedTransmissionIDs = `SELECT id FROM transmissions WHERE first_seen < $1 ORDER BY first_seen, id LIMIT $2`
 
-// The two statements of one prune batch. Child observations go first (no
-// CASCADE in SQLite).
+// The two statements of one prune batch. Child observations go first, retaining
+// the bounded deletion behavior of the SQLite implementation.
 const (
 	pruneObservationsBatch  = `DELETE FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `)`
 	pruneTransmissionsBatch = `DELETE FROM transmissions WHERE id IN (` + pruneAgedTransmissionIDs + `)`
@@ -129,13 +126,13 @@ func (s *Store) PruneOldClientReceptions(days int) (int64, error) {
 
 	var n int64
 	err := s.WriterTx("prune_client_receptions", func(tx *sql.Tx) error {
-		res, err := tx.Exec(`DELETE FROM client_receptions WHERE rx_at < ?`, cutoff)
+		res, err := tx.Exec(`DELETE FROM client_receptions WHERE rx_at < `+s.parameter(1), cutoff)
 		if err != nil {
 			return fmt.Errorf("prune client_receptions: %w", err)
 		}
 		n, _ = res.RowsAffected()
 		// Drop companion name rows not refreshed within the window.
-		if _, err := tx.Exec(`DELETE FROM client_observers WHERE last_seen < ?`, cutoff); err != nil {
+		if _, err := tx.Exec(`DELETE FROM client_observers WHERE last_seen < `+s.parameter(1), cutoff); err != nil {
 			return fmt.Errorf("prune client_observers: %w", err)
 		}
 		return nil
@@ -161,7 +158,7 @@ func (s *Store) PruneOldClientRxObservations(days int) (int64, error) {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(rxTimeMillisLayout)
-	res, err := s.db.Exec(`DELETE FROM client_rx_observations WHERE rx_at < ?`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM client_rx_observations WHERE rx_at < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune client_rx_observations: %w", err)
 	}
@@ -184,7 +181,7 @@ func (s *Store) PruneOldClientRfSamples(days int) (int64, error) {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(rxTimeMillisLayout)
-	res, err := s.db.Exec(`DELETE FROM client_rf_samples WHERE sampled_at < ?`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM client_rf_samples WHERE sampled_at < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune client_rf_samples: %w", err)
 	}
@@ -222,7 +219,7 @@ func (s *Store) PruneOldClientDeclaredRegions(days int) (int64, error) {
 // specific side of it.
 func (s *Store) pruneOldClientDeclaredRegionsAt(cutoffInstant time.Time) (int64, error) {
 	cutoff := cutoffInstant.Format(rxTimeMillisLayout)
-	res, err := s.db.Exec(`DELETE FROM node_declared_regions WHERE observed_at < ?`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM node_declared_regions WHERE observed_at < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune node_declared_regions: %w", err)
 	}
@@ -252,7 +249,7 @@ func (s *Store) PruneNeighborEdges(maxAgeDays int) (int64, error) {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(maxAgeDays) * 24 * time.Hour).Format(time.RFC3339)
-	res, err := s.db.Exec("DELETE FROM neighbor_edges WHERE last_seen < ?", cutoff)
+	res, err := s.db.Exec("DELETE FROM neighbor_edges WHERE last_seen < "+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune neighbor_edges: %w", err)
 	}
@@ -314,7 +311,7 @@ func (s *Store) BackfillFromPubkey(chunkSize int, yieldDuration time.Duration, p
 	}
 	log.Printf("[backfill] from_pubkey starting: %d ADVERT rows", total)
 
-	stmt, err := s.db.Prepare("UPDATE transmissions SET from_pubkey = ? WHERE id = ?")
+	stmt, err := s.db.Prepare("UPDATE transmissions SET from_pubkey = " + s.parameter(1) + " WHERE id = " + s.parameter(2))
 	if err != nil {
 		log.Printf("[backfill] from_pubkey prepare: %v", err)
 		return
@@ -324,7 +321,7 @@ func (s *Store) BackfillFromPubkey(chunkSize int, yieldDuration time.Duration, p
 	var processed int64
 	for {
 		rows, err := s.db.Query(
-			"SELECT id, decoded_json FROM transmissions WHERE from_pubkey IS NULL AND payload_type = 4 LIMIT ?",
+			"SELECT id, decoded_json FROM transmissions WHERE from_pubkey IS NULL AND payload_type = 4 LIMIT "+s.parameter(1),
 			chunkSize)
 		if err != nil {
 			log.Printf("[backfill] from_pubkey select: %v", err)
@@ -348,7 +345,7 @@ func (s *Store) BackfillFromPubkey(chunkSize int, yieldDuration time.Duration, p
 			break
 		}
 
-		tx, err := s.db.Begin()
+		tx, err := beginWrite(s.db, s.Backend())
 		if err != nil {
 			log.Printf("[backfill] from_pubkey begin tx: %v", err)
 			return
@@ -442,7 +439,7 @@ func (s *Store) PruneOldClientNodeNames(days int) (int64, error) {
 // PruneOldClientNodeNames, so tests can pin the cutoff.
 func (s *Store) pruneOldClientNodeNamesAt(cutoffInstant time.Time) (int64, error) {
 	cutoff := cutoffInstant.Format(rxTimeMillisLayout)
-	res, err := s.db.Exec(`DELETE FROM client_node_names WHERE observed_at < ?`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM client_node_names WHERE observed_at < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune client_node_names: %w", err)
 	}

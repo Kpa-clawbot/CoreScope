@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema"
 )
 
@@ -45,8 +46,16 @@ var (
 // nothing, and switching it off leaves no table and no triggers behind.
 // days > 0 installs the index (or refreshes its triggers);
 // ScheduleObservationHopsBackfill then fills whatever part of the window is not
-// yet covered.
+// yet covered. PostgreSQL has no equivalent accelerator and keeps using its
+// native reach scan; no SQLite schema or maintenance SQL may run there.
 func (s *Store) ConfigureObservationHops(days int) error {
+	if s.Backend() != dbconfig.SQLite {
+		s.hopIndexDays = 0
+		if days > 0 {
+			log.Printf("[hop-index] retention.hopIndexDays is SQLite-only; PostgreSQL uses the native reach scan without a hop index")
+		}
+		return nil
+	}
 	s.hopIndexDays = days
 	if days <= 0 {
 		start := time.Now()
@@ -92,7 +101,7 @@ func (s *Store) hopFloor() int64 {
 // the gate, it shares the writer with ingest one short chunk at a time. Close()
 // cancels it; it resumes from the stored coverage mark on the next boot.
 func (s *Store) ScheduleObservationHopsBackfill() {
-	if s.hopIndexDays <= 0 {
+	if s.Backend() != dbconfig.SQLite || s.hopIndexDays <= 0 {
 		return
 	}
 	since, err := s.hopCoverage()
@@ -137,6 +146,9 @@ func (s *Store) ScheduleObservationHopsBackfill() {
 // would be undone by the next chunk lowering the mark again, and readers would
 // trust a range whose rows the trim had deleted.
 func (s *Store) backfillObservationHops(ctx context.Context) error {
+	if s.Backend() != dbconfig.SQLite {
+		return nil
+	}
 	s.hopMaintMu.Lock()
 	defer s.hopMaintMu.Unlock()
 	since, err := s.hopCoverage()
@@ -220,7 +232,7 @@ func (s *Store) backfillObservationHops(ctx context.Context) error {
 // whole range the mark moves across removes it too, instead of leaving its hop
 // rows under the raised mark where nothing would ever delete them.
 func (s *Store) TrimObservationHops() (int64, error) {
-	if s.hopIndexDays <= 0 {
+	if s.Backend() != dbconfig.SQLite || s.hopIndexDays <= 0 {
 		return 0, nil
 	}
 	s.hopMaintMu.Lock()

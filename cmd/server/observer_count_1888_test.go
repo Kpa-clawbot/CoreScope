@@ -27,18 +27,18 @@ func seedObserversForCount(t *testing.T, db *DB) {
 	live := []string{"live1", "live2", "live3"}
 	for _, id := range live {
 		if _, err := db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen, packet_count, inactive)
-			VALUES (?, ?, ?, ?, 10, 0)`, id, "Observer "+id, now, now); err != nil {
+			VALUES ($1, $2, $3, $4, 10, 0)`, id, "Observer "+id, now, now); err != nil {
 			t.Fatalf("insert %s: %v", id, err)
 		}
 	}
 	// One explicitly soft-deleted, one with a NULL flag — GetObservers treats
 	// NULL as live, so only the inactive=1 row must be excluded.
 	if _, err := db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen, packet_count, inactive)
-		VALUES ('gone1', 'Gone One', ?, ?, 5, 1)`, now, now); err != nil {
+		VALUES ('gone1', 'Gone One', $1, $2, 5, 1)`, now, now); err != nil {
 		t.Fatalf("insert gone1: %v", err)
 	}
 	if _, err := db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen, packet_count, inactive)
-		VALUES ('nullflag', 'Null Flag', ?, ?, 5, NULL)`, now, now); err != nil {
+		VALUES ('nullflag', 'Null Flag', $1, $2, 5, NULL)`, now, now); err != nil {
 		t.Fatalf("insert nullflag: %v", err)
 	}
 }

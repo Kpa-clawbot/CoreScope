@@ -184,11 +184,11 @@ func (s *PacketStore) unmatchedTransmissionsInWindow(sinceISO string) ([]unmatch
 	rows, err := s.db.conn.Query(`
 		SELECT t.id, t.raw_hex
 		FROM transmissions t
-		WHERE t.first_seen >= ?
+		WHERE t.first_seen >= `+s.db.parameter(1)+`
 		  AND t.scope_name = ''
 		  AND `+scopeConformanceForwarderRouteTypesSQL+`
 		ORDER BY t.first_seen DESC
-		LIMIT ?`, sinceISO, scopeVerifyMaxWindowPackets)
+		LIMIT `+s.db.parameter(2), sinceISO, scopeVerifyMaxWindowPackets)
 	if err != nil {
 		return nil, false, fmt.Errorf("unmatched transmissions scan: %w", err)
 	}

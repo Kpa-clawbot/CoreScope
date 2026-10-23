@@ -38,7 +38,7 @@ func TestStatsFileWriter_SampledAtMatchesProcIOSampledAt(t *testing.T) {
 	statsPath := filepath.Join(dir, "ingestor-stats.json")
 	t.Setenv("CORESCOPE_INGESTOR_STATS", statsPath)
 
-	store, err := OpenStore(filepath.Join(dir, "test.db"))
+	store, err := openPostgresTestStore(t, filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

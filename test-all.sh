@@ -224,4 +224,10 @@ node tests/unit/test-warmup-banner.js
 node tests/unit/test-ws-stale-watchdog-1074.js
 node tests/unit/test-xss-escape-sinks.js
 
+node tests/unit/test-postgres-ci-install.js
+node tests/unit/test-postgres-ops.js
+node tests/unit/test-deployment-readiness.js
+node tests/unit/test-storage-entrypoint.js
+node tests/unit/test-storage-manage.js
+
 echo "All standalone frontend suites passed"
