@@ -56,7 +56,7 @@ assert(parser, 'missing executable Python request parser');
 assert(parser.includes('GITHUB_EVENT_PATH'), 'PR body must be parsed from the raw event, not inserted into shell source');
 assert(!parser.includes('${{'), 'request parser must not interpolate untrusted expressions');
 const A = 'a'.repeat(40), B = 'b'.repeat(40), H = 'c'.repeat(40);
-const baseline = 'b9593f71745b856651cfd6d6c80bb1f3f091e13e';
+const baseline = '7fa86fe1c1304b88e0f2a44052465dfb86abb8a6';
 const checked = '- [x] Run SQLite benchmark (primary)';
 const body = `${checked}\nsqlite-baseline-sha: ${A}\nsqlite-candidate-sha: ${B}\nsqlite-harness-sha: ${H}`;
 function request(text = '', { action = 'synchronize', previous, changes, event = 'pull_request', inputs = {} } = {}) {
