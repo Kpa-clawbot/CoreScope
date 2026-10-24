@@ -6,6 +6,9 @@
    Fork-only feature; isolated page (no changes to the core map). */
 'use strict';
 (function () {
+  // i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+  var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
   var map = null, covLayer = null, days = 7, selectedRx = '', selectedName = '', boardCache = [], destroyed = false, generation = 0;
   // layer: 'signal' (default, per-cell best SNR of directly-heard nodes) or
   // 'noise' (RF noise-floor layer, opt-in — see MC_CLIENT_RF_SAMPLES).
@@ -41,14 +44,14 @@
 
   function dayBtn(d) { return '<button data-days="' + d + '"' + (d === days ? ' class="active"' : '') + ' aria-pressed="' + (d === days ? 'true' : 'false') + '">' + (d === 1 ? '24h' : d + 'd') + '</button>'; }
 
-  function layerBtn(k, label) { return '<button data-layer="' + k + '"' + (k === layer ? ' class="active"' : '') + ' aria-pressed="' + (k === layer ? 'true' : 'false') + '">' + label + '</button>'; }
+  function layerBtn(k, label) { return '<button data-layer="' + k + '"' + (k === layer ? ' class="active"' : '') + ' aria-pressed="' + (k === layer ? 'true' : 'false') + '">' + tr(label) + '</button>'; }
 
   // mineBtnHtml renders the "My coverage" toggle, or nothing for a visitor
   // who is not logged in (?mine=1 needs a session).
   function mineBtnHtml(user, on) {
     if (!user) return '';
     return '<button data-mine="1"' + (on ? ' class="active"' : '') + ' aria-pressed="' + (on ? 'true' : 'false') + '"' +
-      ' title="Only coverage collected by companions linked to your account">My coverage</button>';
+      ' title="' + tr('Only coverage collected by companions linked to your account') + '">' + tr('My coverage') + '</button>';
   }
 
   // coverageUrl builds the signal-layer request.
@@ -96,23 +99,23 @@
   function legendHtml() {
     if (layer === 'noise') {
       return '<div class="nq-cov-legend" id="rxLegend">' +
-        '<span><i style="background:var(--nq-cov-strong)"></i>quiet (≤ ' + NOISE_QUIET_MAX + ' dBm)</span>' +
-        '<span><i style="background:var(--nq-cov-mid)"></i>medium</span>' +
-        '<span><i style="background:var(--nq-cov-weak)"></i>busy (> ' + NOISE_BUSY_MIN + ' dBm)</span>' +
+        '<span><i style="background:var(--nq-cov-strong)"></i>' + tr('quiet') + ' (≤ ' + NOISE_QUIET_MAX + ' dBm)</span>' +
+        '<span><i style="background:var(--nq-cov-mid)"></i>' + tr('medium') + '</span>' +
+        '<span><i style="background:var(--nq-cov-weak)"></i>' + tr('busy') + ' (> ' + NOISE_BUSY_MIN + ' dBm)</span>' +
         '</div>';
     }
     return '<div class="nq-cov-legend" id="rxLegend">' +
-      '<span><i style="background:var(--nq-cov-strong)"></i>strong</span>' +
-      '<span><i style="background:var(--nq-cov-mid)"></i>medium</span>' +
-      '<span><i style="background:var(--nq-cov-weak)"></i>weak</span>' +
-      '<span><i style="background:var(--nq-cov-grey)"></i>no signal</span>' +
-      (gapsAvailable() && showGaps && !mine ? '<span><i class="nq-cov-gap-swatch"></i>driven, nothing received</span>' : '') +
+      '<span><i style="background:var(--nq-cov-strong)"></i>' + tr('strong') + '</span>' +
+      '<span><i style="background:var(--nq-cov-mid)"></i>' + tr('medium') + '</span>' +
+      '<span><i style="background:var(--nq-cov-weak)"></i>' + tr('weak') + '</span>' +
+      '<span><i style="background:var(--nq-cov-grey)"></i>' + tr('no signal') + '</span>' +
+      (gapsAvailable() && showGaps && !mine ? '<span><i class="nq-cov-gap-swatch"></i>' + tr('driven, nothing received') + '</span>' : '') +
       '</div>';
   }
 
   function gapsBtnHtml() {
     return '<button id="rxGapsBtn" data-gaps="1"' + (showGaps ? ' class="active"' : '') + ' aria-pressed="' + (showGaps ? 'true' : 'false') + '"' +
-      ' title="Cells a companion drove through in this period without receiving anything. This is not proof of no coverage: at the edge of a node\'s range, another drive may well receive something.">Nothing received</button>';
+      ' title="' + tr("Cells a companion drove through in this period without receiving anything. This is not proof of no coverage: at the edge of a node's range, another drive may well receive something.") + '">' + tr('Nothing received') + '</button>';
   }
 
   // gapFillOpacity: denser hatch for cells driven through more often (1 / 2-3 / 4+ samples).
@@ -123,8 +126,8 @@
 
   function gapCellHtml(p) {
     if (!p) return '';
-    return '<div style="font-weight:600;margin-bottom:4px">Nothing received here in this period</div>' +
-      '<div style="font-size:12px;color:var(--text-muted)">' + p.samples + (p.samples === 1 ? ' track sample' : ' track samples') + ' while driving</div>';
+    return '<div style="font-weight:600;margin-bottom:4px">' + tr('Nothing received here in this period') + '</div>' +
+      '<div style="font-size:12px;color:var(--text-muted)">' + trn(p.samples, '{count} track sample while driving', '{count} track samples while driving') + '</div>';
   }
 
   // ensureGapHatch creates the gap renderer once per map and puts the 45-degree
@@ -154,8 +157,8 @@
   // must not keep claiming best-signal colouring while the noise legend (an
   // inverted, opposite-direction colour axis) sits right below it.
   function subtitleHtml() {
-    var colourText = layer === 'noise' ? 'Colour = median RF noise floor per cell.' : 'Colour = best signal per cell.';
-    return 'Where roaming CoreScope-RX clients heard nodes. ' + colourText + ' <a href="https://github.com/efiten/corescope-rx" target="_blank" rel="noopener">Get the companion app →</a>';
+    var colourText = layer === 'noise' ? tr('Colour = median RF noise floor per cell.') : tr('Colour = best signal per cell.');
+    return tr('Where roaming CoreScope-RX clients heard nodes.') + ' ' + colourText + ' <a href="https://github.com/efiten/corescope-rx" target="_blank" rel="noopener">' + tr('Get the companion app') + ' →</a>';
   }
 
   function pageHtml() {
@@ -164,7 +167,7 @@
         '<div class="analytics-time-range" id="rxGapsBar" style="margin:8px 0' + (layer === 'signal' ? '' : ';display:none') + '">' + gapsBtnHtml() + '</div>'
       : '';
     return '<div style="max-width:1100px;margin:0 auto;padding:12px 16px">' +
-      '<h2 style="margin:4px 0 2px;font-size:18px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Mobile RX coverage</h2>' +
+      '<h2 style="margin:4px 0 2px;font-size:18px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> ' + tr('Mobile RX coverage') + '</h2>' +
       '<div style="color:var(--text-muted);font-size:11px" id="rxSubtitle">' + subtitleHtml() + '</div>' +
       '<div class="analytics-time-range" id="rxDays" style="margin:8px 0">' + dayBtn(1) + dayBtn(7) + dayBtn(14) + dayBtn(30) + '</div>' +
       '<div class="analytics-time-range" id="rxMineBar" style="margin:8px 0" hidden></div>' +
@@ -172,9 +175,9 @@
       legendHtml() +
       '<div style="position:relative">' +
       '<div id="rxMap" style="height:60vh;min-height:360px;border:1px solid var(--border,#d0d7de);border-radius:6px;margin:8px 0"></div>' +
-      '<div id="rxNoiseEmpty" class="nq-msg" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1000;pointer-events:none">No RF samples in this view yet.</div>' +
+      '<div id="rxNoiseEmpty" class="nq-msg" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1000;pointer-events:none">' + tr('No RF samples in this view yet.') + '</div>' +
       '</div>' +
-      '<div class="nq-group-h">Top mobile observers</div>' +
+      '<div class="nq-group-h">' + tr('Top mobile observers') + '</div>' +
       '<div id="rxBoard" class="rxb"></div>' +
       '</div>';
   }
@@ -182,7 +185,7 @@
   // coverageNodeRow renders one heard node: name (or heard_key prefix) + latest SNR + count.
   function coverageNodeRow(n) {
     var label = n.name ? escapeHtml(n.name) : '<code>' + escapeHtml(n.prefix || '?') + '</code>';
-    var snr = (n.snr != null) ? Number(n.snr).toFixed(1) + ' dB' : 'no sig';
+    var snr = (n.snr != null) ? Number(n.snr).toFixed(1) + ' dB' : tr('no sig');
     return '<div style="display:flex;gap:8px;justify-content:space-between;font-size:12px;line-height:1.6">' +
       '<span>' + label + '</span>' +
       '<span style="color:var(--text-muted)">' + snr + ' · ×' + n.count + '</span></div>';
@@ -196,11 +199,11 @@
   function coverageNodesHtml(p) {
     var nodes = (p && p.nodes) || [];
     var head = '<div style="font-weight:600;margin-bottom:4px">' +
-      nodes.length + (nodes.length === 1 ? ' node heard here' : ' nodes heard here') + '</div>';
+      trn(nodes.length, '{count} node heard here', '{count} nodes heard here') + '</div>';
     if (!nodes.length) return head + '<div style="color:var(--text-muted)">n=' + (p ? p.count : 0) + '</div>';
     var rows = nodes.slice(0, COVERAGE_NODE_CAP).map(coverageNodeRow).join('');
     var more = (nodes.length > COVERAGE_NODE_CAP)
-      ? '<div style="color:var(--text-muted);font-size:11px;margin-top:3px">(' + (nodes.length - COVERAGE_NODE_CAP) + ' more)</div>'
+      ? '<div style="color:var(--text-muted);font-size:11px;margin-top:3px">(' + tr('{count} more', { count: nodes.length - COVERAGE_NODE_CAP }) + ')</div>'
       : '';
     return head + '<div style="min-width:180px">' + rows + '</div>' + more;
   }
@@ -231,10 +234,10 @@
   // the quietest/noisiest single sample in the cell.
   function noiseCellHtml(p) {
     if (!p) return '';
-    return '<div style="font-weight:600;margin-bottom:4px">' + p.count + (p.count === 1 ? ' sample' : ' samples') + '</div>' +
+    return '<div style="font-weight:600;margin-bottom:4px">' + trn(p.count, '{count} sample', '{count} samples') + '</div>' +
       '<div style="font-size:12px;line-height:1.6;min-width:160px">' +
-      '<div>median: ' + Number(p.median_noise_floor).toFixed(1) + ' dBm</div>' +
-      '<div style="color:var(--text-muted)">quietest: ' + p.quietest_noise_floor + ' dBm · noisiest: ' + p.noisiest_noise_floor + ' dBm</div>' +
+      '<div>' + tr('median:') + ' ' + Number(p.median_noise_floor).toFixed(1) + ' dBm</div>' +
+      '<div style="color:var(--text-muted)">' + tr('quietest:') + ' ' + p.quietest_noise_floor + ' dBm · ' + tr('noisiest:') + ' ' + p.noisiest_noise_floor + ' dBm</div>' +
       '</div>';
   }
 
@@ -300,7 +303,7 @@
       // unlabelled indistinguishable from "no samples in this view".
       if (destroyed || !covLayer || layer !== 'noise') return;
       covLayer.clearLayers();
-      setNoiseEmpty(true, 'Could not load noise samples. Pan or zoom to retry.');
+      setNoiseEmpty(true, tr('Could not load noise samples. Pan or zoom to retry.'));
     });
   }
 
@@ -315,7 +318,7 @@
     var el = document.getElementById('rxNoiseEmpty');
     if (!el) return;
     if (show && layer === 'noise') {
-      el.textContent = text || 'No RF samples in this view yet.';
+      el.textContent = text || tr('No RF samples in this view yet.');
       el.style.display = 'block';
     } else {
       el.style.display = 'none';
@@ -359,8 +362,8 @@
     var cells = BOARD_COLS.map(function (c) {
       var arrow = boardSort.key === c.key ? (boardSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
       return '<span class="' + c.cls + ' rxb-sort" data-sort="' + c.key + '"' +
-        (c.title ? ' title="' + escapeHtml(c.title) + '"' : '') +
-        ' role="button" tabindex="0">' + escapeHtml(c.label) + arrow + '</span>';
+        (c.title ? ' title="' + escapeHtml(tr(c.title)) + '"' : '') +
+        ' role="button" tabindex="0">' + escapeHtml(tr(c.label)) + arrow + '</span>';
     }).join('');
     return '<div class="rxb-row rxb-head"><span class="rxb-rank">#</span>' + cells + '</div>';
   }
@@ -368,19 +371,19 @@
   function renderBoard() {
     var el = document.getElementById('rxBoard');
     if (!el) return;
-    if (!boardCache.length) { el.innerHTML = '<div class="muted" style="color:var(--text-muted);font-size:13px">No mobile observers in this window yet.</div>'; return; }
+    if (!boardCache.length) { el.innerHTML = '<div class="muted" style="color:var(--text-muted);font-size:13px">' + tr('No mobile observers in this window yet.') + '</div>'; return; }
     sortBoard();
     var rows = boardCache.map(function (o, i) {
       var nm = o.name ? escapeHtml(o.name) : (escapeHtml(o.pubkey.slice(0, 10)) + '…');
       return '<div class="rxb-row' + (o.pubkey === selectedRx ? ' sel' : '') + '" data-rx="' + escapeHtml(o.pubkey) + '" data-name="' + escapeHtml(o.name || '') + '"' +
-        ' role="button" tabindex="0" aria-pressed="' + (o.pubkey === selectedRx ? 'true' : 'false') + '" aria-label="Show coverage for ' + escapeHtml(o.name || o.pubkey.slice(0, 10)) + '">' +
+        ' role="button" tabindex="0" aria-pressed="' + (o.pubkey === selectedRx ? 'true' : 'false') + '" aria-label="' + tr('Show coverage for {name}', { name: escapeHtml(o.name || o.pubkey.slice(0, 10)) }) + '">' +
         '<span class="rxb-rank">' + (i + 1) + '</span><span class="rxb-name">' + nm + '</span>' +
         '<span class="rxb-score">' + Number(o.score).toFixed(1) + '</span>' +
         '<span class="rxb-cells">' + o.cells + '</span>' +
         '<span class="rxb-nodes">' + o.nodes + '</span>' +
         '<span class="rxb-rec">' + o.receptions + '</span></div>';
     }).join('');
-    el.innerHTML = (selectedRx ? '<button id="rxAll" class="btn-primary" style="margin:0 0 8px">← Show all observers</button>' : '') +
+    el.innerHTML = (selectedRx ? '<button id="rxAll" class="btn-primary" style="margin:0 0 8px">← ' + tr('Show all observers') + '</button>' : '') +
       boardHeadHtml() + rows;
     // Column sort handlers (click + keyboard).
     el.querySelectorAll('.rxb-sort[data-sort]').forEach(function (h) {
@@ -442,7 +445,7 @@
       .catch(function (e) {
         console.warn('rx-coverage: leaderboard fetch failed', e);
         var el = document.getElementById('rxBoard');
-        if (el) el.innerHTML = '<div class="muted" style="color:var(--text-muted);font-size:13px">Could not load mobile observers.</div>';
+        if (el) el.innerHTML = '<div class="muted" style="color:var(--text-muted);font-size:13px">' + tr('Could not load mobile observers.') + '</div>';
       });
   }
 
@@ -507,7 +510,7 @@
 
   async function start(container, current) {
     if (!window.MC_CLIENT_RX_COVERAGE) {
-      container.innerHTML = '<div class="nq-msg">Coverage is not enabled on this deployment.</div>';
+      container.innerHTML = '<div class="nq-msg">' + tr('Coverage is not enabled on this deployment.') + '</div>';
       return;
     }
     selectedRx = ''; selectedName = ''; days = 7; boardCache = []; layer = 'signal'; mine = false; showGaps = true;
