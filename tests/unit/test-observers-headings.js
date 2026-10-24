@@ -57,7 +57,7 @@ test('expected headings present and ordered', () => {
   const labels = [];
   const re = /<th[^>]*>([^<]+)<\/th>/g;
   let m;
-  while ((m = re.exec(thead)) !== null) labels.push(m[1].trim());
+  while ((m = re.exec(thead)) !== null) labels.push(m[1].trim().replace(/^\$\{tr\('(.*)'\)\}$/, '$1'));
   const expected = ['Status', 'Name', 'Region', 'Last Status', 'Last Packet',
                     'Packet Health', 'Total Packets', 'Packets/Hour', 'TX 1h', 'Clock Offset', 'Uptime',
                     'Firmware', 'Client'];

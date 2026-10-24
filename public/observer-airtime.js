@@ -4,6 +4,8 @@
  * (tx_airtime_pct_1h, duty_cycle_warn_pct). */
 window.ObserverAirtime = (function () {
   'use strict';
+  // i18n.js defines tr(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
   var DEFAULT_WARN_PCT = 10;
 
   function warnPct(w) {
@@ -24,10 +26,10 @@ window.ObserverAirtime = (function () {
 
   function badge(pct, w) {
     if (pct == null) {
-      return '<span class="text-muted" title="Under 30 minutes of airtime samples in the last hour, or none in the last 15 minutes">—</span>';
+      return '<span class="text-muted" title="' + tr('Under 30 minutes of airtime samples in the last hour, or none in the last 15 minutes') + '">—</span>';
     }
     var over = isOver(pct, w);
-    var title = 'TX airtime over the last hour. Duty-cycle warning at ' + warnPct(w) + '%';
+    var title = tr('TX airtime over the last hour. Duty-cycle warning at {pct}%', { pct: warnPct(w) });
     return '<span class="airtime-pct' + (over ? ' airtime-over' : '') + '" title="' + title + '">' +
       format(pct).replace('<', '&lt;') + '</span>';
   }

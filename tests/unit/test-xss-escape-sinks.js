@@ -385,7 +385,7 @@ function extractObsStatValue(field) {
   const labelMap = { model: 'Model', firmware: 'Firmware', client_version: 'Client', iata: 'Region' };
   const label = labelMap[field];
   const re = new RegExp(
-    '<div class="stat-label">' + label + '<\\/div>[\\s\\S]{0,250}?' +
+    '<div class="stat-label">(?:' + label + "|\\$\\{tr\\('" + label + "'\\)\\})<\\/div>[\\s\\S]{0,250}?" +
     '<div class="stat-value"[^>]*>(\\$\\{[^}]*obs\\.' + field + '[^}]*\\})<\\/div>'
   );
   const m = src.match(re);
@@ -494,14 +494,14 @@ function renderObsDetail(obs) {
   const fn = new Function(
     'obs', 'obsSkew', 'escapeHtml', 'window', 'HEALTH_THRESHOLDS',
     'formatDuration', 'timeAgo', 'formatSkew', 'renderSkewBadge', 'observerSkewSeverity',
-    'statusCls', 'statusLabel',
+    'statusCls', 'statusLabel', 'tr', 'trn',
     radioBlock + '\nreturn `' + tpl + '`;'
   );
   return fn(
     obs, sandbox.obsSkew, escapeHtml, sandbox.window, sandbox.HEALTH_THRESHOLDS,
     sandbox.formatDuration, sandbox.timeAgo, sandbox.formatSkew,
     sandbox.renderSkewBadge, sandbox.observerSkewSeverity,
-    statusCls, statusLabel
+    statusCls, statusLabel, tr, (n, one, other, p) => tr(n === 1 ? one : other, Object.assign({ count: n }, p))
   );
 }
 
@@ -653,7 +653,7 @@ test('observers.js table row: Region badge escapes o.iata', () => {
 
 test('observers.js slide-over: Region <dd> escapes o.iata', () => {
   const html = evalConcat('public/observers.js',
-    /'<dt>Region<\/dt><dd>' \+ (\(o\.iata \? '<span class="badge-region">' \+ [^;]*?\+ '<\/span>' : '—'\))/,
+    /'<dt>(?:Region|' \+ tr\('Region'\) \+ ')<\/dt><dd>' \+ (\(o\.iata \? '<span class="badge-region">' \+ [^;]*?\+ '<\/span>' : '—'\))/,
     { o: { iata: PAYLOAD } });
   assertNoXss(html, 'observers.js slide-over iata');
 });
