@@ -1,5 +1,7 @@
 /* === CoreScope — perf.js === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
 
 var GH = 'https://github.com/Kpa-clawbot/corescope';
 
@@ -85,7 +87,7 @@ async function resetPerfStats(win, fetchFn, alertFn) {
     var r = await fetchFn('/api/perf/reset', { method: 'POST', headers: win.CSAuth ? win.CSAuth.adminHeaders() : {} });
     if (!r.ok) throw new Error('HTTP ' + r.status);
   } catch (e) {
-    alertFn('Reset failed: ' + e.message);
+    alertFn(tr('Reset failed: {message}', { message: e.message }));
     return false;
   }
   return true;
@@ -100,14 +102,14 @@ function renderVersionCard(health) {
   var parts = [];
   if (vTag) parts.push('<a href="' + GH + '/releases/tag/' + vTag + '" target="_blank" rel="noopener">' + vTag + '</a>');
   if (sha) parts.push('<a href="' + GH + '/commit/' + sha + '" target="_blank" rel="noopener">' + sha.slice(0, 7) + '</a>');
-  return '<div class="perf-card"><div class="perf-num perf-num--small">' + parts.join(' · ') + '</div><div class="perf-label">Version</div></div>';
+  return '<div class="perf-card"><div class="perf-num perf-num--small">' + parts.join(' · ') + '</div><div class="perf-label">' + tr('Version') + '</div></div>';
 }
 
 (function () {
   let interval = null;
 
   async function render(app) {
-    app.innerHTML = '<div id="perfWrapper" style="padding:16px 24px;"><h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg> Performance Dashboard</h2><div id="perfContent">Loading...</div></div>';
+    app.innerHTML = '<div id="perfWrapper" style="padding:16px 24px;"><h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg> ' + tr('Performance Dashboard') + '</h2><div id="perfContent">' + tr('Loading...') + '</div></div>';
     await refresh();
   }
 
@@ -130,10 +132,10 @@ function renderVersionCard(health) {
 
       // Server overview
       html += `<div style="display:flex;gap:16px;flex-wrap:wrap;margin:16px 0;">
-        <div class="perf-card"><div class="perf-num">${server.totalRequests}</div><div class="perf-label">Total Requests</div></div>
-        <div class="perf-card"><div class="perf-num">${server.avgMs}ms</div><div class="perf-label">Avg Response</div></div>
-        <div class="perf-card"><div class="perf-num">${health ? health.uptimeHuman : Math.round(server.uptime / 60) + 'm'}</div><div class="perf-label">Uptime</div></div>
-        <div class="perf-card"><div class="perf-num">${server.slowQueries.length}</div><div class="perf-label">Slow (&gt;100ms)</div></div>
+        <div class="perf-card"><div class="perf-num">${server.totalRequests}</div><div class="perf-label">${tr('Total Requests')}</div></div>
+        <div class="perf-card"><div class="perf-num">${server.avgMs}ms</div><div class="perf-label">${tr('Avg Response')}</div></div>
+        <div class="perf-card"><div class="perf-num">${health ? health.uptimeHuman : Math.round(server.uptime / 60) + 'm'}</div><div class="perf-label">${tr('Uptime')}</div></div>
+        <div class="perf-card"><div class="perf-num">${server.slowQueries.length}</div><div class="perf-label">${tr('Slow')} (&gt;100ms)</div></div>
         ${renderVersionCard(health)}
       </div>`;
 
@@ -153,19 +155,19 @@ function renderVersionCard(health) {
             <div class="perf-card"><div class="perf-num">${(+gr.heapInuseMB).toFixed(1)}MB</div><div class="perf-label">Heap Inuse</div></div>
             <div class="perf-card"><div class="perf-num">${(+gr.heapIdleMB).toFixed(1)}MB</div><div class="perf-label">Heap Idle</div></div>
             <div class="perf-card"><div class="perf-num">${gr.numCPU}</div><div class="perf-label">CPUs</div></div>
-            <div class="perf-card"><div class="perf-num">${health.websocket.clients}</div><div class="perf-label">WS Clients</div></div>
+            <div class="perf-card"><div class="perf-num">${health.websocket.clients}</div><div class="perf-label">${tr('WS Clients')}</div></div>
           </div>`;
         } else {
           const m = health.memory, el = health.eventLoop;
           const elColor = el.p95Ms > 500 ? 'var(--status-red)' : el.p95Ms > 100 ? 'var(--status-yellow)' : 'var(--status-green)';
           const memColor = m.heapUsed > m.heapTotal * 0.85 ? 'var(--status-red)' : m.heapUsed > m.heapTotal * 0.7 ? 'var(--status-yellow)' : 'var(--status-green)';
-          html += `<h3>System Health</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          html += `<h3>${tr('System Health')}</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
             <div class="perf-card"><div class="perf-num" style="color:${memColor}">${m.heapUsed}MB</div><div class="perf-label">Heap Used / ${m.heapTotal}MB</div></div>
             <div class="perf-card"><div class="perf-num">${m.rss}MB</div><div class="perf-label">RSS</div></div>
             <div class="perf-card"><div class="perf-num" style="color:${elColor}">${el.p95Ms}ms</div><div class="perf-label">Event Loop p95</div></div>
             <div class="perf-card"><div class="perf-num">${el.maxLagMs}ms</div><div class="perf-label">EL Max Lag</div></div>
             <div class="perf-card"><div class="perf-num">${el.currentLagMs}ms</div><div class="perf-label">EL Current</div></div>
-            <div class="perf-card"><div class="perf-num">${health.websocket.clients}</div><div class="perf-label">WS Clients</div></div>
+            <div class="perf-card"><div class="perf-num">${health.websocket.clients}</div><div class="perf-label">${tr('WS Clients')}</div></div>
           </div>`;
         }
       }
@@ -182,10 +184,10 @@ function renderVersionCard(health) {
         // Cancelled writes warn at >1 MB/s — sustained cancellation usually
         // means truncate/unlink racing with active writers (#1119-shaped bug).
         const cancelledWarn = cancelled > 1048576 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
-        html += `<h3>Disk I/O (server process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-          <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
-          <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.writeBytesPerSec || 0)}${writeWarn}</div><div class="perf-label">Write</div></div>
-          <div class="perf-card"><div class="perf-num">${fmtRate(cancelled)}${cancelledWarn}</div><div class="perf-label">Cancelled Write</div></div>
+        html += `<h3>${tr('Disk I/O (server process)')}</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.readBytesPerSec || 0)}</div><div class="perf-label">${tr('Read')}</div></div>
+          <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.writeBytesPerSec || 0)}${writeWarn}</div><div class="perf-label">${tr('Write')}</div></div>
+          <div class="perf-card"><div class="perf-num">${fmtRate(cancelled)}${cancelledWarn}</div><div class="perf-label">${tr('Cancelled Write')}</div></div>
           <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsRead || 0)}/s</div><div class="perf-label">Syscalls Read</div></div>
           <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsWrite || 0)}/s</div><div class="perf-label">Syscalls Write</div></div>
         </div>`;
@@ -197,10 +199,10 @@ function renderVersionCard(health) {
           const ingWriteWarn = (ing.writeBytesPerSec || 0) > 10 * 1048576 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
           const ingCancelled = ing.cancelledWriteBytesPerSec || 0;
           const ingCancelledWarn = ingCancelled > 1048576 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
-          html += `<h3>Disk I/O (Ingestor process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-            <div class="perf-card"><div class="perf-num">${fmtRate(ing.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
-            <div class="perf-card"><div class="perf-num">${fmtRate(ing.writeBytesPerSec || 0)}${ingWriteWarn}</div><div class="perf-label">Write</div></div>
-            <div class="perf-card"><div class="perf-num">${fmtRate(ingCancelled)}${ingCancelledWarn}</div><div class="perf-label">Cancelled Write</div></div>
+          html += `<h3>${tr('Disk I/O (Ingestor process)')}</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+            <div class="perf-card"><div class="perf-num">${fmtRate(ing.readBytesPerSec || 0)}</div><div class="perf-label">${tr('Read')}</div></div>
+            <div class="perf-card"><div class="perf-num">${fmtRate(ing.writeBytesPerSec || 0)}${ingWriteWarn}</div><div class="perf-label">${tr('Write')}</div></div>
+            <div class="perf-card"><div class="perf-num">${fmtRate(ingCancelled)}${ingCancelledWarn}</div><div class="perf-label">${tr('Cancelled Write')}</div></div>
             <div class="perf-card"><div class="perf-num">${Math.round(ing.syscallsRead || 0)}/s</div><div class="perf-label">Syscalls Read</div></div>
             <div class="perf-card"><div class="perf-num">${Math.round(ing.syscallsWrite || 0)}/s</div><div class="perf-label">Syscalls Write</div></div>
           </div>`;
@@ -211,9 +213,9 @@ function renderVersionCard(health) {
       if (writeSources && writeSources.sources) {
         const src = writeSources.sources;
         const keys = Object.keys(src).sort((a, b) => (src[b] || 0) - (src[a] || 0));
-        html += '<h3>Write Sources</h3>';
+        html += '<h3>' + tr('Write Sources') + '</h3>';
         if (keys.length === 0) {
-          html += '<p style="color:var(--text-muted)">No ingestor stats yet (waiting for /tmp/corescope-ingestor-stats.json)</p>';
+          html += '<p style="color:var(--text-muted)">' + tr('No ingestor stats yet (waiting for {file})', { file: '/tmp/corescope-ingestor-stats.json' }) + '</p>';
         } else {
           // Anomaly detection (#1120 acceptance): flag any component whose
           // per-second write rate exceeds 10× its 5-minute rolling baseline.
@@ -229,7 +231,7 @@ function renderVersionCard(health) {
           const cutoff = Date.parse(current.sampleAt) - (6 * 60 * 1000);
           while (history.length > 1 && Date.parse(history[0].sampleAt) < cutoff) history.shift();
 
-          html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Source</th><th scope="col">Total</th><th scope="col">Rate/s</th><th scope="col">Baseline/s</th><th scope="col">Anomaly</th></tr></thead><tbody>';
+          html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">' + tr('Source') + '</th><th scope="col">' + tr('Total') + '</th><th scope="col">' + tr('Rate/s') + '</th><th scope="col">' + tr('Baseline/s') + '</th><th scope="col">' + tr('Anomaly') + '</th></tr></thead><tbody>';
           for (const k of keys) {
             const v = src[k] || 0;
             const rate = anom.rates[k];
@@ -241,7 +243,7 @@ function renderVersionCard(health) {
           }
           html += '</tbody></table></div>';
           if (writeSources.sampleAt) {
-            html += `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Sampled: ${writeSources.sampleAt} · baseline window: 5 min · threshold: 10×</div>`;
+            html += `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">${tr('Sampled: {time} · baseline window: 5 min · threshold: 10×', { time: writeSources.sampleAt })}</div>`;
           }
         }
       }
@@ -254,8 +256,8 @@ function renderVersionCard(health) {
         const hitFlag = hitRate > 0 && hitRate < 90 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
         html += `<h3>SQLite (WAL + Cache Hit)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
           <div class="perf-card"><div class="perf-num">${walMB.toFixed(1)}MB${walFlag}</div><div class="perf-label">WAL Size</div></div>
-          <div class="perf-card"><div class="perf-num">${(sqliteStats.pageCount || 0).toLocaleString()}</div><div class="perf-label">Page Count</div></div>
-          <div class="perf-card"><div class="perf-num">${sqliteStats.pageSize || 0}</div><div class="perf-label">Page Size</div></div>
+          <div class="perf-card"><div class="perf-num">${(sqliteStats.pageCount || 0).toLocaleString()}</div><div class="perf-label">${tr('Page Count')}</div></div>
+          <div class="perf-card"><div class="perf-num">${sqliteStats.pageSize || 0}</div><div class="perf-label">${tr('Page Size')}</div></div>
           <div class="perf-card"><div class="perf-num">${hitRate.toFixed(1)}%${hitFlag}</div><div class="perf-label">Cache Hit Rate</div></div>
         </div>`;
       }
@@ -264,20 +266,20 @@ function renderVersionCard(health) {
       if (server.cache) {
         const c = server.cache;
         const clientCache = _apiCache ? _apiCache.size : 0;
-        html += `<h3>Cache</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-          <div class="perf-card"><div class="perf-num">${c.size}</div><div class="perf-label">Server Entries</div></div>
-          <div class="perf-card"><div class="perf-num">${c.hits}</div><div class="perf-label">Server Hits</div></div>
-          <div class="perf-card"><div class="perf-num">${c.misses}</div><div class="perf-label">Server Misses</div></div>
-          <div class="perf-card"><div class="perf-num" style="color:${c.hitRate > 50 ? 'var(--status-green)' : c.hitRate > 20 ? 'var(--status-yellow)' : 'var(--status-red)'}">${c.hitRate}%</div><div class="perf-label">Server Hit Rate</div></div>
-          <div class="perf-card"><div class="perf-num">${c.staleHits || 0}</div><div class="perf-label">Stale Hits (SWR)</div></div>
-          <div class="perf-card"><div class="perf-num">${c.recomputes || 0}</div><div class="perf-label">Recomputes</div></div>
-          <div class="perf-card"><div class="perf-num">${clientCache}</div><div class="perf-label">Client Entries</div></div>
+        html += `<h3>${tr('Cache')}</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          <div class="perf-card"><div class="perf-num">${c.size}</div><div class="perf-label">${tr('Server Entries')}</div></div>
+          <div class="perf-card"><div class="perf-num">${c.hits}</div><div class="perf-label">${tr('Server Hits')}</div></div>
+          <div class="perf-card"><div class="perf-num">${c.misses}</div><div class="perf-label">${tr('Server Misses')}</div></div>
+          <div class="perf-card"><div class="perf-num" style="color:${c.hitRate > 50 ? 'var(--status-green)' : c.hitRate > 20 ? 'var(--status-yellow)' : 'var(--status-red)'}">${c.hitRate}%</div><div class="perf-label">${tr('Server Hit Rate')}</div></div>
+          <div class="perf-card"><div class="perf-num">${c.staleHits || 0}</div><div class="perf-label">${tr('Stale Hits (SWR)')}</div></div>
+          <div class="perf-card"><div class="perf-num">${c.recomputes || 0}</div><div class="perf-label">${tr('Recomputes')}</div></div>
+          <div class="perf-card"><div class="perf-num">${clientCache}</div><div class="perf-label">${tr('Client Entries')}</div></div>
         </div>`;
         if (client) {
           html += `<div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-            <div class="perf-card"><div class="perf-num">${client.cacheHits || 0}</div><div class="perf-label">Client Hits</div></div>
-            <div class="perf-card"><div class="perf-num">${client.cacheMisses || 0}</div><div class="perf-label">Client Misses</div></div>
-            <div class="perf-card"><div class="perf-num" style="color:${(client.cacheHitRate||0) > 50 ? 'var(--status-green)' : 'var(--status-yellow)'}">${client.cacheHitRate || 0}%</div><div class="perf-label">Client Hit Rate</div></div>
+            <div class="perf-card"><div class="perf-num">${client.cacheHits || 0}</div><div class="perf-label">${tr('Client Hits')}</div></div>
+            <div class="perf-card"><div class="perf-num">${client.cacheMisses || 0}</div><div class="perf-label">${tr('Client Misses')}</div></div>
+            <div class="perf-card"><div class="perf-num" style="color:${(client.cacheHitRate||0) > 50 ? 'var(--status-green)' : 'var(--status-yellow)'}">${client.cacheHitRate || 0}%</div><div class="perf-label">${tr('Client Hit Rate')}</div></div>
           </div>`;
         }
       }
@@ -285,17 +287,17 @@ function renderVersionCard(health) {
       // Packet Store stats
       if (server.packetStore) {
         const ps = server.packetStore;
-        html += `<h3>In-Memory Packet Store</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-          <div class="perf-card"><div class="perf-num">${ps.inMemory.toLocaleString()}</div><div class="perf-label">Packets in RAM</div></div>
-          <div class="perf-card"><div class="perf-num">${ps.trackedMB}MB</div><div class="perf-label">Tracked Memory</div></div>
-          <div class="perf-card"><div class="perf-num">${ps.maxMB}MB</div><div class="perf-label">Memory Limit</div></div>
+        html += `<h3>${tr('In-Memory Packet Store')}</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          <div class="perf-card"><div class="perf-num">${ps.inMemory.toLocaleString()}</div><div class="perf-label">${tr('Packets in RAM')}</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.trackedMB}MB</div><div class="perf-label">${tr('Tracked Memory')}</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.maxMB}MB</div><div class="perf-label">${tr('Memory Limit')}</div></div>
           <div class="perf-card"><div class="perf-num">${ps.estimatedMB}MB</div><div class="perf-label">Heap (debug)</div></div>
-          <div class="perf-card"><div class="perf-num">${ps.queries.toLocaleString()}</div><div class="perf-label">Queries Served</div></div>
-          <div class="perf-card"><div class="perf-num">${ps.inserts.toLocaleString()}</div><div class="perf-label">Live Inserts</div></div>
-          <div class="perf-card"><div class="perf-num">${ps.evicted.toLocaleString()}</div><div class="perf-label">Evicted</div></div>
-          <div class="perf-card"><div class="perf-num">${ps.indexes.byHash.toLocaleString()}</div><div class="perf-label">Unique Hashes</div></div>
-          <div class="perf-card"><div class="perf-num">${ps.indexes.byObserver}</div><div class="perf-label">Observers</div></div>
-          <div class="perf-card"><div class="perf-num">${ps.indexes.byNode.toLocaleString()}</div><div class="perf-label">Indexed Nodes</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.queries.toLocaleString()}</div><div class="perf-label">${tr('Queries Served')}</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.inserts.toLocaleString()}</div><div class="perf-label">${tr('Live Inserts')}</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.evicted.toLocaleString()}</div><div class="perf-label">${tr('Evicted')}</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.indexes.byHash.toLocaleString()}</div><div class="perf-label">${tr('Unique Hashes')}</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.indexes.byObserver}</div><div class="perf-label">${tr('Observers')}</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.indexes.byNode.toLocaleString()}</div><div class="perf-label">${tr('Indexed Nodes')}</div></div>
         </div>`;
       }
 
@@ -305,13 +307,13 @@ function renderVersionCard(health) {
         const walColor = sq.walSizeMB > 50 ? 'var(--status-red)' : sq.walSizeMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)';
         const freelistColor = sq.freelistMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)';
         html += `<h3>SQLite</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-          <div class="perf-card"><div class="perf-num">${sq.dbSizeMB}MB</div><div class="perf-label">DB Size</div></div>
+          <div class="perf-card"><div class="perf-num">${sq.dbSizeMB}MB</div><div class="perf-label">${tr('DB Size')}</div></div>
           <div class="perf-card"><div class="perf-num" style="color:${walColor}">${sq.walSizeMB}MB</div><div class="perf-label">WAL Size</div></div>
           <div class="perf-card"><div class="perf-num" style="color:${freelistColor}">${sq.freelistMB}MB</div><div class="perf-label">Freelist</div></div>
-          <div class="perf-card"><div class="perf-num">${(sq.rows.transmissions || 0).toLocaleString()}</div><div class="perf-label">Transmissions</div></div>
-          <div class="perf-card"><div class="perf-num">${(sq.rows.observations || 0).toLocaleString()}</div><div class="perf-label">Observations</div></div>
-          <div class="perf-card"><div class="perf-num">${sq.rows.nodes || 0}</div><div class="perf-label">Nodes</div></div>
-          <div class="perf-card"><div class="perf-num">${sq.rows.observers || 0}</div><div class="perf-label">Observers</div></div>`;
+          <div class="perf-card"><div class="perf-num">${(sq.rows.transmissions || 0).toLocaleString()}</div><div class="perf-label">${tr('Transmissions')}</div></div>
+          <div class="perf-card"><div class="perf-num">${(sq.rows.observations || 0).toLocaleString()}</div><div class="perf-label">${tr('Observations')}</div></div>
+          <div class="perf-card"><div class="perf-num">${sq.rows.nodes || 0}</div><div class="perf-label">${tr('Nodes')}</div></div>
+          <div class="perf-card"><div class="perf-num">${sq.rows.observers || 0}</div><div class="perf-label">${tr('Observers')}</div></div>`;
         if (sq.walPages) {
           html += `<div class="perf-card"><div class="perf-num">${sq.walPages.busy}</div><div class="perf-label">WAL Busy Pages</div></div>`;
         }
@@ -328,8 +330,8 @@ function renderVersionCard(health) {
         return tb - ta;
       });
       if (eps.length) {
-        html += '<h3>Server Endpoints (sorted by total time)</h3>';
-        html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Endpoint</th><th scope="col">Count</th><th scope="col">Avg</th><th scope="col">P50</th><th scope="col">P95</th><th scope="col">Max</th><th scope="col">Total</th></tr></thead><tbody>';
+        html += '<h3>' + tr('Server Endpoints (sorted by total time)') + '</h3>';
+        html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">' + tr('Endpoint') + '</th><th scope="col">' + tr('Count') + '</th><th scope="col">' + tr('Avg') + '</th><th scope="col">P50</th><th scope="col">P95</th><th scope="col">' + tr('Max') + '</th><th scope="col">' + tr('Total') + '</th></tr></thead><tbody>';
         for (const [path, s] of eps) {
           const total = Math.round(s.count * s.avgMs);
           const cls = s.p95Ms > 200 ? ' class="perf-slow"' : s.p95Ms > 50 ? ' class="perf-warn"' : '';
@@ -340,8 +342,8 @@ function renderVersionCard(health) {
 
       // Client API calls
       if (client && client.endpoints.length) {
-        html += '<h3>Client API Calls (this session)</h3>';
-        html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Endpoint</th><th scope="col">Count</th><th scope="col">Avg</th><th scope="col">Max</th><th scope="col">Total</th></tr></thead><tbody>';
+        html += '<h3>' + tr('Client API Calls (this session)') + '</h3>';
+        html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">' + tr('Endpoint') + '</th><th scope="col">' + tr('Count') + '</th><th scope="col">' + tr('Avg') + '</th><th scope="col">' + tr('Max') + '</th><th scope="col">' + tr('Total') + '</th></tr></thead><tbody>';
         for (const s of client.endpoints) {
           const cls = s.maxMs > 500 ? ' class="perf-slow"' : s.avgMs > 200 ? ' class="perf-warn"' : '';
           html += `<tr${cls}><td><code>${s.path}</code></td><td>${s.count}</td><td>${s.avgMs}ms</td><td>${s.maxMs}ms</td><td>${s.totalMs}ms</td></tr>`;
@@ -351,15 +353,15 @@ function renderVersionCard(health) {
 
       // Slow queries
       if (server.slowQueries.length) {
-        html += '<h3>Recent Slow Queries (&gt;100ms)</h3>';
-        html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Time</th><th scope="col">Path</th><th scope="col">Duration</th><th scope="col">Status</th></tr></thead><tbody>';
+        html += '<h3>' + tr('Recent Slow Queries') + ' (&gt;100ms)</h3>';
+        html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">' + tr('Time') + '</th><th scope="col">' + tr('Path') + '</th><th scope="col">' + tr('Duration') + '</th><th scope="col">' + tr('Status') + '</th></tr></thead><tbody>';
         for (const q of server.slowQueries.slice().reverse()) {
           html += `<tr class="perf-slow"><td>${new Date(q.time).toLocaleTimeString()}</td><td><code>${q.path}</code></td><td>${q.ms}ms</td><td>${q.status}</td></tr>`;
         }
         html += '</tbody></table></div>';
       }
 
-      html += `<div style="margin-top:16px"><button id="perfReset" style="padding:8px 16px;cursor:pointer">Reset Stats</button> <button id="perfRefresh" style="padding:8px 16px;cursor:pointer">Refresh</button></div>`;
+      html += `<div style="margin-top:16px"><button id="perfReset" style="padding:8px 16px;cursor:pointer">${tr('Reset Stats')}</button> <button id="perfRefresh" style="padding:8px 16px;cursor:pointer">${tr('Refresh')}</button></div>`;
       el.innerHTML = html;
 
       document.getElementById('perfReset')?.addEventListener('click', async () => {
@@ -369,7 +371,7 @@ function renderVersionCard(health) {
       });
       document.getElementById('perfRefresh')?.addEventListener('click', refresh);
     } catch (err) {
-      el.innerHTML = `<p style="color:red">Error: ${err.message}</p>`;
+      el.innerHTML = `<p style="color:red">${tr('Error: {message}', { message: typeof escapeHtml === 'function' ? escapeHtml(err.message) : err.message })}</p>`;
     }
   }
 
