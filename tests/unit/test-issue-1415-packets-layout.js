@@ -146,7 +146,7 @@ assert(
 
 // ── 6. #1458 P0-B — raw-bytes disclosure copy ───────────────────────────
 assert(
-  /<summary>Show raw bytes<\/summary>/.test(pktJs),
+  /<summary>(?:Show raw bytes|\$\{tr\('Show raw bytes'\)\})<\/summary>/.test(pktJs),
   'detail-technical disclosure summary reads "Show raw bytes" (per spec)'
 );
 

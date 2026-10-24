@@ -1,5 +1,8 @@
 /* === CoreScope — observers.js === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
 // Issue #1478 — naive-clock warning chip.
 // Exposed as a window global so the renderer (and a jsdom-style test) can
@@ -19,12 +22,12 @@ window.ObserversNaiveChip = {
     } else {
       magnitude = absSec + 's';
     }
-    var dir = sec < 0 ? 'behind' : 'ahead of';
     var count = Number(o.clock_skew_count_24h || 0);
-    var tip = 'Observer\u2019s local clock is ' + magnitude + ' ' + dir
-      + ' UTC — per-packet timing for this observer is being clamped to ingest time'
-      + (count > 0 ? ' (' + count + ' events in last 24h)' : '')
-      + '. Fix: set the host clock to UTC, or emit Z-suffixed/offset-aware timestamps.';
+    var tip = (sec < 0
+        ? tr('Observer\u2019s local clock is {amount} behind UTC — per-packet timing for this observer is being clamped to ingest time', { amount: magnitude })
+        : tr('Observer\u2019s local clock is {amount} ahead of UTC — per-packet timing for this observer is being clamped to ingest time', { amount: magnitude }))
+      + (count > 0 ? ' (' + trn(count, '{count} events in last 24h', '{count} events in last 24h') + ')' : '')
+      + '. ' + tr('Fix: set the host clock to UTC, or emit Z-suffixed/offset-aware timestamps.');
     return '<span class="obs-clock-naive-chip" title="' + tip.replace(/"/g, '&quot;')
       + '" aria-label="' + tip.replace(/"/g, '&quot;')
       + '" style="margin-left:6px;cursor:help">'
@@ -93,16 +96,16 @@ window.ObserversSummary = (function () {
       var iso = new Date(fetchedAt).toISOString();
       updatedHtml = '<span class="obs-stat obs-updated' + staleCls
         + '" data-action="obs-refresh" role="button" tabindex="0"'
-        + ' title="Click to force a fresh fetch (bypass client cache)"'
-        + ' aria-label="Last updated ' + timeAgo(iso) + ' — click to refresh">'
-        + 'Last updated: ' + timeAgo(iso) + '</span>';
+        + ' title="' + tr('Click to force a fresh fetch (bypass client cache)') + '"'
+        + ' aria-label="' + tr('Last updated {time} — click to refresh', { time: timeAgo(iso) }) + '">'
+        + tr('Last updated: {time}', { time: timeAgo(iso) }) + '</span>';
     }
     return ''
       + '<div class="obs-summary">'
-      +   '<span class="obs-stat"><span class="health-dot health-green"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg></span> ' + c.online + ' Online</span>'
-      +   '<span class="obs-stat"><span class="health-dot health-yellow"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-triangle"></use></svg></span> ' + c.stale + ' Stale</span>'
-      +   '<span class="obs-stat"><span class="health-dot health-red"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-x"></use></svg></span> ' + c.offline + ' Offline</span>'
-      +   '<span class="obs-stat"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg> ' + c.total + ' Total</span>'
+      +   '<span class="obs-stat"><span class="health-dot health-green"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg></span> ' + tr('{count} Online', { count: c.online }) + '</span>'
+      +   '<span class="obs-stat"><span class="health-dot health-yellow"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-triangle"></use></svg></span> ' + tr('{count} Stale', { count: c.stale }) + '</span>'
+      +   '<span class="obs-stat"><span class="health-dot health-red"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-x"></use></svg></span> ' + tr('{count} Offline', { count: c.offline }) + '</span>'
+      +   '<span class="obs-stat"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg> ' + tr('{count} Total', { count: c.total }) + '</span>'
       +   updatedHtml
       + '</div>';
   }
@@ -152,24 +155,24 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     app.innerHTML = `
       <div class="observers-page">
         <div class="page-header">
-          <h2>Observer Status</h2>
+          <h2>${tr('Observer Status')}</h2>
           <button type="button" class="btn-secondary" data-action="compare-observers"
-                  title="Compare two observers side-by-side"
-                  aria-label="Compare observers">
-            <svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"></use></svg><span>Compare observers</span>
+                  title="${tr('Compare two observers side-by-side')}"
+                  aria-label="${tr('Compare observers')}">
+            <svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"></use></svg><span>${tr('Compare observers')}</span>
           </button>
           <button type="button" class="btn-secondary" data-action="compare-selected"
-                  title="Select exactly two rows to compare"
-                  aria-label="Compare selected observers"
+                  title="${tr('Select exactly two rows to compare')}"
+                  aria-label="${tr('Compare selected observers')}"
                   aria-disabled="true" disabled>
-            <svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-scales"></use></svg><span>Compare selected (<span data-role="compare-count">0</span>)</span>
+            <svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-scales"></use></svg><span>${tr('Compare selected ({count})', { count: '<span data-role="compare-count">0</span>' })}</span>
           </button>
           <span class="obs-refresh-spacer"></span>
-          <button class="btn-icon" data-action="obs-refresh" title="Refresh" aria-label="Refresh observers"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"></use></svg></button>
+          <button class="btn-icon" data-action="obs-refresh" title="${tr('Refresh')}" aria-label="${tr('Refresh observers')}"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"></use></svg></button>
         </div>
         <div id="obsRegionFilter" class="region-filter-container"></div>
         <div id="mqttStatusPanel" class="mqtt-status-panel-container"></div>
-        <div id="obsContent"><div class="text-center text-muted" style="padding:40px">Loading…</div></div>
+        <div id="obsContent"><div class="text-center text-muted" style="padding:40px">${tr('Loading…')}</div></div>
       </div>`;
     RegionFilter.init(document.getElementById('obsRegionFilter'));
     // #1043: mount the MQTT source status panel above the observers
@@ -290,14 +293,14 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     } catch (e) {
       if (myId !== _loadObserversReqId) return; // discard stale error too
       document.getElementById('obsContent').innerHTML =
-        `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Error loading observers: ${e.message}</div>`;
+        `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">${tr('Error loading observers: {message}', { message: escapeHtml(e.message) })}</div>`;
     }
   }
 
   // NOTE: Comparing server timestamps to Date.now() can skew if client/server
   // clocks differ. We add ±30s tolerance to thresholds to reduce false positives.
   function healthStatus(lastSeen) {
-    if (!lastSeen) return { cls: 'health-red', label: 'Unknown' };
+    if (!lastSeen) return { cls: 'health-red', label: tr('Unknown') };
     const ago = Date.now() - new Date(lastSeen).getTime();
     const tolerance = 30000; // 30s tolerance for clock skew
     // Issue #1552 — thresholds are operator-configurable via config.json
@@ -307,9 +310,9 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     const th = (typeof window !== 'undefined' && window.HEALTH_THRESHOLDS) || {};
     const onlineMs = th.observerOnlineMs || 3600000;
     const staleMs = th.observerStaleMs || 86400000;
-    if (ago < onlineMs + tolerance) return { cls: 'health-green', label: 'Online' };
-    if (ago < staleMs + tolerance) return { cls: 'health-yellow', label: 'Stale' };
-    return { cls: 'health-red', label: 'Offline' };
+    if (ago < onlineMs + tolerance) return { cls: 'health-green', label: tr('Online') };
+    if (ago < staleMs + tolerance) return { cls: 'health-yellow', label: tr('Stale') };
+    return { cls: 'health-red', label: tr('Offline') };
   }
   // Issue #1552 — exposed for tests and external callers.
   // #1563 — Expose for ObserversSummary so aggregate counts and per-row dots
@@ -320,12 +323,12 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
   function packetBadge(o) {
     const warnIcon = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-warning"></use></svg>';
     const broadcastIcon = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg>';
-    if (!o.last_packet_at) return '<span title="No packets ever observed">' + broadcastIcon + warnIcon + ' never</span>';
+    if (!o.last_packet_at) return '<span title="' + tr('No packets ever observed') + '">' + broadcastIcon + warnIcon + ' ' + tr('never') + '</span>';
     const pktAgo = Date.now() - new Date(o.last_packet_at).getTime();
     const statusAgo = o.last_seen ? Date.now() - new Date(o.last_seen).getTime() : Infinity;
     const gap = pktAgo - statusAgo;
     if (gap > 600000) {
-      return `<span title="Last packet ${timeAgo(o.last_packet_at)} — status is newer by ${Math.round(gap/60000)}min. Observer may be alive but not forwarding packets.">${broadcastIcon}${warnIcon} ${timeAgo(o.last_packet_at)}</span>`;
+      return `<span title="${tr('Last packet {time} — status is newer by {minutes}min. Observer may be alive but not forwarding packets.', { time: timeAgo(o.last_packet_at), minutes: Math.round(gap/60000) })}">${broadcastIcon}${warnIcon} ${timeAgo(o.last_packet_at)}</span>`;
     }
     return timeAgo(o.last_packet_at);
   }
@@ -351,9 +354,9 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
   }
 
   function sparkBar(count, max) {
-    if (max === 0) return `<span class="text-muted">0/hr</span>`;
+    if (max === 0) return `<span class="text-muted">${tr('{count}/hr', { count: 0 })}</span>`;
     const pct = Math.min(100, Math.round((count / max) * 100));
-    return `<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap"><span style="display:inline-block;width:60px;height:12px;background:var(--border);border-radius:3px;overflow:hidden;vertical-align:middle"><span style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,#3b82f6,#60a5fa);border-radius:3px"></span></span><span style="font-size:11px">${count}/hr</span></span>`;
+    return `<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap"><span style="display:inline-block;width:60px;height:12px;background:var(--border);border-radius:3px;overflow:hidden;vertical-align:middle"><span style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,#3b82f6,#60a5fa);border-radius:3px"></span></span><span style="font-size:11px">${tr('{count}/hr', { count: count })}</span></span>`;
   }
 
   function render() {
@@ -377,7 +380,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
       : observers;
 
     if (filtered.length === 0) {
-      el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No observers found.</div>';
+      el.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('No observers found.') + '</div>';
       return;
     }
 
@@ -391,11 +394,11 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     el.innerHTML = `
       ${summaryHtml}
       <div class="obs-table-scroll table-fluid-wrap"><table class="data-table obs-table" id="obsTable">
-        <caption class="sr-only">Observer status and statistics</caption>
+        <caption class="sr-only">${tr('Observer status and statistics')}</caption>
         <thead><tr>
-          <th scope="col" data-priority="1" data-sort-key="status" data-type="numeric">Status</th><th scope="col" data-priority="1" data-sort-key="name">Name</th><th scope="col" data-priority="3" data-sort-key="region">Region</th><th scope="col" data-priority="2" data-sort-key="last_seen" data-type="numeric">Last Status</th><th scope="col" data-priority="2" data-sort-key="last_packet_at" data-type="numeric">Last Packet</th>
-          <th scope="col" data-priority="3" data-sort-key="packet_health" data-type="numeric">Packet Health</th><th scope="col" data-priority="4" data-sort-key="packet_count" data-type="numeric">Total Packets</th><th scope="col" data-priority="3" data-sort-key="packets_hour" data-type="numeric">Packets/Hour</th><th scope="col" data-priority="3" data-sort-key="airtime_1h" data-type="numeric" title="TX airtime share over the last hour (duty cycle)">TX 1h</th><th scope="col" data-priority="4" data-sort-key="clock_offset" data-type="numeric">Clock Offset</th><th scope="col" data-priority="4" data-sort-key="uptime" data-type="numeric">Uptime</th><th scope="col" data-priority="4" data-sort-key="firmware">Firmware</th><th scope="col" data-priority="4" data-sort-key="client_version">Client</th>
-          <th scope="col" data-priority="1" class="col-compare-select" style="width:32px"><span class="sr-only">Select for compare</span></th>
+          <th scope="col" data-priority="1" data-sort-key="status" data-type="numeric">${tr('Status')}</th><th scope="col" data-priority="1" data-sort-key="name">${tr('Name')}</th><th scope="col" data-priority="3" data-sort-key="region">${tr('Region')}</th><th scope="col" data-priority="2" data-sort-key="last_seen" data-type="numeric">${tr('Last Status')}</th><th scope="col" data-priority="2" data-sort-key="last_packet_at" data-type="numeric">${tr('Last Packet')}</th>
+          <th scope="col" data-priority="3" data-sort-key="packet_health" data-type="numeric">${tr('Packet Health')}</th><th scope="col" data-priority="4" data-sort-key="packet_count" data-type="numeric">${tr('Total Packets')}</th><th scope="col" data-priority="3" data-sort-key="packets_hour" data-type="numeric">${tr('Packets/Hour')}</th><th scope="col" data-priority="3" data-sort-key="airtime_1h" data-type="numeric" title="${tr('TX airtime share over the last hour (duty cycle)')}">TX 1h</th><th scope="col" data-priority="4" data-sort-key="clock_offset" data-type="numeric">${tr('Clock Offset')}</th><th scope="col" data-priority="4" data-sort-key="uptime" data-type="numeric">${tr('Uptime')}</th><th scope="col" data-priority="4" data-sort-key="firmware">${tr('Firmware')}</th><th scope="col" data-priority="4" data-sort-key="client_version">${tr('Client')}</th>
+          <th scope="col" data-priority="1" class="col-compare-select" style="width:32px"><span class="sr-only">${tr('Select for compare')}</span></th>
         </tr></thead>
         <tbody>${filtered.map(o => {
           const h = healthStatus(o.last_seen);
@@ -422,7 +425,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
           const _packetsHour = (o.packetsLastHour != null) ? o.packetsLastHour : '';
           return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" data-observer-id="${escapeHtml(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
             <td data-value="${_healthRank}"><span class="health-dot ${h.cls}" title="${h.label}">${shapeIcon}</span> ${h.label}</td>
-            <td data-testid="obs-cell-name" data-value="${escapeHtml(String(o.name || o.id))}" class="mono">${escapeHtml(o.name || o.id)}${window.ObserversNaiveChip.render(o)}${o.can_relay === false ? ' <span class="badge-listener" title="Firmware reported repeat:off — listener-only; excluded from path-hop disambiguator (issue #1290)">listener</span>' : (o.can_relay === true ? ' <span class="badge-repeater" title="Firmware reported repeat:on — eligible as a path hop">repeater</span>' : '')}</td>
+            <td data-testid="obs-cell-name" data-value="${escapeHtml(String(o.name || o.id))}" class="mono">${escapeHtml(o.name || o.id)}${window.ObserversNaiveChip.render(o)}${o.can_relay === false ? ' <span class="badge-listener" title="' + tr('Firmware reported repeat:off — listener-only; excluded from path-hop disambiguator (issue #1290)') + '">' + tr('listener') + '</span>' : (o.can_relay === true ? ' <span class="badge-repeater" title="' + tr('Firmware reported repeat:on — eligible as a path hop') + '">' + tr('repeater') + '</span>' : '')}</td>
             <td data-value="${escapeHtml(o.iata || '')}">${o.iata ? `<span class="badge-region">${escapeHtml(o.iata)}</span>` : '—'}</td>
             <td data-value="${_lastSeenMs}">${timeAgo(o.last_seen)}</td>
             <td data-testid="obs-cell-last-packet" data-value="${_lastPktMs}">${o.last_packet_at ? timeAgo(o.last_packet_at) : '<span class="text-muted">—</span>'}</td>
@@ -434,14 +437,14 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
               var sk = obsSkewMap[o.id];
               if (!sk || sk.samples == null || sk.samples === 0) return '<span class="text-muted">—</span>';
               var sev = observerSkewSeverity(sk.offsetSec);
-              return renderSkewBadge(sev, sk.offsetSec) + ' <span class="text-muted" title="Computed from ' + sk.samples + ' multi-observer packets. Positive = observer ahead of consensus.">(' + sk.samples + ')</span>';
+              return renderSkewBadge(sev, sk.offsetSec) + ' <span class="text-muted" title="' + tr('Computed from {count} multi-observer packets. Positive = observer ahead of consensus.', { count: sk.samples }) + '">(' + sk.samples + ')</span>';
             })()}</td>
             <td data-value="${_uptimeMs}">${uptimeStr(o.first_seen)}</td>
             <td data-testid="obs-cell-firmware" data-value="${escapeHtml(String(o.firmware || ''))}" class="mono"${o.firmware ? ` title="${escapeHtml(String(o.firmware))}"` : ''}>${o.firmware ? escapeHtml(truncateBuildSuffix(String(o.firmware))) : '<span class="text-muted">—</span>'}</td>
             <td data-testid="obs-cell-client-version" data-value="${escapeHtml(String(o.client_version || ''))}" class="mono"${o.client_version ? ` title="${escapeHtml(String(o.client_version))}"` : ''}>${o.client_version ? escapeHtml(String(o.client_version)) : '<span class="text-muted">—</span>'}</td>
             <td class="col-compare-select" onclick="event.stopPropagation()" style="text-align:center">
               <input type="checkbox" data-compare-select value="${escapeHtml(o.id)}"
-                     aria-label="Select ${escapeHtml(o.name || o.id)} for comparison"
+                     aria-label="${tr('Select {name} for comparison', { name: escapeHtml(o.name || o.id) })}"
                      onclick="event.stopPropagation()" />
             </td>
           </tr>`;
@@ -507,8 +510,8 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     btn.disabled = !enabled;
     btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
     btn.title = enabled
-      ? 'Compare the two selected observers'
-      : 'Select exactly two observers to enable (currently ' + ids.length + ')';
+      ? tr('Compare the two selected observers')
+      : tr('Select exactly two observers to enable (currently {count})', { count: ids.length });
   }
   // Wire change events globally so the state updates even when checkbox
   // toggles by keyboard (space) rather than mouse click.
@@ -529,22 +532,22 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     if (!o) return;
     var h = healthStatus(o.last_seen);
     var sk = obsSkewMap[o.id];
-    var skewLine = (sk && sk.samples) ? renderSkewBadge(observerSkewSeverity(sk.offsetSec), sk.offsetSec) + ' (' + sk.samples + ' samples)' : '—';
+    var skewLine = (sk && sk.samples) ? renderSkewBadge(observerSkewSeverity(sk.offsetSec), sk.offsetSec) + ' (' + trn(sk.samples, '{count} samples', '{count} samples') + ')' : '—';
     var pkts = sparkBar(o.packetsLastHour || 0, Math.max(1, o.packetsLastHour || 1));
     var content = window.SlideOver.open({ title: (o.name || o.id) });
     var naiveChipHTML = window.ObserversNaiveChip.render(o);
     content.innerHTML =
-      (naiveChipHTML ? '<div style="margin-bottom:10px">' + naiveChipHTML + ' <span class="text-muted">Clock is naive — per-packet timing clamped to ingest time. Clears itself 24h after the last skew event.</span></div>' : '') +
+      (naiveChipHTML ? '<div style="margin-bottom:10px">' + naiveChipHTML + ' <span class="text-muted">' + tr('Clock is naive — per-packet timing clamped to ingest time. Clears itself 24h after the last skew event.') + '</span></div>' : '') +
       '<dl class="slide-over-dl" style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
-        '<dt>Status</dt><dd><span class="health-dot ' + h.cls + '"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg></span> ' + h.label + '</dd>' +
-        '<dt>Region</dt><dd>' + (o.iata ? '<span class="badge-region">' + escapeHtml(o.iata) + '</span>' : '—') + '</dd>' +
-        '<dt>Last status</dt><dd>' + timeAgo(o.last_seen) + '</dd>' +
-        '<dt>Last packet</dt><dd>' + (o.last_packet_at ? timeAgo(o.last_packet_at) : '—') + '</dd>' +
-        '<dt>Total packets</dt><dd>' + (o.packet_count || 0).toLocaleString() + '</dd>' +
-        '<dt>Packets/hr</dt><dd>' + pkts + '</dd>' +
-        '<dt>Clock offset</dt><dd>' + skewLine + '</dd>' +
-        '<dt>Uptime</dt><dd>' + uptimeStr(o.first_seen) + '</dd>' +
+        '<dt>' + tr('Status') + '</dt><dd><span class="health-dot ' + h.cls + '"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg></span> ' + h.label + '</dd>' +
+        '<dt>' + tr('Region') + '</dt><dd>' + (o.iata ? '<span class="badge-region">' + escapeHtml(o.iata) + '</span>' : '—') + '</dd>' +
+        '<dt>' + tr('Last status') + '</dt><dd>' + timeAgo(o.last_seen) + '</dd>' +
+        '<dt>' + tr('Last packet') + '</dt><dd>' + (o.last_packet_at ? timeAgo(o.last_packet_at) : '—') + '</dd>' +
+        '<dt>' + tr('Total packets') + '</dt><dd>' + (o.packet_count || 0).toLocaleString() + '</dd>' +
+        '<dt>' + tr('Packets/hr') + '</dt><dd>' + pkts + '</dd>' +
+        '<dt>' + tr('Clock offset') + '</dt><dd>' + skewLine + '</dd>' +
+        '<dt>' + tr('Uptime') + '</dt><dd>' + uptimeStr(o.first_seen) + '</dd>' +
       '</dl>' +
-      '<p style="margin-top:14px"><a class="btn-primary" href="' + hashHref + '">Open full detail →</a></p>';
+      '<p style="margin-top:14px"><a class="btn-primary" href="' + hashHref + '">' + tr('Open full detail') + ' →</a></p>';
   }
 })();

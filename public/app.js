@@ -1,6 +1,16 @@
 /* === CoreScope — app.js === */
 'use strict';
 
+// --- UI translations ---
+// i18n.js loads before this file in the browser and defines tr()/trn().
+// Sandboxes that load app.js on its own get English with {placeholders} filled.
+if (typeof globalThis.tr !== 'function') {
+  globalThis.tr = function (s, p) {
+    return p ? s.replace(/\{(\w+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m)) : s;
+  };
+  globalThis.trn = function (n, one, other, p) { return globalThis.tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
+}
+
 // --- Route/Payload name maps ---
 const ROUTE_TYPES = { 0: 'TRANSPORT_FLOOD', 1: 'FLOOD', 2: 'DIRECT', 3: 'TRANSPORT_DIRECT' };
 const PAYLOAD_TYPES = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 6: 'Group Data', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 10: 'Multipart', 11: 'Control', 15: 'Raw Custom' };
@@ -341,8 +351,8 @@ function timeAgo(iso) {
   else if (abs < 3600) { value = Math.floor(abs / 60); suffix = 'm'; }
   else if (abs < 86400) { value = Math.floor(abs / 3600); suffix = 'h'; }
   else { value = Math.floor(abs / 86400); suffix = 'd'; }
-  if (s < 0) return 'in ' + value + suffix;
-  return value + suffix + ' ago';
+  if (s < 0) return tr('in {time}', { time: value + suffix });
+  return tr('{time} ago', { time: value + suffix });
 }
 
 function getHashParams() {
@@ -1153,10 +1163,10 @@ registerPage('tools-landing', {
   init: function (container) {
     container.innerHTML =
       '<div class="tools-landing">' +
-        '<h2>Tools</h2>' +
+        '<h2>' + tr('Tools') + '</h2>' +
         '<div class="tools-menu">' +
-          '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
-          '<a href="#/tools/trace/" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
+          '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ' + tr('Path Inspector') + '</h3><p>' + tr('Resolve prefix paths to candidate full-pubkey routes with confidence scoring.') + '</p></a>' +
+          '<a href="#/tools/trace/" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ' + tr('Trace Viewer') + '</h3><p>' + tr('View detailed packet traces by hash.') + '</p></a>' +
         '</div>' +
       '</div>';
   },
@@ -1317,7 +1327,7 @@ function navigate() {
       else { app.setAttribute('tabindex', '-1'); app.focus({ preventScroll: true }); }
     });
   } else {
-    app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${escapeHtml(route)}</h2><p>Page not yet implemented.</p></div>`;
+    app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${escapeHtml(route)}</h2><p>${tr('Page not yet implemented.')}</p></div>`;
   }
 }
 
@@ -1971,9 +1981,15 @@ window.addEventListener('DOMContentLoaded', () => {
     if (window._customizerV2) window._customizerV2.init(window.SITE_CONFIG);
   });
 
-  // Navigate immediately — don't gate data-fetching pages on cosmetic theme fetch
-  if (!location.hash || location.hash === '#/') location.hash = '#/home';
-  else navigate();
+  // Navigate immediately — don't gate data-fetching pages on cosmetic theme fetch.
+  // The UI language does gate the first render (i18n.js resolves at once for
+  // English and gives up after a few seconds), so pages render translated.
+  const startRouting = () => {
+    if (!location.hash || location.hash === '#/') location.hash = '#/home';
+    else navigate();
+  };
+  if (window.I18n && window.I18n.ready) window.I18n.ready.then(startRouting);
+  else startRouting();
 });
 
 /**

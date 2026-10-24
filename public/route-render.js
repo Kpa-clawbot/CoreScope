@@ -24,6 +24,9 @@
  */
 (function () {
   'use strict';
+  // i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+  var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
   // Wong palette: per-hop sequence gradient, bright → fading.
   // Used purely as a redundant carrier alongside the sequence-number badge,
@@ -122,7 +125,7 @@
 
   function buildPopupHtml(p, hopNum, total) {
     var pubkeyShort = p.pubkey ? String(p.pubkey).slice(0, 12) : '—';
-    var roleLine = escapeHtml(p.role || 'unknown');
+    var roleLine = escapeHtml(tr(p.role || 'unknown'));
     var lastSeen = p.last_seen
       ? new Date(p.last_seen).toLocaleString()
       : (p.last_heard ? new Date(p.last_heard).toLocaleString() : '—');
@@ -132,28 +135,28 @@
       : '—';
     var deepLink = p.pubkey
       ? '<div style="margin-top:6px"><a class="mc-route-popup-link" href="#/map?node=' +
-        encodeURIComponent(p.pubkey) + '">Show on main map \u2192</a></div>'
+        encodeURIComponent(p.pubkey) + '">' + tr('Show on main map') + ' →</a></div>'
       : '';
     return '<div class="mc-route-popup">' +
-      '<div class="mc-route-popup-title">Hop ' + hopNum + ' of ' + total +
+      '<div class="mc-route-popup-title">' + tr('Hop {n} of {total}', { n: hopNum, total: total }) +
       ': ' + escapeHtml(p.name || pubkeyShort) + '</div>' +
-      '<div class="mc-route-popup-row"><span>Role</span><b>' + roleLine + '</b></div>' +
-      '<div class="mc-route-popup-row"><span>Pubkey</span><code>' +
+      '<div class="mc-route-popup-row"><span>' + tr('Role') + '</span><b>' + roleLine + '</b></div>' +
+      '<div class="mc-route-popup-row"><span>' + tr('Pubkey') + '</span><code>' +
       escapeHtml(pubkeyShort) + '\u2026</code></div>' +
-      '<div class="mc-route-popup-row"><span>Last seen</span>' + escapeHtml(lastSeen) + '</div>' +
-      '<div class="mc-route-popup-row"><span>Observations</span>' + escapeHtml(String(obsCount)) + '</div>' +
-      '<div class="mc-route-popup-row"><span>Coords</span>' + escapeHtml(coords) + '</div>' +
+      '<div class="mc-route-popup-row"><span>' + tr('Last seen') + '</span>' + escapeHtml(lastSeen) + '</div>' +
+      '<div class="mc-route-popup-row"><span>' + tr('Observations') + '</span>' + escapeHtml(String(obsCount)) + '</div>' +
+      '<div class="mc-route-popup-row"><span>' + tr('Coords') + '</span>' + escapeHtml(coords) + '</div>' +
       deepLink +
       '</div>';
   }
 
   function ariaLabelFor(p, idx, total) {
-    var name = p.name || (p.pubkey ? String(p.pubkey).slice(0, 8) : 'unknown');
-    var role = p.role || 'unknown';
-    var base = 'Hop ' + (idx + 1) + ' of ' + total + ', ' + name + ', ' + role;
-    if (p.isOrigin) base += ', originator';
-    if (p.isDest) base += ', destination';
-    if (p.resolved === false) base += ', unresolved';
+    var name = p.name || (p.pubkey ? String(p.pubkey).slice(0, 8) : tr('unknown'));
+    var role = tr(p.role || 'unknown');
+    var base = tr('Hop {n} of {total}', { n: idx + 1, total: total }) + ', ' + name + ', ' + role;
+    if (p.isOrigin) base += ', ' + tr('originator');
+    if (p.isDest) base += ', ' + tr('destination');
+    if (p.resolved === false) base += ', ' + tr('unresolved');
     return base;
   }
 
@@ -198,26 +201,26 @@
       var svg = window.makeRoleMarkerSVG ? window.makeRoleMarkerSVG(r, color, 14) : '';
       return '<li class="mc-route-legend-entry mc-route-legend-role">' +
         '<span class="mc-route-legend-swatch">' + svg + '</span>' +
-        '<span>' + r + '</span></li>';
+        '<span>' + tr(r) + '</span></li>';
     }).join('');
 
     var html =
-      '<div class="mc-route-legend" role="region" aria-label="Route legend">' +
+      '<div class="mc-route-legend" role="region" aria-label="' + tr('Route legend') + '">' +
         '<button type="button" class="mc-route-legend-toggle" aria-expanded="true" aria-controls="mc-route-legend-body">' +
-          'Legend' +
+          tr('Legend') +
         '</button>' +
         '<div id="mc-route-legend-body" class="mc-route-legend-body">' +
           (resolvedCount < totalCount
             ? '<div class="mc-route-resolved-badge" role="status">' +
-              resolvedCount + ' of ' + totalCount + ' hops resolved</div>'
+              tr('{resolved} of {total} hops resolved', { resolved: resolvedCount, total: totalCount }) + '</div>'
             : '<div class="mc-route-resolved-badge" role="status">' +
-              totalCount + ' of ' + totalCount + ' hops resolved</div>') +
+              tr('{resolved} of {total} hops resolved', { resolved: totalCount, total: totalCount }) + '</div>') +
           '<ul class="mc-route-legend-list">' +
-            '<li class="mc-route-legend-entry"><span class="mc-route-legend-glyph" aria-hidden="true">\u25B6</span><span>origin (originator)</span></li>' +
-            '<li class="mc-route-legend-entry"><span class="mc-route-legend-glyph" aria-hidden="true">\u2691</span><span>destination</span></li>' +
-            '<li class="mc-route-legend-entry"><span class="mc-route-legend-gradient" aria-hidden="true"></span><span>hop-order color (bright \u2192 fading)</span></li>' +
+            '<li class="mc-route-legend-entry"><span class="mc-route-legend-glyph" aria-hidden="true">\u25B6</span><span>' + tr('origin (originator)') + '</span></li>' +
+            '<li class="mc-route-legend-entry"><span class="mc-route-legend-glyph" aria-hidden="true">\u2691</span><span>' + tr('destination') + '</span></li>' +
+            '<li class="mc-route-legend-entry"><span class="mc-route-legend-gradient" aria-hidden="true"></span><span>' + tr('hop-order color (bright → fading)') + '</span></li>' +
           '</ul>' +
-          '<div class="mc-route-legend-section">role shapes</div>' +
+          '<div class="mc-route-legend-section">' + tr('role shapes') + '</div>' +
           '<ul class="mc-route-legend-list">' + roleEntries + '</ul>' +
         '</div>' +
       '</div>';
@@ -239,11 +242,11 @@
   function buildContextLabel(container, timestamp) {
     var prior = container.querySelector('.mc-route-context-label');
     if (prior) prior.remove();
-    var ts = timestamp ? new Date(timestamp).toLocaleString() : 'unknown time';
+    var ts = timestamp ? new Date(timestamp).toLocaleString() : tr('unknown time');
     var el = document.createElement('div');
     el.className = 'mc-route-context-label';
     el.setAttribute('role', 'status');
-    el.textContent = 'Route observed at ' + ts;
+    el.textContent = tr('Route observed at {time}', { time: ts });
     container.appendChild(el);
   }
 
@@ -310,9 +313,9 @@
       if (a.lat == null || a.lon == null || b.lat == null || b.lon == null) continue;
       var color = seqColor(i, total - 1);
       var dist = haversineKm(a, b);
-      var ariaLabel = 'Hop ' + (i + 1) + ' \u2192 ' + (i + 2) +
+      var ariaLabel = tr('Hop {n}', { n: i + 1 }) + ' → ' + (i + 2) +
         (dist != null ? ', ~' + dist + 'km' : '') +
-        (redacted ? ' (' + hopsHiddenCount + ' 1-byte hop(s) hidden)' : '');
+        (redacted ? ' (' + trn(hopsHiddenCount, '{count} 1-byte hop hidden', '{count} 1-byte hops hidden') + ')' : '');
       var edgeDash = (a.resolved === false || b.resolved === false)
         ? '6 4'
         : (redacted ? '4 6' : null);
@@ -329,8 +332,8 @@
       // the theme tokens via .mc-route-redacted-badge in CSS.
       if (redacted && i === 0) {
         var mid = [(a.lat + b.lat) / 2, (a.lon + b.lon) / 2];
-        var badgeHtml = '<span class="mc-route-redacted-badge" title="Hidden by customizer: 1-byte path hops are filtered. Toggle off in Customize to see the full path.">' +
-          hopsHiddenCount + ' hop' + (hopsHiddenCount === 1 ? '' : 's') + ' hidden (1-byte)' +
+        var badgeHtml = '<span class="mc-route-redacted-badge" title="' + tr('Hidden by customizer: 1-byte path hops are filtered. Toggle off in Customize to see the full path.') + '">' +
+          trn(hopsHiddenCount, '{count} hop hidden (1-byte)', '{count} hops hidden (1-byte)') +
           '</span>';
         L.marker(mid, {
           icon: L.divIcon({ className: 'mc-route-redacted-badge-wrap', html: badgeHtml, iconSize: [120, 18], iconAnchor: [60, 9] }),

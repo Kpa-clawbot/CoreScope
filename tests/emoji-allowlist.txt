@@ -52,7 +52,7 @@ README.md
 public/cb-presets.js                    # ✓/✗ inline contrast-ratio annotations
 
 # --- channel-qr.js: comment references prior glyphs after swap ---
-public/channel-qr.js:133                # comment references 📋/✓ (now Phosphor)
+public/channel-qr.js:135                # comment references 📋/✓ (now Phosphor)
 
 # --- text-affordance dropdown caret used in button labels ---
 # "Filters ▾", "More ▾", "All Observers ▾", etc. The caret is part of the

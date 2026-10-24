@@ -1,5 +1,8 @@
 (function() {
   'use strict';
+  // i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+  var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
   // #1799 PR #1804 r1 item 9 (adv6): payload-labels.js is loaded
   // synchronously before this script in index.html. Missing module is
@@ -188,7 +191,8 @@
       var e = enums[k];
       if (!e) return '';
       var color = TYPE_COLORS[k] || '#888';
-      var label = e.short + ' \u2014 ' + e.long;
+      // Short names stay English (they are filter tokens too); the description is translated.
+      var label = e.short + ' — ' + tr(e.long);
       return '<li data-enum="' + k + '"><span class="live-dot" style="background:' + color + '" aria-hidden="true"></span> ' + label + '</li>';
     }).join('');
   }
@@ -238,7 +242,7 @@
     if (btn) {
       btn.textContent = CORNER_ARROWS[corner];
       btn.setAttribute('aria-label',
-        'Move ' + (PANEL_NAMES[id] || 'panel') + ' to next corner (currently ' + CORNER_LABELS[corner] + ')');
+        tr('Move {panel} to next corner (currently {corner})', { panel: tr(PANEL_NAMES[id] || 'panel'), corner: tr(CORNER_LABELS[corner]) }));
     }
   }
 
@@ -275,7 +279,7 @@
     applyPanelPosition(panelId, next);
     // Announce for screen readers
     var announce = document.getElementById('panelPositionAnnounce');
-    if (announce) announce.textContent = (PANEL_NAMES[panelId] || 'Panel') + ' moved to ' + CORNER_LABELS[next];
+    if (announce) announce.textContent = tr('{panel} moved to {corner}', { panel: tr(PANEL_NAMES[panelId] || 'Panel'), corner: tr(CORNER_LABELS[next]) });
   }
 
   function resetPanelPositions() {
@@ -308,7 +312,7 @@
     const iso = d && isFinite(d.getTime()) ? d.toISOString() : null;
     const f = formatTimestampWithTooltip(iso, getTimestampMode());
     const warn = f.isFuture
-      ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
+      ? ' <span class="timestamp-future-icon" title="' + tr('Timestamp is in the future — node clock may be skewed') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
       : '';
     return `<span class="timestamp-text" title="${escapeHtml(f.tooltip)}">${escapeHtml(f.text)}</span>${warn}`;
   }
@@ -496,11 +500,11 @@
     const prompt = document.getElementById('vcrPrompt');
     if (!prompt) return;
     prompt.setAttribute('role', 'alertdialog');
-    prompt.setAttribute('aria-label', 'Missed packets prompt');
+    prompt.setAttribute('aria-label', tr('Missed packets prompt'));
     prompt.innerHTML = `
-      <span>You missed <strong>${count}</strong> packets.</span>
-      <button id="vcrPromptReplay" class="vcr-prompt-btn">▶ Replay</button>
-      <button id="vcrPromptSkip" class="vcr-prompt-btn">⏭ Skip to live</button>
+      <span>${trn(count, 'You missed {count} packet.', 'You missed {count} packets.', { count: '<strong>' + count + '</strong>' })}</span>
+      <button id="vcrPromptReplay" class="vcr-prompt-btn">▶ ${tr('Replay')}</button>
+      <button id="vcrPromptSkip" class="vcr-prompt-btn">⏭ ${tr('Skip to live')}</button>
     `;
     prompt.classList.remove('hidden');
     document.getElementById('vcrPromptReplay').addEventListener('click', () => {
@@ -626,11 +630,11 @@
   function buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash) {
     // tsMs is packet receive time — "ago" is relative to when the packet arrived, not when the animation ended
     const secsAgo = Math.round((Date.now() - tsMs) / 1000);
-    const timeStr = secsAgo < 60 ? secsAgo + 's ago' : Math.round(secsAgo / 60) + 'm ago';
+    const timeStr = tr('{time} ago', { time: secsAgo < 60 ? secsAgo + 's' : Math.round(secsAgo / 60) + 'm' });
     // hopNames originate from adv_name (~line 3199) — attacker-controlled. Escape
     // each before joining into the popup HTML. (#1536)
     const chain = (hopNames || []).map(escapeHtml).join(' → ');
-    const link = hash ? `<a class="lc-path-link" href="#/packets/${hash}" style="color:${color}">full detail →</a>` : '';
+    const link = hash ? `<a class="lc-path-link" href="#/packets/${hash}" style="color:${color}">${tr('full detail')} →</a>` : '';
     return `<div class="lc-path-popup">
       <span class="lc-path-badge" style="background:${color}">${typeName}</span>
       <div class="lc-path-time">${timeStr}</div>
@@ -719,7 +723,7 @@
   function drawLcdText(text, color) {
     const canvas = document.getElementById('vcrLcdCanvas');
     if (!canvas) return;
-    canvas.setAttribute('aria-label', 'VCR time: ' + text);
+    canvas.setAttribute('aria-label', tr('VCR time: {time}', { time: text }));
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
     const cw = canvas.offsetWidth, ch = canvas.offsetHeight;
@@ -810,24 +814,24 @@
     if (VCR.mode === 'LIVE') {
       modeEl.innerHTML = '<span class="vcr-live-dot"></span> LIVE';
       modeEl.className = 'vcr-mode vcr-mode-live';
-      if (pauseBtn) { pauseBtn.textContent = '⏸'; pauseBtn.setAttribute('aria-label', 'Pause'); }
+      if (pauseBtn) { pauseBtn.textContent = '⏸'; pauseBtn.setAttribute('aria-label', tr('Pause')); }
       if (missedEl) missedEl.classList.add('hidden');
       updateVCRClock(Date.now());
     } else if (VCR.mode === 'PAUSED') {
-      modeEl.textContent = '⏸ PAUSED';
+      modeEl.textContent = '⏸ ' + tr('PAUSED');
       modeEl.className = 'vcr-mode vcr-mode-paused';
-      if (pauseBtn) { pauseBtn.textContent = '▶'; pauseBtn.setAttribute('aria-label', 'Play'); }
+      if (pauseBtn) { pauseBtn.textContent = '▶'; pauseBtn.setAttribute('aria-label', tr('Play')); }
       if (missedEl && VCR.missedCount > 0) {
         missedEl.textContent = `+${VCR.missedCount}`;
         missedEl.classList.remove('hidden');
       }
     } else if (VCR.mode === 'REPLAY') {
-      modeEl.textContent = `⏪ REPLAY`;
+      modeEl.textContent = '⏪ ' + tr('REPLAY');
       modeEl.className = 'vcr-mode vcr-mode-replay';
-      if (pauseBtn) { pauseBtn.textContent = '⏸'; pauseBtn.setAttribute('aria-label', 'Pause'); }
+      if (pauseBtn) { pauseBtn.textContent = '⏸'; pauseBtn.setAttribute('aria-label', tr('Pause')); }
       if (missedEl) missedEl.classList.add('hidden');
     }
-    if (speedBtn) { speedBtn.textContent = speedLabel(VCR.speed); speedBtn.setAttribute('aria-label', 'Speed ' + speedLabel(VCR.speed)); }
+    if (speedBtn) { speedBtn.textContent = speedLabel(VCR.speed); speedBtn.setAttribute('aria-label', tr('Speed {speed}', { speed: speedLabel(VCR.speed) })); }
     updateVCRLcd();
 
     // WAKE THE ENGINE: If we unpaused or changed speed above 0, kickstart the canvas
@@ -1255,21 +1259,21 @@
             </div>
           </div>
           <div class="live-header-critical" data-live-header-critical>
-            <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
-            <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
+            <span class="live-beacon" aria-label="${tr('WebSocket connection beacon')}"></span>
+            <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> ${tr('pkts')}</div>
           </div>
           <!-- #1234: stats row promoted to a direct child of .live-header so
                the counters are always visible inline on mobile (single-row
                header, no MESH LIVE label, no chart toggle). At desktop
                this also flows inline next to the title via flex. -->
           <div class="live-stats-row" data-live-stats-row>
-            <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
-            <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
-            <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
+            <div class="live-stat-pill"><span id="liveNodeCount">0</span> ${tr('nodes')}</div>
+            <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> ${tr('active')}</div>
+            <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>${tr('/min')}</div>
           </div>
           <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
                   aria-expanded="false" aria-controls="liveHeaderBody"
-                  aria-label="Show live stats"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></button>
+                  aria-label="${tr('Show live stats')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></button>
 
         <!-- #1205: settings toggles are children of the MESH LIVE panel
              (#liveHeader), not a free-floating .live-overlay. PR #1180
@@ -1277,40 +1281,40 @@
         <div class="live-controls" id="liveControls">
           <div class="live-controls-body" data-live-controls-body id="liveControlsBody">
             <div class="live-toggles">
-            <label><input type="checkbox" id="liveHeatToggle" checked aria-describedby="heatDesc"> Heat</label>
-            <span id="heatDesc" class="sr-only">Overlay a density heat map on the mesh nodes</span>
-            <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Inferred Hops</label>
-            <span id="ghostDesc" class="sr-only">Show inferred hop markers for unknown hops</span>
-            <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
-            <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
-            <label><input type="checkbox" id="liveColorHashToggle" aria-describedby="colorHashDesc"> Color by hash</label>
-            <span id="colorHashDesc" class="sr-only">Color flying-packet dots and contrails by packet hash for propagation tracing</span>
+            <label><input type="checkbox" id="liveHeatToggle" checked aria-describedby="heatDesc"> ${tr('Heat')}</label>
+            <span id="heatDesc" class="sr-only">${tr('Overlay a density heat map on the mesh nodes')}</span>
+            <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> ${tr('Inferred Hops')}</label>
+            <span id="ghostDesc" class="sr-only">${tr('Show inferred hop markers for unknown hops')}</span>
+            <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> ${tr('Realistic')}</label>
+            <span id="realisticDesc" class="sr-only">${tr('Buffer packets by hash and animate all paths simultaneously')}</span>
+            <label><input type="checkbox" id="liveColorHashToggle" aria-describedby="colorHashDesc"> ${tr('Color by hash')}</label>
+            <span id="colorHashDesc" class="sr-only">${tr('Color flying-packet dots and contrails by packet hash for propagation tracing')}</span>
             <label><input type="checkbox" id="liveMatrixToggle" aria-describedby="matrixDesc"> Matrix</label>
-            <span id="matrixDesc" class="sr-only">Animate packet hex bytes flowing along paths like the Matrix</span>
-            <label><input type="checkbox" id="liveMatrixRainToggle" aria-describedby="rainDesc"> Rain</label>
-            <span id="rainDesc" class="sr-only">Matrix rain overlay — packets fall as hex columns</span>
-            <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-music-note"/></svg> Audio</label>
-            <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
-            <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
-            <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
-            <label><input type="checkbox" id="liveMultibyteToggle" aria-describedby="multibyteDesc"> Multibyte only</label>
-            <span id="multibyteDesc" class="sr-only">Show only multibyte (≥2-byte path-hash) packets; hide unreliable single-byte traffic</span>
-            <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
+            <span id="matrixDesc" class="sr-only">${tr('Animate packet hex bytes flowing along paths like the Matrix')}</span>
+            <label><input type="checkbox" id="liveMatrixRainToggle" aria-describedby="rainDesc"> ${tr('Rain')}</label>
+            <span id="rainDesc" class="sr-only">${tr('Matrix rain overlay — packets fall as hex columns')}</span>
+            <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-music-note"/></svg> ${tr('Audio')}</label>
+            <span id="audioDesc" class="sr-only">${tr('Sonify packets — turn raw bytes into generative music')}</span>
+            <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ ${tr('Favorites')}</label>
+            <span id="favDesc" class="sr-only">${tr('Show only favorited and claimed nodes')}</span>
+            <label><input type="checkbox" id="liveMultibyteToggle" aria-describedby="multibyteDesc"> ${tr('Multibyte only')}</label>
+            <span id="multibyteDesc" class="sr-only">${tr('Show only multibyte (≥2-byte path-hash) packets; hide unreliable single-byte traffic')}</span>
+            <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> ${tr('Mesh live area')}</label>
             </div>
             <div class="live-toggles">
               <div class="live-node-filter-wrap" style="position:relative">
                 <label class="live-node-filter-hitarea" style="display:inline-flex; align-items:center; min-height:44px; cursor:text;">
-                  <input type="text" id="liveNodeFilterInput" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="" disabled>
+                  <input type="text" id="liveNodeFilterInput" placeholder="${tr('Filter by node…')}" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="" disabled>
                 </label>
                 <div id="liveNodeFilterDropdown" class="live-node-filter-dropdown hidden" role="listbox"></div>
-                <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
+                <button id="liveNodeFilterClear" class="vcr-btn" title="${tr('Clear node filter')}" style="display:none">×</button>
               </div>
               <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             </div>
-            <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
+            <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="${tr('Filter live packets by IATA region')}"></div>
             <div id="liveAreaFilter" class="live-area-filter-container"></div>
             <div class="audio-controls hidden" id="audioControls">
-              <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
+              <label class="audio-slider-label">${tr('Voice')} <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
               <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
               <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
             </div>
@@ -1319,38 +1323,38 @@
         </div><!-- /#liveHeader -->
         <div class="live-overlay live-feed" id="liveFeed">
           <div class="panel-header">
-            <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
-            <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed" aria-label="Hide feed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+            <button class="panel-corner-btn" data-panel="liveFeed" title="${tr('Move panel to next corner')}" aria-label="${tr('Move panel to next corner')}">◫</button>
+            <button class="feed-hide-btn" id="feedHideBtn" title="${tr('Hide feed')}" aria-label="${tr('Hide feed')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
           <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log">
-            <div class="live-feed-empty" aria-hidden="true">Waiting for packets…</div>
+            <div class="live-feed-empty" aria-hidden="true">${tr('Waiting for packets…')}</div>
           </div>
         </div>
-        <button class="feed-show-btn hidden" id="feedShowBtn" title="Show feed" aria-label="Show feed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg></button>
+        <button class="feed-show-btn hidden" id="feedShowBtn" title="${tr('Show feed')}" aria-label="${tr('Show feed')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg></button>
         <div id="nodeDetailBackdrop" class="node-detail-backdrop"></div>
         <div class="live-overlay live-node-detail hidden" id="liveNodeDetail">
           <div class="panel-header">
-            <button class="panel-corner-btn" data-panel="liveNodeDetail" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
-            <button class="feed-hide-btn" id="nodeDetailClose" title="Close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+            <button class="panel-corner-btn" data-panel="liveNodeDetail" title="${tr('Move panel to next corner')}" aria-label="${tr('Move panel to next corner')}">◫</button>
+            <button class="feed-hide-btn" id="nodeDetailClose" title="${tr('Close')}" aria-label="${tr('Close')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
           <div class="panel-content" id="nodeDetailContent"></div>
         </div>
-        <button class="legend-toggle-btn" id="legendToggleBtn" aria-label="Show legend" title="Show legend"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg></button>
-        <div class="live-overlay live-legend" id="liveLegend" role="region" aria-label="Map legend">
+        <button class="legend-toggle-btn" id="legendToggleBtn" aria-label="${tr('Show legend')}" title="${tr('Show legend')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg></button>
+        <div class="live-overlay live-legend" id="liveLegend" role="region" aria-label="${tr('Map legend')}">
           <div class="panel-header">
-            <button class="panel-corner-btn" data-panel="liveLegend" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
+            <button class="panel-corner-btn" data-panel="liveLegend" title="${tr('Move panel to next corner')}" aria-label="${tr('Move panel to next corner')}">◫</button>
           </div>
           <div class="panel-content">
-          <h3 class="legend-title">PACKET TYPES</h3>
+          <h3 class="legend-title">${tr('PACKET TYPES')}</h3>
           <ul class="legend-list">
             ${buildLegendHtml(window.PayloadLabels || null)}
           </ul>
-          <h3 class="legend-title" style="margin-top:8px">NODE ROLES</h3>
+          <h3 class="legend-title" style="margin-top:8px">${tr('NODE ROLES')}</h3>
           <ul class="legend-list" id="roleLegendList"></ul>
-          <h3 class="legend-title" style="margin-top:8px">MARKER STYLES</h3>
+          <h3 class="legend-title" style="margin-top:8px">${tr('MARKER STYLES')}</h3>
           <ul class="legend-list">
-            <li><span class="live-ring live-ring--repeater" aria-hidden="true"></span> Bright white ring — repeater</li>
-            <li><span class="live-ring live-ring--other" aria-hidden="true"></span> Faded ring — companion / sensor / room</li>
+            <li><span class="live-ring live-ring--repeater" aria-hidden="true"></span> ${tr('Bright white ring — repeater')}</li>
+            <li><span class="live-ring live-ring--other" aria-hidden="true"></span> ${tr('Faded ring — companion / sensor / room')}</li>
           </ul>
           </div>
         </div>
@@ -1359,23 +1363,23 @@
         <div class="sr-only" id="panelPositionAnnounce" aria-live="polite"></div>
         <div class="vcr-bar" id="vcrBar">
           <div class="vcr-controls">
-            <button id="vcrRewindBtn" class="vcr-btn" title="Rewind" aria-label="Rewind">⏪</button>
-            <button id="vcrPauseBtn" class="vcr-btn" title="Pause/Play" aria-label="Pause">⏸</button>
-            <button id="vcrLiveBtn" class="vcr-btn vcr-live-btn" title="Jump to live" aria-label="Snap to Live">LIVE</button>
-            <button id="vcrSpeedBtn" class="vcr-btn" title="Playback speed" aria-label="Speed 1x">1x</button>
+            <button id="vcrRewindBtn" class="vcr-btn" title="${tr('Rewind')}" aria-label="${tr('Rewind')}">⏪</button>
+            <button id="vcrPauseBtn" class="vcr-btn" title="${tr('Pause/Play')}" aria-label="${tr('Pause')}">⏸</button>
+            <button id="vcrLiveBtn" class="vcr-btn vcr-live-btn" title="${tr('Jump to live')}" aria-label="${tr('Snap to Live')}">LIVE</button>
+            <button id="vcrSpeedBtn" class="vcr-btn" title="${tr('Playback speed')}" aria-label="${tr('Speed {speed}', { speed: '1x' })}">1x</button>
             <div id="vcrMode" class="vcr-mode vcr-mode-live"><span class="vcr-live-dot"></span> LIVE</div>
           </div>
-          <div class="vcr-scope-btns" role="radiogroup" aria-label="Timeline scope">
-            <button class="vcr-scope-btn active" data-scope="3600000" role="radio" aria-checked="true" aria-label="Scope 1 hour">1h</button>
-            <button class="vcr-scope-btn" data-scope="21600000" role="radio" aria-checked="false" aria-label="Scope 6 hours">6h</button>
-            <button class="vcr-scope-btn vcr-scope-btn--overflow" data-scope="43200000" role="radio" aria-checked="false" aria-label="Scope 12 hours">12h</button>
-            <button class="vcr-scope-btn vcr-scope-btn--overflow" data-scope="86400000" role="radio" aria-checked="false" aria-label="Scope 24 hours">24h</button>
+          <div class="vcr-scope-btns" role="radiogroup" aria-label="${tr('Timeline scope')}">
+            <button class="vcr-scope-btn active" data-scope="3600000" role="radio" aria-checked="true" aria-label="${tr('Scope {window}', { window: tr('1 hour') })}">1h</button>
+            <button class="vcr-scope-btn" data-scope="21600000" role="radio" aria-checked="false" aria-label="${tr('Scope {window}', { window: tr('6 hours') })}">6h</button>
+            <button class="vcr-scope-btn vcr-scope-btn--overflow" data-scope="43200000" role="radio" aria-checked="false" aria-label="${tr('Scope {window}', { window: tr('12 hours') })}">12h</button>
+            <button class="vcr-scope-btn vcr-scope-btn--overflow" data-scope="86400000" role="radio" aria-checked="false" aria-label="${tr('Scope {window}', { window: tr('24 hours') })}">24h</button>
             <!-- #1234: at ≤640px buttons marked .vcr-scope-btn--overflow are
                  hidden and surfaced via this More dropdown instead. -->
             <div class="vcr-scope-more-wrap" data-vcr-scope-more-wrap>
               <button type="button" class="vcr-scope-btn vcr-scope-more" data-vcr-scope-more
                       aria-haspopup="true" aria-expanded="false" aria-controls="vcrScopeMoreMenu"
-                      aria-label="More timeline scopes">More ▾</button>
+                      aria-label="${tr('More timeline scopes')}">${tr('More')} ▾</button>
               <div class="vcr-scope-more-menu" id="vcrScopeMoreMenu" role="menu" hidden></div>
             </div>
           </div>
@@ -1386,7 +1390,7 @@
           </div>
           <div class="vcr-lcd">
             <div class="vcr-lcd-row vcr-lcd-mode" id="vcrLcdMode">LIVE</div>
-            <canvas id="vcrLcdCanvas" class="vcr-lcd-canvas" width="200" height="32" role="img" aria-label="VCR time display"></canvas>
+            <canvas id="vcrLcdCanvas" class="vcr-lcd-canvas" width="200" height="32" role="img" aria-label="${tr('VCR time display')}"></canvas>
             <div class="vcr-lcd-row vcr-lcd-pkts" id="vcrLcdPkts"></div>
           </div>
           <div id="vcrPrompt" class="vcr-prompt hidden"></div>
@@ -1619,8 +1623,8 @@
         btn.href = 'javascript:void(0)';
         btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrows-out"/></svg>';
         btn.id = 'liveFullscreenToggle';
-        btn.title = 'Fullscreen (F)';
-        btn.setAttribute('aria-label', 'Toggle fullscreen');
+        btn.title = tr('Fullscreen (F)');
+        btn.setAttribute('aria-label', tr('Toggle fullscreen'));
         btn.setAttribute('role', 'button');
         btn.setAttribute('aria-pressed', 'false');
         L.DomEvent.disableClickPropagation(btn);
@@ -1639,8 +1643,8 @@
         btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-gear"/></svg>';
         btn.id = 'liveControlsToggle';
         btn.setAttribute('data-live-controls-toggle', '');
-        btn.title = 'Settings';
-        btn.setAttribute('aria-label', 'Show live controls');
+        btn.title = tr('Settings');
+        btn.setAttribute('aria-label', tr('Show live controls'));
         btn.setAttribute('role', 'button');
         btn.setAttribute('aria-expanded', 'false');
         btn.setAttribute('aria-controls', 'liveControlsBody');
@@ -1749,13 +1753,13 @@
         if (!window.RegionShowAll) return;
         var wrap = document.createElement('label');
         wrap.className = 'live-show-all-region-nodes';
-        wrap.title = 'When a region is selected, show every node on the map (legacy behavior). Off = hide non-region nodes.';
+        wrap.title = tr('When a region is selected, show every node on the map (legacy behavior). Off = hide non-region nodes.');
         var cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.id = 'liveShowAllRegionNodes';
         cb.checked = RegionShowAll.get();
         wrap.appendChild(cb);
-        wrap.appendChild(document.createTextNode(' Show all nodes'));
+        wrap.appendChild(document.createTextNode(' ' + tr('Show all nodes')));
         rfEl.parentNode.insertBefore(wrap, rfEl.nextSibling);
         cb.addEventListener('change', function() {
           RegionShowAll.set(cb.checked);
@@ -2054,11 +2058,11 @@
       var pairs = [
         {
           rootId: 'liveHeader', togId: 'liveHeaderToggle', bodyId: 'liveHeaderBody',
-          showLabel: 'Show live stats', hideLabel: 'Hide live stats'
+          showLabel: tr('Show live stats'), hideLabel: tr('Hide live stats')
         },
         {
           rootId: 'liveControls', togId: 'liveControlsToggle', bodyId: 'liveControlsBody',
-          showLabel: 'Show live controls', hideLabel: 'Hide live controls'
+          showLabel: tr('Show live controls'), hideLabel: tr('Hide live controls')
         },
       ];
       var narrowMql = window.matchMedia('(max-width: 768px)');
@@ -2157,8 +2161,8 @@
           btn.setAttribute('aria-pressed', on ? 'true' : 'false');
           btn.innerHTML = on ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrows-out"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrows-out"/></svg>';
           btn.setAttribute('aria-label', on
-            ? 'Exit fullscreen (F)'
-            : 'Toggle fullscreen (F) — hide chrome, keep stats');
+            ? tr('Exit fullscreen (F)')
+            : tr('Toggle fullscreen (F) — hide chrome, keep stats'));
         }
         try { localStorage.setItem(STORAGE_KEY, on ? 'true' : 'false'); }
         catch (_) { /* private browsing */ }
@@ -2215,13 +2219,13 @@
       try {
         if (localStorage.getItem('live-legend-hidden') === 'true') {
           legendEl.classList.add('hidden');
-          legendToggleBtn.setAttribute('aria-label', 'Show legend');
+          legendToggleBtn.setAttribute('aria-label', tr('Show legend'));
           legendToggleBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg>';
         }
       } catch (_) { /* private browsing / storage disabled */ }
       legendToggleBtn.addEventListener('click', () => {
         const nowHidden = legendEl.classList.toggle('hidden');
-        legendToggleBtn.setAttribute('aria-label', nowHidden ? 'Show legend' : 'Hide legend');
+        legendToggleBtn.setAttribute('aria-label', nowHidden ? tr('Show legend') : tr('Hide legend'));
         legendToggleBtn.innerHTML = nowHidden ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg>';
         try { localStorage.setItem('live-legend-hidden', String(nowHidden)); } catch (_) { /* ignore */ }
       });
@@ -2283,7 +2287,7 @@
         const swatch = window.makeRoleMarkerSVG
           ? window.makeRoleMarkerSVG(role, color, 14)
           : `<span class="live-dot" style="background:${color}" aria-hidden="true"></span>`;
-        li.innerHTML = `<span class="live-shape-swatch" aria-hidden="true">${swatch}</span> ${(ROLE_LABELS[role] || role).replace(/s$/, '')}`;
+        li.innerHTML = `<span class="live-shape-swatch" aria-hidden="true">${swatch}</span> ${tr((ROLE_LABELS[role] || role).replace(/s$/, ''))}`;
         roleLegendList.appendChild(li);
       }
     }
@@ -2305,7 +2309,7 @@
     if (savedFeedWidth) feedEl.style.width = savedFeedWidth + 'px';
     const resizeHandle = document.createElement('div');
     resizeHandle.className = 'feed-resize-handle';
-    resizeHandle.setAttribute('aria-label', 'Resize feed panel');
+    resizeHandle.setAttribute('aria-label', tr('Resize feed panel'));
     feedEl.appendChild(resizeHandle);
     let feedResizing = false;
     resizeHandle.addEventListener('mousedown', (e) => {
@@ -2523,8 +2527,8 @@
       const pinBtn = document.createElement('button');
       pinBtn.id = 'navPinBtn';
       pinBtn.className = 'nav-pin-btn';
-      pinBtn.setAttribute('aria-label', 'Pin navigation open');
-      pinBtn.setAttribute('title', 'Pin navigation open');
+      pinBtn.setAttribute('aria-label', tr('Pin navigation open'));
+      pinBtn.setAttribute('title', tr('Pin navigation open'));
       pinBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-push-pin"/></svg>';
       pinBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2595,7 +2599,7 @@
     const content = document.getElementById('nodeDetailContent');
     panel.classList.remove('hidden');
     document.getElementById('nodeDetailBackdrop').classList.add('active');
-    content.innerHTML = '<div style="padding:20px;color:var(--text-muted)">Loading…</div>';
+    content.innerHTML = '<div style="padding:20px;color:var(--text-muted)">' + tr('Loading…') + '</div>';
     try {
       const [data, healthData] = await Promise.all([
         api('/nodes/' + encodeURIComponent(pubkey), { ttl: 30 }),
@@ -2607,18 +2611,18 @@
       const observers = h.observers || [];
       const recent = h.recentPackets || [];
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
-      const roleLabel = (ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/, '');
+      const roleLabel = tr((ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/, ''));
       const hasLoc = n.lat != null && n.lon != null;
       const lastSeen = formatLiveTimestampHtml(n.last_seen);
       const health = getHealthStatus(n.role, n.last_seen);
       const statusDot = health === 'healthy' ? 'health-green' : health === 'degraded' ? 'health-yellow' : 'health-red';
-      const statusLabel = health === 'healthy' ? 'Online' : health === 'degraded' ? 'Degraded' : 'Offline';
+      const statusLabel = health === 'healthy' ? tr('Online') : health === 'degraded' ? tr('Degraded') : tr('Offline');
 
       let html = `
         <div style="padding:16px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
             <span class="${statusDot}" style="font-size:18px" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>
-            <h3 style="margin:0;font-size:16px;font-weight:700;">${escapeHtml(n.name || 'Unknown')}</h3>
+            <h3 style="margin:0;font-size:16px;font-weight:700;">${escapeHtml(n.name || tr('Unknown'))}</h3>
           </div>
           <div style="margin-bottom:12px;">
             <span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600;background:${roleColor};color:#fff;">${roleLabel.toUpperCase()}</span>
@@ -2628,29 +2632,29 @@
             <code style="font-size:10px;word-break:break-all;">${escapeHtml(n.public_key)}</code>
           </div>
           <table style="font-size:12px;width:100%;border-collapse:collapse;">
-            <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Last Seen</td><td>${lastSeen}</td></tr>
-            <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Adverts</td><td>${n.advert_count || 0}</td></tr>
-            ${'configured_scope' in n && n.configured_scope !== null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;" title="Region scopes this node has configured, confirmed via an observer /neighbors report (status=responded) — concrete evidence (#1865).${n.configured_scope_at ? ' Last confirmed ' + escapeHtml(String(n.configured_scope_at)) + '.' : ''}">Configured scope <span style="color:var(--status-green-text)" role="img" aria-label="confirmed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg></span></td><td>${n.configured_scope === '' ? '<span style="color:var(--text-muted)">none configured</span>' : `<code style="color:var(--link-color)">${escapeHtml(n.configured_scope)}</code>`}</td></tr>` : ''}
-            ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Scope</td><td>${n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
-  : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
+            <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">${tr('Last Seen')}</td><td>${lastSeen}</td></tr>
+            <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">${tr('Adverts')}</td><td>${n.advert_count || 0}</td></tr>
+            ${'configured_scope' in n && n.configured_scope !== null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;" title="${tr('Region scopes this node has configured, confirmed via an observer /neighbors report (status=responded) — concrete evidence (#1865).')}${n.configured_scope_at ? ' ' + tr('Last confirmed {time}.', { time: escapeHtml(String(n.configured_scope_at)) }) : ''}">${tr('Configured scope')} <span style="color:var(--status-green-text)" role="img" aria-label="${tr('confirmed')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg></span></td><td>${n.configured_scope === '' ? '<span style="color:var(--text-muted)">' + tr('none configured') + '</span>' : `<code style="color:var(--link-color)">${escapeHtml(n.configured_scope)}</code>`}</td></tr>` : ''}
+            ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">${tr('Scope')}</td><td>${n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
+  : n.default_scope === '' ? '<span style="color:var(--text-muted)">' + tr('unknown scope') + '</span>'
   : `<code style="color:var(--link-color)">${escapeHtml(n.default_scope)}</code>`
 }</td></tr>` : ''}
-            ${hasLoc ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Location</td><td>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</td></tr>` : ''}
-            ${stats.avgSnr != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg SNR</td><td>${stats.avgSnr.toFixed(1)} dB</td></tr>` : ''}
-            ${stats.avgHops != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg Hops</td><td>${stats.avgHops.toFixed(1)}</td></tr>` : ''}
-            ${stats.totalTransmissions || stats.totalPackets ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Total Packets</td><td>${stats.totalTransmissions || stats.totalPackets}</td></tr>` : ''}
+            ${hasLoc ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">${tr('Location')}</td><td>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</td></tr>` : ''}
+            ${stats.avgSnr != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">${tr('Avg SNR')}</td><td>${stats.avgSnr.toFixed(1)} dB</td></tr>` : ''}
+            ${stats.avgHops != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">${tr('Avg Hops')}</td><td>${stats.avgHops.toFixed(1)}</td></tr>` : ''}
+            ${stats.totalTransmissions || stats.totalPackets ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">${tr('Total Packets')}</td><td>${stats.totalTransmissions || stats.totalPackets}</td></tr>` : ''}
           </table>`;
 
       if (observers.length) {
         const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))];
-        html += `<h4 style="font-size:12px;margin:12px 0 6px;color:var(--text-muted);">Heard By${regions.length ? ' — Regions: ' + regions.map(r => escapeHtml(r)).join(', ') : ''}</h4>
+        html += `<h4 style="font-size:12px;margin:12px 0 6px;color:var(--text-muted);">${tr('Heard By')}${regions.length ? ' — ' + tr('Regions: {list}', { list: regions.map(r => escapeHtml(r)).join(', ') }) : ''}</h4>
           <div style="font-size:11px;">` +
-          observers.map(o => `<div style="padding:2px 0;"><a href="#/observers/${encodeURIComponent(o.observer_id)}" style="color:var(--link-color);text-decoration:none;">${escapeHtml(o.observer_name || o.observer_id.slice(0, 12))}${o.iata ? ' (' + escapeHtml(o.iata) + ')' : ''}</a> — ${o.packetCount || o.count || 0} pkts</div>`).join('') +
+          observers.map(o => `<div style="padding:2px 0;"><a href="#/observers/${encodeURIComponent(o.observer_id)}" style="color:var(--link-color);text-decoration:none;">${escapeHtml(o.observer_name || o.observer_id.slice(0, 12))}${o.iata ? ' (' + escapeHtml(o.iata) + ')' : ''}</a> — ${o.packetCount || o.count || 0} ${tr('pkts')}</div>`).join('') +
           '</div>';
       }
 
       if (recent.length) {
-        html += `<h4 style="font-size:12px;margin:12px 0 6px;color:var(--text-muted);">Recent Packets</h4>
+        html += `<h4 style="font-size:12px;margin:12px 0 6px;color:var(--text-muted);">${tr('Recent Packets')}</h4>
           <div style="font-size:11px;max-height:200px;overflow-y:auto;">` +
           recent.slice(0, 10).map(p => `<div style="padding:2px 0;display:flex;justify-content:space-between;">
             <a href="#/packets/${encodeURIComponent(p.hash || '')}" style="color:var(--link-color);text-decoration:none;">${escapeHtml(p.payload_type || '?')}${transportBadge(p.route_type)}${p.observation_count > 1 ? ' <span class="badge badge-obs" style="font-size:9px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + p.observation_count + '</span>' : ''}</a>
@@ -2659,11 +2663,11 @@
           '</div>';
       }
 
-      html += `<div id="liveNodePaths" style="margin-top:8px;"><div style="font-size:11px;color:var(--text-muted);padding:4px 0;"><span class="spinner" style="font-size:10px"></span> Loading paths…</div></div>`;
+      html += `<div id="liveNodePaths" style="margin-top:8px;"><div style="font-size:11px;color:var(--text-muted);padding:4px 0;"><span class="spinner" style="font-size:10px"></span> ${tr('Loading paths…')}</div></div>`;
 
       html += `<div style="margin-top:12px;display:flex;gap:8px;">
-        <a href="#/nodes/${encodeURIComponent(n.public_key)}" style="font-size:12px;color:var(--link-color);">Full Detail →</a>
-        <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" style="font-size:12px;color:var(--link-color);"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Analytics</a>
+        <a href="#/nodes/${encodeURIComponent(n.public_key)}" style="font-size:12px;color:var(--link-color);">${tr('Full Detail')} →</a>
+        <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" style="font-size:12px;color:var(--link-color);"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ${tr('Analytics')}</a>
       </div></div>`;
 
       content.innerHTML = html;
@@ -2704,10 +2708,10 @@
             if (!filteredHops.length) {
               // #1784 — distinguish between "all 1-byte filtered" and
               // "all below trust threshold" for the fallback message.
-              var _msg = '1-byte filtered';
+              var _msg = tr('1-byte filtered');
               if (_pathHopsBelowTrust(p.hops || [])) {
                 var _tt = (window.MC_getPathTrustThreshold ? window.MC_getPathTrustThreshold() : 1);
-                _msg = _tt + '-byte trust threshold (pathTrust.minHashBytesForMapping: ' + _tt + ')';
+                _msg = tr('{bytes}-byte trust threshold', { bytes: _tt }) + ' (pathTrust.minHashBytesForMapping: ' + _tt + ')';
               }
               return `<div style="padding:3px 0;font-size:11px;line-height:1.4;color:var(--text-muted)">— (${_msg}) <span style="color:var(--text-muted)">(${p.count}×)</span></div>`;
             }
@@ -2720,10 +2724,10 @@
             return `<div style="padding:3px 0;font-size:11px;line-height:1.4">${chain} <span style="color:var(--text-muted)">(${p.count}×)</span></div>`;
           }).join('');
         }
-        pathEl.innerHTML = `<h4 style="font-size:12px;margin:8px 0 4px;color:var(--text-muted);">Paths Through (${pathData.totalPaths})</h4>` +
+        pathEl.innerHTML = `<h4 style="font-size:12px;margin:8px 0 4px;color:var(--text-muted);">${tr('Paths Through ({count})', { count: pathData.totalPaths })}</h4>` +
           `<div id="livePathsList" style="max-height:200px;overflow-y:auto;">` +
           renderPathList(pathData.paths.slice(0, COLLAPSE)) +
-          (pathData.paths.length > COLLAPSE ? `<button id="showMorePaths" style="font-size:11px;color:var(--link-color);background:none;border:none;cursor:pointer;padding:4px 0;">Show all ${pathData.paths.length} paths</button>` : '') +
+          (pathData.paths.length > COLLAPSE ? `<button id="showMorePaths" style="font-size:11px;color:var(--link-color);background:none;border:none;cursor:pointer;padding:4px 0;">${tr('Show all {count} paths', { count: pathData.paths.length })}</button>` : '') +
           '</div>';
         const moreBtn = document.getElementById('showMorePaths');
         if (moreBtn) moreBtn.addEventListener('click', () => {
@@ -2734,7 +2738,7 @@
         if (pathEl) pathEl.innerHTML = '';
       });
     } catch (e) {
-      content.innerHTML = `<div style="padding:20px;color:var(--text-muted);">Error: ${e.message}</div>`;
+      content.innerHTML = `<div style="padding:20px;color:var(--text-muted);">${tr('Error: {message}', { message: escapeHtml(e.message) })}</div>`;
     }
   }
 
@@ -2909,7 +2913,7 @@
     const input = document.getElementById('liveNodeFilterInput');
     if (nodeFilterKeys.length > 0) {
       if (clearBtn) clearBtn.style.display = '';
-      if (countEl) { countEl.textContent = `Showing ${nodeFilterShown} of ${nodeFilterTotal}`; countEl.classList.remove('hidden'); }
+      if (countEl) { countEl.textContent = tr('Showing {shown} of {total}', { shown: nodeFilterShown, total: nodeFilterTotal }); countEl.classList.remove('hidden'); }
       // Never overwrite the field while the user is in it: this also runs from the
       // debounced typing handler (which commits the trimmed value) and from every
       // matching packet, and a picked suggestion shows the name while the key is
@@ -2944,7 +2948,7 @@
       var _ph = document.createElement('div');
       _ph.className = 'live-feed-empty';
       _ph.setAttribute('aria-hidden', 'true');
-      _ph.textContent = 'Waiting for packets…';
+      _ph.textContent = tr('Waiting for packets…');
       feedContent.appendChild(_ph);
     }
 
@@ -4414,7 +4418,7 @@
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${pkt.observation_count}</span>` : '';
     const iataBadge = obsIataBadgeHtml(pkt);
-    const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="Anomaly detected" style="margin-left:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>' : '';
+    const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="' + tr('Anomaly detected') + '" style="margin-left:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>' : '';
     var _ccPayload2 = (pkt.decoded || {}).payload || {};
     var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
     var dotHtml = _ccChan ? _feedColorDot(_ccChan) : '';
@@ -4569,18 +4573,18 @@
       <div class="panel-header" style="border-left:3px solid ${color}">
         <strong>${typeName}</strong>
         ${sender ? `<span class="fdc-sender">${escapeHtml(sender)}</span>` : ''}
-        <button class="fdc-close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+        <button class="fdc-close" aria-label="${tr('Close')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
       </div>
       ${text ? `<div class="fdc-text">${escapeHtml(text.length > 120 ? text.slice(0, 120) + '…' : text)}</div>` : ''}
       <div class="fdc-meta">
         ${channel ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> ${escapeHtml(channel)}</span>` : ''}
-        ${hops.length ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-shuffle"/></svg> ${hops.length} hops</span>` : ''}
+        ${hops.length ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-shuffle"/></svg> ${trn(hops.length, '{count} hop', '{count} hops')}</span>` : ''}
         ${snr != null ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> ${Number(snr).toFixed(1)} dB</span>` : ''}
         ${rssi != null ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${rssi} dBm</span>` : ''}
         ${observer ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${escapeHtml(observer)}</span>` : ''}
       </div>
-      ${pkt.hash ? `<a class="fdc-link" href="#/packets/${pkt.hash.toLowerCase()}">View in packets →</a>` : ''}
-      <button class="fdc-replay">↻ Replay</button>
+      ${pkt.hash ? `<a class="fdc-link" href="#/packets/${pkt.hash.toLowerCase()}">${tr('View in packets')} →</a>` : ''}
+      <button class="fdc-replay">↻ ${tr('Replay')}</button>
     `;
     card.querySelector('.fdc-close').addEventListener('click', (e) => { e.stopPropagation(); card.remove(); });
     card.querySelector('.fdc-replay').addEventListener('click', (e) => {

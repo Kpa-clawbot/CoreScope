@@ -1,5 +1,8 @@
 /* === CoreScope — nodes.js === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
 (function () {
   let nodes = [];
@@ -179,7 +182,7 @@
     }
     const f = formatTimestampWithTooltip(isoString, getTimestampMode());
     const warn = f.isFuture
-      ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
+      ? ' <span class="timestamp-future-icon" title="' + tr('Timestamp is in the future — node clock may be skewed') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
       : '';
     return `<span class="timestamp-text" title="${escapeHtml(f.tooltip)}">${escapeHtml(f.text)}</span>${warn}`;
   }
@@ -198,18 +201,18 @@
     const threshMs = isInfra ? HEALTH_THRESHOLDS.infraSilentMs : HEALTH_THRESHOLDS.nodeSilentMs;
     const threshold = threshMs >= 3600000 ? Math.round(threshMs / 3600000) + 'h' : Math.round(threshMs / 60000) + 'm';
     if (status === 'active') {
-      return 'Active \u2014 heard within the last ' + threshold + '.' + (isInfra ? ' Repeaters typically advertise every 12-24h.' : '');
+      return tr('Active — heard within the last {window}.', { window: threshold }) + (isInfra ? ' ' + tr('Repeaters typically advertise every 12-24h.') : '');
     }
     if (status === 'uncertain') {
-      return 'Uncertain \u2014 nothing that can only be this ' + role + ' for over ' + threshold + '. Its hop prefix, shared with other repeaters, still appears in paths: that may be this node or another one.';
+      return tr('Uncertain — nothing that can only be this {role} for over {window}. Its hop prefix, shared with other repeaters, still appears in paths: that may be this node or another one.', { role: tr(role), window: threshold });
     }
     if (role === 'companion') {
-      return 'Stale \u2014 not heard for over ' + threshold + '. Companions only advertise when the user initiates \u2014 this may be normal.';
+      return tr('Stale — not heard for over {window}. Companions only advertise when the user initiates — this may be normal.', { window: threshold });
     }
     if (role === 'sensor') {
-      return 'Stale \u2014 not heard for over ' + threshold + '. This sensor may be offline.';
+      return tr('Stale — not heard for over {window}. This sensor may be offline.', { window: threshold });
     }
-    return 'Stale \u2014 not heard for over ' + threshold + '. This ' + role + ' may be offline or out of range.';
+    return tr('Stale — not heard for over {window}. This {role} may be offline or out of range.', { window: threshold, role: tr(role) });
   }
 
   // #1845: how long we have heard nothing at all from this node. Infinity when
@@ -233,28 +236,28 @@
     // #1598/#2260: certain relays are already in last_heard
     const status = getNodeStatus(n);
     const statusTooltip = getStatusTooltip(role, status);
-    const statusLabel = status === 'active' ? '<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Active'
-      : status === 'uncertain' ? '<span style="color:var(--text-muted)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle"/></svg></span> Uncertain'
-      : '<span style="color:var(--text-muted)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Stale';
+    const statusLabel = status === 'active' ? '<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ' + tr('Active')
+      : status === 'uncertain' ? '<span style="color:var(--text-muted)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle"/></svg></span> ' + tr('Uncertain')
+      : '<span style="color:var(--text-muted)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ' + tr('Stale');
     const statusAge = lastHeardMs ? (Date.now() - lastHeardMs) : Infinity;
 
     let explanation = '';
     if (status === 'active') {
       // #2260: no "Last relayed" here. last_relayed also counts 1-byte prefix
       // matches of other repeaters; the certain relays are in last heard.
-      explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'unknown');
+      explanation = tr('Last heard {time}', { time: lastHeardTime ? renderNodeTimestampText(lastHeardTime) : tr('unknown') });
     } else if (status === 'uncertain') {
-      explanation = 'Last certainly heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'never') +
-        ' \u2014 its shared hop prefix was last in a path ' + renderNodeTimestampText(n.last_relayed) + ', possibly another node';
+      explanation = tr('Last certainly heard {time} — its shared hop prefix was last in a path {relayed}, possibly another node',
+        { time: lastHeardTime ? renderNodeTimestampText(lastHeardTime) : tr('never'), relayed: renderNodeTimestampText(n.last_relayed) });
     } else {
       const ageDays = Math.floor(statusAge / 86400000);
       const ageHours = Math.floor(statusAge / 3600000);
       const ageStr = ageDays >= 1 ? ageDays + 'd' : ageHours + 'h';
       const isInfra = role === 'repeater' || role === 'room';
       const reason = isInfra
-        ? 'repeaters typically advertise every 12-24h'
-        : 'companions only advertise when user initiates, this may be normal';
-      explanation = 'Not heard for ' + ageStr + ' — ' + reason;
+        ? tr('repeaters typically advertise every 12-24h')
+        : tr('companions only advertise when user initiates, this may be normal');
+      explanation = tr('Not heard for {age}', { age: ageStr }) + ' — ' + reason;
     }
 
     return { status, statusLabel, statusTooltip, statusAge, explanation, roleColor, lastHeardMs, role };
@@ -263,7 +266,7 @@
   function renderNodeBadges(n, roleColor) {
     // Returns HTML for: role badge, hash prefix badge, hash inconsistency link, status label
     const info = getStatusInfo(n);
-    let html = `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(roleColor)) || ('background:'+roleColor+';color:#fff')}">${n.role}</span>`;
+    let html = `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(roleColor)) || ('background:'+roleColor+';color:#fff')}">${tr(n.role)}</span>`;
     if (n.hash_size) {
       html += ` <span class="badge pubkey-prefix-badge">${n.public_key.slice(0, n.hash_size * 2).toUpperCase()}</span>`;
     }
@@ -272,10 +275,10 @@
     // per AdvertDataHelpers.h:14-16, but Feat1/Feat2 aren't persisted per-node
     // in CoreScope today; hash_size is the observed effective capability).
     if (n.hash_size && Number(n.hash_size) >= 2) {
-      html += ` <span class="badge multibyte-badge" title="Node advertises multibyte hash path (firmware Feat1/Feat2)">Multibyte: ${Number(n.hash_size)}-byte</span>`;
+      html += ` <span class="badge multibyte-badge" title="${tr('Node advertises multibyte hash path (firmware Feat1/Feat2)')}">${tr('Multibyte: {bytes}-byte', { bytes: Number(n.hash_size) })}</span>`;
     }
     if (n.hash_size_inconsistent) {
-      html += ` <a href="#/nodes/${encodeURIComponent(n.public_key)}?section=node-packets" class="badge" style="background:var(--status-yellow);color:#000;font-size:10px;cursor:pointer;text-decoration:none"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> variable hash size</a>`;
+      html += ` <a href="#/nodes/${encodeURIComponent(n.public_key)}?section=node-packets" class="badge" style="background:var(--status-yellow);color:#000;font-size:10px;cursor:pointer;text-decoration:none"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${tr('variable hash size')}</a>`;
     }
     html += ` <span title="${info.statusTooltip}">${info.statusLabel}</span>`;
     return html;
@@ -289,7 +292,10 @@
   function renderHashInconsistencyWarning(n) {
     if (!n.hash_size_inconsistent) return '';
     const sizes = Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : [];
-    return `<div style="font-size:11px;color:var(--text-muted);margin:-2px 0 6px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">Adverts show varying hash sizes (<strong>${sizes.join('-byte, ')}-byte</strong>). This is a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--link-color)">known bug</a> where automatic adverts ignore the configured multibyte path setting. Fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--link-color)">repeater v1.14.1</a>.</div>`;
+    return `<div style="font-size:11px;color:var(--text-muted);margin:-2px 0 6px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">${tr('Adverts show varying hash sizes ({sizes}). This is a {bug} where automatic adverts ignore the configured multibyte path setting. Fixed in {release}.', {
+      sizes: '<strong>' + sizes.join('-byte, ') + '-byte</strong>',
+      bug: '<a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--link-color)">' + tr('known bug') + '</a>',
+      release: '<a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--link-color)">repeater v1.14.1</a>' })}</div>`;
   }
 
   // ─── Neighbor section helpers ───────────────────────────────────────────────
@@ -360,15 +366,15 @@
     var items = limit ? sorted.slice(0, limit) : sorted;
     return items.map(function(nb) {
       var conf = getConfidenceIndicator(nb);
-      var name = nb.name || (nb.prefix + '… (unknown)');
+      var name = nb.name || (nb.prefix + '… (' + tr('unknown') + ')');
       var nameHtml = nb.pubkey
         ? '<a href="#/nodes/' + encodeURIComponent(nb.pubkey) + '">' + escapeHtml(name) + '</a>'
         : '<span class="text-muted">' + escapeHtml(name) + '</span>';
       var role = nb.role || '—';
       var roleBadge = nb.role
-        ? '<span class="badge" style="background:' + (ROLE_COLORS[nb.role] || 'var(--surface-2)') + ';color:#fff;font-size:10px">' + escapeHtml(role) + '</span>'
+        ? '<span class="badge" style="background:' + (ROLE_COLORS[nb.role] || 'var(--surface-2)') + ';color:#fff;font-size:10px">' + escapeHtml(tr(role)) + '</span>'
         : '<span class="text-muted">—</span>';
-      var scoreTitle = 'Observations: ' + nb.count;
+      var scoreTitle = tr('Observations: {count}', { count: nb.count });
       if (nb.counts_by_mode) {
         var parts = [];
         [1, 2, 4, 6].forEach(function(m) {
@@ -376,12 +382,12 @@
         });
         if (parts.length) scoreTitle += ' (' + parts.join(', ') + ')';
       }
-      if (nb.avg_snr != null) scoreTitle += ' · Avg SNR: ' + Number(nb.avg_snr).toFixed(1) + ' dB';
+      if (nb.avg_snr != null) scoreTitle += ' · ' + tr('Avg SNR: {snr} dB', { snr: Number(nb.avg_snr).toFixed(1) });
       var distanceCell = nb.distance_km != null
         ? formatDistance(Number(nb.distance_km))
         : '<span class="text-muted">—</span>';
       var showOnMap = nb.pubkey
-        ? ' <button class="btn-link neighbor-show-map" data-pubkey="' + escapeHtml(nb.pubkey) + '" style="font-size:11px;padding:1px 6px;white-space:nowrap"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> Map</button>'
+        ? ' <button class="btn-link neighbor-show-map" data-pubkey="' + escapeHtml(nb.pubkey) + '" style="font-size:11px;padding:1px 6px;white-space:nowrap"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> ' + tr('Map') + '</button>'
         : '';
       var lastSeenVal = nb.last_seen ? new Date(nb.last_seen).getTime() : 0;
       var distanceVal = nb.distance_km != null ? Number(nb.distance_km) : '';
@@ -392,7 +398,7 @@
         '<td data-value="' + (nb.count || 0) + '">' + nb.count + '</td>' +
         '<td data-value="' + lastSeenVal + '">' + renderNodeTimestampHtml(nb.last_seen) + '</td>' +
         '<td data-value="' + distanceVal + '">' + distanceCell + '</td>' +
-        '<td><span title="' + conf.label + '">' + conf.icon + '</span></td>' +
+        '<td><span title="' + tr(conf.label) + '">' + conf.icon + '</span></td>' +
         '<td class="col-action">' + showOnMap + '</td>' +
         '</tr>';
     }).join('');
@@ -401,13 +407,13 @@
   function renderNeighborTable(neighbors, limit) {
     return '<table class="data-table neighbor-sort-table" style="font-size:12px">' +
       '<thead><tr>' +
-      '<th scope="col" data-sort-key="name">Neighbor</th>' +
-      '<th scope="col" data-sort-key="role">Role</th>' +
-      '<th scope="col" data-sort-key="score" data-type="numeric" data-sort-default="desc">Score</th>' +
-      '<th scope="col" data-sort-key="count" data-type="numeric" data-sort-default="desc">Obs</th>' +
-      '<th scope="col" data-sort-key="last_seen" data-type="numeric" data-sort-default="desc">Last Seen</th>' +
-      '<th scope="col" data-sort-key="distance" data-type="numeric">Distance</th>' +
-      '<th scope="col">Conf</th><th scope="col" class="col-action"></th>' +
+      '<th scope="col" data-sort-key="name">' + tr('Neighbor') + '</th>' +
+      '<th scope="col" data-sort-key="role">' + tr('Role') + '</th>' +
+      '<th scope="col" data-sort-key="score" data-type="numeric" data-sort-default="desc">' + tr('Score') + '</th>' +
+      '<th scope="col" data-sort-key="count" data-type="numeric" data-sort-default="desc">' + tr('Obs') + '</th>' +
+      '<th scope="col" data-sort-key="last_seen" data-type="numeric" data-sort-default="desc">' + tr('Last Seen') + '</th>' +
+      '<th scope="col" data-sort-key="distance" data-type="numeric">' + tr('Distance') + '</th>' +
+      '<th scope="col">' + tr('Conf') + '</th><th scope="col" class="col-action"></th>' +
       '</tr></thead>' +
       '<tbody>' + renderNeighborRows(neighbors, limit) + '</tbody></table>';
   }
@@ -420,7 +426,7 @@
 
     // Always set spinner as initial DOM state (synchronous) so tests can observe it
     var spinnerEl = document.getElementById(containerId);
-    if (spinnerEl) spinnerEl.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div>';
+    if (spinnerEl) spinnerEl.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> ' + tr('Loading neighbors…') + '</div>';
 
     // Check cache
     var cached = _neighborCache[pubkey];
@@ -434,7 +440,7 @@
       renderNeighborData(data, containerId, limit, headerSelector, viewAllPubkey);
     }).catch(function() {
       var el = document.getElementById(containerId);
-      if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Could not load neighbor data</div>';
+      if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">' + tr('Could not load neighbor data') + '</div>';
     });
   }
 
@@ -442,23 +448,23 @@
     var el = document.getElementById(containerId);
     if (!el) return;
     if (!data || !data.neighbors || !data.neighbors.length) {
-      el.innerHTML = '<div class="text-muted" style="padding:8px">No neighbor data available yet. Neighbor relationships are built from observed packet paths over time.</div>';
+      el.innerHTML = '<div class="text-muted" style="padding:8px">' + tr('No neighbor data available yet. Neighbor relationships are built from observed packet paths over time.') + '</div>';
       if (headerSelector) {
         var h = document.querySelector(headerSelector);
-        if (h) h.textContent = 'Neighbors (0)';
+        if (h) h.textContent = tr('Neighbors ({count})', { count: 0 });
       }
       return;
     }
     if (headerSelector) {
       var h = document.querySelector(headerSelector);
-      if (h) h.textContent = 'Neighbors (' + data.neighbors.length + ')';
+      if (h) h.textContent = tr('Neighbors ({count})', { count: data.neighbors.length });
     }
     var html = renderNeighborTable(data.neighbors, limit);
     if (limit && data.neighbors.length > limit) {
-      html += '<div style="margin-top:6px;text-align:right"><button class="btn-link show-all-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">Show all ' + data.neighbors.length + ' neighbors <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></button></div>';
+      html += '<div style="margin-top:6px;text-align:right"><button class="btn-link show-all-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + tr('Show all {count} neighbors', { count: data.neighbors.length }) + ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></button></div>';
     } else if (!limit && data.neighbors.length > 5) {
       // Collapse toggle when expanded (#855)
-      html += '<div style="margin-top:6px;text-align:right"><button class="btn-link collapse-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">Show fewer <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-up"/></svg></button></div>';
+      html += '<div style="margin-top:6px;text-align:right"><button class="btn-link collapse-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + tr('Show fewer') + ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-up"/></svg></button></div>';
     }
     el.innerHTML = html;
 
@@ -513,11 +519,11 @@
       // so the split-panel UX on desktop is preserved.
       app.innerHTML = `<div class="node-fullscreen">
         <div class="node-full-header">
-          <button class="detail-back-btn node-back-btn" id="nodeBackBtn" aria-label="Back to nodes">←</button>
-          <span class="node-full-title">Loading…</span>
+          <button class="detail-back-btn node-back-btn" id="nodeBackBtn" aria-label="${tr('Back to nodes')}">←</button>
+          <span class="node-full-title">${tr('Loading…')}</span>
         </div>
         <div class="node-full-body" id="nodeFullBody">
-          <div class="text-center text-muted" style="padding:40px">Loading…</div>
+          <div class="text-center text-muted" style="padding:40px">${tr('Loading…')}</div>
         </div>
       </div>`;
       document.getElementById('nodeBackBtn').addEventListener('click', () => { location.hash = '#/nodes'; });
@@ -556,16 +562,16 @@
 
     app.innerHTML = `<div class="nodes-page">
       <div class="nodes-topbar">
-        <input type="text" class="nodes-search" id="nodeSearch" placeholder="Search by name or pubkey prefix…" aria-label="Search nodes by name or pubkey prefix">
+        <input type="text" class="nodes-search" id="nodeSearch" placeholder="${tr('Search by name or pubkey prefix…')}" aria-label="${tr('Search nodes by name or pubkey prefix')}">
         <div class="nodes-counts" id="nodeCounts"></div>
         <button class="btn-secondary nodes-export-btn" id="nodesExportBtn" disabled
-          title="Download the visible nodes as a MeshCore companion config">Export JSON</button>
+          title="${tr('Download the visible nodes as a MeshCore companion config')}">${tr('Export JSON')}</button>
       </div>
       <div id="nodesRegionFilter" class="region-filter-container"></div>
       <div id="nodesAreaFilter" style="display:none"></div>
       <div class="split-layout">
         <div class="panel-left" id="nodesLeft" aria-live="polite" aria-relevant="additions removals"></div>
-        <div class="panel-right empty" id="nodesRight"><span>Select a node to view details</span></div>
+        <div class="panel-right empty" id="nodesRight"><span>${tr('Select a node to view details')}</span></div>
       </div>
     </div>`;
 
@@ -648,7 +654,7 @@
   }
 
   function renderPacketCountLabel(id) {
-    return `<button type="button" class="sort-help node-packet-count-help" aria-label="Total Packets help" aria-describedby="${id}">Total Packets <span aria-hidden="true">ⓘ</span><span class="sort-help-tip" id="${id}" role="tooltip">Total Packets counts distinct transmissions involving this node as an originator, destination, or resolved relay. The seen count totals observations of those transmissions; one transmission can have multiple observations.</span></button>`;
+    return `<button type="button" class="sort-help node-packet-count-help" aria-label="${tr('Total Packets help')}" aria-describedby="${id}">${tr('Total Packets')} <span aria-hidden="true">ⓘ</span><span class="sort-help-tip" id="${id}" role="tooltip">${tr('Total Packets counts distinct transmissions involving this node as an originator, destination, or resolved relay. The seen count totals observations of those transmissions; one transmission can have multiple observations.')}</span></button>`;
   }
 
   function setupPacketCountHelp(app) {
@@ -748,22 +754,22 @@
       const dupMap = buildDupNameMap(_allNodes);
       const dupBadge = dupNameBadge(n.name, n.public_key, dupMap);
       const dupKeys = n.name && dupMap[n.name.toLowerCase()] ? dupMap[n.name.toLowerCase()].filter(function(k) { return k !== n.public_key; }) : [];
-      const dupSection = dupKeys.length ? '<div class="dup-also-known" style="font-size:11px;color:var(--text-muted);margin-top:4px">Also known as: ' + dupKeys.map(function(k) { return '<a href="#/nodes/' + encodeURIComponent(k) + '" class="mono" style="font-size:11px">' + escapeHtml(k.slice(0, 12)) + '…</a>'; }).join(', ') + '</div>' : '';
+      const dupSection = dupKeys.length ? '<div class="dup-also-known" style="font-size:11px;color:var(--text-muted);margin-top:4px">' + tr('Also known as:') + ' ' + dupKeys.map(function(k) { return '<a href="#/nodes/' + encodeURIComponent(k) + '" class="mono" style="font-size:11px">' + escapeHtml(k.slice(0, 12)) + '…</a>'; }).join(', ') + '</div>' : '';
 
       removeDetailMap(body);
       body.innerHTML = `
         <div class="node-full-card" style="padding:12px 16px;margin-bottom:8px">
-          <div class="node-detail-name" style="font-size:20px">${escapeHtml(n.name || '(unnamed)')}${dupBadge}</div>
+          <div class="node-detail-name" style="font-size:20px">${escapeHtml(n.name || '(' + tr('unnamed') + ')')}${dupBadge}</div>
           ${dupSection}
           <div style="margin:4px 0 6px">${renderNodeBadges(n, roleColor)}</div>
           ${renderHashInconsistencyWarning(n)}
           <div class="node-detail-key mono" style="font-size:11px;word-break:break-all;margin-bottom:6px">${n.public_key}</div>
           <div style="display:flex;flex-wrap:wrap;gap:6px">
-            <button class="btn-primary" id="copyUrlBtn" style="flex:0 0 auto;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Copy URL</button>
-            <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="flex:0 0 auto;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Copy short URL</button>
-            <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Analytics</a>
-            <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Reach</a>
-            <a href="#/observers/${encodeURIComponent(n.public_key.toUpperCase())}" class="btn-primary" title="View this pubkey as an observer" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Observer →</a>
+            <button class="btn-primary" id="copyUrlBtn" style="flex:0 0 auto;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> ${tr('Copy URL')}</button>
+            <button class="btn-primary" id="copyShortUrlBtn" title="${tr('Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)')}" style="flex:0 0 auto;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${tr('Copy short URL')}</button>
+            <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ${tr('Analytics')}</a>
+            <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${tr('Reach')}</a>
+            <a href="#/observers/${encodeURIComponent(n.public_key.toUpperCase())}" class="btn-primary" title="${tr('View this pubkey as an observer')}" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${tr('Observer')} →</a>
             <span class="node-notify-slot" id="nodeNotifySlotFull"></span>
           </div>
         </div>
@@ -777,9 +783,9 @@
         </div>
 
         <table class="node-stats-table" id="node-stats">
-          <tr><td>Status</td><td><span title="${si.statusTooltip}">${statusLabel}</span> <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
-          <tr><td>Last Heard</td><td>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</td></tr>
-          ${(n.role === 'repeater' || n.role === 'room') ? `<tr><td title="Last time this repeater appeared as a relay hop in a non-advert packet observed by the network (#662). This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: 'Last Heard' counts only packets that can be this node alone (#2260).">Last Relayed</td><td>${n.last_relayed ? renderNodeTimestampHtml(n.last_relayed) + ' ' + (n.relay_active ? '<span style="color:var(--status-green-text);font-size:11px"><span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> actively relaying</span>' : '<span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> alive (idle)</span>') : '<span style="color:var(--text-muted)">never observed as relay hop</span> <span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> alive (idle)</span>'}${(n.relay_count_1h != null || n.relay_count_24h != null) ? ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${n.relay_count_1h || 0} relays/hr, ${n.relay_count_24h || 0} relays/24h)</span>` : ''}</td></tr>` : ''}
+          <tr><td>${tr('Status')}</td><td><span title="${si.statusTooltip}">${statusLabel}</span> <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
+          <tr><td>${tr('Last Heard')}</td><td>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</td></tr>
+          ${(n.role === 'repeater' || n.role === 'room') ? `<tr><td title="${tr('Last time this repeater appeared as a relay hop in a non-advert packet observed by the network (#662). This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: \'Last Heard\' counts only packets that can be this node alone (#2260).')}">${tr('Last Relayed')}</td><td>${n.last_relayed ? renderNodeTimestampHtml(n.last_relayed) + ' ' + (n.relay_active ? '<span style="color:var(--status-green-text);font-size:11px"><span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ' + tr('actively relaying') + '</span>' : '<span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ' + tr('alive (idle)') + '</span>') : '<span style="color:var(--text-muted)">' + tr('never observed as relay hop') + '</span> <span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ' + tr('alive (idle)') + '</span>'}${(n.relay_count_1h != null || n.relay_count_24h != null) ? ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${tr('{hour} relays/hr, {day} relays/24h', { hour: n.relay_count_1h || 0, day: n.relay_count_24h || 0 })})</span>` : ''}</td></tr>` : ''}
           ${(n.role === 'repeater' || n.role === 'room') && (n.traffic_share_score != null || n.usefulness_score != null) ? (() => {
             // #1456: prefer the new traffic_share_score field; fall back
             // to legacy usefulness_score for graceful degradation
@@ -793,14 +799,14 @@
             // Per issue #672 classification table: 0.8+ Critical, 0.6+ Valuable,
             // 0.3+ Moderate, 0.1+ Marginal, else Redundant.
             let label, color;
-            if (s >= 0.8) { label = 'Critical'; color = 'var(--status-green, #2ecc71)'; }
-            else if (s >= 0.6) { label = 'Valuable'; color = 'var(--status-green, #2ecc71)'; }
-            else if (s >= 0.3) { label = 'Moderate'; color = 'var(--status-yellow, #f1c40f)'; }
-            else if (s >= 0.1) { label = 'Marginal'; color = 'var(--status-orange, #e67e22)'; }
-            else { label = 'Redundant'; color = 'var(--status-red, #e74c3c)'; }
+            if (s >= 0.8) { label = tr('Critical'); color = 'var(--status-green, #2ecc71)'; }
+            else if (s >= 0.6) { label = tr('Valuable'); color = 'var(--status-green, #2ecc71)'; }
+            else if (s >= 0.3) { label = tr('Moderate'); color = 'var(--status-yellow, #f1c40f)'; }
+            else if (s >= 0.1) { label = tr('Marginal'); color = 'var(--status-orange, #e67e22)'; }
+            else { label = tr('Redundant'); color = 'var(--status-red, #e74c3c)'; }
             const barWidth = Math.max(2, Math.round(s * 100));
-            const tooltip = "Fraction of all non-advert mesh traffic in the analyzer's memory that transited through this repeater as a relay hop. High = lots of packets pass through; low = quieter (may still be structurally important — see Bridge score). One of 4 planned scoring axes (#672); others pending.";
-            return `<tr id="row-usefulness-score" data-usefulness-score="${s.toFixed(4)}" data-traffic-share-score="${s.toFixed(4)}"><td title="${tooltip}">Traffic share <span style="color:var(--text-muted);cursor:help" aria-label="help">ⓘ</span></td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${barWidth}%;height:100%;background:${color}"></span></span><span style="color:${color};font-weight:600">${pct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${label}</span></td></tr>`;
+            const tooltip = tr("Fraction of all non-advert mesh traffic in the analyzer's memory that transited through this repeater as a relay hop. High = lots of packets pass through; low = quieter (may still be structurally important — see Bridge score). One of 4 planned scoring axes (#672); others pending.");
+            return `<tr id="row-usefulness-score" data-usefulness-score="${s.toFixed(4)}" data-traffic-share-score="${s.toFixed(4)}"><td title="${tooltip}">${tr('Traffic share')} <span style="color:var(--text-muted);cursor:help" aria-label="${tr('help')}">ⓘ</span></td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${barWidth}%;height:100%;background:${color}"></span></span><span style="color:${color};font-weight:600">${pct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${label}</span></td></tr>`;
           })() : ''}
           ${(n.role === 'repeater' || n.role === 'room') && n.bridge_score != null ? (() => {
             // Bridge axis (issue #672 axis 2 of 4): normalized betweenness
@@ -811,40 +817,40 @@
             const b = Number(n.bridge_score) || 0;
             const bpct = (b * 100).toFixed(1);
             let blabel, bcolor;
-            if (b >= 0.5) { blabel = 'Critical bridge'; bcolor = 'var(--status-green, #2ecc71)'; }
-            else if (b >= 0.2) { blabel = 'Important'; bcolor = 'var(--status-green, #2ecc71)'; }
-            else if (b >= 0.05) { blabel = 'Some role'; bcolor = 'var(--status-yellow, #f1c40f)'; }
-            else if (b > 0) { blabel = 'Marginal'; bcolor = 'var(--status-orange, #e67e22)'; }
-            else { blabel = 'No bridge role'; bcolor = 'var(--text-muted)'; }
+            if (b >= 0.5) { blabel = tr('Critical bridge'); bcolor = 'var(--status-green, #2ecc71)'; }
+            else if (b >= 0.2) { blabel = tr('Important'); bcolor = 'var(--status-green, #2ecc71)'; }
+            else if (b >= 0.05) { blabel = tr('Some role'); bcolor = 'var(--status-yellow, #f1c40f)'; }
+            else if (b > 0) { blabel = tr('Marginal'); bcolor = 'var(--status-orange, #e67e22)'; }
+            else { blabel = tr('No bridge role'); bcolor = 'var(--text-muted)'; }
             const bbarWidth = Math.max(2, Math.round(b * 100));
-            const btooltip = "Normalized betweenness centrality (0..1). How often this node sits on the shortest path between other pairs of nodes in the affinity graph. 1.0 = the most structurally critical node on the mesh. High Bridge + low Traffic share = a quiet but irreplaceable chokepoint.";
-            return `<tr id="row-bridge-score" data-bridge-score="${b.toFixed(4)}"><td title="${btooltip}">Bridge score <span style="color:var(--text-muted);cursor:help" aria-label="help">ⓘ</span></td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${bbarWidth}%;height:100%;background:${bcolor}"></span></span><span style="color:${bcolor};font-weight:600">${bpct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${blabel}</span></td></tr>`;
+            const btooltip = tr('Normalized betweenness centrality (0..1). How often this node sits on the shortest path between other pairs of nodes in the affinity graph. 1.0 = the most structurally critical node on the mesh. High Bridge + low Traffic share = a quiet but irreplaceable chokepoint.');
+            return `<tr id="row-bridge-score" data-bridge-score="${b.toFixed(4)}"><td title="${btooltip}">${tr('Bridge score')} <span style="color:var(--text-muted);cursor:help" aria-label="${tr('help')}">ⓘ</span></td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${bbarWidth}%;height:100%;background:${bcolor}"></span></span><span style="color:${bcolor};font-weight:600">${bpct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${blabel}</span></td></tr>`;
           })() : ''}
-          ${(n.role === 'repeater' || n.role === 'room') && Array.isArray(n.transported_scopes) && n.transported_scopes.length ? `<tr id="row-transported-scopes"><td title="Distinct region scopes (transmissions.scope_name) of the non-advert packets whose path names this repeater by its full pubkey. Shows which regions' traffic it has carried (#1751). Packets that only carry a 1-byte hop are excluded: that byte is shared by every node with the same pubkey prefix, so it cannot say which of them relayed (#1902).">Transported scopes</td><td><span style="display:inline-flex;flex-wrap:wrap;gap:3px;vertical-align:middle">${n.transported_scopes.map(sc => '<span class="badge">' + escapeHtml(String(sc)) + '</span>').join('')}</span></td></tr>` : ''}
-          ${'configured_scope' in n && n.configured_scope !== null ? `<tr id="row-configured-scope"><td title="Region scopes this node has CONFIGURED, confirmed via an observer /neighbors report (status=responded) — concrete evidence, distinct from observed default scope and transported scopes (#1865).${n.configured_scope_at ? ' Last confirmed ' + escapeHtml(String(n.configured_scope_at)) + '.' : ''}">Configured scope <span style="color:var(--status-green-text)" role="img" aria-label="confirmed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg></span></td><td>${n.configured_scope === '' ? '<span style="color:var(--text-muted)">none configured</span>' : `<code style="color:var(--link-color)">${escapeHtml(n.configured_scope)}</code>`}</td></tr>` : ''}
-          <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
-          <tr><td>${renderPacketCountLabel('fullNodePacketCountHelp')}</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
-          <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
-          ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
-          ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
-          <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + (Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : []).join(', ') + '-byte"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> varies</span>' : ''}</td></tr>
-          ${rfOn() ? `<tr><td title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</td><td data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</td></tr>` : ''}
+          ${(n.role === 'repeater' || n.role === 'room') && Array.isArray(n.transported_scopes) && n.transported_scopes.length ? `<tr id="row-transported-scopes"><td title="${tr('Distinct region scopes (transmissions.scope_name) of the non-advert packets whose path names this repeater by its full pubkey. Shows which regions\' traffic it has carried (#1751). Packets that only carry a 1-byte hop are excluded: that byte is shared by every node with the same pubkey prefix, so it cannot say which of them relayed (#1902).')}">${tr('Transported scopes')}</td><td><span style="display:inline-flex;flex-wrap:wrap;gap:3px;vertical-align:middle">${n.transported_scopes.map(sc => '<span class="badge">' + escapeHtml(String(sc)) + '</span>').join('')}</span></td></tr>` : ''}
+          ${'configured_scope' in n && n.configured_scope !== null ? `<tr id="row-configured-scope"><td title="${tr('Region scopes this node has CONFIGURED, confirmed via an observer /neighbors report (status=responded) — concrete evidence, distinct from observed default scope and transported scopes (#1865).')}${n.configured_scope_at ? ' ' + tr('Last confirmed {time}.', { time: escapeHtml(String(n.configured_scope_at)) }) : ''}">${tr('Configured scope')} <span style="color:var(--status-green-text)" role="img" aria-label="${tr('confirmed')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg></span></td><td>${n.configured_scope === '' ? '<span style="color:var(--text-muted)">' + tr('none configured') + '</span>' : `<code style="color:var(--link-color)">${escapeHtml(n.configured_scope)}</code>`}</td></tr>` : ''}
+          <tr><td>${tr('First Seen')}</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
+          <tr><td>${renderPacketCountLabel('fullNodePacketCountHelp')}</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(' + tr('seen {count}×', { count: stats.totalObservations }) + ')</span>' : ''}</td></tr>
+          <tr><td>${tr('Packets Today')}</td><td>${stats.packetsToday || 0}</td></tr>
+          ${stats.avgHops ? `<tr><td>${tr('Avg Hops')}</td><td>${stats.avgHops}</td></tr>` : ''}
+          ${hasLoc ? `<tr><td>${tr('Location')}</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
+          <tr><td>${tr('Hash Prefix')}</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : tr('Unknown')}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="' + tr('Seen: {sizes}-byte', { sizes: (Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : []).join(', ') }) + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + tr('varies') + '</span>' : ''}</td></tr>
+          ${rfOn() ? `<tr><td title="${tr('LoRa radio settings this node last advertised to the MeshCore map')}">LoRa</td><td data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</td></tr>` : ''}
         </table>
 
         <div class="node-full-card" id="node-packets">
           ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
-          <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete. An observed empty direct path cannot prove an origin-local send or RF distance.">Recent Adverts (${validPackets.length})</h4>
+          <h4 title="${tr('Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete. An observed empty direct path cannot prove an origin-local send or RF distance.')}">${tr('Recent Adverts ({count})', { count: validPackets.length })}</h4>
           <div class="node-activity-list">
             ${window.groupRecentAdverts(validPackets).map(group => `<div class="node-advert-group" data-advert-kind="${group.kind}">
-            <h5 title="Count in this recent sample, not the node's lifetime total.">${group.label} (${group.adverts.length})</h5>
+            <h5 title="${tr('Count in this recent sample, not the node\'s lifetime total.')}">${tr(group.label)} (${group.adverts.length})</h5>
             ${group.adverts.length ? group.adverts.map(p => {
               let decoded; try { decoded = JSON.parse(p.decoded_json); } catch {}
-              const typeLabel = p.payload_type === 4 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Advert' : p.payload_type === 5 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg> Channel' : p.payload_type === 2 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg> DM' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Packet';
+              const typeLabel = p.payload_type === 4 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Advert' : p.payload_type === 5 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg> ' + tr('Channel') : p.payload_type === 2 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg> DM' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> ' + tr('Packet');
               const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
               const obs = p.observer_name || p.observer_id;
               const snr = p.snr != null ? ` · SNR ${p.snr}dB` : '';
               const rssi = p.rssi != null ? ` · RSSI ${p.rssi}dBm` : '';
-              const obsBadge = p.observation_count > 1 ? ` <span class="badge badge-obs" title="Seen ${p.observation_count} times"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${p.observation_count}</span>` : '';
+              const obsBadge = p.observation_count > 1 ? ` <span class="badge badge-obs" title="${trn(p.observation_count, 'Seen {count} time', 'Seen {count} times')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${p.observation_count}</span>` : '';
               // Show hash size per advert if inconsistent
               let hashSizeBadge = '';
               if (n.hash_size_inconsistent && p.payload_type === 4 && p.raw_hex) {
@@ -858,53 +864,53 @@
               }
               return `<div class="node-activity-item">
                 <span class="node-activity-time">${renderNodeTimestampHtml(p.timestamp)}</span>
-                <span>${typeLabel}${detail}${hashSizeBadge}${obsBadge}${obs ? ' via ' + escapeHtml(obs) : ''}${snr}${rssi}</span>
-                <a href="#/packets/${p.hash}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">Analyze →</a>
+                <span>${typeLabel}${detail}${hashSizeBadge}${obsBadge}${obs ? ' ' + tr('via {observer}', { observer: escapeHtml(obs) }) : ''}${snr}${rssi}</span>
+                <a href="#/packets/${p.hash}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">${tr('Analyze')} →</a>
               </div>`;
-            }).join('') : '<div class="text-muted">None in this recent sample</div>'}
+            }).join('') : '<div class="text-muted">' + tr('None in this recent sample') + '</div>'}
             </div>`).join('')}
           </div>
         `; })()}
         </div>
 
         ${observers.length || relayObserverCount ? `<div class="node-full-card" id="node-observers">
-          <h4 title="Observers that received this node's own transmission off the air. An observer that only saw traffic relayed through this node is counted separately below.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
-          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
+          <h4 title="${tr('Observers that received this node\'s own transmission off the air. An observer that only saw traffic relayed through this node is counted separately below.')}">${trn(observers.length, 'Heard By — direct ({count} observer)', 'Heard By — direct ({count} observers)')}</h4>
+          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="' + tr('Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.') + '">' + tr('No observation proves a direct reception here, which is not the same as being out of range.') + '</div>'}
           ${observers.length ? `<table class="data-table observer-sort-table" style="font-size:12px">
             <thead><tr>
-              <th scope="col" data-sort-key="observer">Observer</th>
-              <th scope="col" data-sort-key="packets" data-type="numeric" data-sort-default="desc">Packets</th>
-              <th scope="col" data-sort-key="snr" data-type="numeric" data-sort-default="desc">Avg SNR</th>
-              <th scope="col" data-sort-key="rssi" data-type="numeric" data-sort-default="desc">Avg RSSI</th>
+              <th scope="col" data-sort-key="observer">${tr('Observer')}</th>
+              <th scope="col" data-sort-key="packets" data-type="numeric" data-sort-default="desc">${tr('Packets')}</th>
+              <th scope="col" data-sort-key="snr" data-type="numeric" data-sort-default="desc">${tr('Avg SNR')}</th>
+              <th scope="col" data-sort-key="rssi" data-type="numeric" data-sort-default="desc">${tr('Avg RSSI')}</th>
             </tr></thead>
             <tbody>
               ${observers.map(o => `<tr>
-                <td data-value="${escapeHtml((o.observer_name || o.observer_id || '').toLowerCase())}" style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}${o.can_relay === false ? ' <span class="badge-listener" title="Firmware reported repeat:off — excluded from path-hop disambiguator (#1290)">listener</span>' : (o.can_relay === true ? ' <span class="badge-repeater" title="Firmware reported repeat:on — eligible as a path hop">repeater</span>' : '')}</td>
+                <td data-value="${escapeHtml((o.observer_name || o.observer_id || '').toLowerCase())}" style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}${o.can_relay === false ? ' <span class="badge-listener" title="' + tr('Firmware reported repeat:off — excluded from path-hop disambiguator (#1290)') + '">' + tr('listener') + '</span>' : (o.can_relay === true ? ' <span class="badge-repeater" title="' + tr('Firmware reported repeat:on — eligible as a path hop') + '">' + tr('repeater') + '</span>' : '')}</td>
                 <td data-value="${o.packetCount || 0}">${o.packetCount}</td>
                 <td data-value="${o.avgSnr != null ? Number(o.avgSnr) : ''}">${o.avgSnr != null ? Number(o.avgSnr).toFixed(1) + ' dB' : '—'}</td>
                 <td data-value="${o.avgRssi != null ? Number(o.avgRssi) : ''}">${o.avgRssi != null ? Number(o.avgRssi).toFixed(0) + ' dBm' : '—'}</td>
               </tr>`).join('')}
             </tbody>
           </table>` : ''}
-          ${relayObserverCount ? `<div class="text-muted" style="font-size:12px;padding:6px 0 0" id="node-relay-observers">Seen via relay by ${relayObserverCount} observer${relayObserverCount === 1 ? '' : 's'}. Those observers heard a repeater that forwarded this node's traffic, not this node.</div>` : ''}
+          ${relayObserverCount ? `<div class="text-muted" style="font-size:12px;padding:6px 0 0" id="node-relay-observers">${trn(relayObserverCount, 'Seen via relay by {count} observer. Those observers heard a repeater that forwarded this node\'s traffic, not this node.', 'Seen via relay by {count} observers. Those observers heard a repeater that forwarded this node\'s traffic, not this node.')}</div>` : ''}
         </div>` : ''}
 
         <div class="node-full-card" id="node-neighbors">
-          <h4 id="fullNeighborsHeader">Neighbors</h4>
-          <div id="fullNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+          <h4 id="fullNeighborsHeader">${tr('Neighbors')}</h4>
+          <div id="fullNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> ${tr('Loading neighbors…')}</div></div>
         </div>
 
         <div class="node-full-card" id="node-affinity-debug" style="display:none">
-          <h4 style="cursor:pointer" onclick="var body=this.parentElement.querySelector('.affinity-debug-body'); var hidden=body.style.display==='none'; body.style.display=hidden?'block':'none'; this.querySelector('.toggle-icon').innerHTML=body.style.display==='none'?'<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg>':'<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-up"/></svg>'"><span class="toggle-icon"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></span> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Affinity Debug</h4>
+          <h4 style="cursor:pointer" onclick="var body=this.parentElement.querySelector('.affinity-debug-body'); var hidden=body.style.display==='none'; body.style.display=hidden?'block':'none'; this.querySelector('.toggle-icon').innerHTML=body.style.display==='none'?'<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg>':'<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-up"/></svg>'"><span class="toggle-icon"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></span> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ${tr('Affinity Debug')}</h4>
           <div class="affinity-debug-body" style="display:none">
-            <div id="affinityDebugContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading debug data…</div></div>
+            <div id="affinityDebugContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> ${tr('Loading debug data…')}</div></div>
           </div>
         </div>
 
         <div class="node-full-card" id="fullPathsSection">
-          <h4>Paths Through This Node</h4>
+          <h4>${tr('Paths Through This Node')}</h4>
           <div class="path-symbols-legend-wrapper">${(window.HopDisplay && HopDisplay.renderPathSymbolsLegend) ? HopDisplay.renderPathSymbolsLegend() : ''}</div>
-          <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
+          <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> ${tr('Loading paths…')}</div></div>
         </div>
 
         <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
@@ -925,8 +931,8 @@
       document.getElementById('copyUrlBtn')?.addEventListener('click', () => {
         const btn = document.getElementById('copyUrlBtn');
         window.copyToClipboard(nodeUrl, () => {
-          btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Copied!';
-          setTimeout(() => btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Copy URL', 2000);
+          btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('Copied!');
+          setTimeout(() => btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> ' + tr('Copy URL'), 2000);
         });
       });
 
@@ -936,8 +942,8 @@
       document.getElementById('copyShortUrlBtn')?.addEventListener('click', () => {
         const btn = document.getElementById('copyShortUrlBtn');
         window.copyToClipboard(shortUrl, () => {
-          btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Copied!';
-          setTimeout(() => btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Copy short URL', 2000);
+          btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('Copied!');
+          setTimeout(() => btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ' + tr('Copy short URL'), 2000);
         });
       });
 
@@ -1000,8 +1006,8 @@
 
             // Edges table
             if (data.edges && data.edges.length) {
-              html += '<h5 style="margin:8px 0 4px">Neighbor Edges (' + data.edges.length + ')</h5>';
-              html += '<table class="mini-table" style="width:100%;font-size:12px"><thead><tr><th>Neighbor</th><th>Score</th><th>Count</th><th>Last Seen</th><th>Observers</th><th>Status</th></tr></thead><tbody>';
+              html += '<h5 style="margin:8px 0 4px">' + tr('Neighbor Edges ({count})', { count: data.edges.length }) + '</h5>';
+              html += '<table class="mini-table" style="width:100%;font-size:12px"><thead><tr><th>' + tr('Neighbor') + '</th><th>' + tr('Score') + '</th><th>' + tr('Count') + '</th><th>' + tr('Last Seen') + '</th><th>' + tr('Observers') + '</th><th>' + tr('Status') + '</th></tr></thead><tbody>';
               data.edges.forEach(function (e) {
                 var neighbor = e.nodeBName || e.nodeAName || (e.nodeB || e.nodeA || '').substring(0, 8);
                 if (e.nodeA.toLowerCase() === n.public_key.toLowerCase()) {
@@ -1009,25 +1015,25 @@
                 } else {
                   neighbor = e.nodeAName || (e.nodeA || '').substring(0, 8);
                 }
-                var status = e.ambiguous ? (e.unresolved ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> Unresolved' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Ambiguous') : (e.resolved ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Auto-resolved' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Resolved');
+                var status = e.ambiguous ? (e.unresolved ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> ' + tr('Unresolved') : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + tr('Ambiguous')) : (e.resolved ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('Auto-resolved') : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('Resolved'));
                 html += '<tr><td>' + escapeHtml(neighbor) + '</td><td>' + (e.score || 0).toFixed(3) + '</td><td>' + e.weight + '</td><td>' + (e.lastSeen || '').substring(0, 10) + '</td><td>' + (e.observers || []).length + '</td><td>' + status + '</td></tr>';
               });
               html += '</tbody></table>';
             } else {
-              html += '<div class="text-muted" style="padding:8px">No affinity edges for this node</div>';
+              html += '<div class="text-muted" style="padding:8px">' + tr('No affinity edges for this node') + '</div>';
             }
 
             // Resolutions
             if (data.resolutions && data.resolutions.length) {
-              html += '<h5 style="margin:12px 0 4px">Prefix Resolutions (' + data.resolutions.length + ')</h5>';
+              html += '<h5 style="margin:12px 0 4px">' + tr('Prefix Resolutions ({count})', { count: data.resolutions.length }) + '</h5>';
               data.resolutions.forEach(function (r) {
                 html += '<div style="border:1px solid var(--border);border-radius:4px;padding:8px;margin-bottom:6px;font-size:12px">';
-                html += '<b>Prefix: ' + escapeHtml(r.prefix) + '</b> → ';
+                html += '<b>' + tr('Prefix: {prefix}', { prefix: escapeHtml(r.prefix) }) + '</b> → ';
                 if (r.method === 'auto-resolved') {
                   html += '<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + escapeHtml(r.chosenName || r.chosen || '?') + '</span>';
                   html += ' (Jaccard=' + r.chosenJaccard.toFixed(2) + ', ratio=' + ((isFinite(r.ratio) && r.ratio < 100) ? r.ratio.toFixed(1) + '×' : '∞') + ')';
                 } else {
-                  html += '<span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Ambiguous</span>';
+                  html += '<span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + tr('Ambiguous') + '</span>';
                   if (r.ratio) html += ' (ratio=' + r.ratio.toFixed(1) + '×, threshold=' + r.thresholdApplied + '×)';
                 }
                 // Show disambiguation tier used (M4 resolveWithContext)
@@ -1044,7 +1050,7 @@
                 }
                 // Candidates table
                 if (r.candidates && r.candidates.length) {
-                  html += '<div style="margin-top:4px"><table class="mini-table" style="width:100%;font-size:11px"><thead><tr><th>Candidate</th><th>Jaccard</th><th>Count</th></tr></thead><tbody>';
+                  html += '<div style="margin-top:4px"><table class="mini-table" style="width:100%;font-size:11px"><thead><tr><th>' + tr('Candidate') + '</th><th>Jaccard</th><th>' + tr('Count') + '</th></tr></thead><tbody>';
                   r.candidates.forEach(function (c) {
                     var highlight = r.chosen && c.pubkey === r.chosen ? ' style="background:var(--status-green-bg,rgba(34,197,94,0.1))"' : '';
                     html += '<tr' + highlight + '><td>' + escapeHtml(c.name || c.pubkey.substring(0, 8)) + '</td><td>' + c.jaccard.toFixed(3) + '</td><td>' + c.score + '</td></tr>';
@@ -1057,14 +1063,14 @@
 
             // Stats summary
             if (data.stats) {
-              html += '<h5 style="margin:12px 0 4px">Graph Stats</h5>';
+              html += '<h5 style="margin:12px 0 4px">' + tr('Graph Stats') + '</h5>';
               html += '<div style="font-size:12px;line-height:1.6">';
-              html += 'Total edges: ' + data.stats.totalEdges + '<br>';
-              html += 'Total nodes: ' + data.stats.totalNodes + '<br>';
-              html += 'Resolved: ' + data.stats.resolvedCount + ' | Ambiguous: ' + data.stats.ambiguousCount + ' | Unresolved: ' + data.stats.unresolvedCount + '<br>';
-              html += 'Avg confidence: ' + (data.stats.avgConfidence || 0).toFixed(3) + '<br>';
-              html += 'Cold-start coverage: ' + (data.stats.coldStartCoverage || 0).toFixed(1) + '%<br>';
-              html += 'Cache age: ' + (data.stats.cacheAge || 'N/A') + ' | Last rebuild: ' + (data.stats.lastRebuild || 'N/A');
+              html += tr('Total edges: {count}', { count: data.stats.totalEdges }) + '<br>';
+              html += tr('Total nodes: {count}', { count: data.stats.totalNodes }) + '<br>';
+              html += tr('Resolved: {resolved} | Ambiguous: {ambiguous} | Unresolved: {unresolved}', { resolved: data.stats.resolvedCount, ambiguous: data.stats.ambiguousCount, unresolved: data.stats.unresolvedCount }) + '<br>';
+              html += tr('Avg confidence: {value}', { value: (data.stats.avgConfidence || 0).toFixed(3) }) + '<br>';
+              html += tr('Cold-start coverage: {value}%', { value: (data.stats.coldStartCoverage || 0).toFixed(1) }) + '<br>';
+              html += tr('Cache age: {age} | Last rebuild: {rebuild}', { age: data.stats.cacheAge || 'N/A', rebuild: data.stats.lastRebuild || 'N/A' });
               html += '</div>';
             }
 
@@ -1072,7 +1078,7 @@
           })
           .catch(function (err) {
             var el = document.getElementById('affinityDebugContent');
-            if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Failed to load debug data: ' + escapeHtml(err.message) + '</div>';
+            if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">' + tr('Failed to load debug data: {message}', { message: escapeHtml(err.message) }) + '</div>';
           });
       })();
 
@@ -1081,10 +1087,10 @@
         const el = document.getElementById('fullPathsContent');
         if (!el) return;
         if (!pathData || !pathData.paths || !pathData.paths.length) {
-          el.innerHTML = '<div class="text-muted" style="padding:8px">No paths observed through this node</div>';
+          el.innerHTML = '<div class="text-muted" style="padding:8px">' + tr('No paths observed through this node') + '</div>';
           return;
         }
-        document.querySelector('#fullPathsSection h4').textContent = `Paths Through This Node (${pathData.totalPaths} unique, ${pathData.totalTransmissions} transmissions)`;
+        document.querySelector('#fullPathsSection h4').textContent = tr('Paths Through This Node ({unique} unique, {transmissions} transmissions)', { unique: pathData.totalPaths, transmissions: pathData.totalTransmissions });
         const COLLAPSE_LIMIT = 10;
         const currentPubkey = n.public_key.toLowerCase();
         function renderPaths(paths) {
@@ -1102,7 +1108,7 @@
             }).join(' → ');
             return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
               <div>${chain}</div>
-              <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${renderNodeTimestampHtml(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">Analyze →</a></div>
+              <div style="color:var(--text-muted);margin-top:2px">${p.count}× · ${tr('last {time}', { time: renderNodeTimestampHtml(p.lastSeen) })} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">${tr('Analyze')} →</a></div>
             </div>`;
           }).join('');
         }
@@ -1110,14 +1116,14 @@
           el.innerHTML = renderPaths(pathData.paths);
         } else {
           el.innerHTML = renderPaths(pathData.paths.slice(0, COLLAPSE_LIMIT)) +
-            `<button id="showAllFullPaths" class="btn-primary" style="margin-top:8px;font-size:11px;padding:4px 12px">Show all ${pathData.paths.length} paths</button>`;
+            `<button id="showAllFullPaths" class="btn-primary" style="margin-top:8px;font-size:11px;padding:4px 12px">${tr('Show all {count} paths', { count: pathData.paths.length })}</button>`;
           document.getElementById('showAllFullPaths').addEventListener('click', function() {
             el.innerHTML = renderPaths(pathData.paths);
           });
         }
       }).catch(() => {
         const el = document.getElementById('fullPathsContent');
-        if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Failed to load paths</div>';
+        if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">' + tr('Failed to load paths') + '</div>';
       });
 
     } catch (e) {
@@ -1134,7 +1140,7 @@
         if (document.getElementById('nodeFullBody') !== body) return;
         if (hit) {
           const t = document.querySelector('.node-full-title');
-          if (t) t.textContent = (hit.name || hit.pubkey.slice(0, 12)) + ' (self-reported)';
+          if (t) t.textContent = (hit.name || hit.pubkey.slice(0, 12)) + ' (' + tr('self-reported') + ')';
           removeDetailMap(body);
           body.innerHTML = window.ReportedNodes.detailHtml(hit, rep.method);
           return;
@@ -1143,14 +1149,14 @@
       const titleEl = document.querySelector('.node-full-title');
       if (titleEl) {
         titleEl.textContent = is404
-          ? 'Node not found — ' + (pubkey || '').slice(0, 12) + '…'
-          : 'Failed to load node';
+          ? tr('Node not found') + ' — ' + (pubkey || '').slice(0, 12) + '…'
+          : tr('Failed to load node');
       }
       const safePubkey = escapeHtml(pubkey || '');
-      const headline = is404 ? 'Node not found' : 'Failed to load node';
+      const headline = is404 ? tr('Node not found') : tr('Failed to load node');
       const detail = is404
-        ? 'No node matched the requested public key on this instance. It may exist on another deployment, or it may have been evicted/blacklisted here.'
-        : 'The node detail API call failed: ' + escapeHtml(msg);
+        ? tr('No node matched the requested public key on this instance. It may exist on another deployment, or it may have been evicted/blacklisted here.')
+        : tr('The node detail API call failed: {message}', { message: escapeHtml(msg) });
       removeDetailMap(body);
       body.innerHTML =
         '<div class="node-full-card" style="padding:24px;margin:16px auto;max-width:560px;text-align:center">' +
@@ -1158,15 +1164,15 @@
           '<div class="mono" style="font-size:11px;color:var(--text-muted);word-break:break-all;margin-bottom:12px">' + safePubkey + '</div>' +
           '<div style="color:var(--text-muted);margin-bottom:16px">' + detail + '</div>' +
           '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">' +
-            '<a href="#/nodes" class="btn-primary" style="text-decoration:none;padding:6px 14px">← Back to Nodes</a>' +
-            '<button id="nodeRetryBtn" class="btn-primary" style="padding:6px 14px">Try again</button>' +
+            '<a href="#/nodes" class="btn-primary" style="text-decoration:none;padding:6px 14px">← ' + tr('Back to Nodes') + '</a>' +
+            '<button id="nodeRetryBtn" class="btn-primary" style="padding:6px 14px">' + tr('Try again') + '</button>' +
           '</div>' +
         '</div>';
       const retryBtn = document.getElementById('nodeRetryBtn');
       if (retryBtn) {
         retryBtn.addEventListener('click', function () {
-          if (titleEl) titleEl.textContent = 'Loading…';
-          body.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+          if (titleEl) titleEl.textContent = tr('Loading…');
+          body.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Loading…') + '</div>';
           loadFullNode(pubkey);
         });
       }
@@ -1219,14 +1225,14 @@
 
     var calSum = cs.calibrationSummary || {};
     var calLine = calSum.totalSamples
-      ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Last ' + calSum.totalSamples + ' samples: ' + (calSum.calibratedSamples || 0) + ' corrected via observer calibration, ' + (calSum.uncalibratedSamples || 0) + ' uncorrected (single-observer).</div>'
+      ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">' + tr('Last {total} samples: {calibrated} corrected via observer calibration, {uncalibrated} uncorrected (single-observer).', { total: calSum.totalSamples, calibrated: calSum.calibratedSamples || 0, uncalibrated: calSum.uncalibratedSamples || 0 }) + '</div>'
       : '';
 
     // Severity reason.
     var skewVal = window.currentSkewValue(cs);
     var sampleCount = (cs.samples || []).length;
-    var sevLabel = SKEW_SEVERITY_LABELS[cs.severity] || cs.severity;
-    var reasonLine = '<div style="font-size:12px;margin-bottom:8px"><strong>Recent ' + sampleCount + ' adverts median ' + formatSkew(skewVal) + ' → ' + sevLabel + '</strong></div>';
+    var sevLabel = SKEW_SEVERITY_LABELS[cs.severity] ? tr(SKEW_SEVERITY_LABELS[cs.severity]) : cs.severity;
+    var reasonLine = '<div style="font-size:12px;margin-bottom:8px"><strong>' + tr('Recent {count} adverts median {skew}', { count: sampleCount, skew: formatSkew(skewVal) }) + ' → ' + sevLabel + '</strong></div>';
 
     var hashBlocks = evidence.map(function(ev) {
       var shortHash = (ev.hash || '').substring(0, 8) + '…';
@@ -1243,23 +1249,23 @@
       });
       var medianLabel;
       if (outlierObs > 0 && outlierObs === obsCount) {
-        medianLabel = 'insufficient data (' + outlierObs + ' RTC-reset outlier' + (outlierObs !== 1 ? 's' : '') + ' excluded)';
+        medianLabel = tr('insufficient data') + ' (' + trn(outlierObs, '{count} RTC-reset outlier excluded', '{count} RTC-reset outliers excluded') + ')';
       } else if (outlierObs > 0) {
-        medianLabel = formatSkew(ev.medianCorrectedSkewSec) + ' (' + outlierObs + ' RTC-reset outlier' + (outlierObs !== 1 ? 's' : '') + ' excluded)';
+        medianLabel = formatSkew(ev.medianCorrectedSkewSec) + ' (' + trn(outlierObs, '{count} RTC-reset outlier excluded', '{count} RTC-reset outliers excluded') + ')';
       } else {
         medianLabel = formatSkew(ev.medianCorrectedSkewSec);
       }
-      var header = '<div style="font-weight:600;font-size:12px;margin-top:6px">Hash ' + shortHash + '  ·  ' + obsCount + ' observer' + (obsCount !== 1 ? 's' : '') + '  ·  median corrected: ' + medianLabel + '</div>';
+      var header = '<div style="font-weight:600;font-size:12px;margin-top:6px">Hash ' + shortHash + '  ·  ' + trn(obsCount, '{count} observer', '{count} observers') + '  ·  ' + tr('median corrected: {value}', { value: medianLabel }) + '</div>';
       var lines = (ev.observers || []).map(function(o) {
         var name = escapeHtml(o.observerName || o.observerID);
         return '<div style="font-size:11px;padding-left:16px;font-family:var(--mono)">' +
-          name + '   raw=' + formatSkew(o.rawSkewSec) + '  corrected=' + formatSkew(o.correctedSkewSec) + '  (observer offset ' + formatSkew(o.observerOffsetSec) + ')' +
+          name + '   raw=' + formatSkew(o.rawSkewSec) + '  corrected=' + formatSkew(o.correctedSkewSec) + '  (' + tr('observer offset {value}', { value: formatSkew(o.observerOffsetSec) }) + ')' +
           '</div>';
       }).join('');
       return header + lines;
     }).join('');
 
-    return '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">Evidence (' + evidence.length + ' hashes)</summary>' +
+    return '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">' + tr('Evidence ({count} hashes)', { count: evidence.length }) + '</summary>' +
       '<div style="margin-top:6px;padding:8px;background:var(--bg-secondary);border-radius:6px">' +
       reasonLine + calLine + hashBlocks +
       '</div></details>';
@@ -1271,16 +1277,16 @@
       var cs = await api('/nodes/' + encodeURIComponent(pubkey) + '/clock-skew', { ttl: 30000 });
       if (!cs || !cs.severity) return;
       container.style.display = '';
-      var driftHtml = cs.driftPerDaySec ? '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">Drift: ' + formatDrift(cs.driftPerDaySec) + '</div>' : '';
+      var driftHtml = cs.driftPerDaySec ? '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">' + tr('Drift: {value}', { value: formatDrift(cs.driftPerDaySec) }) + '</div>' : '';
       var sparkHtml = renderSkewSparkline(cs.samples, 200, 32);
       var skewVal = window.currentSkewValue(cs);
       var skewDisplay = cs.severity === 'no_clock'
-        ? '<span style="font-size:18px;font-weight:700;color:var(--text-muted)">No Clock</span>'
+        ? '<span style="font-size:18px;font-weight:700;color:var(--text-muted)">' + tr('No Clock') + '</span>'
         : '<span style="font-size:18px;font-weight:700;font-family:var(--mono)">' + formatSkew(skewVal) + '</span>';
       var bimodalWarning = '';
       if (cs.severity === 'bimodal_clock') {
         var totalRecent = cs.recentSampleCount || 0;
-        var summary = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + (cs.recentBadSampleCount || '?') + ' of last ' + (totalRecent || '?') + ' adverts had nonsense timestamps (likely RTC reset)';
+        var summary = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + tr('{bad} of last {total} adverts had nonsense timestamps (likely RTC reset)', { bad: cs.recentBadSampleCount || '?', total: totalRecent || '?' });
         var badList = '';
         if (Array.isArray(cs.recentBadSamples) && cs.recentBadSamples.length) {
           var items = cs.recentBadSamples.map(function(bs) {
@@ -1297,14 +1303,14 @@
         bimodalWarning = '<div style="font-size:12px;color:var(--status-amber-text);margin-top:4px">' + summary + badList + '</div>';
       }
       container.innerHTML =
-        '<h4 style="margin:0 0 6px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Clock Skew</h4>' +
+        '<h4 style="margin:0 0 6px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> ' + tr('Clock Skew') + '</h4>' +
         '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
           skewDisplay +
           renderSkewBadge(cs.severity, skewVal, cs) +
-          (cs.calibrated ? ' <span style="font-size:10px;color:var(--text-muted)" title="Observer-calibrated"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> calibrated</span>' : '') +
+          (cs.calibrated ? ' <span style="font-size:10px;color:var(--text-muted)" title="' + tr('Observer-calibrated') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> ' + tr('calibrated') + '</span>' : '') +
         '</div>' +
         driftHtml +
-        (sparkHtml ? '<div class="skew-sparkline-wrap" style="margin-top:8px">' + sparkHtml + '<div style="font-size:10px;color:var(--text-muted)">Skew over time (' + (cs.samples || []).length + ' samples)</div></div>' : '') +
+        (sparkHtml ? '<div class="skew-sparkline-wrap" style="margin-top:8px">' + sparkHtml + '<div style="font-size:10px;color:var(--text-muted)">' + tr('Skew over time ({count} samples)', { count: (cs.samples || []).length }) + '</div></div>' : '') +
         bimodalWarning +
         buildEvidencePanel(cs);
     } catch (e) {
@@ -1344,7 +1350,7 @@
     var keys = dupMap[name.toLowerCase()];
     if (!keys || keys.length <= 1) return '';
     var others = keys.filter(function(k) { return k !== pubkey; });
-    var title = keys.length + ' nodes share this name (' + others.map(function(k) { return k.slice(0, 8) + '…'; }).join(', ') + ')';
+    var title = tr('{count} nodes share this name ({keys})', { count: keys.length, keys: others.map(function(k) { return k.slice(0, 8) + '…'; }).join(', ') });
     return ' <span class="dup-name-badge" title="' + escapeHtml(title) + '">(' + keys.length + ')</span>';
   }
 
@@ -1383,7 +1389,7 @@
           // M2: progress feedback between pages
           if (nodesBody && offset > 0) {
             const estTotal = firstTotal || '?';
-            nodesBody.innerHTML = '<tr><td colspan="99" style="text-align:center;padding:2em">Loading nodes\u2026 ' + accumulated.length + '/' + estTotal + '</td></tr>';
+            nodesBody.innerHTML = '<tr><td colspan="99" style="text-align:center;padding:2em">' + tr('Loading nodes…') + ' ' + accumulated.length + '/' + estTotal + '</td></tr>';
           }
           // Exit on has_more; fall back to a zero-length page against a server
           // that predates it. A short page is NOT the end: handleNodes drops
@@ -1475,7 +1481,7 @@
     } catch (e) {
       console.error('Failed to load nodes:', e);
       const tbody = document.getElementById('nodesBody');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">Failed to load nodes. Please try again.</div></td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">' + tr('Failed to load nodes. Please try again.') + '</div></td></tr>';
     } finally {
       // Always signal data-loaded — even on error — so E2E tests can proceed.
       var nodesContainer = document.getElementById('nodesLeft') || document.getElementById('nodesBody');
@@ -1488,7 +1494,7 @@
     if (!btn || !window.NodesExport) return;
     const n = window.NodesExport.buildContacts(nodes).contacts.length;
     btn.disabled = n === 0;
-    btn.textContent = n ? 'Export JSON (' + n + ')' : 'Export JSON';
+    btn.textContent = n ? tr('Export JSON') + ' (' + n + ')' : tr('Export JSON');
   }
 
   // #1268 M3: the LoRa filter only exists while the server has map data.
@@ -1499,7 +1505,7 @@
     const sel = document.getElementById('nodeLoraFilter');
     if (!sel) return;
     sel.hidden = !rfOn();
-    if (sel.options[1]) sel.options[1].textContent = 'LoRa: differs from nearby (' + count + ')';
+    if (sel.options[1]) sel.options[1].textContent = tr('LoRa: differs from nearby ({count})', { count: count });
   }
 
   function renderCounts() {
@@ -1510,7 +1516,7 @@
       { k: 'rooms', l: 'Rooms', c: ROLE_COLORS.room || '#6b7280' },
       { k: 'companions', l: 'Companions', c: ROLE_COLORS.companion },
       { k: 'sensors', l: 'Sensors', c: ROLE_COLORS.sensor },
-    ].map(r => `<span class="node-count-pill" style="background:${r.c}">${counts[r.k] || 0} ${r.l}</span>`).join('');
+    ].map(r => `<span class="node-count-pill" style="background:${r.c}">${counts[r.k] || 0} ${tr(r.l)}</span>`).join('');
   }
 
   function renderLeft() {
@@ -1520,47 +1526,47 @@
     el.innerHTML = `
       <div class="nodes-tabs-bar">
         <div class="nodes-tabs" id="nodeTabs">
-          ${TABS.map(t => `<button class="node-tab ${activeTab === t.key ? 'active' : ''}" data-tab="${t.key}">${t.label}</button>`).join('')}
+          ${TABS.map(t => `<button class="node-tab ${activeTab === t.key ? 'active' : ''}" data-tab="${t.key}">${tr(t.label)}</button>`).join('')}
         </div>
         <div class="nodes-filters">
           <div class="filter-group" id="nodeStatusFilter">
-            <button class="btn ${statusFilter==='all'?'active':''}" data-status="all">All</button>
-            <button class="btn ${statusFilter==='active'?'active':''}" data-status="active">Active</button>
-            <button class="btn ${statusFilter==='uncertain'?'active':''}" data-status="uncertain" title="No packet that can only be this repeater within its window; only its shared hop prefix still appears in paths (#2260)">Uncertain</button>
-            <button class="btn ${statusFilter==='stale'?'active':''}" data-status="stale">Stale</button>
+            <button class="btn ${statusFilter==='all'?'active':''}" data-status="all">${tr('All')}</button>
+            <button class="btn ${statusFilter==='active'?'active':''}" data-status="active">${tr('Active')}</button>
+            <button class="btn ${statusFilter==='uncertain'?'active':''}" data-status="uncertain" title="${tr('No packet that can only be this repeater within its window; only its shared hop prefix still appears in paths (#2260)')}">${tr('Uncertain')}</button>
+            <button class="btn ${statusFilter==='stale'?'active':''}" data-status="stale">${tr('Stale')}</button>
           </div>
-          <select id="nodeLastHeard" aria-label="Filter by last heard time">
-            <option value="">Last Heard: Any</option>
-            <option value="1h" ${lastHeard==='1h'?'selected':''}>1 hour</option>
-            <option value="2h" ${lastHeard==='2h'?'selected':''}>2 hours</option>
-            <option value="6h" ${lastHeard==='6h'?'selected':''}>6 hours</option>
-            <option value="12h" ${lastHeard==='12h'?'selected':''}>12 hours</option>
-            <option value="24h" ${lastHeard==='24h'?'selected':''}>24 hours</option>
-            <option value="48h" ${lastHeard==='48h'?'selected':''}>48 hours</option>
-            <option value="3d" ${lastHeard==='3d'?'selected':''}>3 days</option>
-            <option value="7d" ${lastHeard==='7d'?'selected':''}>7 days</option>
-            <option value="14d" ${lastHeard==='14d'?'selected':''}>14 days</option>
-            <option value="30d" ${lastHeard==='30d'?'selected':''}>30 days</option>
+          <select id="nodeLastHeard" aria-label="${tr('Filter by last heard time')}">
+            <option value="">${tr('Last Heard: Any')}</option>
+            <option value="1h" ${lastHeard==='1h'?'selected':''}>${tr('1 hour')}</option>
+            <option value="2h" ${lastHeard==='2h'?'selected':''}>${tr('2 hours')}</option>
+            <option value="6h" ${lastHeard==='6h'?'selected':''}>${tr('6 hours')}</option>
+            <option value="12h" ${lastHeard==='12h'?'selected':''}>${tr('12 hours')}</option>
+            <option value="24h" ${lastHeard==='24h'?'selected':''}>${tr('24 hours')}</option>
+            <option value="48h" ${lastHeard==='48h'?'selected':''}>${tr('48 hours')}</option>
+            <option value="3d" ${lastHeard==='3d'?'selected':''}>${tr('3 days')}</option>
+            <option value="7d" ${lastHeard==='7d'?'selected':''}>${tr('7 days')}</option>
+            <option value="14d" ${lastHeard==='14d'?'selected':''}>${tr('14 days')}</option>
+            <option value="30d" ${lastHeard==='30d'?'selected':''}>${tr('30 days')}</option>
           </select>
-          <select id="nodeSilentFor" aria-label="Show only nodes silent longer than">
-            <option value="">Silent for: Any</option>
-            ${['1d','3d','7d','14d','30d'].map(k => `<option value="${k}" ${silentFor===k?'selected':''}>over ${k}${_silentCounts ? ` (${_silentCounts[k]})` : ''}</option>`).join('')}
+          <select id="nodeSilentFor" aria-label="${tr('Show only nodes silent longer than')}">
+            <option value="">${tr('Silent for: Any')}</option>
+            ${['1d','3d','7d','14d','30d'].map(k => `<option value="${k}" ${silentFor===k?'selected':''}>${tr('over {window}', { window: k })}${_silentCounts ? ` (${_silentCounts[k]})` : ''}</option>`).join('')}
           </select>
-          <select id="nodeLoraFilter" aria-label="Show only nodes whose LoRa settings differ from nearby nodes" ${rfOn() ? '' : 'hidden'}>
-            <option value="">LoRa: Any</option>
-            <option value="differs" ${loraFilter==='differs'?'selected':''}>LoRa: differs from nearby (${_loraDiffCount})</option>
+          <select id="nodeLoraFilter" aria-label="${tr('Show only nodes whose LoRa settings differ from nearby nodes')}" ${rfOn() ? '' : 'hidden'}>
+            <option value="">${tr('LoRa: Any')}</option>
+            <option value="differs" ${loraFilter==='differs'?'selected':''}>${tr('LoRa: differs from nearby ({count})', { count: _loraDiffCount })}</option>
           </select>
         </div>
       </div>
       <div class="table-fluid-wrap"><table class="data-table" id="nodesTable">
         <thead><tr>
-          <th scope="col" data-sort-key="name" data-priority="1">Name</th>
-          <th scope="col" class="col-pubkey" data-sort-key="public_key" data-priority="3">Public Key</th>
-          <th scope="col" data-sort-key="role" data-priority="2">Role</th>
-          <th scope="col" data-sort-key="default_scope" data-priority="3">Scope</th>
-          <th scope="col" data-sort-key="last_seen" data-sort-default="desc" data-priority="1">Last Seen</th>
-          <th scope="col" data-sort-key="first_seen" data-sort-default="desc" data-priority="3">First Seen</th>
-          <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">Adverts</th>
+          <th scope="col" data-sort-key="name" data-priority="1">${tr('Name')}</th>
+          <th scope="col" class="col-pubkey" data-sort-key="public_key" data-priority="3">${tr('Public Key')}</th>
+          <th scope="col" data-sort-key="role" data-priority="2">${tr('Role')}</th>
+          <th scope="col" data-sort-key="default_scope" data-priority="3">${tr('Scope')}</th>
+          <th scope="col" data-sort-key="last_seen" data-sort-default="desc" data-priority="1">${tr('Last Seen')}</th>
+          <th scope="col" data-sort-key="first_seen" data-sort-default="desc" data-priority="3">${tr('First Seen')}</th>
+          <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">${tr('Adverts')}</th>
         </tr></thead>
         <tbody id="nodesBody"></tbody>
       </table></div>
@@ -1647,7 +1653,7 @@
         if (panel && !panel.classList.contains('empty')) {
           removeDetailMap();
           panel.classList.add('empty');
-          panel.innerHTML = '<span>Select a node to view details</span>';
+          panel.innerHTML = '<span>' + tr('Select a node to view details') + '</span>';
           selectedKey = null;
           history.replaceState(null, '', '#/nodes');
           renderRows();
@@ -1674,7 +1680,7 @@
         const panel = document.getElementById('nodesRight');
         removeDetailMap();
         panel.classList.add('empty');
-        panel.innerHTML = '<span>Select a node to view details</span>';
+        panel.innerHTML = '<span>' + tr('Select a node to view details') + '</span>';
         selectedKey = null;
         history.replaceState(null, '', '#/nodes');
         renderRows();
@@ -1713,7 +1719,7 @@
     if (!tbody) return;
 
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:24px">No nodes found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:24px">' + tr('No nodes found') + '</td></tr>';
       return;
     }
 
@@ -1752,7 +1758,7 @@
       const cs = _fleetSkew && _fleetSkew[n.public_key];
       const skewBadgeHtml = cs && cs.severity && cs.severity !== 'ok' ? renderSkewBadge(cs.severity, window.currentSkewValue(cs), cs) : '';
       return `<tr data-key="${n.public_key}" data-action="select" data-value="${n.public_key}" tabindex="0" role="row" class="${selectedKey === n.public_key ? 'selected' : ''}${isClaimed ? ' claimed-row' : ''}">
-        <td>${favStar(n.public_key, 'node-fav')}${isClaimed ? '<span class="claimed-badge" title="My Mesh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span> ' : ''}<strong>${escapeHtml(n.name || '(unnamed)')}</strong>${dupNameBadge(n.name, n.public_key, dupMap)}${skewBadgeHtml}${RfParams.deviationBadge(rfFor(n), rfDev(n))}</td>
+        <td>${favStar(n.public_key, 'node-fav')}${isClaimed ? '<span class="claimed-badge" title="' + tr('My Mesh') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span> ' : ''}<strong>${escapeHtml(n.name || '(' + tr('unnamed') + ')')}</strong>${dupNameBadge(n.name, n.public_key, dupMap)}${skewBadgeHtml}${RfParams.deviationBadge(rfFor(n), rfDev(n))}</td>
         <td class="mono col-pubkey">${truncate(n.public_key, 16)}</td>
         <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(roleColor)) || ('background:'+roleColor+';color:#fff')}">${n.role}</span></td>
         <td style="font-family:var(--mono);font-size:12px">${n.default_scope ? escapeHtml(n.default_scope) : ''}</td>
@@ -1806,7 +1812,7 @@
       history.replaceState(null, '', '#/nodes/' + encodeURIComponent(pubkey));
       renderRows();
       const so = window.SlideOver.open({
-        title: 'Node detail',
+        title: tr('Node detail'),
         // Resolver runs after onClose re-renders rows, so look the row up
         // by data-key after the new tbody is in place.
         restoreFocus: function () {
@@ -1820,26 +1826,26 @@
           renderRows();
         }
       });
-      so.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      so.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Loading…') + '</div>';
       try {
         const data = await fetchNodeDetail(pubkey);
         if (selectedKey !== pubkey) return;
         const n = (data && data.node) || data || {};
         const titleEl = document.querySelector('.slide-over-title');
-        if (titleEl) titleEl.textContent = n.advert_name || (n.public_key ? n.public_key.slice(0, 10) : 'Node');
+        if (titleEl) titleEl.textContent = n.advert_name || (n.public_key ? n.public_key.slice(0, 10) : tr('Node'));
         var role = (n.role || '').toString();
         var lastHeard = n.last_heard || n.last_seen;
         so.innerHTML =
           '<dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
-            '<dt>Name</dt><dd>' + escapeHtml(n.advert_name || '—') + '</dd>' +
-            '<dt>Role</dt><dd>' + escapeHtml(role || '—') + '</dd>' +
-            '<dt>Public key</dt><dd class="mono" style="word-break:break-all">' + escapeHtml(n.public_key || '—') + '</dd>' +
-            '<dt>Last heard</dt><dd>' + (lastHeard ? timeAgo(lastHeard) : '—') + '</dd>' +
-            '<dt>Adverts</dt><dd>' + (n.advert_count != null ? n.advert_count : '—') + '</dd>' +
+            '<dt>' + tr('Name') + '</dt><dd>' + escapeHtml(n.advert_name || '—') + '</dd>' +
+            '<dt>' + tr('Role') + '</dt><dd>' + escapeHtml(role ? tr(role) : '—') + '</dd>' +
+            '<dt>' + tr('Public key') + '</dt><dd class="mono" style="word-break:break-all">' + escapeHtml(n.public_key || '—') + '</dd>' +
+            '<dt>' + tr('Last heard') + '</dt><dd>' + (lastHeard ? timeAgo(lastHeard) : '—') + '</dd>' +
+            '<dt>' + tr('Adverts') + '</dt><dd>' + (n.advert_count != null ? n.advert_count : '—') + '</dd>' +
           '</dl>' +
-          '<p style="margin-top:14px"><a class="btn-primary" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>';
+          '<p style="margin-top:14px"><a class="btn-primary" href="#/nodes/' + encodeURIComponent(pubkey) + '">' + tr('Open full detail') + ' →</a></p>';
       } catch (e) {
-        so.innerHTML = '<div class="text-muted">Error: ' + (e && e.message ? e.message : String(e)) + '</div>';
+        so.innerHTML = '<div class="text-muted">' + tr('Error: {message}', { message: escapeHtml(e && e.message ? e.message : String(e)) }) + '</div>';
       }
       return;
     }
@@ -1849,7 +1855,7 @@
     const panel = document.getElementById('nodesRight');
     panel.classList.remove('empty');
     removeDetailMap();
-    panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+    panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Loading…') + '</div>';
 
     try {
       const data = await fetchNodeDetail(pubkey);
@@ -1857,7 +1863,7 @@
       renderDetail(panel, data);
     } catch (e) {
       if (selectedKey !== pubkey || !panel.isConnected) return;
-      panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
+      panel.innerHTML = `<div class="text-muted">${tr('Error: {message}', { message: escapeHtml(e.message) })}</div>`;
     }
   }
 
@@ -1886,13 +1892,13 @@
 
     removeDetailMap(panel);
     panel.innerHTML = `
-      <button class="panel-close-btn" title="Close detail pane (Esc)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+      <button class="panel-close-btn" title="${tr('Close detail pane (Esc)')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
       <div class="node-detail">
-        <div class="node-detail-name">${escapeHtml(n.name || '(unnamed)')}${dupBadge}</div>
+        <div class="node-detail-name">${escapeHtml(n.name || '(' + tr('unnamed') + ')')}${dupBadge}</div>
         <div class="node-detail-role">${renderNodeBadges(n, roleColor)}
-          <button class="btn-primary node-detail-btn" data-pubkey="${encodeURIComponent(n.public_key)}" aria-label="View details for ${escapeHtml(n.name || n.public_key)}" style="font-size:11px;padding:2px 8px;margin-left:8px;cursor:pointer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Details</button>
-          <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Analytics</a>
-          <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Reach</a>
+          <button class="btn-primary node-detail-btn" data-pubkey="${encodeURIComponent(n.public_key)}" aria-label="${tr('View details for {name}', { name: escapeHtml(n.name || n.public_key) })}" style="font-size:11px;padding:2px 8px;margin-left:8px;cursor:pointer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ${tr('Details')}</button>
+          <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ${tr('Analytics')}</a>
+          <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${tr('Reach')}</a>
           <span class="node-notify-slot" id="nodeNotifySlot"></span>
         </div>
         ${renderStatusExplanation(n)}
@@ -1907,24 +1913,24 @@
         </div>
 
         <div class="node-detail-section">
-          <h4>Overview</h4>
+          <h4>${tr('Overview')}</h4>
           <dl class="detail-meta">
-            <dt>Last Heard</dt><dd>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</dd>
-            <dt>First Seen</dt><dd>${renderNodeTimestampHtml(n.first_seen)}</dd>
+            <dt>${tr('Last Heard')}</dt><dd>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</dd>
+            <dt>${tr('First Seen')}</dt><dd>${renderNodeTimestampHtml(n.first_seen)}</dd>
             <dt>${renderPacketCountLabel('nodePacketCountHelp')}</dt><dd>${totalPackets}</dd>
-            <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
-            ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
-            ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
-            ${rfOn() ? `<dt title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</dt><dd data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</dd>` : ''}
+            <dt>${tr('Packets Today')}</dt><dd>${stats.packetsToday || 0}</dd>
+            ${stats.avgHops ? `<dt>${tr('Avg Hops')}</dt><dd>${stats.avgHops}</dd>` : ''}
+            ${hasLoc ? `<dt>${tr('Location')}</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
+            ${rfOn() ? `<dt title="${tr('LoRa radio settings this node last advertised to the MeshCore map')}">LoRa</dt><dd data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</dd>` : ''}
           </dl>
         </div>
 
         <div class="node-detail-section">
           ${(() => { const validPackets = adverts.filter(a => a.hash && a.timestamp); return `
-          <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete. An observed empty direct path cannot prove an origin-local send or RF distance.">Recent Adverts (${validPackets.length})</h4>
+          <h4 title="${tr('Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete. An observed empty direct path cannot prove an origin-local send or RF distance.')}">${tr('Recent Adverts ({count})', { count: validPackets.length })}</h4>
           <div id="advertTimeline">
             ${window.groupRecentAdverts(validPackets).map(group => `<div class="node-advert-group" data-advert-kind="${group.kind}">
-            <h5 title="Count in this recent sample, not the node's lifetime total.">${group.label} (${group.adverts.length})</h5>
+            <h5 title="${tr('Count in this recent sample, not the node\'s lifetime total.')}">${tr(group.label)} (${group.adverts.length})</h5>
             ${group.adverts.length ? group.adverts.map(a => {
               let decoded;
               try { decoded = JSON.parse(a.decoded_json); } catch {}
@@ -1937,23 +1943,23 @@
                 <div class="advert-info">
                   <strong>${renderNodeTimestampHtml(a.timestamp)}</strong> ${icon} ${pType}${detail}
                   ${a.observation_count > 1 ? ' <span class="badge badge-obs"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + a.observation_count + '</span>' : ''}
-                  ${obs ? ' via ' + escapeHtml(obs) : ''}
+                  ${obs ? ' ' + tr('via {observer}', { observer: escapeHtml(obs) }) : ''}
                   ${a.snr != null ? ` · SNR ${a.snr}dB` : ''}${a.rssi != null ? ` · RSSI ${a.rssi}dBm` : ''}
-                  <br><a href="#/packets/${a.hash}" class="ch-analyze-link">Analyze →</a>
+                  <br><a href="#/packets/${a.hash}" class="ch-analyze-link">${tr('Analyze')} →</a>
                 </div>
               </div>`;
-            }).join('') : '<div class="text-muted">None in this recent sample</div>'}
+            }).join('') : '<div class="text-muted">' + tr('None in this recent sample') + '</div>'}
             </div>`).join('')}
           </div>
           `; })()}
         </div>
 
         ${observers.length || relayObserverCount ? `<div class="node-detail-section">
-          <h4 title="Observers that received this node's own transmission off the air.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
-          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
+          <h4 title="${tr('Observers that received this node\'s own transmission off the air.')}">${trn(observers.length, 'Heard By — direct ({count} observer)', 'Heard By — direct ({count} observers)')}</h4>
+          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="' + tr('Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.') + '">' + tr('No observation proves a direct reception here, which is not the same as being out of range.') + '</div>'}
           <div class="observer-list">
             ${observers.map(o => {
-              const stats = [`${o.packetCount} pkts`];
+              const stats = [`${o.packetCount} ${tr('pkts')}`];
               if (o.avgSnr != null) stats.push('SNR ' + Number(o.avgSnr).toFixed(1) + 'dB');
               if (o.avgRssi != null) stats.push('RSSI ' + Number(o.avgRssi).toFixed(0));
               return `<div class="observer-row" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
@@ -1962,17 +1968,17 @@
             </div>`;
             }).join('')}
           </div>
-          ${relayObserverCount ? `<div class="text-muted" style="font-size:12px;padding:6px 0 0">Seen via relay by ${relayObserverCount} observer${relayObserverCount === 1 ? '' : 's'}.</div>` : ''}
+          ${relayObserverCount ? `<div class="text-muted" style="font-size:12px;padding:6px 0 0">${trn(relayObserverCount, 'Seen via relay by {count} observer.', 'Seen via relay by {count} observers.')}</div>` : ''}
         </div>` : ''}
 
         <div class="node-detail-section" id="panelNeighborsSection">
-          <h4 id="panelNeighborsHeader">Neighbors</h4>
-          <div id="panelNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+          <h4 id="panelNeighborsHeader">${tr('Neighbors')}</h4>
+          <div id="panelNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> ${tr('Loading neighbors…')}</div></div>
         </div>
 
         <div class="node-detail-section" id="pathsSection">
-          <h4>Paths Through This Node</h4>
-          <div id="pathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
+          <h4>${tr('Paths Through This Node')}</h4>
+          <div id="pathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> ${tr('Loading paths…')}</div></div>
         </div>
 
         <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
@@ -2042,11 +2048,11 @@
       const el = document.getElementById('pathsContent');
       if (!el) return;
       if (!pathData || !pathData.paths || !pathData.paths.length) {
-        el.innerHTML = '<div class="text-muted" style="padding:8px">No paths observed through this node</div>';
-        document.querySelector('#pathsSection h4').textContent = 'Paths Through This Node';
+        el.innerHTML = '<div class="text-muted" style="padding:8px">' + tr('No paths observed through this node') + '</div>';
+        document.querySelector('#pathsSection h4').textContent = tr('Paths Through This Node');
         return;
       }
-      document.querySelector('#pathsSection h4').textContent = `Paths Through This Node (${pathData.totalPaths} unique path${pathData.totalPaths !== 1 ? 's' : ''}, ${pathData.totalTransmissions} transmissions)`;
+      document.querySelector('#pathsSection h4').textContent = tr('Paths Through This Node ({unique} unique, {transmissions} transmissions)', { unique: pathData.totalPaths, transmissions: pathData.totalTransmissions });
       const COLLAPSE_LIMIT = 10;
       const showAll = pathData.paths.length <= COLLAPSE_LIMIT;
       const currentPubkey = n.public_key.toLowerCase();
@@ -2060,7 +2066,7 @@
           }).join(' → ');
           return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
             <div>${chain}</div>
-            <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${renderNodeTimestampHtml(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">Analyze →</a></div>
+            <div style="color:var(--text-muted);margin-top:2px">${p.count}× · ${tr('last {time}', { time: renderNodeTimestampHtml(p.lastSeen) })} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">${tr('Analyze')} →</a></div>
           </div>`;
         }).join('');
       }
@@ -2068,14 +2074,14 @@
         el.innerHTML = renderPaths(pathData.paths);
       } else {
         el.innerHTML = renderPaths(pathData.paths.slice(0, COLLAPSE_LIMIT)) +
-          `<button id="showAllPaths" class="btn-primary" style="margin-top:8px;font-size:11px;padding:4px 12px">Show all ${pathData.paths.length} paths</button>`;
+          `<button id="showAllPaths" class="btn-primary" style="margin-top:8px;font-size:11px;padding:4px 12px">${tr('Show all {count} paths', { count: pathData.paths.length })}</button>`;
         document.getElementById('showAllPaths').addEventListener('click', function() {
           el.innerHTML = renderPaths(pathData.paths);
         });
       }
     }).catch(() => {
       const el = document.getElementById('pathsContent');
-      if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Failed to load paths</div>';
+      if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">' + tr('Failed to load paths') + '</div>';
     });
   }
 

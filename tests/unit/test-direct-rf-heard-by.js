@@ -35,10 +35,13 @@ const block = src.slice(startIdx, endIdx).replace(/\s+$/, '');
 
 // The block is one `${cond ? `...` : ''}` substitution, so wrapping it in
 // backticks turns it back into the markup the page renders.
-const renderCard = new Function(
-  'observers', 'relayObserverCount', 'escapeHtml',
+// English pass-through for the i18n helpers (public/i18n.js) the cards call.
+const tr = (s, p) => (p ? s.replace(/\{(\w+)\}/g, (m, k) => (k in p ? String(p[k]) : m)) : s);
+const trn = (n, one, other, p) => tr(n === 1 ? one : other, Object.assign({ count: n }, p));
+const renderCard = (observers, relayObserverCount, escapeHtml) => new Function(
+  'observers', 'relayObserverCount', 'escapeHtml', 'tr', 'trn',
   'return `' + block + '`;'
-);
+)(observers, relayObserverCount, escapeHtml, tr, trn);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const directRow = {
@@ -48,7 +51,8 @@ const directRow = {
 
 test('heading says "direct" and counts only the direct observers', () => {
   const html = renderCard([directRow], 7, esc);
-  assert.ok(/Heard By &mdash; direct \(1 observer\)/.test(html),
+  // The dash is written as &mdash; or as the character (translated heading).
+  assert.ok(/Heard By (?:&mdash;|—) direct \(1 observer\)/.test(html),
     'expected a singular direct heading, got: ' + html.slice(0, 300));
   assert.ok(!/Heard By \(/.test(html), 'the old undifferentiated heading is still rendered');
 });
@@ -65,7 +69,7 @@ test('relayed observers are reported as a count, without signal numbers', () => 
 
 test('a node nobody hears directly still renders the card, with an empty state', () => {
   const html = renderCard([], 35, esc);
-  assert.ok(/Heard By &mdash; direct \(0 observers\)/.test(html), 'expected a zero direct heading');
+  assert.ok(/Heard By (?:&mdash;|—) direct \(0 observers\)/.test(html), 'expected a zero direct heading');
   assert.ok(/No observation proves a direct reception here/.test(html),
     'expected the empty state line');
   // The empty state must not assert that nobody is in range. It cannot know
@@ -129,8 +133,8 @@ test('both Heard By views ignore unsupported region fields and escape names', ()
   assert.ok(sideStart >= 0, 'could not find the side-pane Heard By card');
   const sideEnd = src.indexOf('<div class="node-detail-section" id="panelNeighborsSection">', sideStart);
   assert.ok(sideEnd > sideStart, 'could not find the end of the side-pane Heard By card');
-  const renderSideCard = new Function('observers', 'relayObserverCount', 'escapeHtml',
-    'return `' + src.slice(sideStart, sideEnd).trimEnd() + '`;');
+  const renderSideCard = (observers, relayObserverCount, escapeHtml) => new Function('observers', 'relayObserverCount', 'escapeHtml', 'tr', 'trn',
+    'return `' + src.slice(sideStart, sideEnd).trimEnd() + '`;')(observers, relayObserverCount, escapeHtml, tr, trn);
   // Even a stale client-supplied region must not revive an unsupported field.
   const row = { ...directRow, observer_name: '<b>Observer</b>', iata: 'unsupported-region' };
   for (const render of [renderCard, renderSideCard]) {

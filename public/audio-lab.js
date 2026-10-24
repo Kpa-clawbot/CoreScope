@@ -3,6 +3,9 @@
 'use strict';
 
 (function () {
+  // i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+  var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
   let styleEl = null;
   let loopTimer = null;
   let selectedPacket = null;
@@ -144,7 +147,7 @@
     const volume = Math.min(0.6, 0.15 + (obsCount - 1) * 0.02);
     const voiceCount = Math.min(Math.max(1, Math.ceil(Math.log2(obsCount + 1))), 8);
     let panValue = 0;
-    let panSource = 'no location data → center';
+    let panSource = tr('no location data → center');
     try {
       const d = JSON.parse(pkt.decoded_json || '{}');
       if (d.lon != null) {
@@ -187,7 +190,7 @@
 
   function renderDetail(pkt, app) {
     const m = computeMapping(pkt);
-    if (!m) { document.getElementById('alabDetail').innerHTML = '<div class="alab-empty">No raw hex data for this packet</div>'; return; }
+    if (!m) { document.getElementById('alabDetail').innerHTML = '<div class="alab-empty">' + tr('No raw hex data for this packet') + '</div>'; return; }
 
     // Hex dump with sampled bytes highlighted
     const sampledSet = new Set(m.sampledIndices);
@@ -200,60 +203,60 @@
 
     document.getElementById('alabDetail').innerHTML = `
       <div class="alab-section">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Packet Data</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> ${tr('Packet Data')}</h3>
         <div class="alab-grid">
-          <div class="alab-stat"><span class="label">Type</span><br><span class="value" style="color:${m.color}">${m.typeName}</span></div>
-          <div class="alab-stat"><span class="label">Total Size</span><br><span class="value">${m.totalSize} bytes</span></div>
-          <div class="alab-stat"><span class="label">Payload Size</span><br><span class="value">${m.payloadSize} bytes</span></div>
-          <div class="alab-stat"><span class="label">Hops</span><br><span class="value">${m.hopCount}</span></div>
-          <div class="alab-stat"><span class="label">Observations</span><br><span class="value">${m.obsCount}</span></div>
-          <div class="alab-stat"><span class="label">Hash</span><br><span class="value">${pkt.hash || '—'}</span></div>
+          <div class="alab-stat"><span class="label">${tr('Type')}</span><br><span class="value" style="color:${m.color}">${m.typeName}</span></div>
+          <div class="alab-stat"><span class="label">${tr('Total Size')}</span><br><span class="value">${trn(m.totalSize, '{count} bytes', '{count} bytes')}</span></div>
+          <div class="alab-stat"><span class="label">${tr('Payload Size')}</span><br><span class="value">${trn(m.payloadSize, '{count} bytes', '{count} bytes')}</span></div>
+          <div class="alab-stat"><span class="label">${tr('Hops')}</span><br><span class="value">${m.hopCount}</span></div>
+          <div class="alab-stat"><span class="label">${tr('Observations')}</span><br><span class="value">${m.obsCount}</span></div>
+          <div class="alab-stat"><span class="label">${tr('Hash')}</span><br><span class="value">${pkt.hash || '—'}</span></div>
         </div>
         <div style="margin-top:10px">
-          <div class="alab-hex" id="alabHex" onclick="this.classList.toggle('expanded')" title="Click to expand">${hexHtml}</div>
+          <div class="alab-hex" id="alabHex" onclick="this.classList.toggle('expanded')" title="${tr('Click to expand')}">${hexHtml}</div>
         </div>
       </div>
 
       <div class="alab-section">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-music-note"/></svg> Sound Mapping</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-music-note"/></svg> ${tr('Sound Mapping')}</h3>
         <table class="alab-map-table">
           <tr>
-            <td class="map-param">Instrument</td>
+            <td class="map-param">${tr('Instrument')}</td>
             <td class="map-value">${m.oscType}</td>
-            <td class="map-why">payload_type = ${m.typeName} → ${m.oscType} oscillator</td>
+            <td class="map-why">payload_type = ${m.typeName} → ${tr('{type} oscillator', { type: m.oscType })}</td>
           </tr>
           <tr>
-            <td class="map-param">Scale</td>
-            <td class="map-value">${m.scaleName}</td>
-            <td class="map-why">payload_type = ${m.typeName} → ${m.scaleName} (root MIDI ${SCALE_INTERVALS[m.typeName]?.root || 48})</td>
+            <td class="map-param">${tr('Scale')}</td>
+            <td class="map-value">${tr(m.scaleName)}</td>
+            <td class="map-why">payload_type = ${m.typeName} → ${tr(m.scaleName)} (${tr('root MIDI {note}', { note: SCALE_INTERVALS[m.typeName]?.root || 48 })})</td>
           </tr>
           <tr>
-            <td class="map-param">Notes</td>
+            <td class="map-param">${tr('Notes')}</td>
             <td class="map-value">${m.noteCount}</td>
-            <td class="map-why">⌈√${m.payloadSize}⌉ = ⌈${Math.sqrt(m.payloadSize).toFixed(1)}⌉ = ${m.noteCount} bytes sampled evenly across payload</td>
+            <td class="map-why">⌈√${m.payloadSize}⌉ = ⌈${Math.sqrt(m.payloadSize).toFixed(1)}⌉ = ${tr('{count} bytes sampled evenly across payload', { count: m.noteCount })}</td>
           </tr>
           <tr>
-            <td class="map-param">Filter Cutoff</td>
+            <td class="map-param">${tr('Filter Cutoff')}</td>
             <td class="map-value">${m.filterHz} Hz</td>
-            <td class="map-why">${m.hopCount} hops → map(1...10 → 8000...800 Hz) = ${m.filterHz} Hz lowpass — more hops = more muffled</td>
+            <td class="map-why">${tr('{hops} hops → map(1...10 → 8000...800 Hz) = {hz} Hz lowpass — more hops = more muffled', { hops: m.hopCount, hz: m.filterHz })}</td>
           </tr>
           <tr>
-            <td class="map-param">Volume</td>
+            <td class="map-param">${tr('Volume')}</td>
             <td class="map-value">${m.volume}</td>
-            <td class="map-why">min(0.6, 0.15 + (${m.obsCount} obs − 1) × 0.02) = ${m.volume} — more observers = louder</td>
+            <td class="map-why">${tr('min(0.6, 0.15 + ({obs} obs − 1) × 0.02) = {volume} — more observers = louder', { obs: m.obsCount, volume: m.volume })}</td>
           </tr>
           <tr>
-            <td class="map-param">Voices</td>
+            <td class="map-param">${tr('Voices')}</td>
             <td class="map-value">${m.voiceCount}</td>
-            <td class="map-why">min(⌈log₂(${m.obsCount} + 1)⌉, 8) = ${m.voiceCount} — more observers = richer chord</td>
+            <td class="map-why">${tr('min(⌈log₂({obs} + 1)⌉, 8) = {voices} — more observers = richer chord', { obs: m.obsCount, voices: m.voiceCount })}</td>
           </tr>
           <tr>
-            <td class="map-param">Detune</td>
+            <td class="map-param">${tr('Detune')}</td>
             <td class="map-value">${m.detuneDesc.join(', ')}</td>
-            <td class="map-why">${m.voiceCount} voices detuned for shimmer — wider spread with more voices</td>
+            <td class="map-why">${tr('{count} voices detuned for shimmer — wider spread with more voices', { count: m.voiceCount })}</td>
           </tr>
           <tr>
-            <td class="map-param">Pan</td>
+            <td class="map-param">${tr('Pan')}</td>
             <td class="map-value">${m.panValue}</td>
             <td class="map-why">${m.panSource}</td>
           </tr>
@@ -261,16 +264,16 @@
       </div>
 
       <div class="alab-section">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-piano-keys"/></svg> Note Sequence</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-piano-keys"/></svg> ${tr('Note Sequence')}</h3>
         <table class="alab-note-table">
-          <tr><th scope="col"></th><th scope="col">#</th><th scope="col">Payload Index</th><th scope="col">Byte</th><th scope="col">→ MIDI</th><th scope="col">→ Freq</th><th scope="col">Duration (why)</th><th scope="col">Gap (why)</th></tr>
+          <tr><th scope="col"></th><th scope="col">#</th><th scope="col">${tr('Payload Index')}</th><th scope="col">${tr('Byte')}</th><th scope="col">→ MIDI</th><th scope="col">→ ${tr('Freq')}</th><th scope="col">${tr('Duration (why)')}</th><th scope="col">${tr('Gap (why)')}</th></tr>
           ${m.notes.map((n, i) => {
-            const durWhy = `byte ${n.byte} → map(0...255 → 50...400ms) × tempo`;
+            const durWhy = tr('byte {byte} → map(0...255 → 50...400ms) × tempo', { byte: n.byte });
             const gapWhy = i < m.notes.length - 1
-              ? `|${n.byte} − ${m.notes[i+1].byte}| = ${Math.abs(m.notes[i+1].byte - n.byte)} → map(0...255 → 30...300ms) × tempo`
+              ? `|${n.byte} − ${m.notes[i+1].byte}| = ${Math.abs(m.notes[i+1].byte - n.byte)} → ` + tr('map(0...255 → 30...300ms) × tempo')
               : '';
             return `<tr id="noteRow${i}" class="alab-note-clickable" data-note-idx="${i}">
-            <td><button class="alab-note-play" data-note-idx="${i}" title="Play this note">▶</button></td>
+            <td><button class="alab-note-play" data-note-idx="${i}" title="${tr('Play this note')}">▶</button></td>
             <td>${i + 1}</td>
             <td>[${n.index}]</td>
             <td>0x${n.byte.toString(16).padStart(2, '0').toUpperCase()} (${n.byte})</td>
@@ -283,7 +286,7 @@
       </div>
 
       <div class="alab-section">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Byte Visualizer</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ${tr('Byte Visualizer')}</h3>
         <div class="alab-byte-viz" id="alabByteViz"></div>
       </div>
     `;
@@ -433,34 +436,34 @@
 
     app.innerHTML = `
       <div class="alab">
-        <div class="alab-sidebar" id="alabSidebar"><div style="color:var(--text-muted);font-size:13px;padding:8px">Loading packets...</div></div>
+        <div class="alab-sidebar" id="alabSidebar"><div style="color:var(--text-muted);font-size:13px;padding:8px">${tr('Loading packets...')}</div></div>
         <div class="alab-main">
           <div class="alab-controls" id="alabControls">
-            <button class="alab-btn" id="alabPlay" title="Play selected packet">▶ Play</button>
-            <button class="alab-btn" id="alabLoop" title="Loop playback"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-repeat"/></svg> Loop</button>
-            <span style="font-size:12px;color:var(--text-muted)">Speed:</span>
+            <button class="alab-btn" id="alabPlay" title="${tr('Play selected packet')}">▶ ${tr('Play')}</button>
+            <button class="alab-btn" id="alabLoop" title="${tr('Loop playback')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-repeat"/></svg> ${tr('Loop')}</button>
+            <span style="font-size:12px;color:var(--text-muted)">${tr('Speed:')}</span>
             <button class="alab-speed" data-speed="0.25">0.25x</button>
             <button class="alab-speed active" data-speed="1">1x</button>
             <button class="alab-speed" data-speed="2">2x</button>
             <button class="alab-speed" data-speed="4">4x</button>
             <div class="alab-slider-group">
               <span>BPM</span>
-              <input type="range" id="alabBPM" aria-label="Playback BPM" min="30" max="300" value="${baseBPM}">
+              <input type="range" id="alabBPM" aria-label="${tr('Playback BPM')}" min="30" max="300" value="${baseBPM}">
               <span id="alabBPMVal">${baseBPM}</span>
             </div>
             <div class="alab-slider-group">
-              <span>Vol</span>
-              <input type="range" id="alabVol" aria-label="Playback volume" min="0" max="100" value="${MeshAudio && MeshAudio.getVolume ? Math.round(MeshAudio.getVolume() * 100) : 30}">
+              <span>${tr('Vol')}</span>
+              <input type="range" id="alabVol" aria-label="${tr('Playback volume')}" min="0" max="100" value="${MeshAudio && MeshAudio.getVolume ? Math.round(MeshAudio.getVolume() * 100) : 30}">
               <span id="alabVolVal">${MeshAudio && MeshAudio.getVolume ? Math.round(MeshAudio.getVolume() * 100) : 30}%</span>
             </div>
             <div class="alab-slider-group">
-              <span>Voice</span>
+              <span>${tr('Voice')}</span>
               <select id="alabVoice">${(MeshAudio && MeshAudio.getVoiceNames ? MeshAudio.getVoiceNames() : ['constellation']).map(v =>
                 `<option value="${v}" ${(MeshAudio && MeshAudio.getVoiceName && MeshAudio.getVoiceName() === v) ? 'selected' : ''}>${v}</option>`
               ).join('')}</select>
             </div>
           </div>
-          <div id="alabDetail"><div class="alab-empty">← Select a packet from the sidebar to explore its sound</div></div>
+          <div id="alabDetail"><div class="alab-empty">← ${tr('Select a packet from the sidebar to explore its sound')}</div></div>
         </div>
       </div>
     `;
@@ -507,7 +510,7 @@
       const data = await api('/audio-lab/buckets');
       const sidebar = document.getElementById('alabSidebar');
       if (!data.buckets || Object.keys(data.buckets).length === 0) {
-        sidebar.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px">No packets in memory yet</div>';
+        sidebar.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px">' + tr('No packets in memory yet') + '</div>';
         return;
       }
 
@@ -519,7 +522,7 @@
         html += `<div class="alab-type-list" data-type-list="${type}">`;
         pkts.forEach((p, i) => {
           const size = p.raw_hex ? p.raw_hex.length / 2 : 0;
-          html += `<div class="alab-pkt" data-type="${type}" data-idx="${i}">#${i + 1} — ${size}B — ${p.observation_count || 1} obs</div>`;
+          html += `<div class="alab-pkt" data-type="${type}" data-idx="${i}">#${i + 1} — ${size}B — ${tr('{count} obs', { count: p.observation_count || 1 })}</div>`;
         });
         html += '</div>';
       }
@@ -547,7 +550,7 @@
         }
       });
     } catch (err) {
-      document.getElementById('alabSidebar').innerHTML = `<div style="color:var(--text-muted);padding:8px">Error loading packets: ${err.message}</div>`;
+      document.getElementById('alabSidebar').innerHTML = `<div style="color:var(--text-muted);padding:8px">${tr('Error loading packets: {message}', { message: typeof escapeHtml === 'function' ? escapeHtml(err.message) : err.message })}</div>`;
     }
   }
 

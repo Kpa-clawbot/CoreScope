@@ -42,7 +42,10 @@ function extractFn(src, header) {
 const helperSrc = extractFn(chSrc, 'function channelDisplayName(ch');
 assert(helperSrc, 'channelDisplayName helper exists');
 if (helperSrc) {
-  const sandbox = { formatHashHex: h => h, PRIVATE_CHANNEL_LABEL: 'Private Channel' };
+  const sandbox = { formatHashHex: h => h, PRIVATE_CHANNEL_LABEL: 'Private Channel',
+    // English pass-through for the i18n helper (public/i18n.js).
+    tr: (s, p) => (p ? s.replace(/\{(\w+)\}/g, (m, k) => (k in p ? String(p[k]) : m)) : s),
+  };
   vm.createContext(sandbox);
   vm.runInContext('const PRIVATE_CHANNEL_LABEL = "Private Channel";\n' + helperSrc, sandbox);
   assert(sandbox.channelDisplayName({ name: 'psk:372a9c93', userLabel: 'My Crew' }) === 'My Crew',
@@ -69,7 +72,7 @@ assert(!/'⤴'/.test(chSrc) && !/"⤴"/.test(chSrc),
 // into the iconBtn(...) call for ch-share-btn — this catches the
 // case where someone removes the icon from the button content but leaves
 // "Share" in an aria-label or title.
-assert(/iconBtn\(\s*'ch-share-btn'[^)]*#ph-share-network[^)]*<\/svg> Share'/.test(chSrc),
+assert(/iconBtn\(\s*'ch-share-btn'[^)]*#ph-share-network[^)]*<\/svg> (?:Share'|' \+ tr\('Share'\))/.test(chSrc),
   "share button content includes the Phosphor share icon and visible Share label");
 
 console.log('\n=== Fix 3: ✕ delete button is a visibly red destructive button ===');

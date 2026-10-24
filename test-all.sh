@@ -58,6 +58,7 @@ node tests/unit/test-frontend-helpers.js
 node tests/unit/test-geofilter-draft.js
 node tests/unit/test-hash-color.js
 node tests/unit/test-health-status.js
+node tests/unit/test-i18n.js
 node tests/unit/test-hop-path-detail.js
 node tests/unit/test-hop-path-inference.js
 node tests/unit/test-hop-resolver-affinity.js

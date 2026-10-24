@@ -1,5 +1,8 @@
 /* === CoreScope — region-filter.js (shared region filter component) === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
 (function () {
   var LS_KEY = 'meshcore-region-filter';
@@ -100,7 +103,7 @@
     var html = '';
     picks.forEach(function (p, i) {
       var on = p === active;
-      var title = (p.description ? p.description + ' ' : '') + 'Selects ' + p.codes.join(', ') + '.';
+      var title = (p.description ? p.description + ' ' : '') + tr('Selects {codes}.', { codes: p.codes.join(', ') });
       html += '<button type="button" class="region-pill region-quick-pick' + (on ? ' region-pill-active' : '') +
         '" data-pick="' + i + '" aria-pressed="' + on + '" title="' + esc(title) + '">' + esc(p.name) + '</button>';
     });
@@ -114,7 +117,7 @@
     var active = activePick(picks);
     var html = '';
     picks.forEach(function (p, i) {
-      var title = (p.description ? p.description + ' ' : '') + 'Selects ' + p.codes.join(', ') + '.';
+      var title = (p.description ? p.description + ' ' : '') + tr('Selects {codes}.', { codes: p.codes.join(', ') });
       html += '<label class="region-dropdown-item region-quick-pick" title="' + esc(title) + '">' +
         '<input type="checkbox" data-pick="' + i + '"' + (p === active ? ' checked' : '') + '> <strong>' + esc(p.name) + '</strong></label>';
     });
@@ -179,24 +182,24 @@
 
   /** Build summary label for dropdown trigger */
   function dropdownLabel(codes) {
-    if (!_selected) return 'All Regions';
+    if (!_selected) return tr('All Regions');
     var named = activePick(presentPicks(codes));
     if (named) return esc(named.name);
     var sel = Array.from(_selected);
-    if (sel.length === 0) return 'All Regions';
+    if (sel.length === 0) return tr('All Regions');
     if (sel.length <= 2) return sel.join(', ');
-    return sel.length + ' Regions';
+    return trn(sel.length, '{count} Region', '{count} Regions');
   }
 
   /** Render pill bar mode (≤4 regions) */
   function renderPills(container, codes) {
     var allSelected = !_selected;
     var picks = presentPicks(codes);
-    var html = '<div class="region-filter-bar" role="group" aria-label="Region filter">';
-    html += '<span class="region-filter-label" id="region-filter-label">Region:</span>';
+    var html = '<div class="region-filter-bar" role="group" aria-label="' + tr('Region filter') + '">';
+    html += '<span class="region-filter-label" id="region-filter-label">' + tr('Region:') + '</span>';
     html += barPicksHtml(picks);
     html += '<button class="region-pill' + (allSelected ? ' region-pill-active' : '') +
-      '" data-region="__all__" role="checkbox" aria-checked="' + allSelected + '">All</button>';
+      '" data-region="__all__" role="checkbox" aria-checked="' + allSelected + '">' + tr('All') + '</button>';
     codes.forEach(function (code) {
       var label = _regions[code] || code;
       var active = allSelected || (_selected && _selected.has(code));
@@ -219,12 +222,12 @@
   function renderDropdown(container, codes) {
     var allSelected = !_selected;
     var picks = presentPicks(codes);
-    var html = '<div class="region-dropdown-wrap" role="group" aria-label="Region filter">';
+    var html = '<div class="region-dropdown-wrap" role="group" aria-label="' + tr('Region filter') + '">';
     html += '<button class="region-dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">' +
       dropdownLabel(codes) + ' ▾</button>';
-    html += '<div class="region-dropdown-menu" role="listbox" aria-label="Select regions" hidden>';
+    html += '<div class="region-dropdown-menu" role="listbox" aria-label="' + tr('Select regions') + '" hidden>';
     html += '<label class="region-dropdown-item"><input type="checkbox" data-region="__all__"' +
-      (allSelected ? ' checked' : '') + '> <strong>All</strong></label>';
+      (allSelected ? ' checked' : '') + '> <strong>' + tr('All') + '</strong></label>';
     html += menuPicksHtml(picks);
     codes.forEach(function (code) {
       var configLabel = _regions[code];

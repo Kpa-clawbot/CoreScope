@@ -32,7 +32,8 @@ function escapeHtml(s) {
 }
 
 function renderRow(o) {
-  const sandbox = { o: o, i: 0, selectedRx: '', escapeHtml: escapeHtml };
+  const tr = (s, p) => (p ? s.replace(/\{(\w+)\}/g, (m, k) => (k in p ? String(p[k]) : m)) : s);
+  const sandbox = { o: o, i: 0, selectedRx: '', escapeHtml: escapeHtml, tr: tr };
   vm.createContext(sandbox);
   return vm.runInContext('(function () { ' + block + ' })()', sandbox);
 }

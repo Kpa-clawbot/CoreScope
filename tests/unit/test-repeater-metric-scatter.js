@@ -28,7 +28,7 @@ function assert(cond, msg) {
 const src = fs.readFileSync(path.join(REPO_ROOT, 'public', 'analytics.js'), 'utf8');
 
 console.log('\n=== tab wiring (structural — not executable without a DOM) ===');
-assert(/data-tab="repeater-metrics"[^>]*>\s*Repeater Metrics\s*</.test(src),
+assert(/data-tab="repeater-metrics"[^>]*>\s*(?:Repeater Metrics|\$\{tr\('Repeater Metrics'\)\})\s*</.test(src),
   'tab bar has a "Repeater Metrics" button');
 assert(/case 'repeater-metrics':\s*await renderRepeaterMetricsTab\(el\)/.test(src),
   'renderTab dispatches repeater-metrics');
@@ -46,8 +46,10 @@ const block = src.slice(start, end);
 const esc = s => s ? String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
 const statusYellow = () => '#eab308';
 const window = { ROLE_COLORS: { repeater: '#3b82f6', room: '#a855f7' } };
-const M = new Function('esc', 'statusYellow', 'window',
-  block + '\nreturn { REPEATER_METRIC_AXES, _niceCeil, _axisFmt, _resolveAxis, _toScatterPoints, renderMetricScatter };')(esc, statusYellow, window);
+const tr = (s, p) => (p ? s.replace(/\{(\w+)\}/g, (m, k) => (k in p ? String(p[k]) : m)) : s);
+const trn = (n, one, other, p) => tr(n === 1 ? one : other, Object.assign({ count: n }, p));
+const M = new Function('tr', 'trn', 'esc', 'statusYellow', 'window',
+  block + '\nreturn { REPEATER_METRIC_AXES, _niceCeil, _axisFmt, _resolveAxis, _toScatterPoints, renderMetricScatter };')(tr, trn, esc, statusYellow, window);
 
 console.log('\n=== axis math (behavioral) ===');
 assert(M._niceCeil(0) === 1 && M._niceCeil(0.07) === 0.1 && M._niceCeil(37) === 50,

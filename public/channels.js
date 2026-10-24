@@ -1,5 +1,8 @@
 /* === CoreScope — channels.js === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
 (function () {
   let channels = [];
@@ -192,7 +195,7 @@
     const header = document.getElementById('chHeader');
     if (header) header.querySelector('.ch-header-text').textContent = 'Select a channel';
     const msgEl = document.getElementById('chMessages');
-    if (msgEl) msgEl.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
+    if (msgEl) msgEl.innerHTML = '<div class="ch-empty">' + tr('Choose a channel from the sidebar to view messages') + '</div>';
     document.getElementById('chScrollBtn')?.classList.add('hidden');
     return true;
   }
@@ -227,12 +230,12 @@
     tip.className = 'ch-node-tooltip';
     tip.setAttribute('role', 'tooltip');
     const roleKey = node.role || (node.is_repeater ? 'repeater' : node.is_room ? 'room' : node.is_sensor ? 'sensor' : 'companion');
-    const role = (ROLE_EMOJI[roleKey] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>') + ' ' + (ROLE_LABELS[roleKey] || roleKey);
+    const role = (ROLE_EMOJI[roleKey] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>') + ' ' + tr(ROLE_LABELS[roleKey] || roleKey);
     const lastActivity = node.last_heard || node.last_seen;
-    const lastSeen = lastActivity ? timeAgo(lastActivity) : 'unknown';
+    const lastSeen = lastActivity ? timeAgo(lastActivity) : tr('unknown');
     tip.innerHTML = `<div class="ch-tooltip-name">${escapeHtml(node.name)}</div>
       <div class="ch-tooltip-role">${role}</div>
-      <div class="ch-tooltip-meta">Last seen: ${lastSeen}</div>
+      <div class="ch-tooltip-meta">${tr('Last seen: {time}', { time: lastSeen })}</div>
       <div class="ch-tooltip-key mono">${(node.public_key || '').slice(0, 16)}…</div>`;
     document.body.appendChild(tip);
     var trigger = e.target.closest('[data-node]') || e.target;
@@ -290,10 +293,10 @@
     if (!node) {
       panel.innerHTML = `<div class="ch-node-panel-header">
           <strong>${escapeHtml(name)}</strong>
-          <button class="ch-node-close" data-action="ch-close-node" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+          <button class="ch-node-close" data-action="ch-close-node" aria-label="${tr('Close')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
         </div>
         <div class="ch-node-panel-body">
-          <div class="ch-node-field" style="color:var(--text-muted)">No node record found — this sender has only been seen in channel messages, not via adverts.</div>
+          <div class="ch-node-field" style="color:var(--text-muted)">${tr('No node record found — this sender has only been seen in channel messages, not via adverts.')}</div>
         </div>`;
       _focusTrapCleanup = trapFocus(panel);
       panel.querySelector('.ch-node-close')?.focus();
@@ -305,29 +308,29 @@
       const n = detail.node;
       const adverts = detail.recentAdverts || [];
       const roleKey = n.role || (n.is_repeater ? 'repeater' : n.is_room ? 'room' : n.is_sensor ? 'sensor' : 'companion');
-      const role = (ROLE_EMOJI[roleKey] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>') + ' ' + (ROLE_LABELS[roleKey] || roleKey);
+      const role = (ROLE_EMOJI[roleKey] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>') + ' ' + tr(ROLE_LABELS[roleKey] || roleKey);
       const lastActivity = n.last_heard || n.last_seen;
-      const lastSeen = lastActivity ? timeAgo(lastActivity) : 'unknown';
+      const lastSeen = lastActivity ? timeAgo(lastActivity) : tr('unknown');
 
       panel.innerHTML = `<div class="ch-node-panel-header">
-          <strong>${escapeHtml(n.name || 'Unknown')}</strong>
-          <button class="ch-node-close" data-action="ch-close-node" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+          <strong>${escapeHtml(n.name || tr('Unknown'))}</strong>
+          <button class="ch-node-close" data-action="ch-close-node" aria-label="${tr('Close')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
         </div>
         <div class="ch-node-panel-body">
-          <div class="ch-node-field"><span class="ch-node-label">Role</span> ${role}</div>
-          <div class="ch-node-field"><span class="ch-node-label">Last Seen</span> ${lastSeen}</div>
-          <div class="ch-node-field"><span class="ch-node-label">Adverts</span> ${n.advert_count || 0}</div>
-          ${n.lat && n.lon ? `<div class="ch-node-field"><span class="ch-node-label">Location</span> ${Number(n.lat).toFixed(4)}, ${Number(n.lon).toFixed(4)}</div>` : ''}
-          <div class="ch-node-field mono" style="font-size:11px;word-break:break-all"><span class="ch-node-label">Key</span> ${n.public_key}</div>
-          ${adverts.length ? `<div class="ch-node-adverts"><span class="ch-node-label">Recent Adverts</span>
+          <div class="ch-node-field"><span class="ch-node-label">${tr('Role')}</span> ${role}</div>
+          <div class="ch-node-field"><span class="ch-node-label">${tr('Last Seen')}</span> ${lastSeen}</div>
+          <div class="ch-node-field"><span class="ch-node-label">${tr('Adverts')}</span> ${n.advert_count || 0}</div>
+          ${n.lat && n.lon ? `<div class="ch-node-field"><span class="ch-node-label">${tr('Location')}</span> ${Number(n.lat).toFixed(4)}, ${Number(n.lon).toFixed(4)}</div>` : ''}
+          <div class="ch-node-field mono" style="font-size:11px;word-break:break-all"><span class="ch-node-label">${tr('Key')}</span> ${n.public_key}</div>
+          ${adverts.length ? `<div class="ch-node-adverts"><span class="ch-node-label">${tr('Recent Adverts')}</span>
             ${adverts.slice(0, 5).map(a => `<div class="ch-node-advert">${timeAgo(a.timestamp)} · SNR ${a.snr != null ? a.snr + 'dB' : '?'}</div>`).join('')}
           </div>` : ''}
-          <a href="#/nodes/${n.public_key}" class="ch-node-link">View full node detail →</a>
+          <a href="#/nodes/${n.public_key}" class="ch-node-link">${tr('View full node detail')} →</a>
         </div>`;
       _focusTrapCleanup = trapFocus(panel);
       panel.querySelector('.ch-node-close')?.focus();
     } catch (e) {
-      panel.innerHTML = `<div class="ch-node-panel-header"><strong>${escapeHtml(name)}</strong><button class="ch-node-close" data-action="ch-close-node"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div><div class="ch-node-panel-body ch-empty">Failed to load</div>`;
+      panel.innerHTML = `<div class="ch-node-panel-header"><strong>${escapeHtml(name)}</strong><button class="ch-node-close" data-action="ch-close-node"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div><div class="ch-node-panel-body ch-empty">${tr('Failed to load')}</div>`;
       _focusTrapCleanup = trapFocus(panel);
       panel.querySelector('.ch-node-close')?.focus();
     }
@@ -402,9 +405,9 @@
   function messageScopeChipHtml(scopeName) {
     if (scopeName == null) return '';
     if (scopeName === '') {
-      return '<span class="sa-chip sa-chip-unmatched ch-msg-scope" title="Sent with a region scope that could not be matched to a single region on this instance">unknown scope</span>';
+      return '<span class="sa-chip sa-chip-unmatched ch-msg-scope" title="' + tr('Sent with a region scope that could not be matched to a single region on this instance') + '">' + tr('unknown scope') + '</span>';
     }
-    return '<span class="sa-chip sa-chip-declared ch-msg-scope" title="Region scope this message was sent with">' + escapeHtml(scopeName) + '</span>';
+    return '<span class="sa-chip sa-chip-declared ch-msg-scope" title="' + tr('Region scope this message was sent with') + '">' + escapeHtml(scopeName) + '</span>';
   }
 
   function truncate(str, len) {
@@ -523,7 +526,7 @@
       // #1020/#1087: persist optional user-supplied label alongside the key
       // through the canonical helper (verified read-back).
       if (!persistAddedChannel(channelName, keyHex, label)) {
-        showAddStatus('Failed to save channel — browser storage may be full', 'error');
+        showAddStatus(tr('Failed to save channel — browser storage may be full'), 'error');
         return;
       }
 
@@ -552,16 +555,16 @@
         ? selectResult.messageCount
         : (Array.isArray(messages) ? messages.length : 0);
       var displayLabel = (typeof label === 'string' && label.trim()) ? label.trim() :
-        (channelName.startsWith('psk:') ? 'Custom channel (' + channelName.substring(4) + ')' : channelName);
+        (channelName.startsWith('psk:') ? tr('Custom channel ({key})', { key: channelName.substring(4) }) : channelName);
       if (selectResult && selectResult.wrongKey) {
-        showAddStatus('Key does not match any packets for ' + displayLabel, 'error');
+        showAddStatus(tr('Key does not match any packets for {channel}', { channel: displayLabel }), 'error');
       } else if (msgCount > 0) {
-        showAddStatus('Added ' + displayLabel + ' — ' + msgCount + ' messages decrypted', 'success');
+        showAddStatus(trn(msgCount, 'Added {channel} — {count} message decrypted', 'Added {channel} — {count} messages decrypted', { channel: displayLabel }), 'success');
       } else {
-        showAddStatus('Added ' + displayLabel + ' — no messages found yet', 'warn');
+        showAddStatus(tr('Added {channel} — no messages found yet', { channel: displayLabel }), 'warn');
       }
     } catch (err) {
-      showAddStatus('Failed to decrypt', 'error');
+      showAddStatus(tr('Failed to decrypt'), 'error');
     }
   }
 
@@ -642,7 +645,7 @@
     try {
       data = await api('/packets?limit=1000&payloadType=5' + qs, { ttl: 10000 });
     } catch (e) {
-      return { messages: cachedMsgs, error: 'Failed to fetch packets: ' + e.message, fromCache: cachedMsgs.length > 0 };
+      return { messages: cachedMsgs, error: tr('Failed to fetch packets: {message}', { message: e.message }), fromCache: cachedMsgs.length > 0 };
     }
 
     var packets = data.packets || [];
@@ -814,74 +817,74 @@
     var _pendingNode = _initUrlParams.get('node');
 
     app.innerHTML = `<div class="ch-layout">
-      <div class="ch-sidebar" aria-label="Channel list">
+      <div class="ch-sidebar" aria-label="${tr('Channel list')}">
         <div class="ch-sidebar-header">
-          <div class="ch-sidebar-title"><span class="ch-icon"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chats"/></svg></span> Channels</div>
+          <div class="ch-sidebar-title"><span class="ch-icon"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chats"/></svg></span> ${tr('Channels')}</div>
           <div id="chRegionFilter" class="region-filter-container ch-header-region"></div>
           <button type="button" id="chAddChannelBtn" class="ch-add-channel-btn"
-                  aria-label="Add channel" title="Add a channel — generate, paste a key, or monitor a hashtag">+ Add</button>
+                  aria-label="${tr('Add channel')}" title="${tr('Add a channel — generate, paste a key, or monitor a hashtag')}">+ ${tr('Add')}</button>
         </div>
         <div id="chAddStatus" class="ch-add-status" style="display:none"></div>
-        <div class="ch-channel-list" id="chList" role="listbox" aria-label="Channels">
-          <div class="ch-loading">Loading channels…</div>
+        <div class="ch-channel-list" id="chList" role="listbox" aria-label="${tr('Channels')}">
+          <div class="ch-loading">${tr('Loading channels…')}</div>
         </div>
         <div class="ch-sidebar-resize" aria-hidden="true"></div>
       </div>
       <!-- #1034 PR1: Add Channel modal -->
       <div id="chAddChannelModal" class="modal-overlay ch-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="chModalTitle" hidden>
         <div class="modal ch-modal" role="document">
-          <button type="button" class="modal-close ch-modal-close" id="chModalClose" data-action="ch-modal-close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
-          <h3 id="chModalTitle">Add Channel</h3>
+          <button type="button" class="modal-close ch-modal-close" id="chModalClose" data-action="ch-modal-close" aria-label="${tr('Close')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+          <h3 id="chModalTitle">${tr('Add Channel')}</h3>
           <div class="ch-modal-callout" role="note">
-            <span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> Channels are saved to <strong>THIS browser only</strong>. They won't appear on other devices or browsers, and clearing browser data will remove them.
+            <span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> ${tr('Channels are saved to {where}. They won\'t appear on other devices or browsers, and clearing browser data will remove them.', { where: '<strong>' + tr('THIS browser only') + '</strong>' })}
           </div>
 
           <section class="ch-modal-section" aria-labelledby="chSecGenTitle">
-            <h4 id="chSecGenTitle" class="ch-modal-section-title">Generate PSK Channel</h4>
-            <p class="ch-modal-section-hint">Create a new private channel with a random key. Share the QR code with others to add it.</p>
+            <h4 id="chSecGenTitle" class="ch-modal-section-title">${tr('Generate PSK Channel')}</h4>
+            <p class="ch-modal-section-hint">${tr('Create a new private channel with a random key. Share the QR code with others to add it.')}</p>
             <div class="ch-modal-row">
-              <input type="text" id="chGenerateName" class="ch-modal-input" placeholder="Channel name (e.g. My Crew)" aria-label="Channel name" spellcheck="false">
-              <button type="button" id="chGenerateBtn" class="btn-primary">Generate &amp; Show QR</button>
+              <input type="text" id="chGenerateName" class="ch-modal-input" placeholder="${tr('Channel name (e.g. My Crew)')}" aria-label="${tr('Channel name')}" spellcheck="false">
+              <button type="button" id="chGenerateBtn" class="btn-primary">${tr('Generate & Show QR')}</button>
             </div>
             <div id="qr-output" class="ch-qr-output" aria-live="polite"></div>
           </section>
 
           <section class="ch-modal-section" aria-labelledby="chSecPskTitle">
-            <h4 id="chSecPskTitle" class="ch-modal-section-title">Add Private Channel (PSK)</h4>
-            <p class="ch-modal-section-hint">Paste a 32-character hex key someone shared with you, or scan their QR code.</p>
+            <h4 id="chSecPskTitle" class="ch-modal-section-title">${tr('Add Private Channel (PSK)')}</h4>
+            <p class="ch-modal-section-hint">${tr('Paste a 32-character hex key someone shared with you, or scan their QR code.')}</p>
             <div class="ch-modal-row">
               <input type="text" id="chPskKey" class="ch-modal-input ch-modal-input--mono"
-                     placeholder="32-char hex key (0-9, a-f)"
+                     placeholder="${tr('32-char hex key (0-9, a-f)')}"
                      pattern="[0-9a-fA-F]{32}"
                      maxlength="32"
-                     aria-label="32-character hex PSK key" spellcheck="false" autocomplete="off">
-              <button type="button" id="scan-qr-btn" class="ch-modal-btn-secondary" title="Scan a meshcore:// channel QR with your camera"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-camera"/></svg> Scan QR</button>
+                     aria-label="${tr('32-character hex PSK key')}" spellcheck="false" autocomplete="off">
+              <button type="button" id="scan-qr-btn" class="ch-modal-btn-secondary" title="${tr('Scan a meshcore:// channel QR with your camera')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-camera"/></svg> ${tr('Scan QR')}</button>
             </div>
             <div class="ch-modal-row">
-              <input type="text" id="chPskName" class="ch-modal-input" placeholder="Display name (optional)" aria-label="Optional display name" spellcheck="false">
-              <button type="button" id="chPskAddBtn" class="btn-primary">Add</button>
+              <input type="text" id="chPskName" class="ch-modal-input" placeholder="${tr('Display name (optional)')}" aria-label="${tr('Optional display name')}" spellcheck="false">
+              <button type="button" id="chPskAddBtn" class="btn-primary">${tr('Add')}</button>
             </div>
             <div id="chPskError" class="ch-modal-error" style="display:none" role="alert"></div>
           </section>
 
           <section class="ch-modal-section" aria-labelledby="chSecTagTitle">
-            <h4 id="chSecTagTitle" class="ch-modal-section-title">Monitor Hashtag Channel</h4>
-            <p class="ch-modal-section-hint">Decrypt traffic on a public hashtag channel by deriving the key from its name.</p>
+            <h4 id="chSecTagTitle" class="ch-modal-section-title">${tr('Monitor Hashtag Channel')}</h4>
+            <p class="ch-modal-section-hint">${tr('Decrypt traffic on a public hashtag channel by deriving the key from its name.')}</p>
             <div class="ch-modal-row ch-hashtag-row">
               <span class="ch-hashtag-prefix" aria-hidden="true">#</span>
               <input type="text" id="chHashtagName" class="ch-modal-input"
                      placeholder="meshcore"
-                     aria-label="Hashtag channel name (without #)" spellcheck="false" autocomplete="off">
-              <button type="button" id="chHashtagBtn" class="btn-primary">Monitor</button>
+                     aria-label="${tr('Hashtag channel name (without #)')}" spellcheck="false" autocomplete="off">
+              <button type="button" id="chHashtagBtn" class="btn-primary">${tr('Monitor')}</button>
               <button type="button" id="chHashtagProposeBtn" class="ch-modal-btn-secondary" hidden
-                      title="Ask an admin of this instance to decrypt this channel for every visitor">Propose for everyone</button>
+                      title="${tr('Ask an admin of this instance to decrypt this channel for every visitor')}">${tr('Propose for everyone')}</button>
             </div>
             <div id="chHashtagProposeMsg" class="ch-propose-msg" role="status" aria-live="polite"></div>
-            <div class="ch-modal-warn"><span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> Case-sensitive — <code>#meshcore</code> ≠ <code>#MeshCore</code></div>
+            <div class="ch-modal-warn"><span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> ${tr('Case-sensitive')} — <code>#meshcore</code> ≠ <code>#MeshCore</code></div>
           </section>
 
           <div class="ch-modal-footer">
-            <span class=""><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg></span> Keys stay in your browser — CoreScope is a passive observer that monitors and decrypts traffic but cannot transmit over RF. Use the close button to remove individual channels.
+            <span class=""><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg></span> ${tr('Keys stay in your browser — CoreScope is a passive observer that monitors and decrypts traffic but cannot transmit over RF. Use the close button to remove individual channels.')}
           </div>
         </div>
       </div>
@@ -893,31 +896,31 @@
            QR section bleed into the Add submit flow. -->
       <div id="chShareModal" class="modal-overlay ch-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="chShareModalTitle" hidden>
         <div class="modal ch-modal ch-share-modal" role="document">
-          <button type="button" class="modal-close ch-modal-close" id="chShareModalClose" data-action="ch-share-modal-close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
-          <h3 id="chShareModalTitle" class="ch-share-modal-title">Share Channel</h3>
+          <button type="button" class="modal-close ch-modal-close" id="chShareModalClose" data-action="ch-share-modal-close" aria-label="${tr('Close')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+          <h3 id="chShareModalTitle" class="ch-share-modal-title">${tr('Share Channel')}</h3>
           <div class="ch-share-modal-body">
             <div id="chShareQr" class="ch-share-qr" aria-live="polite"></div>
             <div class="ch-share-field-group">
-              <label class="ch-share-label" for="chShareKey">Hex Key</label>
+              <label class="ch-share-label" for="chShareKey">${tr('Hex Key')}</label>
               <div class="ch-share-row">
-                <input type="text" id="chShareKey" data-share-field="key" class="ch-modal-input ch-modal-input--mono" readonly aria-label="Channel hex key">
-                <button type="button" class="ch-modal-btn-secondary" data-share-copy="key" aria-label="Copy hex key"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Copy</button>
+                <input type="text" id="chShareKey" data-share-field="key" class="ch-modal-input ch-modal-input--mono" readonly aria-label="${tr('Channel hex key')}">
+                <button type="button" class="ch-modal-btn-secondary" data-share-copy="key" aria-label="${tr('Copy hex key')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> ${tr('Copy')}</button>
               </div>
             </div>
             <div class="ch-modal-warn" role="note">
-              <span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> Privacy: only share with trusted people. Anyone with this key can read all messages on this channel.
+              <span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> ${tr('Privacy: only share with trusted people. Anyone with this key can read all messages on this channel.')}
             </div>
           </div>
         </div>
       </div>
-      <div class="ch-main" role="region" aria-label="Channel messages">
+      <div class="ch-main" role="region" aria-label="${tr('Channel messages')}">
         <div class="ch-main-header" id="chHeader">
           <button type="button" class="ch-back" data-action="ch-back"
-                  aria-label="Back to channel list" title="Back">‹</button>
-          <span class="ch-header-text">Select a channel</span>
+                  aria-label="${tr('Back to channel list')}" title="${tr('Back')}">‹</button>
+          <span class="ch-header-text">${tr('Select a channel')}</span>
         </div>
         <div class="ch-messages" id="chMessages">
-          <div class="ch-empty">Choose a channel from the sidebar to view messages</div>
+          <div class="ch-empty">${tr('Choose a channel from the sidebar to view messages')}</div>
         </div>
         <span id="chAriaLive" class="sr-only" aria-live="polite"></span>
         <button class="ch-scroll-btn hidden" id="chScrollBtn">↓ New messages</button>
@@ -1023,7 +1026,7 @@
       _shareModalTrigger = document.activeElement;
       var safeName = _truncateForQr(displayName);
       var title = document.getElementById('chShareModalTitle');
-      if (title) title.textContent = 'Share: ' + safeName;
+      if (title) title.textContent = tr('Share: {channel}', { channel: safeName });
       var qrHolder = document.getElementById('chShareQr');
       var keyField = document.getElementById('chShareKey');
       var fieldsWrap = shareModalEl.querySelectorAll('.ch-share-field-group');
@@ -1053,7 +1056,7 @@
       if (!shareModalEl) return;
       _shareModalTrigger = document.activeElement;
       var title = document.getElementById('chShareModalTitle');
-      if (title) title.textContent = 'Share: ' + displayName;
+      if (title) title.textContent = tr('Share: {channel}', { channel: displayName });
       var qrHolder = document.getElementById('chShareQr');
       if (qrHolder) {
         qrHolder.innerHTML = '';
@@ -1098,7 +1101,7 @@
             try { src.select(); } catch (e2) {}
             var doneCopy = function () {
               var orig = copyBtn.textContent;
-              copyBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> Copied';
+              copyBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> ' + tr('Copied');
               setTimeout(function () { copyBtn.textContent = orig; }, 1200);
             };
             if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1134,7 +1137,7 @@
       var channelName = 'psk:' + keyHex.substring(0, 8);
       // #1087 Bug 3: persist via canonical helper synchronously.
       if (!persistAddedChannel(channelName, keyHex, label)) {
-        showAddStatus('Failed to save channel — storage full', 'error');
+        showAddStatus(tr('Failed to save channel — storage full'), 'error');
         return;
       }
       var qrOut = document.getElementById('qr-output');
@@ -1145,12 +1148,12 @@
           // #1087 Bug 2: pass the user label (not psk:<hex8>).
           window.ChannelQR.generate(label || channelName, keyHex, qrOut);
         } else {
-          qrOut.textContent = 'Key generated: ' + keyHex;
+          qrOut.textContent = tr('Key generated: {key}', { key: keyHex });
         }
       }
       mergeUserChannels();
       renderChannelList();
-      showAddStatus('Generated channel ' + (label || channelName), 'success');
+      showAddStatus(tr('Generated channel {channel}', { channel: label || channelName }), 'success');
     });
 
     // Section 2: Add PSK
@@ -1162,7 +1165,7 @@
       var raw = keyEl ? (keyEl.value || '').trim() : '';
       var label = nameEl ? (nameEl.value || '').trim() : '';
       if (!isHexKey(raw)) {
-        if (errEl) { errEl.textContent = 'Key must be 32 hex characters (0–9, a–f).'; errEl.style.display = ''; }
+        if (errEl) { errEl.textContent = tr('Key must be 32 hex characters (0–9, a–f).'); errEl.style.display = ''; }
         return;
       }
       if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
@@ -1180,7 +1183,7 @@
       var errEl = document.getElementById('chPskError');
       if (!window.ChannelQR || typeof window.ChannelQR.scan !== 'function') {
         if (errEl) {
-          errEl.textContent = 'QR scanning is unavailable in this browser.';
+          errEl.textContent = tr('QR scanning is unavailable in this browser.');
           errEl.style.display = '';
         }
         return;
@@ -1195,7 +1198,7 @@
         if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
       } catch (err) {
         if (errEl) {
-          errEl.textContent = 'Scan failed: ' + (err && err.message ? err.message : 'unknown error');
+          errEl.textContent = tr('Scan failed: {message}', { message: err && err.message ? err.message : tr('unknown error') });
           errEl.style.display = '';
         }
       }
@@ -1269,9 +1272,9 @@
         history.replaceState(null, '', '#/channels');
         document.querySelector('.ch-layout')?.classList.remove('ch-detail-open');
         var headerT = document.querySelector('#chHeader .ch-header-text');
-        if (headerT) headerT.textContent = 'Select a channel';
+        if (headerT) headerT.textContent = tr('Select a channel');
         var msgEl = document.getElementById('chMessages');
-        if (msgEl) msgEl.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
+        if (msgEl) msgEl.innerHTML = '<div class="ch-empty">' + tr('Choose a channel from the sidebar to view messages') + '</div>';
         renderChannelList();
       }
     });
@@ -1315,10 +1318,10 @@
         var displayName = labelFromStore
           || (sCh && sCh.userLabel)
           || (channelName.indexOf('psk:') === 0
-              ? 'Private Channel'
+              ? tr('Private Channel')
               : channelName);
         if (!keyHex) {
-          openShareModalError(displayName, 'No stored key found for "' + displayName + '" — cannot share.');
+          openShareModalError(displayName, tr('No stored key found for "{channel}" — cannot share.', { channel: displayName }));
           return;
         }
         if (typeof openShareModal === 'function') {
@@ -1339,7 +1342,7 @@
         var chName = channelHash.startsWith('user:')
           ? channelHash.substring(5)
           : (ch && ch.name) || channelHash;
-        if (!confirm('Remove channel "' + chName + '"?\n\nThis will permanently remove the key from this browser and clear cached messages. You will need to re-enter the key to decrypt this channel again.')) return;
+        if (!confirm(tr('Remove channel "{channel}"?', { channel: chName }) + '\n\n' + tr('This will permanently remove the key from this browser and clear cached messages. You will need to re-enter the key to decrypt this channel again.'))) return;
         ChannelDecrypt.removeKey(chName);
         if (channelHash.startsWith('user:')) {
           // Pure user-added channel — drop from the list entirely.
@@ -1349,9 +1352,9 @@
             messages = [];
             history.replaceState(null, '', '#/channels');
             var msgEl2 = document.getElementById('chMessages');
-            if (msgEl2) msgEl2.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
+            if (msgEl2) msgEl2.innerHTML = '<div class="ch-empty">' + tr('Choose a channel from the sidebar to view messages') + '</div>';
             var header2 = document.getElementById('chHeader');
-            if (header2) header2.querySelector('.ch-header-text').textContent = 'Select a channel';
+            if (header2) header2.querySelector('.ch-header-text').textContent = tr('Select a channel');
           }
         } else if (ch) {
           // Server-known channel: keep the row, just unmark as user-added so
@@ -1362,7 +1365,7 @@
           if (selectedHash === channelHash) {
             messages = [];
             var msgEl2 = document.getElementById('chMessages');
-            if (msgEl2) msgEl2.innerHTML = '<div class="ch-empty">Key removed — add a key to decrypt messages</div>';
+            if (msgEl2) msgEl2.innerHTML = '<div class="ch-empty">' + tr('Key removed — add a key to decrypt messages') + '</div>';
           }
         }
         renderChannelList();
@@ -1596,14 +1599,14 @@
         var ch2 = channels.find(function (c) { return c.hash === selectedHash; });
         var header = document.getElementById('chHeader');
         if (header && ch2) {
-          header.querySelector('.ch-header-text').textContent = (ch2.name || 'Channel ' + selectedHash) + ' — ' + messages.length + ' messages';
+          header.querySelector('.ch-header-text').textContent = (ch2.name || tr('Channel {hash}', { hash: selectedHash })) + ' — ' + trn(messages.length, '{count} message', '{count} messages');
         }
         var msgEl = document.getElementById('chMessages');
         if (msgEl && autoScroll) scrollToBottom();
         else {
           document.getElementById('chScrollBtn')?.classList.remove('hidden');
           var liveEl = document.getElementById('chAriaLive');
-          if (liveEl) liveEl.textContent = 'New message received';
+          if (liveEl) liveEl.textContent = tr('New message received');
         }
       }
     }
@@ -1766,7 +1769,7 @@
     } catch (e) {
       if (!silent) {
         const el = document.getElementById('chList');
-        if (el) el.innerHTML = `<div class="ch-empty">Failed to load channels</div>`;
+        if (el) el.innerHTML = `<div class="ch-empty">${tr('Failed to load channels')}</div>`;
       }
     }
   }
@@ -1774,6 +1777,7 @@
   // #1041: single source of truth for the user-facing placeholder shown
   // when a PSK channel has no user-supplied label. Hoisted so the helper
   // and any future call sites stay in sync (i18n / branding-friendly).
+  // English; translated where returned (this runs at load, before the dictionary).
   const PRIVATE_CHANNEL_LABEL = 'Private Channel';
 
   // Display name for a channel — handles PSK channels where the raw
@@ -1788,10 +1792,10 @@
     if (!ch) return '';
     const name = ch.name || '';
     if (ch.userLabel) return ch.userLabel;
-    if (name.indexOf('psk:') === 0) return PRIVATE_CHANNEL_LABEL;
+    if (name.indexOf('psk:') === 0) return tr(PRIVATE_CHANNEL_LABEL);
     if (name) return name;
     if (fallback) return fallback;
-    return 'Channel ' + (typeof formatHashHex === 'function' ? formatHashHex(ch.hash) : ch.hash);
+    return tr('Channel {hash}', { hash: typeof formatHashHex === 'function' ? formatHashHex(ch.hash) : ch.hash });
   }
 
   // #1034 PR1: render a single channel row (used by all sidebar sections).
@@ -1802,7 +1806,7 @@
     // Channel" rule lives in one place. Pass an `encryptedFallback` so
     // rows for non-user-added encrypted channels keep showing "Unknown"
     // (their existing behavior) when there's no name at all.
-    const encryptedFallback = isEncrypted ? 'Unknown' : '';
+    const encryptedFallback = isEncrypted ? tr('Unknown') : '';
     const name = channelDisplayName(ch, encryptedFallback);
     const color = isEncrypted && !isUserAdded ? 'var(--text-muted, #6b7280)' : getChannelColor(ch.hash);
     const time = ch.lastActivityMs ? formatSecondsAgo(Math.floor((Date.now() - ch.lastActivityMs) / 1000)) : '';
@@ -1816,7 +1820,7 @@
     } else if (isEncrypted && !isUserAdded) {
       preview = `0x${formatHashHex(ch.hash)}`;
     } else if (typeof ch.messageCount === 'number' && ch.messageCount > 0) {
-      preview = `${ch.messageCount} messages`;
+      preview = trn(ch.messageCount, '{count} message', '{count} messages');
     } else {
       preview = '';
     }
@@ -1840,21 +1844,21 @@
       return ' <span class="ch-icon-btn ' + modClass + '" role="button" tabindex="0"'
         + ' ' + dataAttr + '="' + escapeHtml(hash) + '"'
         + (extraAttrs || '')
-        + ' title="' + title + '"'
-        + ' aria-label="' + ariaVerb + ' ' + escapeHtml(name) + '">' + glyph + '</span>';
+        + ' title="' + tr(title) + '"'
+        + ' aria-label="' + tr('{action} {channel}', { action: tr(ariaVerb), channel: escapeHtml(name) }) + '">' + glyph + '</span>';
     }
     const removeBtn = isUserAdded
       ? iconBtn('ch-remove-btn', 'data-remove-channel', ch.hash, name, '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg>',
                 'Remove channel and clear saved key', 'Remove', '')
       : '';
     const shareBtn = isUserAdded
-      ? iconBtn('ch-share-btn', 'data-share-channel', ch.hash, name, '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-share-network"/></svg> Share',
+      ? iconBtn('ch-share-btn', 'data-share-channel', ch.hash, name, '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-share-network"/></svg> ' + tr('Share'),
                 'Share channel key (QR + URL)', 'Share', ' aria-haspopup="dialog"')
       : '';
-    const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-key"/></svg></span>' : '';
-    const approvedBadge = ch.approved ? ' <span class="ch-approved-badge" title="Approved by an admin of this instance: decrypted for every visitor">approved</span>' : '';
+    const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="' + tr('You added this key') + '" aria-label="' + tr('Your key') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-key"/></svg></span>' : '';
+    const approvedBadge = ch.approved ? ' <span class="ch-approved-badge" title="' + tr('Approved by an admin of this instance: decrypted for every visitor') + '">' + tr('approved') + '</span>' : '';
     const unreadBadge = (ch.unread && ch.unread > 0)
-      ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + ch.unread + ' new" aria-label="' + ch.unread + ' unread">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
+      ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + tr('{count} new', { count: ch.unread }) + '" aria-label="' + tr('{count} unread', { count: ch.unread }) + '">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
       : '';
 
     return `<button class="ch-item${sel}${encClass}" data-hash="${escapeHtml(ch.hash)}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}${isUserAdded ? ' data-user-added="true"' : ''}>
@@ -1862,7 +1866,7 @@
       <div class="ch-item-body">
         <div class="ch-item-top">
           <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}${approvedBadge}${unreadBadge}
-          <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></span>' : ''}
+          <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="${tr('Change channel color')}" aria-label="${tr('Change color for {channel}', { channel: escapeHtml(name) })}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="' + tr('Clear color') + '" aria-label="' + tr('Clear color for {channel}', { channel: escapeHtml(name) }) + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></span>' : ''}
           <span class="ch-item-time" data-channel-hash="${escapeHtml(ch.hash)}">${time}</span>${shareBtn}${removeBtn}
         </div>
         <div class="ch-item-preview">${escapeHtml(preview)}</div>
@@ -1890,7 +1894,7 @@
   function renderChannelRowMobile(ch) {
     const isEncrypted = ch.encrypted === true;
     const isUserAdded = ch.userAdded === true;
-    const encryptedFallback = isEncrypted ? 'Unknown' : '';
+    const encryptedFallback = isEncrypted ? tr('Unknown') : '';
     const name = channelDisplayName(ch, encryptedFallback);
     const color = (isEncrypted && !isUserAdded)
       ? 'var(--text-muted, #6b7280)'
@@ -1904,7 +1908,7 @@
     } else if (isEncrypted && !isUserAdded) {
       preview = '0x' + formatHashHex(ch.hash);
     } else if (typeof ch.messageCount === 'number' && ch.messageCount > 0) {
-      preview = ch.messageCount + ' messages';
+      preview = trn(ch.messageCount, '{count} message', '{count} messages');
     }
     const abbr = avatarTextForChannel(ch);
     // abbr may be a Phosphor sprite (HTML) or plain text — detect & emit raw vs escaped.
@@ -1918,7 +1922,7 @@
       '<div class="ch-row-body">' +
         '<div class="ch-row-line1">' +
           '<span class="ch-row-name">' + escapeHtml(name) + '</span>' +
-          (ch.approved ? '<span class="ch-approved-badge" title="Approved by an admin of this instance: decrypted for every visitor">approved</span>' : '') +
+          (ch.approved ? '<span class="ch-approved-badge" title="' + tr('Approved by an admin of this instance: decrypted for every visitor') + '">' + tr('approved') + '</span>' : '') +
           '<span class="ch-row-time">' + escapeHtml(time) + '</span>' +
         '</div>' +
         '<div class="ch-row-preview">' + escapeHtml(preview) + '</div>' +
@@ -1989,7 +1993,7 @@
       '<div class="ch-section ch-section-catalogue" data-section="catalogue">' +
         '<button type="button" class="ch-section-header ch-section-toggle" id="chCatalogueToggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '" aria-controls="chCatalogueBody">' +
           '<span class="ch-section-caret" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span>' +
-          ' Known channels (catalogue)' + (count ? ' (' + count + ')' : '') +
+          ' ' + tr('Known channels (catalogue)') + (count ? ' (' + count + ')' : '') +
         '</button>' +
         '<div class="ch-section-body" id="chCatalogueBody"' + (collapsed ? ' hidden' : '') + '>' +
           bodyInner +
@@ -2001,13 +2005,13 @@
   function renderKnownChannelsBodyInner() {
     if (__knownChannels === null) {
       setTimeout(loadKnownChannels, 0);
-      return '<div class="ch-section-empty">Loading catalogue…</div>';
+      return '<div class="ch-section-empty">' + tr('Loading catalogue…') + '</div>';
     }
     if (__knownChannelsError) {
-      return '<div class="ch-section-empty">Catalogue unavailable</div>';
+      return '<div class="ch-section-empty">' + tr('Catalogue unavailable') + '</div>';
     }
     if (__knownChannels.length === 0) {
-      return '<div class="ch-section-empty">No catalogue entries</div>';
+      return '<div class="ch-section-empty">' + tr('No catalogue entries') + '</div>';
     }
     return __knownChannels.map(renderKnownChannelRow).join('');
   }
@@ -2023,7 +2027,7 @@
           '<div class="ch-channel-name">' + safeName + '</div>' +
           '<div class="ch-channel-sub">' + region + (desc ? ' · ' + desc : '') + '</div>' +
         '</div>' +
-        '<button type="button" class="ch-known-add-btn" data-action="ch-known-add" data-channel="' + safeName + '" title="Add to my channels">+ Add</button>' +
+        '<button type="button" class="ch-known-add-btn" data-action="ch-known-add" data-channel="' + safeName + '" title="' + tr('Add to my channels') + '">+ ' + tr('Add') + '</button>' +
       '</div>';
   }
   // Delegated click handler for catalogue "+ Add" buttons + toggle.
@@ -2079,7 +2083,7 @@
   function renderChannelList() {
     const el = document.getElementById('chList');
     if (!el) return;
-    if (channels.length === 0) { el.innerHTML = '<div class="ch-empty">No channels found</div>'; return; }
+    if (channels.length === 0) { el.innerHTML = '<div class="ch-empty">' + tr('No channels found') + '</div>'; return; }
 
     // #1367: mobile gets a flat chat-app list (no sections, no inline actions).
     if (isMobileChannels()) {
@@ -2103,25 +2107,25 @@
     if (mine.length > 0) {
       sections.push(
         `<div class="ch-section ch-section-mychannels" data-section="mychannels">
-        <div class="ch-section-header">My Channels <span class="ch-section-locality" title="Saved only in this browser on this device"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-monitor"/></svg> (this browser)</span></div>
+        <div class="ch-section-header">${tr('My Channels')} <span class="ch-section-locality" title="${tr('Saved only in this browser on this device')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-monitor"/></svg> (${tr('this browser')})</span></div>
         ${mine.map(renderChannelRow).join('')}
       </div>`
       );
     }
     sections.push(
       `<div class="ch-section ch-section-network" data-section="network">
-        <div class="ch-section-header">Network</div>
-        ${network.length ? network.map(renderChannelRow).join('') : '<div class="ch-section-empty">No public channels reported by the server.</div>'}
+        <div class="ch-section-header">${tr('Network')}</div>
+        ${network.length ? network.map(renderChannelRow).join('') : '<div class="ch-section-empty">' + tr('No public channels reported by the server.') + '</div>'}
       </div>`
     );
     sections.push(
       `<div class="ch-section ch-section-encrypted" data-section="encrypted" data-encrypted-collapsed="${collapsed ? 'true' : 'false'}">
         <button type="button" class="ch-section-header ch-section-toggle" id="chEncryptedToggle" aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="chEncryptedBody">
           <span class="ch-section-caret" aria-hidden="true">${collapsed ? '▸' : '▾'}</span>
-          Encrypted (${encrypted.length})
+          ${tr('Encrypted ({count})', { count: encrypted.length })}
         </button>
         <div class="ch-section-body" id="chEncryptedBody"${collapsed ? ' hidden' : ''}>
-          ${encrypted.length ? encrypted.map(renderChannelRow).join('') : '<div class="ch-section-empty">No unkeyed encrypted channels seen.</div>'}
+          ${encrypted.length ? encrypted.map(renderChannelRow).join('') : '<div class="ch-section-empty">' + tr('No unkeyed encrypted channels seen.') + '</div>'}
         </div>
       </div>`
     );
@@ -2165,15 +2169,15 @@
     const ch = channels.find(c => c.hash === hash);
     // #1041: never show raw "psk:<hex>" prefixes in the header — use the
     // user-supplied label or "Private Channel".
-    const name = ch ? channelDisplayName(ch) : `Channel ${formatHashHex(hash)}`;
+    const name = ch ? channelDisplayName(ch) : tr('Channel {hash}', { hash: formatHashHex(hash) });
     const header = document.getElementById('chHeader');
-    header.querySelector('.ch-header-text').textContent = `${name} — ${ch?.messageCount || 0} messages`;
+    header.querySelector('.ch-header-text').textContent = `${name} — ${trn(ch?.messageCount || 0, '{count} message', '{count} messages')}`;
 
     const msgEl = document.getElementById('chMessages');
 
     // Shared helper: fetch, decrypt, and render messages for a channel key (M5: cache-first)
     async function decryptAndRender(keyHex, channelHashByte, channelName) {
-      msgEl.innerHTML = '<div class="ch-loading">Decrypting messages…</div>';
+      msgEl.innerHTML = '<div class="ch-loading">' + tr('Decrypting messages…') + '</div>';
       var result = await fetchAndDecryptChannel(keyHex, channelHashByte, channelName, {
         onCacheHit: function (cachedMsgs) {
           // M5: Render cached messages immediately while delta fetch runs.
@@ -2182,7 +2186,7 @@
           // stomping them, same as the other two sites below.
           messages = mergeWsAppendedIntoRest(messages, cachedMsgs || []);
           if (messages.length > 0) {
-            header.querySelector('.ch-header-text').textContent = name + ' — ' + messages.length + ' messages (cached)';
+            header.querySelector('.ch-header-text').textContent = name + ' — ' + trn(messages.length, '{count} message (cached)', '{count} messages (cached)');
             renderMessages();
             scrollToBottom();
           }
@@ -2190,7 +2194,7 @@
       });
       if (isStaleMessageRequest(request)) return { stale: true };
       if (result.wrongKey) {
-        msgEl.innerHTML = '<div class="ch-empty ch-wrong-key"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> Key does not match — no messages could be decrypted</div>';
+        msgEl.innerHTML = '<div class="ch-empty ch-wrong-key"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ' + tr('Key does not match — no messages could be decrypted') + '</div>';
         return { wrongKey: true, messageCount: 0 };
       }
       if (result.error) {
@@ -2200,9 +2204,9 @@
       // #1498: merge WS-pushed messages that landed during the decrypt fetch.
       messages = mergeWsAppendedIntoRest(messages, result.messages || []);
       if (messages.length === 0) {
-        msgEl.innerHTML = '<div class="ch-empty">No encrypted messages found for this channel</div>';
+        msgEl.innerHTML = '<div class="ch-empty">' + tr('No encrypted messages found for this channel') + '</div>';
       } else {
-        header.querySelector('.ch-header-text').textContent = `${name} — ${messages.length} messages (decrypted)`;
+        header.querySelector('.ch-header-text').textContent = `${name} — ${trn(messages.length, '{count} message (decrypted)', '{count} messages (decrypted)')}`;
         renderMessages();
         scrollToBottom();
       }
@@ -2239,7 +2243,7 @@
         }
       }
       // #781: No matching key found — show lock message instead of fetching gibberish
-      msgEl.innerHTML = '<div class="ch-empty"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> This channel is encrypted and no decryption key is configured</div>';
+      msgEl.innerHTML = '<div class="ch-empty"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ' + tr('This channel is encrypted and no decryption key is configured') + '</div>';
       return;
     }
 
@@ -2259,7 +2263,7 @@
       // before assuming a lock state. Conservative on error — fall through.
       // Show a loading affordance so cold deep links don't display stale content
       // for the duration of the metadata RTT (cached 15s thereafter).
-      msgEl.innerHTML = '<div class="ch-loading">Loading messages…</div>';
+      msgEl.innerHTML = '<div class="ch-loading">' + tr('Loading messages…') + '</div>';
       try {
         var rpInc = RegionFilter.getRegionParam();
         var paramsInc = ['includeEncrypted=true'];
@@ -2268,7 +2272,7 @@
         if (isStaleMessageRequest(request)) return;
         var foundCh = (allCh.channels || []).find(function (c) { return c.hash === hash; });
         if (foundCh && foundCh.encrypted === true) {
-          msgEl.innerHTML = '<div class="ch-empty"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> This channel is encrypted and no decryption key is configured</div>';
+          msgEl.innerHTML = '<div class="ch-empty"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ' + tr('This channel is encrypted and no decryption key is configured') + '</div>';
           return;
         }
         // Unencrypted (or unknown) — fall through to the REST fetch below.
@@ -2277,7 +2281,7 @@
       }
     }
 
-    msgEl.innerHTML = '<div class="ch-loading">Loading messages…</div>';
+    msgEl.innerHTML = '<div class="ch-loading">' + tr('Loading messages…') + '</div>';
 
     try {
       const regionQs = rp ? '&region=' + encodeURIComponent(rp) : '';
@@ -2287,14 +2291,14 @@
       // REST fetch was in flight aren't stomped.
       messages = mergeWsAppendedIntoRest(messages, data.messages || []);
       if (messages.length === 0 && rp) {
-        msgEl.innerHTML = '<div class="ch-empty">Channel not available in selected region</div>';
+        msgEl.innerHTML = '<div class="ch-empty">' + tr('Channel not available in selected region') + '</div>';
       } else {
         renderMessages();
         scrollToBottom();
       }
     } catch (e) {
       if (isStaleMessageRequest(request)) return;
-      msgEl.innerHTML = `<div class="ch-empty">Failed to load messages: ${e.message}</div>`;
+      msgEl.innerHTML = `<div class="ch-empty">${tr('Failed to load messages: {message}', { message: escapeHtml(e.message) })}</div>`;
     }
   }
 
@@ -2317,7 +2321,7 @@
       const newMsgs = data.messages || [];
       if (opts.regionSwitch && rp && newMsgs.length === 0) {
         messages = [];
-        msgEl.innerHTML = '<div class="ch-empty">Channel not available in selected region</div>';
+        msgEl.innerHTML = '<div class="ch-empty">' + tr('Channel not available in selected region') + '</div>';
         document.getElementById('chScrollBtn')?.classList.add('hidden');
         return;
       }
@@ -2337,7 +2341,7 @@
       else {
         document.getElementById('chScrollBtn')?.classList.remove('hidden');
         var liveEl = document.getElementById('chAriaLive');
-        if (liveEl) liveEl.textContent = Math.max(1, newMsgs.length - prevLen) + ' new messages';
+        if (liveEl) liveEl.textContent = trn(Math.max(1, newMsgs.length - prevLen), '{count} new message', '{count} new messages');
       }
     } catch {}
   }
@@ -2345,7 +2349,7 @@
   function renderMessages() {
     const msgEl = document.getElementById('chMessages');
     if (!msgEl) return;
-    if (messages.length === 0) { msgEl.innerHTML = '<div class="ch-empty">No messages in this channel yet</div>'; return; }
+    if (messages.length === 0) { msgEl.innerHTML = '<div class="ch-empty">' + tr('No messages in this channel yet') + '</div>'; return; }
 
     msgEl.innerHTML = messages.map(msg => {
       const sender = msg.sender || 'Unknown';
@@ -2373,13 +2377,13 @@
 
       const meta = [];
       meta.push(date + ' ' + time);
-      if (msg.repeats > 1) meta.push(`${msg.repeats}× heard`);
-      if (msg.observers?.length > 1) meta.push(`${msg.observers.length} observers`);
-      if (msg.hops > 0) meta.push(`${msg.hops} hops`);
+      if (msg.repeats > 1) meta.push(tr('{count}× heard', { count: msg.repeats }));
+      if (msg.observers?.length > 1) meta.push(trn(msg.observers.length, '{count} observer', '{count} observers'));
+      if (msg.hops > 0) meta.push(trn(msg.hops, '{count} hop', '{count} hops'));
       if (msg.snr !== null && msg.snr !== undefined) meta.push(`SNR ${msg.snr}`);
       // Cast first: 0, missing or non-numeric all mean the packet encodes no size.
       const hs = Number(msg.path_hash_size) || 0;
-      if (hs) meta.push(`<span class="ch-msg-hash-size" title="Path hash size the sender used">${hs}-byte${hs !== 1 ? 's' : ''}</span>`);
+      if (hs) meta.push(`<span class="ch-msg-hash-size" title="${tr('Path hash size the sender used')}">${trn(hs, '{count}-byte', '{count}-bytes')}</span>`);
       const scopeChip = messageScopeChipHtml(msg.scope_name);
       if (scopeChip) meta.push(scopeChip);
 
@@ -2390,9 +2394,9 @@
       return `<div class="ch-msg ch-message">
         <div class="ch-avatar ch-tappable" style="background:${senderColor}" tabindex="0" role="button" data-node="${safeId}">${senderLetter}</div>
         <div class="ch-msg-content ch-message-content">
-          <div class="ch-msg-sender ch-message-sender ch-sender-link ch-tappable" style="color:${senderColor}" tabindex="0" role="button" data-node="${safeId}">${escapeHtml(sender)}</div>
+          <div class="ch-msg-sender ch-message-sender ch-sender-link ch-tappable" style="color:${senderColor}" tabindex="0" role="button" data-node="${safeId}">${escapeHtml(msg.sender ? sender : tr('Unknown'))}</div>
           <div class="ch-msg-bubble ch-message-bubble">${displayText}</div>
-          <div class="ch-msg-meta ch-message-meta">${meta.join(' · ')}${msg.packetHash ? ` · <a href="#/packets/${msg.packetHash}" class="ch-analyze-link">View packet →</a>` : ''}</div>
+          <div class="ch-msg-meta ch-message-meta">${meta.join(' · ')}${msg.packetHash ? ` · <a href="#/packets/${msg.packetHash}" class="ch-analyze-link">${tr('View packet')} →</a>` : ''}</div>
         </div>
       </div>`;
     }).join('');

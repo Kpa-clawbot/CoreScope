@@ -20,6 +20,8 @@ const ctx = {
   localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
   setTimeout, clearTimeout, setInterval, clearInterval,
   fetch: () => Promise.resolve({ ok: true, json: () => ({}) }),
+  // English pass-through for the i18n helper (public/i18n.js) the legend calls.
+  tr: (s) => s,
 };
 ctx.self = ctx; ctx.globalThis = ctx;
 vm.createContext(ctx);

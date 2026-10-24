@@ -63,6 +63,10 @@ function loadEscapeHtml() {
   return ctx.escapeHtml;
 }
 const escapeHtml = loadEscapeHtml();
+// English pass-through for the i18n helpers (public/i18n.js) that extracted
+// templates call. Placeholder values are inserted as given, like the real tr().
+const tr = (s, p) => (p ? s.replace(/\{(\w+)\}/g, (m, k) => (k in p ? String(p[k]) : m)) : s);
+const trn = (n, one, other, p) => tr(n === 1 ? one : other, Object.assign({ count: n }, p));
 
 // --- Template extraction + eval ------------------------------------------
 // Captures a template literal from a source file, given a regex with ONE
@@ -81,10 +85,10 @@ function evalTemplate(srcFile, regex, bindings) {
   const safeEsc = escapeHtml; // map.js fallback path → real escaper
   const fn = new Function(
     ...argNames,
-    'escapeHtml', 'truncate', 'encodeURIComponent', 'safeEsc',
+    'escapeHtml', 'truncate', 'encodeURIComponent', 'safeEsc', 'tr', 'trn',
     'return `' + tpl + '`;'
   );
-  return fn(...args, escapeHtml, truncate, encodeURIComponent, safeEsc);
+  return fn(...args, escapeHtml, truncate, encodeURIComponent, safeEsc, tr, trn);
 }
 
 // =========================================================================
@@ -298,13 +302,13 @@ test('live.js buildClickablePathPopupHtml: hopNames join escapes each hop', () =
   assert.ok(m, 'buildClickablePathPopupHtml not found');
   const body = m[1];
   const html = new Function(
-    'typeName','color','hopNames','tsMs','hash','escapeHtml',
+    'typeName','color','hopNames','tsMs','hash','escapeHtml','tr',
     body + '\n;' // body returns
   )(
     'CHAN', '#fff',
     [TAG_PAYLOAD, ATTR_PAYLOAD],
     Date.now(), 'abc123',
-    escapeHtml
+    escapeHtml, tr
   );
   assertNoXss(html, 'live.js hop popup');
 });
@@ -369,9 +373,9 @@ test('TRACE-1: traces.js urlHash interpolation escapes URL-fragment payload', ()
   const m = src.match(/(<input type="text" id="traceHashInput"[^`]*?value="\$\{[^}]+\}"[^`]*?>)/);
   assert.ok(m, 'TRACE-1: <input value="${urlHash}"> template not found in traces.js');
   const tpl = m[1];
-  const fn = new Function('urlHash', 'escapeHtml',
+  const fn = new Function('urlHash', 'escapeHtml', 'tr',
     'return `' + tpl + '`;');
-  const html = fn(TAG_PAYLOAD + ATTR_PAYLOAD, escapeHtml);
+  const html = fn(TAG_PAYLOAD + ATTR_PAYLOAD, escapeHtml, tr);
   assertNoXss(html, 'TRACE-1 traces.js urlHash input');
 });
 
@@ -381,7 +385,7 @@ function extractObsStatValue(field) {
   const labelMap = { model: 'Model', firmware: 'Firmware', client_version: 'Client', iata: 'Region' };
   const label = labelMap[field];
   const re = new RegExp(
-    '<div class="stat-label">' + label + '<\\/div>[\\s\\S]{0,250}?' +
+    '<div class="stat-label">(?:' + label + "|\\$\\{tr\\('" + label + "'\\)\\})<\\/div>[\\s\\S]{0,250}?" +
     '<div class="stat-value"[^>]*>(\\$\\{[^}]*obs\\.' + field + '[^}]*\\})<\\/div>'
   );
   const m = src.match(re);
@@ -490,14 +494,14 @@ function renderObsDetail(obs) {
   const fn = new Function(
     'obs', 'obsSkew', 'escapeHtml', 'window', 'HEALTH_THRESHOLDS',
     'formatDuration', 'timeAgo', 'formatSkew', 'renderSkewBadge', 'observerSkewSeverity',
-    'statusCls', 'statusLabel',
+    'statusCls', 'statusLabel', 'tr', 'trn',
     radioBlock + '\nreturn `' + tpl + '`;'
   );
   return fn(
     obs, sandbox.obsSkew, escapeHtml, sandbox.window, sandbox.HEALTH_THRESHOLDS,
     sandbox.formatDuration, sandbox.timeAgo, sandbox.formatSkew,
     sandbox.renderSkewBadge, sandbox.observerSkewSeverity,
-    statusCls, statusLabel
+    statusCls, statusLabel, tr, (n, one, other, p) => tr(n === 1 ? one : other, Object.assign({ count: n }, p))
   );
 }
 
@@ -595,7 +599,7 @@ console.log('\n=== E. URL-derived strings ===');
 
 test('app.js unknown-route page escapes the route taken from location.hash', () => {
   const html = evalTemplate('public/app.js',
-    /(<div style="padding:40px;text-align:center;color:#6b7280"><h2>\$\{[^}]*route[^}]*\}<\/h2><p>Page not yet implemented\.<\/p><\/div>)/,
+    /(<div style="padding:40px;text-align:center;color:#6b7280"><h2>\$\{[^}]*route[^}]*\}<\/h2><p>(?:Page not yet implemented\.|\$\{tr\('Page not yet implemented\.'\)\})<\/p><\/div>)/,
     { route: TAG_PAYLOAD + ATTR_PAYLOAD });
   assertNoXss(html, 'app.js unknown route');
 });
@@ -649,14 +653,14 @@ test('observers.js table row: Region badge escapes o.iata', () => {
 
 test('observers.js slide-over: Region <dd> escapes o.iata', () => {
   const html = evalConcat('public/observers.js',
-    /'<dt>Region<\/dt><dd>' \+ (\(o\.iata \? '<span class="badge-region">' \+ [^;]*?\+ '<\/span>' : '—'\))/,
+    /'<dt>(?:Region|' \+ tr\('Region'\) \+ ')<\/dt><dd>' \+ (\(o\.iata \? '<span class="badge-region">' \+ [^;]*?\+ '<\/span>' : '—'\))/,
     { o: { iata: PAYLOAD } });
   assertNoXss(html, 'observers.js slide-over iata');
 });
 
 test('live.js node detail: "Heard By — Regions" header escapes each iata', () => {
   const html = evalTemplate('public/live.js',
-    /(<h4 style="[^"]*">Heard By\$\{regions\.length[\s\S]*?<\/h4>)/, { regions: [PAYLOAD] });
+    /(<h4 style="[^"]*">(?:Heard By|\$\{tr\('Heard By'\)\})\$\{regions\.length[\s\S]*?<\/h4>)/, { regions: [PAYLOAD] });
   assertNoXss(html, 'live.js regions header');
 });
 

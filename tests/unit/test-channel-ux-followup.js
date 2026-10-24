@@ -74,11 +74,11 @@ assert(/class="ch-modal-callout"/.test(chSrc),
   'modal has a dedicated .ch-modal-callout for the locality warning');
 assert(/THIS browser only/.test(chSrc),
   'callout uses emphatic copy: "Channels are saved to THIS browser only"');
-assert(/won't appear on other devices or browsers|won.t appear on other devices/.test(chSrc),
+assert(/won't appear on other devices or browsers|won.t appear on other devices|won\\'t appear on other devices/.test(chSrc),
   'callout warns that channels won\u2019t appear on other devices/browsers');
 
 // Sidebar "My Channels" section header gets a locality marker.
-assert(/My Channels[\s\S]{0,200}\(this browser\)|🖥️[\s\S]{0,200}My Channels|My Channels[\s\S]{0,200}🖥️/.test(chSrc),
+assert(/My Channels[\s\S]{0,200}\(this browser\)|tr\('My Channels'\)[\s\S]{0,300}\(\$\{tr\('this browser'\)\}\)|🖥️[\s\S]{0,200}My Channels|My Channels[\s\S]{0,200}🖥️/.test(chSrc),
   'My Channels section header reinforces locality (🖥️ or "(this browser)")');
 
 // Remove confirm prompt explicitly mentions "this browser".
@@ -126,6 +126,9 @@ if (renderRowSrc) {
     customColors: {},
     window: {},
     renderChannelRow: null,
+    // English pass-through for the i18n helpers (public/i18n.js).
+    tr: (s, p) => (p ? s.replace(/\{(\w+)\}/g, (m, k) => (k in p ? String(p[k]) : m)) : s),
+    trn: (n, one, other, p) => (n === 1 ? one : other).replace(/\{(\w+)\}/g, (m, k) => (k === 'count' ? String(n) : (p && k in p ? String(p[k]) : m))),
   };
   // #1041 follow-up: renderChannelRow now delegates to channelDisplayName.
   // Eval the REAL helper (and its module-local PRIVATE_CHANNEL_LABEL)

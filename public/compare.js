@@ -1,6 +1,8 @@
 /* === CoreScope — compare.js === */
 /* Observer packet comparison — Fixes #129 */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
 
 /**
  * Compare two sets of packet hashes using Set operations.
@@ -102,11 +104,11 @@ if (typeof window !== 'undefined') {
 
     app.innerHTML = '<div class="compare-page">' +
       '<div class="page-header">' +
-        '<a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">\u2190</a>' +
-        '<h2>\uD83D\uDD0D Observer Comparison</h2>' +
+        '<a href="#/observers" class="btn-icon" title="' + tr('Back to Observers') + '" aria-label="' + tr('Back') + '">\u2190</a>' +
+        '<h2>\uD83D\uDD0D ' + tr('Observer Comparison') + '</h2>' +
       '</div>' +
-      '<nav data-role="compare-breadcrumbs" aria-label="Compare breadcrumbs" class="compare-breadcrumbs"></nav>' +
-      '<div id="compareControls" class="compare-controls"><div class="text-center text-muted" style="padding:20px">Loading observers\u2026</div></div>' +
+      '<nav data-role="compare-breadcrumbs" aria-label="' + tr('Compare breadcrumbs') + '" class="compare-breadcrumbs"></nav>' +
+      '<div id="compareControls" class="compare-controls"><div class="text-center text-muted" style="padding:20px">' + tr('Loading observers\u2026') + '</div></div>' +
       '<div id="compareContent"></div>' +
     '</div>';
 
@@ -149,7 +151,7 @@ if (typeof window !== 'undefined') {
       if (isComparisonReady()) runComparison();
     } catch (e) {
       document.getElementById('compareControls').innerHTML =
-        '<div class="text-muted" style="padding:20px">Error loading observers: ' + escapeHtml(e.message) + '</div>';
+        '<div class="text-muted" style="padding:20px">' + tr('Error loading observers: {message}', { message: escapeHtml(e.message) }) + '</div>';
     }
   }
 
@@ -157,7 +159,7 @@ if (typeof window !== 'undefined') {
     var el = document.getElementById('compareControls');
     if (!el) return;
 
-    var optionsHtml = '<option value="">Select observer\u2026</option>' +
+    var optionsHtml = '<option value="">' + tr('Select observer\u2026') + '</option>' +
       observers.map(function (o) {
         var label = escapeHtml(o.name || o.id);
         var region = o.iata ? ' (' + escapeHtml(o.iata) + ')' : '';
@@ -167,22 +169,22 @@ if (typeof window !== 'undefined') {
     el.innerHTML =
       '<div class="compare-selector">' +
         '<div class="compare-select-group">' +
-          '<label for="compareObsA">Observer A</label>' +
+          '<label for="compareObsA">' + tr('Observer A') + '</label>' +
           '<span class="compare-select-id" aria-hidden="true">A</span>' +
           '<select id="compareObsA" class="compare-select">' + optionsHtml + '</select>' +
         '</div>' +
-        '<span class="compare-vs">vs</span>' +
+        '<span class="compare-vs">' + tr('vs') + '</span>' +
         '<div class="compare-select-group">' +
-          '<label for="compareObsB">Observer B</label>' +
+          '<label for="compareObsB">' + tr('Observer B') + '</label>' +
           '<span class="compare-select-id" aria-hidden="true">B</span>' +
           '<select id="compareObsB" class="compare-select">' + optionsHtml + '</select>' +
         '</div>' +
         '<div class="compare-select-group">' +
-          '<label for="compareRouteFilter">Packet Type</label>' +
+          '<label for="compareRouteFilter">' + tr('Packet Type') + '</label>' +
           '<select id="compareRouteFilter" class="compare-select">' +
-            '<option value="all">All packets</option>' +
-            '<option value="flood">Flood only</option>' +
-            '<option value="direct">Direct only</option>' +
+            '<option value="all">' + tr('All packets') + '</option>' +
+            '<option value="flood">' + tr('Flood only') + '</option>' +
+            '<option value="direct">' + tr('Direct only') + '</option>' +
           '</select>' +
         '</div>' +
       '</div>';
@@ -239,7 +241,7 @@ if (typeof window !== 'undefined') {
       var label = match ? (match.name || match.id) : id;
       return '<a href="#/observers/' + encodeURIComponent(id) + '">' + escapeHtml(label) + '</a>';
     }
-    var parts = ['<a href="#/observers">Observers</a>'];
+    var parts = ['<a href="#/observers">' + tr('Observers') + '</a>'];
     var aLink = linkFor(selA);
     var bLink = linkFor(selB);
     if (aLink || bLink) {
@@ -260,7 +262,7 @@ if (typeof window !== 'undefined') {
     var content = document.getElementById('compareContent');
     if (!content) return;
 
-    content.innerHTML = '<div class="text-center text-muted" style="padding:40px">Fetching packets\u2026</div>';
+    content.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Fetching packets\u2026') + '</div>';
 
     // Update URL for shareability
     var base = '#/compare?a=' + encodeURIComponent(selA) + '&b=' + encodeURIComponent(selB);
@@ -296,7 +298,7 @@ if (typeof window !== 'undefined') {
       currentView = 'summary';
       renderComparison();
     } catch (e) {
-      content.innerHTML = '<div class="text-muted" style="padding:40px">Error: ' + escapeHtml(e.message) + '</div>';
+      content.innerHTML = '<div class="text-muted" style="padding:40px">' + tr('Error: {message}', { message: escapeHtml(e.message) }) + '</div>';
     }
   }
 
@@ -304,7 +306,7 @@ if (typeof window !== 'undefined') {
     for (var i = 0; i < observers.length; i++) {
       if (observers[i].id === id) return observers[i].name || id;
     }
-    return id ? id.substring(0, 12) : 'Unknown';
+    return id ? id.substring(0, 12) : tr('Unknown');
   }
 
   function renderComparison() {
@@ -331,7 +333,7 @@ if (typeof window !== 'undefined') {
 
     var typeHtml = Object.keys(typeBreakdown).map(function (t) {
       return '<span class="compare-type-badge">' +
-        escapeHtml(PAYLOAD_LABELS[t] || 'Type ' + t) + ' <b>' + typeBreakdown[t] + '</b>' +
+        escapeHtml(PAYLOAD_LABELS[t] || tr('Type {type}', { type: t })) + ' <b>' + typeBreakdown[t] + '</b>' +
       '</span>';
     }).join('');
 
@@ -343,65 +345,63 @@ if (typeof window !== 'undefined') {
         // All three cells lead with their percentage so the row reads in
         // one unit (Tufte: show data variation, not design variation).
         // #1646
-        '<section class="compare-strip" aria-label="Packet overlap summary">' +
+        '<section class="compare-strip" aria-label="' + tr('Packet overlap summary') + '">' +
           '<div class="compare-strip-row">' +
-            '<div class="compare-strip-side" data-view="onlyA" role="button" tabindex="0" aria-label="Show only ' + nameA + ' packets">' +
+            '<div class="compare-strip-side" data-view="onlyA" role="button" tabindex="0" aria-label="' + tr('Show only {name} packets', { name: nameA }) + '">' +
               '<div class="compare-strip-name">' + nameA + '</div>' +
               '<div class="compare-strip-side-pct">' + pctA + '<span class="compare-strip-side-pct-unit">%</span></div>' +
-              '<div class="compare-strip-sub">' + r.onlyA.length.toLocaleString() + ' only here</div>' +
+              '<div class="compare-strip-sub">' + tr('{count} only here', { count: r.onlyA.length.toLocaleString() }) + '</div>' +
             '</div>' +
-            '<div class="compare-strip-mid" data-view="both" role="button" tabindex="0" aria-label="Show shared packets">' +
+            '<div class="compare-strip-mid" data-view="both" role="button" tabindex="0" aria-label="' + tr('Show shared packets') + '">' +
               '<div class="compare-strip-mid-pct">' + pctBoth + '<span class="compare-strip-mid-pct-unit">%</span></div>' +
               '<div class="compare-strip-mid-count">' + r.both.length.toLocaleString() + '</div>' +
-              '<div class="compare-strip-mid-label">of all unique</div>' +
+              '<div class="compare-strip-mid-label">' + tr('of all unique') + '</div>' +
             '</div>' +
-            '<div class="compare-strip-side compare-strip-side-b" data-view="onlyB" role="button" tabindex="0" aria-label="Show only ' + nameB + ' packets">' +
+            '<div class="compare-strip-side compare-strip-side-b" data-view="onlyB" role="button" tabindex="0" aria-label="' + tr('Show only {name} packets', { name: nameB }) + '">' +
               '<div class="compare-strip-name">' + nameB + '</div>' +
               '<div class="compare-strip-side-pct">' + pctB + '<span class="compare-strip-side-pct-unit">%</span></div>' +
-              '<div class="compare-strip-sub">' + r.onlyB.length.toLocaleString() + ' only here</div>' +
+              '<div class="compare-strip-sub">' + tr('{count} only here', { count: r.onlyB.length.toLocaleString() }) + '</div>' +
             '</div>' +
           '</div>' +
           // Single shared-axis diff bar. Width is exact proportion.
           '<div class="compare-bar-container">' +
             '<div class="compare-bar" role="img"' +
-                ' aria-label="' + nameA + ' only ' + pctA + '%, both ' + pctBoth + '%, ' + nameB + ' only ' + pctB + '%">' +
-              (pctA > 0 ? '<div class="compare-bar-seg compare-bar-a" style="width:' + pctA + '%" title="Only ' + nameA + ': ' + r.onlyA.length + '"></div>' : '') +
-              (pctBoth > 0 ? '<div class="compare-bar-seg compare-bar-both" style="width:' + pctBoth + '%" title="Both: ' + r.both.length + '"></div>' : '') +
-              (pctB > 0 ? '<div class="compare-bar-seg compare-bar-b" style="width:' + pctB + '%" title="Only ' + nameB + ': ' + r.onlyB.length + '"></div>' : '') +
+                ' aria-label="' + tr('{nameA} only {pctA}%, both {pctBoth}%, {nameB} only {pctB}%', { nameA: nameA, pctA: pctA, pctBoth: pctBoth, nameB: nameB, pctB: pctB }) + '">' +
+              (pctA > 0 ? '<div class="compare-bar-seg compare-bar-a" style="width:' + pctA + '%" title="' + tr('Only {name}: {count}', { name: nameA, count: r.onlyA.length }) + '"></div>' : '') +
+              (pctBoth > 0 ? '<div class="compare-bar-seg compare-bar-both" style="width:' + pctBoth + '%" title="' + tr('Both: {count}', { count: r.both.length }) + '"></div>' : '') +
+              (pctB > 0 ? '<div class="compare-bar-seg compare-bar-b" style="width:' + pctB + '%" title="' + tr('Only {name}: {count}', { name: nameB, count: r.onlyB.length }) + '"></div>' : '') +
             '</div>' +
             '<div class="compare-bar-legend">' +
-              '<span class="compare-legend-item"><span class="compare-dot compare-dot-a"></span> ' + nameA + ' only</span>' +
-              '<span class="compare-legend-item"><span class="compare-dot compare-dot-both"></span> Both</span>' +
-              '<span class="compare-legend-item"><span class="compare-dot compare-dot-b"></span> ' + nameB + ' only</span>' +
+              '<span class="compare-legend-item"><span class="compare-dot compare-dot-a"></span> ' + tr('{name} only', { name: nameA }) + '</span>' +
+              '<span class="compare-legend-item"><span class="compare-dot compare-dot-both"></span> ' + tr('Both') + '</span>' +
+              '<span class="compare-legend-item"><span class="compare-dot compare-dot-b"></span> ' + tr('{name} only', { name: nameB }) + '</span>' +
             '</div>' +
           '</div>' +
         '</section>' +
 
         // Asymmetric reach — two compact sentences instead of two big cards
-        '<section class="compare-asym" aria-label="Directional reach">' +
+        '<section class="compare-asym" aria-label="' + tr('Directional reach') + '">' +
           '<div class="compare-asym-line">' +
             '<span class="compare-asym-pct">' + stats.aSeesOfB.toFixed(1) + '%</span>' +
-            nameA + ' saw <b>' + stats.shared.toLocaleString() + '</b> of ' + nameB +
-            '\u2019s <b>' + stats.totalB.toLocaleString() + '</b> packets' +
+            tr('{seer} saw {shared} of {owner}\u2019s {total} packets', { seer: nameA, shared: '<b>' + stats.shared.toLocaleString() + '</b>', owner: nameB, total: '<b>' + stats.totalB.toLocaleString() + '</b>' }) +
           '</div>' +
           '<div class="compare-asym-line">' +
             '<span class="compare-asym-pct">' + stats.bSeesOfA.toFixed(1) + '%</span>' +
-            nameB + ' saw <b>' + stats.shared.toLocaleString() + '</b> of ' + nameA +
-            '\u2019s <b>' + stats.totalA.toLocaleString() + '</b> packets' +
+            tr('{seer} saw {shared} of {owner}\u2019s {total} packets', { seer: nameB, shared: '<b>' + stats.shared.toLocaleString() + '</b>', owner: nameA, total: '<b>' + stats.totalA.toLocaleString() + '</b>' }) +
           '</div>' +
         '</section>' +
 
         // Shared packet types — pills, mono-numeric
-        (typeHtml ? '<section class="compare-type-summary" aria-label="Shared packet types">' +
-            '<span class="compare-type-summary-label">Shared types</span>' + typeHtml +
+        (typeHtml ? '<section class="compare-type-summary" aria-label="' + tr('Shared packet types') + '">' +
+            '<span class="compare-type-summary-label">' + tr('Shared types') + '</span>' + typeHtml +
           '</section>' : '') +
 
         // Detail tabs
         '<div class="compare-tabs" role="tablist">' +
-          '<button class="tab-btn' + (currentView === 'summary' ? ' active' : '') + '" data-cview="summary" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'summary' ? 'true' : 'false') + '" tabindex="' + (currentView === 'summary' ? '0' : '-1') + '">Summary</button>' +
-          '<button class="tab-btn' + (currentView === 'both' ? ' active' : '') + '" data-cview="both" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'both' ? 'true' : 'false') + '" tabindex="' + (currentView === 'both' ? '0' : '-1') + '">Both (' + r.both.length + ')</button>' +
-          '<button class="tab-btn' + (currentView === 'onlyA' ? ' active' : '') + '" data-cview="onlyA" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'onlyA' ? 'true' : 'false') + '" tabindex="' + (currentView === 'onlyA' ? '0' : '-1') + '">Only ' + nameA + ' (' + r.onlyA.length + ')</button>' +
-          '<button class="tab-btn' + (currentView === 'onlyB' ? ' active' : '') + '" data-cview="onlyB" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'onlyB' ? 'true' : 'false') + '" tabindex="' + (currentView === 'onlyB' ? '0' : '-1') + '">Only ' + nameB + ' (' + r.onlyB.length + ')</button>' +
+          '<button class="tab-btn' + (currentView === 'summary' ? ' active' : '') + '" data-cview="summary" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'summary' ? 'true' : 'false') + '" tabindex="' + (currentView === 'summary' ? '0' : '-1') + '">' + tr('Summary') + '</button>' +
+          '<button class="tab-btn' + (currentView === 'both' ? ' active' : '') + '" data-cview="both" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'both' ? 'true' : 'false') + '" tabindex="' + (currentView === 'both' ? '0' : '-1') + '">' + tr('Both ({count})', { count: r.both.length }) + '</button>' +
+          '<button class="tab-btn' + (currentView === 'onlyA' ? ' active' : '') + '" data-cview="onlyA" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'onlyA' ? 'true' : 'false') + '" tabindex="' + (currentView === 'onlyA' ? '0' : '-1') + '">' + tr('Only {name} ({count})', { name: nameA, count: r.onlyA.length }) + '</button>' +
+          '<button class="tab-btn' + (currentView === 'onlyB' ? ' active' : '') + '" data-cview="onlyB" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'onlyB' ? 'true' : 'false') + '" tabindex="' + (currentView === 'onlyB' ? '0' : '-1') + '">' + tr('Only {name} ({count})', { name: nameB, count: r.onlyB.length }) + '</button>' +
         '</div>' +
         '<div id="compareDetail"></div>' +
       '</div>';
@@ -485,20 +485,20 @@ if (typeof window !== 'undefined') {
       var overlap = total > 0 ? (r.both.length / total * 100).toFixed(1) : '0.0';
       el.innerHTML =
         '<div class="compare-summary-text">' +
-          '<p>In the last 24 hours, <strong>' + nameA + '</strong> saw <strong>' +
-            (r.onlyA.length + r.both.length).toLocaleString() + '</strong> unique packets ' +
-          'and <strong>' + nameB + '</strong> saw <strong>' +
-            (r.onlyB.length + r.both.length).toLocaleString() + '</strong> unique packets. ' +
-          '<strong>' + r.both.length.toLocaleString() + '</strong> (' + overlap + '%) were seen by both observers.</p>' +
-          (r.both.length === 0 && total > 0 ? '<p class="compare-warning">\u26A0\uFE0F These observers share no packets \u2014 they may be on different frequencies or too far apart.</p>' : '') +
-          (r.onlyA.length === 0 && r.onlyB.length === 0 && r.both.length > 0 ? '<p class="compare-good">\u2705 Perfect overlap \u2014 both observers see the same packets.</p>' : '') +
+          '<p>' + tr('In the last 24 hours, {nameA} saw {countA} unique packets and {nameB} saw {countB} unique packets.', {
+            nameA: '<strong>' + nameA + '</strong>', countA: '<strong>' + (r.onlyA.length + r.both.length).toLocaleString() + '</strong>',
+            nameB: '<strong>' + nameB + '</strong>', countB: '<strong>' + (r.onlyB.length + r.both.length).toLocaleString() + '</strong>',
+          }) + ' ' +
+          tr('{count} ({pct}%) were seen by both observers.', { count: '<strong>' + r.both.length.toLocaleString() + '</strong>', pct: overlap }) + '</p>' +
+          (r.both.length === 0 && total > 0 ? '<p class="compare-warning">\u26A0\uFE0F ' + tr('These observers share no packets \u2014 they may be on different frequencies or too far apart.') + '</p>' : '') +
+          (r.onlyA.length === 0 && r.onlyB.length === 0 && r.both.length > 0 ? '<p class="compare-good">\u2705 ' + tr('Perfect overlap \u2014 both observers see the same packets.') + '</p>' : '') +
         '</div>';
       return;
     }
 
     var hashes = r[currentView] || [];
     if (hashes.length === 0) {
-      el.innerHTML = '<div class="text-muted" style="padding:20px">No packets in this category.</div>';
+      el.innerHTML = '<div class="text-muted" style="padding:20px">' + tr('No packets in this category.') + '</div>';
       return;
     }
 
@@ -509,15 +509,15 @@ if (typeof window !== 'undefined') {
     var mapB = r.packetMapB;
 
     el.innerHTML =
-      (hashes.length > displayLimit ? '<div class="text-muted" style="margin-bottom:8px">Showing first ' + displayLimit + ' of ' + hashes.length.toLocaleString() + ' packets.</div>' : '') +
+      (hashes.length > displayLimit ? '<div class="text-muted" style="margin-bottom:8px">' + tr('Showing first {limit} of {total} packets.', { limit: displayLimit, total: hashes.length.toLocaleString() }) + '</div>' : '') +
       '<div class="analytics-table-scroll"><table class="data-table compare-table">' +
         '<thead><tr>' +
-          '<th scope="col">Hash</th><th scope="col">Time</th><th scope="col">Type</th><th scope="col">Observer</th>' +
+          '<th scope="col">' + tr('Hash') + '</th><th scope="col">' + tr('Time') + '</th><th scope="col">' + tr('Type') + '</th><th scope="col">' + tr('Observer') + '</th>' +
         '</tr></thead>' +
         '<tbody>' + displayed.map(function (h) {
           var p = mapA.get(h) || mapB.get(h);
           if (!p) return '';
-          var typeName = PAYLOAD_LABELS[p.payload_type] || 'Type ' + p.payload_type;
+          var typeName = PAYLOAD_LABELS[p.payload_type] || tr('Type {type}', { type: p.payload_type });
           var obsLabel = '';
           if (currentView === 'both') {
             obsLabel = nameA + ', ' + nameB;

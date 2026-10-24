@@ -1,5 +1,8 @@
 /* === CoreScope — traces.js === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
 (function () {
   let currentHash = null;
@@ -18,11 +21,11 @@
     app.innerHTML = `
       <div class="traces-page">
         <div class="page-header">
-          <h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Packet Trace</h2>
+          <h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ${tr('Packet Trace')}</h2>
         </div>
         <div class="trace-search">
-          <input type="text" id="traceHashInput" placeholder="Enter packet hash…" value="${escapeHtml(urlHash)}" aria-label="Packet hash to trace">
-          <button class="btn-primary" id="traceBtn">Trace</button>
+          <input type="text" id="traceHashInput" placeholder="${tr('Enter packet hash…')}" value="${escapeHtml(urlHash)}" aria-label="${tr('Packet hash to trace')}">
+          <button class="btn-primary" id="traceBtn">${tr('Trace')}</button>
         </div>
         <div id="traceResults"></div>
       </div>`;
@@ -59,7 +62,7 @@
     history.replaceState(null, '', `#/tools/trace/${encodeURIComponent(hash)}`);
 
     const results = document.getElementById('traceResults');
-    results.innerHTML = '<div class="text-center text-muted" style="padding:40px">Tracing…</div>';
+    results.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Tracing…') + '</div>';
 
     try {
       const [traceResp, pktResp] = await Promise.all([
@@ -71,7 +74,7 @@
       const packets = pktResp.packets || [];
 
       if (traceData.length === 0 && packets.length === 0) {
-        results.innerHTML = '<div class="trace-empty">No observations found for this packet hash.</div>';
+        results.innerHTML = '<div class="trace-empty">' + tr('No observations found for this packet hash.') + '</div>';
         return;
       }
 
@@ -107,7 +110,7 @@
 
       renderResults(results, allPaths, allPathsRaw, decoded);
     } catch (e) {
-      results.innerHTML = `<div class="trace-empty" style="color:var(--danger)">Error: ${e.message}</div>`;
+      results.innerHTML = `<div class="trace-empty" style="color:var(--danger)">${tr('Error: {message}', { message: escapeHtml(e.message) })}</div>`;
     }
   }
 
@@ -131,19 +134,19 @@
       <div class="trace-summary">
         <div class="trace-stat">
           <div class="trace-stat-value">${uniqueObservers.length}</div>
-          <div class="trace-stat-label">Observers</div>
+          <div class="trace-stat-label">${tr('Observers')}</div>
         </div>
         <div class="trace-stat">
           <div class="trace-stat-value">${traceData.length}</div>
-          <div class="trace-stat-label">Observations</div>
+          <div class="trace-stat-label">${tr('Observations')}</div>
         </div>
         <div class="trace-stat">
           <div class="trace-stat-value">${spreadMs > 0 ? (spreadMs / 1000).toFixed(1) + 's' : '—'}</div>
-          <div class="trace-stat-label">Time Spread</div>
+          <div class="trace-stat-label">${tr('Time Spread')}</div>
         </div>
         <div class="trace-stat">
           <div class="trace-stat-value"><span class="badge badge-${typeClass}">${typeName}</span></div>
-          <div class="trace-stat-label">Packet Type</div>
+          <div class="trace-stat-label">${tr('Packet Type')}</div>
         </div>
       </div>
 
@@ -246,7 +249,7 @@
       const thickness = Math.min(obsArr.length, 6);
       // Use first observer's color, show count as tooltip
       const color = observerColorMap.get(obsArr[0]) || '#6b7280';
-      const title = obsArr.length > 1 ? `${obsArr.length} observers: ${obsArr.join(', ')}` : obsArr[0];
+      const title = obsArr.length > 1 ? tr('{count} observers: {list}', { count: obsArr.length, list: obsArr.join(', ') }) : obsArr[0];
       edgesSvg += `<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${color}" stroke-width="${thickness}" stroke-opacity="0.6"><title>${escapeHtml(title)}</title></line>`;
       // Arrowhead
       const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
@@ -301,12 +304,12 @@
     // Legend: unique paths
     const uniquePaths = [...new Set(allPaths.map(p => p.hops.join('→')))];
     const legendHtml = uniquePaths.length > 1
-      ? `<div class="trace-path-info" style="margin-top:8px">${uniquePaths.length} unique path${uniquePaths.length > 1 ? 's' : ''} observed by ${allPaths.length} observer${allPaths.length > 1 ? 's' : ''}</div>`
-      : `<div class="trace-path-info">${allPaths[0].hops.length} hop${allPaths[0].hops.length !== 1 ? 's' : ''} in relay path</div>`;
+      ? `<div class="trace-path-info" style="margin-top:8px">${trn(uniquePaths.length, '{count} unique path', '{count} unique paths')} ${trn(allPaths.length, 'observed by {count} observer', 'observed by {count} observers')}</div>`
+      : `<div class="trace-path-info">${trn(allPaths[0].hops.length, '{count} hop in relay path', '{count} hops in relay path')}</div>`;
 
     return `
       <div class="trace-section">
-        <h3>Path Graph</h3>
+        <h3>${tr('Path Graph')}</h3>
         <div style="overflow-x:auto;">
           <svg width="${svgW}" height="${svgH}" style="display:block;margin:0 auto;">
             ${edgesSvg}
@@ -339,9 +342,9 @@
 
     return `
       <div class="trace-section">
-        <h3>Propagation Timeline</h3>
+        <h3>${tr('Propagation Timeline')}</h3>
         <div class="tl-header">
-          <span>Observer</span><span>Time</span><span>Δ</span><span>SNR</span><span>RSSI</span>
+          <span>${tr('Observer')}</span><span>${tr('Time')}</span><span>Δ</span><span>SNR</span><span>RSSI</span>
         </div>
         ${rows.join('')}
       </div>`;

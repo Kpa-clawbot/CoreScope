@@ -3,6 +3,9 @@
    bidirectional RF links + a link table. Registered as page 'node-reach'
    (route #/nodes/<pubkey>/reach), mirroring node-analytics.js. */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 (function () {
   var qmap = null;       // map controller from NodeReachMap.render (built once per load)
   var current = null;
@@ -23,6 +26,7 @@
   // glyph + legend text. The map legend and the table both read from this.
   // A one-way link has bottleneck 0 (one direction is 0) — its own tier so it
   // reads as "no two-way", not as a poor two-way (which would be red/weak).
+  // label and legend are English; tr() them where shown.
   var TIERS = [
     { min: 300, label: 'strong', varName: '--link-strong', glyph: '●●●', legend: 'strong (≥300)' },
     { min: 100, label: 'medium', varName: '--link-medium', glyph: '●●', legend: 'medium (100–299)' },
@@ -49,15 +53,15 @@
   }
 
   function statCard(label, value, descShort, descFull) {
-    return '<div class="analytics-stat-card" title="' + escapeHtml(descFull) + '">' +
-      '<div class="analytics-stat-label">' + escapeHtml(label) + '</div>' +
+    return '<div class="analytics-stat-card" title="' + escapeHtml(tr(descFull)) + '">' +
+      '<div class="analytics-stat-label">' + escapeHtml(tr(label)) + '</div>' +
       '<div class="analytics-stat-value">' + escapeHtml(String(value)) + '</div>' +
-      '<div class="analytics-stat-desc">' + escapeHtml(descShort) + '</div></div>';
+      '<div class="analytics-stat-desc">' + escapeHtml(tr(descShort)) + '</div></div>';
   }
 
   function linkRow(i, l) {
     var dist = l.distance_km != null ? Number(l.distance_km).toFixed(1) : '—';
-    var dir = l.bidir ? '' : (l.we_hear > 0 ? 'incoming' : 'outgoing');
+    var dir = l.bidir ? '' : (l.we_hear > 0 ? tr('incoming') : tr('outgoing'));
     var href = '#/nodes/' + encodeURIComponent(l.pubkey);
     var t = tierOf(l.bottleneck);
     return '<tr' + (l.bidir ? '' : ' class="nq-oneway"') + '>' +
@@ -66,7 +70,7 @@
       (dir ? ' <span class="nq-dir">' + dir + '</span>' : '') + '</td>' +
       '<td class="nq-n">' + l.we_hear + '</td>' +
       '<td class="nq-n">' + l.they_hear + '</td>' +
-      '<td class="nq-n" title="' + t.label + '"><span class="nq-tier" style="color:var(' + t.varName + ')">' + l.bottleneck +
+      '<td class="nq-n" title="' + tr(t.label) + '"><span class="nq-tier" style="color:var(' + t.varName + ')">' + l.bottleneck +
       '</span><span class="nq-tier-glyph" style="color:var(' + t.varName + ')">' + t.glyph + '</span></td>' +
       '<td class="nq-n">' + dist + '</td></tr>';
   }
@@ -88,26 +92,26 @@
     var hasConfirmed = typeof n.configured_scope === 'string';
     if (!hasConfirmed && !n.default_scope) return '';
     if (hasConfirmed) {
-      var at = n.configured_scope_at ? ' Last confirmed ' + n.configured_scope_at + '.' : '';
+      var at = n.configured_scope_at ? ' ' + tr('Last confirmed {time}.', { time: n.configured_scope_at }) : '';
       var val = n.configured_scope === ''
-        ? '<span class="nq-scope-none">none configured</span>'
+        ? '<span class="nq-scope-none">' + tr('none configured') + '</span>'
         : '<code>' + escapeHtml(n.configured_scope) + '</code>';
-      return '<div class="nq-scope">Configured scope ' +
-        '<span class="nq-scope-ok" aria-label="confirmed">✓</span> ' + val +
-        '<span class="nq-scope-src" title="Read back off the node via an observer /neighbors report (status=responded).' +
-        escapeHtml(at) + '"> confirmed</span></div>';
+      return '<div class="nq-scope">' + tr('Configured scope') + ' ' +
+        '<span class="nq-scope-ok" aria-label="' + tr('confirmed') + '">✓</span> ' + val +
+        '<span class="nq-scope-src" title="' + tr('Read back off the node via an observer /neighbors report (status=responded).') +
+        escapeHtml(at) + '"> ' + tr('confirmed') + '</span></div>';
     }
-    return '<div class="nq-scope">Scope <code>' + escapeHtml(n.default_scope) + '</code>' +
-      '<span class="nq-scope-src" title="Inferred from the transport scope of observed adverts, not read back off the node."> observed</span></div>';
+    return '<div class="nq-scope">' + tr('Scope') + ' <code>' + escapeHtml(n.default_scope) + '</code>' +
+      '<span class="nq-scope-src" title="' + tr('Inferred from the transport scope of observed adverts, not read back off the node.') + '"> ' + tr('observed') + '</span></div>';
   }
 
   function headerHtml(n, nodeName, days) {
     return '<div class="nq-head">' +
-      '<a class="nq-back" href="#/nodes/' + encodeURIComponent(n.pubkey) + '" aria-label="Back to ' + nodeName + ' detail">← Back to ' + nodeName + '</a>' +
-      '<h2 class="nq-title">' + nodeName + ' — Reach</h2>' +
-      '<div class="nq-sub">' + escapeHtml(n.role || 'Unknown role') + ' · two-way RF link reach</div>' +
+      '<a class="nq-back" href="#/nodes/' + encodeURIComponent(n.pubkey) + '" aria-label="' + tr('Back to {name} detail', { name: nodeName }) + '">← ' + tr('Back to {name}', { name: nodeName }) + '</a>' +
+      '<h2 class="nq-title">' + tr('{name} — Reach', { name: nodeName }) + '</h2>' +
+      '<div class="nq-sub">' + escapeHtml(n.role ? tr(n.role) : tr('Unknown role')) + ' · ' + tr('two-way RF link reach') + '</div>' +
       scopeLineHtml(n) +
-      '<div class="nq-note">Reliable by design: built only from unique <b>2–3 byte</b> path-hash (multibyte) matches. 1-byte hops collide between nodes and are excluded, so the links shown are trustworthy.</div>' +
+      '<div class="nq-note">' + tr('Reliable by design: built only from unique {bytes} path-hash (multibyte) matches. 1-byte hops collide between nodes and are excluded, so the links shown are trustworthy.', { bytes: '<b>' + tr('2–3 byte') + '</b>' }) + '</div>' +
       '<div class="analytics-time-range nq-noprint" id="nqDays" style="margin-top:8px">' +
       dayBtn(1, days, '24h') + dayBtn(7, days, '7d') + dayBtn(14, days, '14d') + dayBtn(30, days, '30d') +
       '</div></div>';
@@ -161,7 +165,7 @@
     if (covHandle) { try { covHandle.off(); } catch (e) {} covHandle = null; }
     if (qmap) { qmap.destroy(); qmap = null; }
     if (isInitial) {
-      container.innerHTML = '<div class="nq-load">Loading reach…</div>';
+      container.innerHTML = '<div class="nq-load">' + tr('Loading reach…') + '</div>';
     }
 
     var d;
@@ -173,10 +177,10 @@
         if (myGen !== loadGen) return; // superseded or destroyed mid-flight
         var wait = reachRetryDelayMs(e, retries);
         if (wait < 0) {
-          container.innerHTML = '<div id="nq-report"><div class="nq-error">Failed to load reach: ' + escapeHtml(e.message) + '</div></div>';
+          container.innerHTML = '<div id="nq-report"><div class="nq-error">' + tr('Failed to load reach: {message}', { message: escapeHtml(e.message) }) + '</div></div>';
           return;
         }
-        container.innerHTML = '<div id="nq-report"><div class="nq-load nq-busy">Reach is busy computing other reports, retrying in ' + (wait / 1000) + ' s…</div></div>';
+        container.innerHTML = '<div id="nq-report"><div class="nq-load nq-busy">' + tr('Reach is busy computing other reports, retrying in {seconds} s…', { seconds: wait / 1000 }) + '</div></div>';
         await new Promise(function (r) { setTimeout(r, wait); });
         if (myGen !== loadGen) return; // navigated away or picked another window while waiting
       }
@@ -192,7 +196,7 @@
       // nodeName is already escaped; build then assign (keeps it off the
       // innerHTML line for the XSS-sink gate, like statsHtml below).
       var emptyHtml = '<div id="nq-report">' + headerHtml(n, nodeName, days) +
-        '<div class="nq-msg">This node has no unique 1–3 byte prefix, so it cannot be reliably identified in paths — no link data available.</div></div>';
+        '<div class="nq-msg">' + tr('This node has no unique 1–3 byte prefix, so it cannot be reliably identified in paths — no link data available.') + '</div></div>';
       container.innerHTML = emptyHtml;
       wireTimeRange(container, pubkey);
       return;
@@ -200,14 +204,14 @@
 
     var statsHtml = headerHtml(n, nodeName, days) +
       '<div class="nq-body">' +
-      '<div class="nq-group-h">Network position (all-time)</div>' +
+      '<div class="nq-group-h">' + tr('Network position (all-time)') + '</div>' +
       '<div class="analytics-stats">' +
       statCard('Neighbours', imp.neighbor_degree, 'All-time distinct neighbours',
         'Distinct neighbours in the all-time neighbour graph (advert first-hop + observer last-hop, geo-filtered).') +
       statCard('Rank', '#' + imp.degree_rank + ' / ' + imp.nodes_with_edges, 'Rank by neighbour count',
         'Rank by neighbour count among all nodes with edges. #1 = most-connected node in the network.') +
       '</div>' +
-      '<div class="nq-group-h">Last ' + d.window.days + ' days</div>' +
+      '<div class="nq-group-h">' + tr('Last {days} days', { days: d.window.days }) + '</div>' +
       '<div class="analytics-stats">' +
       statCard('Links', d.links.length, 'Neighbours seen this window',
         'Distinct direct neighbours seen in paths this window (any direction).') +
@@ -222,8 +226,7 @@
     // Identifiable, but no path adjacency observed in this window.
     if (!d.links.length) {
       container.innerHTML = '<div id="nq-report">' + statsHtml +
-        '<div class="nq-empty">No observed RF links in the last ' + d.window.days +
-        ' days — this node advertises but hasn’t been seen relaying traffic (or no observers captured it). Try a longer window.</div>' +
+        '<div class="nq-empty">' + tr('No observed RF links in the last {days} days — this node advertises but hasn’t been seen relaying traffic (or no observers captured it). Try a longer window.', { days: d.window.days }) + '</div>' +
         '</div></div>';
       wireTimeRange(container, pubkey);
       return;
@@ -231,25 +234,25 @@
 
     container.innerHTML = '<div id="nq-report">' + statsHtml +
       '<div class="nq-actions nq-noprint">' +
-      '<fieldset class="nq-filter"><legend>Show one-way links</legend>' +
-      '<label for="nqIncoming"><input type="checkbox" id="nqIncoming"> incoming <span class="nq-dir">(we hear them)</span></label>' +
-      '<label for="nqOutgoing"><input type="checkbox" id="nqOutgoing"> outgoing <span class="nq-dir">(they hear us)</span></label>' +
+      '<fieldset class="nq-filter"><legend>' + tr('Show one-way links') + '</legend>' +
+      '<label for="nqIncoming"><input type="checkbox" id="nqIncoming"> ' + tr('incoming') + ' <span class="nq-dir">(' + tr('we hear them') + ')</span></label>' +
+      '<label for="nqOutgoing"><input type="checkbox" id="nqOutgoing"> ' + tr('outgoing') + ' <span class="nq-dir">(' + tr('they hear us') + ')</span></label>' +
       '</fieldset>' +
-      (window.MC_CLIENT_RX_COVERAGE ? '<label for="nqCoverage"><input type="checkbox" id="nqCoverage"' + (coverageOn ? ' checked' : '') + '> coverage <span class="nq-dir">(where clients heard it)</span></label>' : '') +
+      (window.MC_CLIENT_RX_COVERAGE ? '<label for="nqCoverage"><input type="checkbox" id="nqCoverage"' + (coverageOn ? ' checked' : '') + '> ' + tr('coverage') + ' <span class="nq-dir">(' + tr('where clients heard it') + ')</span></label>' : '') +
       '<span id="nqCount" class="nq-count" aria-live="polite"></span>' +
-      '<button id="nqPrintBtn" class="btn-primary nq-print-btn">Print / PDF</button>' +
+      '<button id="nqPrintBtn" class="btn-primary nq-print-btn">' + tr('Print / PDF') + '</button>' +
       '</div>' +
       (window.MC_CLIENT_RX_COVERAGE ? '<div class="nq-cov-legend nq-noprint' + (coverageOn ? '' : ' is-hidden') + '" id="nqCovLegend">' +
-      '<span><i style="background:var(--nq-cov-strong)"></i>strong</span>' +
-      '<span><i style="background:var(--nq-cov-mid)"></i>medium</span>' +
-      '<span><i style="background:var(--nq-cov-weak)"></i>weak</span>' +
-      '<span><i style="background:var(--nq-cov-grey)"></i>no signal</span>' +
+      '<span><i style="background:var(--nq-cov-strong)"></i>' + tr('strong') + '</span>' +
+      '<span><i style="background:var(--nq-cov-mid)"></i>' + tr('medium') + '</span>' +
+      '<span><i style="background:var(--nq-cov-weak)"></i>' + tr('weak') + '</span>' +
+      '<span><i style="background:var(--nq-cov-grey)"></i>' + tr('no signal') + '</span>' +
       '</div>' : '') +
       '<div id="nqNoGps" class="nq-nogps"></div>' +
       '<div id="nqMap" class="nq-map"></div>' +
-      '<table class="nq-table"><thead><tr><th>#</th><th>Neighbour</th><th>we hear</th>' +
-      '<th>they hear us</th><th title="smaller of we-hear / they-hear — gates two-way stability">bottleneck</th>' +
-      '<th>distance (km)</th></tr></thead><tbody id="nqRows"></tbody></table>' +
+      '<table class="nq-table"><thead><tr><th>#</th><th>' + tr('Neighbour') + '</th><th>' + tr('we hear') + '</th>' +
+      '<th>' + tr('they hear us') + '</th><th title="' + tr('smaller of we-hear / they-hear — gates two-way stability') + '">' + tr('bottleneck') + '</th>' +
+      '<th>' + tr('distance (km)') + '</th></tr></thead><tbody id="nqRows"></tbody></table>' +
       '</div></div>';
 
     // Build the map ONCE; toggles update the link layer in place (no flicker).
@@ -272,10 +275,10 @@
       });
       document.getElementById('nqRows').innerHTML = list.map(function (l, i) { return linkRow(i + 1, l); }).join('');
       document.getElementById('nqCount').textContent =
-        'showing ' + list.length + ' of ' + d.links.length + ' (' + twoWay.length + ' two-way)';
+        tr('showing {shown} of {total} ({twoway} two-way)', { shown: list.length, total: d.links.length, twoway: twoWay.length });
       var noGps = list.filter(function (l) { return l.lat == null || l.lon == null; }).length;
       document.getElementById('nqNoGps').textContent =
-        noGps ? noGps + ' link' + (noGps === 1 ? '' : 's') + ' have no location and are not drawn on the map.' : '';
+        noGps ? trn(noGps, '{count} link has no location and is not drawn on the map.', '{count} links have no location and are not drawn on the map.') : '';
       lastList = list;
       if (qmap) qmap.setLinks(coverageOn ? [] : list);
     }
@@ -310,7 +313,7 @@
 
   function init(container, routeParam) {
     if (!routeParam || !routeParam.endsWith('/reach')) {
-      container.innerHTML = '<div class="nq-load">Invalid reach URL</div>';
+      container.innerHTML = '<div class="nq-load">' + tr('Invalid reach URL') + '</div>';
       return;
     }
     load(container, routeParam.slice(0, -'/reach'.length), DEFAULT_DAYS, true);

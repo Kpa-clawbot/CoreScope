@@ -42,8 +42,8 @@ console.log('\u2500\u2500 Observers firmware/client columns (#1789) \u2500\u2500
 test('thead contains Firmware header with data-priority=4 and data-sort-key=firmware', () => {
   const thead = extractBlock(src, /<thead><tr>/, /<\/tr><\/thead>/);
   assert.ok(
-    /<th[^>]*data-priority="4"[^>]*data-sort-key="firmware"[^>]*>\s*Firmware\s*<\/th>/.test(thead) ||
-    /<th[^>]*data-sort-key="firmware"[^>]*data-priority="4"[^>]*>\s*Firmware\s*<\/th>/.test(thead),
+    /<th[^>]*data-priority="4"[^>]*data-sort-key="firmware"[^>]*>\s*(?:Firmware|\$\{tr\('Firmware'\)\})\s*<\/th>/.test(thead) ||
+    /<th[^>]*data-sort-key="firmware"[^>]*data-priority="4"[^>]*>\s*(?:Firmware|\$\{tr\('Firmware'\)\})\s*<\/th>/.test(thead),
     'Firmware <th> with data-priority="4" and data-sort-key="firmware" not found in thead'
   );
 });
@@ -51,8 +51,8 @@ test('thead contains Firmware header with data-priority=4 and data-sort-key=firm
 test('thead contains Client header with data-priority=4 and data-sort-key=client_version', () => {
   const thead = extractBlock(src, /<thead><tr>/, /<\/tr><\/thead>/);
   assert.ok(
-    /<th[^>]*data-priority="4"[^>]*data-sort-key="client_version"[^>]*>\s*Client\s*<\/th>/.test(thead) ||
-    /<th[^>]*data-sort-key="client_version"[^>]*data-priority="4"[^>]*>\s*Client\s*<\/th>/.test(thead),
+    /<th[^>]*data-priority="4"[^>]*data-sort-key="client_version"[^>]*>\s*(?:Client|\$\{tr\('Client'\)\})\s*<\/th>/.test(thead) ||
+    /<th[^>]*data-sort-key="client_version"[^>]*data-priority="4"[^>]*>\s*(?:Client|\$\{tr\('Client'\)\})\s*<\/th>/.test(thead),
     'Client <th> with data-priority="4" and data-sort-key="client_version" not found in thead'
   );
 });

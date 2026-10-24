@@ -127,7 +127,8 @@ assert(/\.mc-cluster[^{]*\{[\s\S]*?box-shadow[^;]*rgba\(0\s*,\s*0\s*,\s*0/i.test
 assert(/role=["']img["']/.test(mapSrc) && /aria-label[^=]*=[^>]*nodes/.test(mapSrc),
   'makeClusterIcon emits role="img" + aria-label summarising count + role breakdown');
 assert(/' nodes — '/.test(mapSrc) || /\d+ nodes — /.test(mapSrc) ||
-       /total\s*\+\s*' nodes — '/.test(mapSrc),
+       /total\s*\+\s*' nodes — '/.test(mapSrc) ||
+       /'\{count\} nodes'\)\s*\+\s*' — '/.test(mapSrc),
   'cluster aria-label matches /\\d+ nodes — / pattern (summary + breakdown)');
 
 console.log('\n=== #1356 V2: role pills — letter primary, Wong palette, dark text ===');
@@ -167,7 +168,9 @@ assert(pillFontMatch && /1[0-9]px|0\.625rem|0\.6875rem|0\.75rem/.test(pillFontMa
 
 // V2.f — per-pill aria-label "<N> <role>s".
 assert(/aria-label="'\s*\+\s*n\s*\+\s*' '\s*\+\s*role/.test(mapSrc) ||
-       /aria-label=("|')[\s\S]{0,80}\+\s*n\s*\+[\s\S]{0,80}\+\s*role/.test(mapSrc),
+       /aria-label=("|')[\s\S]{0,80}\+\s*n\s*\+[\s\S]{0,80}\+\s*role/.test(mapSrc) ||
+       // Translated form: the label is built once with trn(n, ... role ...).
+       (/aria-label="'\s*\+\s*pillLabel\s*\+/.test(mapSrc) && /pillLabel\s*=\s*trn\(\s*n\s*,[^;]*role/.test(mapSrc)),
   'pill HTML emits aria-label with count + role');
 
 // V2.g — DO NOT touch --info / --warning / --accent (out of scope hard rule).
@@ -260,7 +263,7 @@ assert(/isAlsoObserver[\s\S]{0,40}\?\s*['"][^'"]*<span\s+aria-hidden="true"[^>]*
 //   `mbStatus || null` + truthy-check structure that prevents this.
 assert(/var\s+status\s*=\s*mbStatus\s*\|\|\s*null\s*;/.test(mapSrc),
   'makeRepeaterLabelIcon normalises missing mbStatus to null (not "undefined")');
-assert(/ariaStatus\s*=\s*status\s*\?\s*\(\s*['"]multi-byte\s/.test(mapSrc),
+assert(/ariaStatus\s*=\s*status\s*\?\s*\(\s*(?:tr\(\s*)?['"]multi-byte\s/.test(mapSrc),
   'ariaStatus uses ternary on truthy `status` — null falls through to "repeater hash <ID>" branch');
 // Negative regression: no template/concat that would ever produce "multi-byte undefined".
 assert(!/['"]multi-byte\s*['"]\s*\+\s*mbStatus(?![^,]*\?)/.test(mapSrc),

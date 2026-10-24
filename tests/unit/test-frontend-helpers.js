@@ -7271,7 +7271,7 @@ console.log('\n=== observers.js: healthStatus (configurable thresholds) ===');
   const healthStatusSrc = m[0];
 
   function runHealthStatus(lastSeen, healthThresholds) {
-    const ctx = { window: {}, Date };
+    const ctx = { window: {}, Date, tr: (s) => s };
     if (healthThresholds) ctx.window.HEALTH_THRESHOLDS = healthThresholds;
     vm.createContext(ctx);
     vm.runInContext(healthStatusSrc + '\n; result = healthStatus(lastSeen);', Object.assign(ctx, { lastSeen, result: null }));

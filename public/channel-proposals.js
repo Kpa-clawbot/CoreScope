@@ -8,6 +8,8 @@
  * escapeHtml; messages use textContent. */
 (function () {
   'use strict';
+  // i18n.js defines tr(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
   var KIND = 'hashtag_channel';
   var MAX_BYTES = 31; // firmware ChannelDetails.name[32] minus the NUL
   // Go's unicode.IsSpace set, so trimming matches strings.TrimSpace.
@@ -20,6 +22,7 @@
   var ODI = '\\u034f\\u115f\\u1160\\u17b4\\u17b5\\u2065\\u3164\\uffa0\\ufff0-\\ufff8' +
     '\\u{e0000}\\u{e0002}-\\u{e001f}\\u{e0080}-\\u{e00ff}\\u{e01f0}-\\u{e0fff}';
   try { BAD_RE = new RegExp('[\\p{Cc}\\p{Cf}\\u2028\\u2029\\u2800' + ODI + ']|(?! )\\p{Zs}', 'u'); } catch (e) { BAD_RE = null; } // old engines: the server still checks
+  // MSG and STATUS_LABELS are English; translated where returned/shown.
   var MSG = {
     empty: 'enter a channel name after #',
     long: 'a channel name is at most 31 bytes including the # (MeshCore stores 32 with the terminator)',
@@ -45,10 +48,10 @@
   function validate(raw) {
     var s = trimGo(String(raw == null ? '' : raw));
     if (s.charAt(0) !== '#') s = '#' + s;
-    if (trimGo(s.slice(1).replace(/‍/g, '')) === '') return { ok: false, error: MSG.empty };
-    if (utf8Length(s) > MAX_BYTES) return { ok: false, error: MSG.long };
-    if (s.toLowerCase() === '#public') return { ok: false, error: MSG.pub };
-    if (BAD_RE && BAD_RE.test(s.replace(/‍/g, ''))) return { ok: false, error: MSG.bad };
+    if (trimGo(s.slice(1).replace(/‍/g, '')) === '') return { ok: false, error: tr(MSG.empty) };
+    if (utf8Length(s) > MAX_BYTES) return { ok: false, error: tr(MSG.long) };
+    if (s.toLowerCase() === '#public') return { ok: false, error: tr(MSG.pub) };
+    if (BAD_RE && BAD_RE.test(s.replace(/‍/g, ''))) return { ok: false, error: tr(MSG.bad) };
     return { ok: true, name: s };
   }
 
@@ -57,7 +60,7 @@
 
   function propose(name) {
     return window.CSAuth.request('POST', '/api/proposals', { kind: KIND, subject: name }).then(function (r) {
-      return r.ok ? { ok: true, text: 'Proposed ' + r.data.subject + ', an admin will review it.' }
+      return r.ok ? { ok: true, text: tr('Proposed {channel}, an admin will review it.', { channel: r.data.subject }) }
                   : { ok: false, text: window.CSAuth.errText(r) };
     });
   }
@@ -84,7 +87,7 @@
       btn.disabled = true;
       setMsg(msg, 'Sending…', true);
       return propose(v.name).then(function (r) { setMsg(msg, r.text, r.ok); return r.ok; },
-        function () { setMsg(msg, 'Network error, try again.', false); return false; })
+        function () { setMsg(msg, tr('Network error, try again.'), false); return false; })
         .then(function (done) { btn.disabled = false; return done; });
     }
     input.addEventListener('input', function () {
@@ -120,12 +123,12 @@
   function fmtDate(iso) { try { return new Date(iso).toLocaleString(); } catch (_) { return String(iso); } }
 
   function statusChip(status) {
-    var label = STATUS_LABELS[status] || status;
+    var label = STATUS_LABELS[status] ? tr(STATUS_LABELS[status]) : status;
     return '<span class="um-status um-status-' + escapeHtml(status) + '">' + escapeHtml(label) + '</span>';
   }
 
   function mineHtml(list) {
-    if (!list || !list.length) return '<p class="account-hint">You have not proposed a channel yet. Use Channels, Add channel, Propose for everyone.</p>';
+    if (!list || !list.length) return '<p class="account-hint">' + tr('You have not proposed a channel yet. Use Channels, Add channel, Propose for everyone.') + '</p>';
     return '<ul class="account-proposals">' + list.map(function (p) {
       return '<li data-subject="' + escapeHtml(p.subject) + '"><span>' + escapeHtml(p.subject) +
         ' <small>' + escapeHtml(fmtDate(p.createdAt)) + '</small></span> ' + statusChip(p.status) +
@@ -137,7 +140,7 @@
     return window.CSAuth.request('GET', '/api/account/proposals').then(function (r) {
       if (!r.ok) { window.CSAuth.say(msgId, window.CSAuth.errText(r), false); return; }
       el.innerHTML = mineHtml(r.data);
-    }).catch(function () { window.CSAuth.say(msgId, 'Network error, try again.', false); });
+    }).catch(function () { window.CSAuth.say(msgId, tr('Network error, try again.'), false); });
   }
 
   window.CSProposals = {

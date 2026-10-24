@@ -9,6 +9,9 @@
    there), and '*' is never listed as a scope. */
 'use strict';
 (function () {
+  // i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+  var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
   var loadGen = 0; // bumped per load; guards against in-flight races (mirrors node-reach.js)
   var DEFAULT_WINDOW = '24h';
   var WINDOWS = [
@@ -34,18 +37,19 @@
   // repeaters that answered a declared-regions request, the transport view
   // every repeater seen forwarding.
   function introHtml(m) {
+    var nodesLink = '<a href="#/nodes">' + tr("Per-node detail lives on each node's page") + '</a>.';
     if (m === 'transport') {
-      return 'Every repeater seen forwarding in the window, with the region scopes it was seen carrying and, where it has answered, the regions it declares. ' +
-        'Type a region scope to see which repeaters carry it and which were active but did not. <a href="#/nodes">Per-node detail lives on each node\'s page</a>.';
+      return tr('Every repeater seen forwarding in the window, with the region scopes it was seen carrying and, where it has answered, the regions it declares.') + ' ' +
+        tr('Type a region scope to see which repeaters carry it and which were active but did not.') + ' ' + nodesLink;
     }
-    return 'Network-wide comparison of declared vs. observed region-scope forwarding, across every repeater that has declared a region list over RF. ' +
-      '<a href="#/nodes">Per-node detail lives on each node\'s page</a>.';
+    return tr('Network-wide comparison of declared vs. observed region-scope forwarding, across every repeater that has declared a region list over RF.') + ' ' +
+      nodesLink;
   }
 
   function modeBtn(key, cur, label) {
     var on = key === cur;
     return '<button data-mode="' + key + '" aria-pressed="' + (on ? 'true' : 'false') + '"' +
-      (on ? ' class="active"' : '') + '>' + label + '</button>';
+      (on ? ' class="active"' : '') + '>' + tr(label) + '</button>';
   }
 
   // normRegion mirrors the server's normalisation for ?region=: no leading '#',
@@ -84,42 +88,44 @@
   // simply has no traffic) and strong evidence over a long one — the reader
   // must never mistake a 1h result for a 7d one.
   function windowHonestyNote(w) {
-    var strength = w === '7d' ? 'a strong signal — a full week with zero matching traffic is hard to explain as bad luck'
-      : (w === '24h' ? 'a moderate signal — worth checking, but a quiet region can still look this way for a day'
-        : 'weak evidence — an hour with no traffic proves very little; treat this as a hint to re-check on 24h or 7d');
-    return '<div class="sa-window-note">Rows below are ranked by declared regions with <strong>zero observed forwarding in the last ' +
-      escapeHtml(w) + '</strong>. At this window, that absence is ' + strength + '.</div>';
+    var strength = w === '7d' ? tr('a strong signal — a full week with zero matching traffic is hard to explain as bad luck')
+      : (w === '24h' ? tr('a moderate signal — worth checking, but a quiet region can still look this way for a day')
+        : tr('weak evidence — an hour with no traffic proves very little; treat this as a hint to re-check on 24h or 7d'));
+    return '<div class="sa-window-note">' + tr('Rows below are ranked by declared regions with {zero}. At this window, that absence is {strength}.', {
+      zero: '<strong>' + tr('zero observed forwarding in the last {window}', { window: escapeHtml(w) }) + '</strong>',
+      strength: strength,
+    }) + '</div>';
   }
 
   function pageHtml() {
     return '<div class="sa-page">' +
       '<div class="sa-head">' +
-      '<h2>Scope audit</h2>' +
+      '<h2>' + tr('Scope audit') + '</h2>' +
       '<div class="sa-controls">' +
-      '<div class="analytics-time-range" id="saMode" role="group" aria-label="View">' +
+      '<div class="analytics-time-range" id="saMode" role="group" aria-label="' + tr('View') + '">' +
       MODES.map(function (m) { return modeBtn(m.key, mode, m.label); }).join('') +
       '</div>' +
       '<div class="analytics-time-range" id="saWindow">' +
       WINDOWS.map(function (w) { return windowBtn(w.key, win, w.label); }).join('') +
       '</div>' +
-      '<div id="saObsRegionFilter" class="region-filter-container" title="Count only forwarding heard by observers in these regions"></div>' +
+      '<div id="saObsRegionFilter" class="region-filter-container" title="' + tr('Count only forwarding heard by observers in these regions') + '"></div>' +
       '</div></div>' +
       '<div class="sa-region-bar" id="saRegionBar"' + (mode === 'transport' ? '' : ' hidden') + '>' +
-      '<label for="saRegion">Scope</label> ' +
-      '<input type="text" id="saRegion" class="nodes-search sa-region" list="saRegionList" placeholder="e.g. be" value="' + escapeHtml(region) + '" aria-describedby="saRegionHelp">' +
+      '<label for="saRegion">' + tr('Scope') + '</label> ' +
+      '<input type="text" id="saRegion" class="nodes-search sa-region" list="saRegionList" placeholder="' + tr('e.g. {example}', { example: 'be' }) + '" value="' + escapeHtml(region) + '" aria-describedby="saRegionHelp">' +
       '<datalist id="saRegionList"></datalist>' +
-      ' <span class="text-muted" id="saRegionHelp">Show which repeaters were seen carrying one region scope, and which were active but did not.</span>' +
+      ' <span class="text-muted" id="saRegionHelp">' + tr('Show which repeaters were seen carrying one region scope, and which were active but did not.') + '</span>' +
       '</div>' +
       '<div class="sa-intro" id="saIntro">' + introHtml(mode) + '</div>' +
       sourcesLineHtml() +
-      '<div class="sa-search-bar"><input type="text" class="nodes-search sa-search" id="saSearch" placeholder="Search by repeater, pubkey, or region…" aria-label="Search scope audit rows"></div>' +
-      '<div id="saBody"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading scope audit…</div></div>' +
+      '<div class="sa-search-bar"><input type="text" class="nodes-search sa-search" id="saSearch" placeholder="' + tr('Search by repeater, pubkey, or region…') + '" aria-label="' + tr('Search scope audit rows') + '"></div>' +
+      '<div id="saBody"><div class="text-muted" style="padding:8px"><span class="spinner"></span> ' + tr('Loading scope audit…') + '</div></div>' +
       '</div>';
   }
 
   function ageHtml(row) {
     var age = timeAgo(row.declaredAt);
-    return '<span title="Declared regions answer captured ' + escapeHtml(row.declaredAt) + '">' + escapeHtml(age) + '</span>';
+    return '<span title="' + tr('Declared regions answer captured {time}', { time: escapeHtml(row.declaredAt) }) + '">' + escapeHtml(age) + '</span>';
   }
 
   // sourcesLineHtml is the always-visible half of the provenance note. It has
@@ -127,10 +133,12 @@
   // which by definition never renders on an instance that HAS data, so an
   // operator with a full table would otherwise never see where it came from.
   function sourcesLineHtml() {
-    return '<div class="sa-sources">The <strong>declared</strong> side is the repeater&rsquo;s own answer, read back off the node by an ' +
-      '<a href="https://observer.gessaman.com/" target="_blank" rel="noopener">ESP32 observer on the neighbour-report firmware</a> or by ' +
-      '<a href="https://github.com/efiten/coredrive-rx" target="_blank" rel="noopener">CoreDrive RX</a>. The newest answer per repeater wins, whichever collected it. ' +
-      'The <strong>observed</strong> side is forwarding CoreScope already sees in its own traffic.</div>';
+    return '<div class="sa-sources">' + tr('The {declared} side is the repeater’s own answer, read back off the node by an {observer} or by {app}. The newest answer per repeater wins, whichever collected it. The {observed} side is forwarding CoreScope already sees in its own traffic.', {
+      declared: '<strong>' + tr('declared') + '</strong>',
+      observer: '<a href="https://observer.gessaman.com/" target="_blank" rel="noopener">' + tr('ESP32 observer on the neighbour-report firmware') + '</a>',
+      app: '<a href="https://github.com/efiten/coredrive-rx" target="_blank" rel="noopener">CoreDrive RX</a>',
+      observed: '<strong>' + tr('observed') + '</strong>',
+    }) + '</div>';
   }
 
   // mergedScopeChips renders ONE chip per declared region, coloured by whether
@@ -151,7 +159,15 @@
   // explanation rather than deferring to the intro: on a fresh deployment this
   // IS the page. Named and returned rather than inlined so it can be asserted.
   function emptyStateHtml() {
-    return '<div class="ns-empty sa-empty"><strong>No repeater has answered with its configured region list yet</strong>, so there is nothing to audit here.<br><br>That answer has to be collected from the repeater itself; nothing else in CoreScope knows which regions a node is <em>configured</em> for, only which ones its traffic was seen under. Two things can collect it, and neither ships with CoreScope, so an empty table is the normal state until you run one:<ul><li>an <a href="https://observer.gessaman.com/" target="_blank" rel="noopener">ESP32 observer on the neighbour-report firmware</a> (<code>set mqtt.neighbors on</code>), which reports its neighbours&rsquo; scopes every 24h</li><li>the <a href="https://github.com/efiten/coredrive-rx" target="_blank" rel="noopener">CoreDrive RX</a> companion app, which asks a repeater directly while you are in range of it</li></ul>The newest answer per repeater wins, whichever collected it.</div>';
+    return '<div class="ns-empty sa-empty">' +
+      tr('{none}, so there is nothing to audit here.', { none: '<strong>' + tr('No repeater has answered with its configured region list yet') + '</strong>' }) + '<br><br>' +
+      tr('That answer has to be collected from the repeater itself; nothing else in CoreScope knows which regions a node is {configured} for, only which ones its traffic was seen under. Two things can collect it, and neither ships with CoreScope, so an empty table is the normal state until you run one:', { configured: '<em>' + tr('configured') + '</em>' }) +
+      '<ul><li>' + tr('an {observer} ({command}), which reports its neighbours’ scopes every 24h', {
+        observer: '<a href="https://observer.gessaman.com/" target="_blank" rel="noopener">' + tr('ESP32 observer on the neighbour-report firmware') + '</a>',
+        command: '<code>set mqtt.neighbors on</code>',
+      }) + '</li><li>' + tr('the {app} companion app, which asks a repeater directly while you are in range of it', {
+        app: '<a href="https://github.com/efiten/coredrive-rx" target="_blank" rel="noopener">CoreDrive RX</a>',
+      }) + '</li></ul>' + tr('The newest answer per repeater wins, whichever collected it.') + '</div>';
   }
 
   function mergedScopeChips(row) {
@@ -170,16 +186,14 @@
       var cls = 'sa-chip ' + (observed ? 'sa-chip-observed' : 'sa-chip-unobserved') + (verified ? ' sa-chip-verified' : '');
       var title;
       if (verified) {
-        title = n + ': observed — ' + hits + ' forwarded packet' + (hits === 1 ? '' : 's') +
-          ' in this window derive to this region, verified against the repeater’s own declared list. ' +
-          'This instance holds no hashRegions key for it, so it could not be named directly.';
+        title = n + ': ' + trn(hits, 'observed — {count} forwarded packet in this window derive to this region, verified against the repeater’s own declared list.', 'observed — {count} forwarded packets in this window derive to this region, verified against the repeater’s own declared list.') + ' ' +
+          tr('This instance holds no hashRegions key for it, so it could not be named directly.');
       } else if (observed) {
-        title = n + ': observed forwarding in this window';
+        title = n + ': ' + tr('observed forwarding in this window');
       } else if (hits === 1) {
-        title = n + ': declared, and exactly one forwarded packet derives to it — that is one match in 65536 by chance alone, ' +
-          'so it is not treated as evidence. Two would be.';
+        title = n + ': ' + tr('declared, and exactly one forwarded packet derives to it — that is one match in 65536 by chance alone, so it is not treated as evidence. Two would be.');
       } else {
-        title = n + ': declared, but no forwarding observed in this window';
+        title = n + ': ' + tr('declared, but no forwarding observed in this window');
       }
       return '<span class="' + cls + '" title="' + escapeHtml(title) + '">' + escapeHtml(n) + '</span>';
     });
@@ -197,8 +211,8 @@
   // cannot resolve a target we hold no row for.
   function nameHtml(row) {
     if (row.name == null) {
-      return '<span class="sa-name-unknown" title="No nodes row held for this target — a declared-regions answer can name a repeater this instance has never recorded.">' +
-        escapeHtml(row.publicKey.slice(0, 10)) + '… (unknown node)</span>';
+      return '<span class="sa-name-unknown" title="' + tr('No nodes row held for this target — a declared-regions answer can name a repeater this instance has never recorded.') + '">' +
+        escapeHtml(row.publicKey.slice(0, 10)) + '… (' + tr('unknown node') + ')</span>';
     }
     var name = row.name ? escapeHtml(row.name) : escapeHtml(row.publicKey.slice(0, 10)) + '…';
     return '<a href="#/nodes/' + encodeURIComponent(row.publicKey) + '">' + name + '</a>';
@@ -237,7 +251,7 @@
 
   function configStateHtml(row) {
     var meta = CONFIG_STATES[row.configState];
-    return '<span class="ns-decl ' + meta.cls + '" title="' + escapeHtml(meta.title) + '">' + meta.label + '</span>';
+    return '<span class="ns-decl ' + meta.cls + '" title="' + escapeHtml(tr(meta.title)) + '">' + tr(meta.label) + '</span>';
   }
 
   // configStateSummaryHtml gives the reader "13 repeaters have no scopes
@@ -250,8 +264,8 @@
     return '<div class="sa-summary">' +
       CONFIG_STATE_ORDER.map(function (state) {
         var meta = CONFIG_STATES[state];
-        return '<span class="sa-summary-item" title="' + escapeHtml(meta.title) + '">' +
-          '<span class="ns-decl ' + meta.cls + '">' + counts[state] + '</span> ' + escapeHtml(meta.summary) + '</span>';
+        return '<span class="sa-summary-item" title="' + escapeHtml(tr(meta.title)) + '">' +
+          '<span class="ns-decl ' + meta.cls + '">' + counts[state] + '</span> ' + escapeHtml(tr(meta.summary)) + '</span>';
       }).join('') +
       '</div>';
   }
@@ -262,8 +276,8 @@
   // prefix collision rather than a confirmed gap.
   function ambiguousCaveat(row) {
     if (!row.ambiguousHops) return '';
-    return ' <span class="sa-chip sa-chip-ambiguous" title="' + row.ambiguousHops + ' forwarder hop' + (row.ambiguousHops === 1 ? '' : 's') +
-      ' in this window matched more than one declared target\'s pubkey prefix and could not be attributed to any of them. Any “not observed” entry on this row may be explained by that prefix collision rather than a real gap.">possibly ambiguous</span>';
+    return ' <span class="sa-chip sa-chip-ambiguous" title="' + trn(row.ambiguousHops, "{count} forwarder hop in this window matched more than one declared target's pubkey prefix and could not be attributed to any of them.", "{count} forwarder hops in this window matched more than one declared target's pubkey prefix and could not be attributed to any of them.").replace(/'/g, '&#39;') +
+      ' ' + tr('Any “not observed” entry on this row may be explained by that prefix collision rather than a real gap.') + '">' + tr('possibly ambiguous') + '</span>';
   }
 
   // unmatchedCaveat flags rows where this instance saw the repeater forward
@@ -312,11 +326,12 @@
     // count was sampled the chip states a bound instead of a figure.
     var sampled = typeof row.observedUnmatchedSampled === 'number' ? row.observedUnmatchedSampled : n;
     var bounded = sampled < n;
-    var label = (bounded ? 'at most ' : '') + escapeHtml(left) + ' forwarded packet' + (left === 1 ? '' : 's');
-    return ' <span class="sa-chip sa-chip-unmatched" title="' + label +
-      ' in this window carried a region scope this CoreScope instance holds no key for, and match none of this repeater&#39;s declared regions. ' +
-      'So this repeater forwards at least one region it does not declare, which this instance also cannot name.">' +
-      label + ' unexplained</span>';
+    var label = bounded
+      ? trn(left, 'at most {count} forwarded packet', 'at most {count} forwarded packets', { count: escapeHtml(left) })
+      : trn(left, '{count} forwarded packet', '{count} forwarded packets', { count: escapeHtml(left) });
+    return ' <span class="sa-chip sa-chip-unmatched" title="' + tr("{packets} in this window carried a region scope this CoreScope instance holds no key for, and match none of this repeater's declared regions.", { packets: label }).replace(/'/g, '&#39;') + ' ' +
+      tr('So this repeater forwards at least one region it does not declare, which this instance also cannot name.') + '">' +
+      tr('{packets} unexplained', { packets: label }) + '</span>';
   }
 
   // statusScore ranks a row's Status column numerically for sorting — a
@@ -329,10 +344,10 @@
 
   function rowHtml(row) {
     var issues = [];
-    if (row.notObserved.length) issues.push('<span class="ns-decl ns-decl-quiet" title="Declared flood-allowed but not observed forwarding it this window.">' + row.notObserved.length + ' not observed</span>');
-    if (row.wildcardContradiction) issues.push('<span class="ns-decl ns-decl-warn" title="Observed forwarding plain (unscoped) floods, but the declared list omits the &#39;*&#39; wildcard that would allow that.">wildcard contradiction</span>');
-    if (row.undeclaredObserved.length) issues.push('<span class="ns-decl ns-decl-unknown" title="Observed forwarding scopes absent from the declared list.">' + row.undeclaredObserved.length + ' undeclared</span>');
-    var issuesHtml = issues.length ? issues.join(' ') : '<span class="ns-decl ns-decl-yes" title="Every declared region was observed forwarding, and nothing undeclared was observed.">agrees</span>';
+    if (row.notObserved.length) issues.push('<span class="ns-decl ns-decl-quiet" title="' + tr('Declared flood-allowed but not observed forwarding it this window.') + '">' + tr('{count} not observed', { count: row.notObserved.length }) + '</span>');
+    if (row.wildcardContradiction) issues.push('<span class="ns-decl ns-decl-warn" title="' + tr("Observed forwarding plain (unscoped) floods, but the declared list omits the '*' wildcard that would allow that.").replace(/'/g, '&#39;') + '">' + tr('wildcard contradiction') + '</span>');
+    if (row.undeclaredObserved.length) issues.push('<span class="ns-decl ns-decl-unknown" title="' + tr('Observed forwarding scopes absent from the declared list.') + '">' + tr('{count} undeclared', { count: row.undeclaredObserved.length }) + '</span>');
+    var issuesHtml = issues.length ? issues.join(' ') : '<span class="ns-decl ns-decl-yes" title="' + tr('Every declared region was observed forwarding, and nothing undeclared was observed.') + '">' + tr('agrees') + '</span>';
 
     // declaredAtMs is the underlying declaredAt timestamp in epoch ms, fed to
     // the Declared age <td> as data-value (mirroring observers.js's
@@ -343,11 +358,11 @@
     var nameSortValue = row.name != null ? row.name : row.publicKey;
 
     return '<tr data-pubkey="' + escapeHtml(row.publicKey) + '">' +
-      '<td class="sa-name" data-value="' + escapeHtml(nameSortValue) + '">' + nameHtml(row) + (row.role != null && row.role !== '' ? '<span class="text-muted sa-role"> ' + escapeHtml(row.role) + '</span>' : '') + '</td>' +
+      '<td class="sa-name" data-value="' + escapeHtml(nameSortValue) + '">' + nameHtml(row) + (row.role != null && row.role !== '' ? '<span class="text-muted sa-role"> ' + escapeHtml(tr(row.role)) + '</span>' : '') + '</td>' +
       '<td data-value="' + statusScore(row) + '">' + issuesHtml + '</td>' +
       '<td data-value="' + escapeHtml(CONFIG_STATES[row.configState].label) + '">' + configStateHtml(row) + '</td>' +
-      '<td data-value="' + row.notObserved.length + '">' + mergedScopeChips(row) + (row.declaredWildcard ? ' <span class="sa-chip sa-chip-wildcard" title="Declares the \'*\' wildcard — allows plain unscoped floods.">*</span>' : '') + ambiguousCaveat(row) + unmatchedCaveat(row) + '</td>' +
-      '<td data-value="' + (isNaN(declaredAtMs) ? '' : declaredAtMs) + '">' + ageHtml(row) + (row.truncated ? ' <span class="ns-truncated" title="Declared list was truncated by the repeater — a missing region here is not necessarily a real absence.">truncated</span>' : '') + '</td>' +
+      '<td data-value="' + row.notObserved.length + '">' + mergedScopeChips(row) + (row.declaredWildcard ? ' <span class="sa-chip sa-chip-wildcard" title="' + tr("Declares the '*' wildcard — allows plain unscoped floods.") + '">*</span>' : '') + ambiguousCaveat(row) + unmatchedCaveat(row) + '</td>' +
+      '<td data-value="' + (isNaN(declaredAtMs) ? '' : declaredAtMs) + '">' + ageHtml(row) + (row.truncated ? ' <span class="ns-truncated" title="' + tr('Declared list was truncated by the repeater — a missing region here is not necessarily a real absence.') + '">' + tr('truncated') + '</span>' : '') + '</td>' +
       '</tr>';
   }
 
@@ -362,8 +377,7 @@
     if (!row.transported?.length) return '<span class="text-muted">—</span>';
     return row.transported.map(function (so) {
       var hit = rgn && String(so.scope).toLowerCase() === rgn;
-      var title = so.scope + ': seen carrying ' + so.packets + ' packet' + (so.packets === 1 ? '' : 's') +
-        ' in this window (first ' + so.firstSeen + ', last ' + so.lastSeen + ')';
+      var title = so.scope + ': ' + trn(so.packets, 'seen carrying {count} packet in this window (first {first}, last {last})', 'seen carrying {count} packets in this window (first {first}, last {last})', { first: so.firstSeen, last: so.lastSeen });
       return '<span class="sa-chip sa-chip-transported' + (hit ? ' sa-chip-match' : '') + '" title="' + escapeHtml(title) + '">' +
         escapeHtml(so.scope) + ' <span class="sa-chip-count">' + escapeHtml(so.packets) + '</span></span>';
     }).join(' ');
@@ -375,17 +389,17 @@
   // nothing, so the two are worded differently.
   function declaredCellHtml(row) {
     if (!row.asked) {
-      return '<span class="sa-not-asked" title="No declared-regions answer has been collected from this repeater, so its configuration is unknown.">not asked</span>';
+      return '<span class="sa-not-asked" title="' + tr('No declared-regions answer has been collected from this repeater, so its configuration is unknown.') + '">' + tr('not asked') + '</span>';
     }
     var chips = mergedScopeChips({ declaredRegions: row.declaredRegions || [], notObserved: row.notObserved || [], regionEvidence: {} });
-    return chips + (row.declaredWildcard ? ' <span class="sa-chip sa-chip-wildcard" title="Declares the \'*\' wildcard — allows plain unscoped floods.">*</span>' : '');
+    return chips + (row.declaredWildcard ? ' <span class="sa-chip sa-chip-wildcard" title="' + tr("Declares the '*' wildcard — allows plain unscoped floods.") + '">*</span>' : '');
   }
 
   function carriesHtml(row, rgn) {
     if (row.carriesScope) {
-      return '<span class="ns-decl ns-decl-yes" title="Seen carrying ' + escapeHtml(rgn) + ' in this window.">carries</span>';
+      return '<span class="ns-decl ns-decl-yes" title="' + tr('Seen carrying {region} in this window.', { region: escapeHtml(rgn) }) + '">' + tr('carries') + '</span>';
     }
-    return '<span class="ns-decl ns-decl-quiet" title="Seen forwarding in this window, but not ' + escapeHtml(rgn) + '.">not seen</span>';
+    return '<span class="ns-decl ns-decl-quiet" title="' + tr('Seen forwarding in this window, but not {region}.', { region: escapeHtml(rgn) }) + '">' + tr('not seen') + '</span>';
   }
 
   function transportRowHtml(row, rgn) {
@@ -393,11 +407,11 @@
     var counts = [];
     var carriesValue = row.carriesScope ? 1 : 0;
     var carriesCell = rgn ? '<td data-value="' + carriesValue + '">' + carriesHtml(row, rgn) + '</td>' : '';
-    if (row.unscopedPackets) counts.push('<span title="Plain unscoped floods forwarded in this window.">' + escapeHtml(row.unscopedPackets) + ' unscoped</span>');
-    if (row.unmatchedPackets) counts.push('<span title="Scoped packets forwarded whose region this CoreScope instance holds no key for.">' + escapeHtml(row.unmatchedPackets) + ' unmatched</span>');
-    if (row.ambiguousHops) counts.push('<span title="Hops whose prefix matched more than one repeater; credited to none of them.">' + escapeHtml(row.ambiguousHops) + ' ambiguous</span>');
+    if (row.unscopedPackets) counts.push('<span title="' + tr('Plain unscoped floods forwarded in this window.') + '">' + tr('{count} unscoped', { count: escapeHtml(row.unscopedPackets) }) + '</span>');
+    if (row.unmatchedPackets) counts.push('<span title="' + tr('Scoped packets forwarded whose region this CoreScope instance holds no key for.') + '">' + tr('{count} unmatched', { count: escapeHtml(row.unmatchedPackets) }) + '</span>');
+    if (row.ambiguousHops) counts.push('<span title="' + tr('Hops whose prefix matched more than one repeater; credited to none of them.') + '">' + tr('{count} ambiguous', { count: escapeHtml(row.ambiguousHops) }) + '</span>');
     return '<tr data-pubkey="' + escapeHtml(row.publicKey) + '">' +
-      '<td class="sa-name" data-value="' + escapeHtml(nameSortValue) + '">' + nameHtml(row) + (row.role != null && row.role !== '' ? '<span class="text-muted sa-role"> ' + escapeHtml(row.role) + '</span>' : '') + '</td>' +
+      '<td class="sa-name" data-value="' + escapeHtml(nameSortValue) + '">' + nameHtml(row) + (row.role != null && row.role !== '' ? '<span class="text-muted sa-role"> ' + escapeHtml(tr(row.role)) + '</span>' : '') + '</td>' +
       carriesCell +
       '<td data-value="' + (row.transported ? row.transported.length : 0) + '">' + transportScopeChips(row, rgn) + '</td>' +
       '<td data-value="' + (row.asked ? 1 : 0) + '">' + declaredCellHtml(row) + '</td>' +
@@ -408,11 +422,11 @@
   function transportSummaryHtml(d) {
     var total = d.repeaters.length;
     var asked = d.repeaters.filter(function (r) { return r.asked; }).length;
-    var s = '<div class="sa-summary"><span class="sa-summary-item"><strong>' + total + '</strong> repeater' + (total === 1 ? '' : 's') +
-      ' seen forwarding in the last ' + escapeHtml(d.window) + '</span><span class="sa-summary-item"><strong>' + asked + '</strong> with a declared-regions answer</span>';
+    var s = '<div class="sa-summary"><span class="sa-summary-item">' + trn(total, '{count} repeater seen forwarding in the last {window}', '{count} repeaters seen forwarding in the last {window}', { count: '<strong>' + total + '</strong>', window: escapeHtml(d.window) }) +
+      '</span><span class="sa-summary-item">' + tr('{count} with a declared-regions answer', { count: '<strong>' + asked + '</strong>' }) + '</span>';
     if (d.scope) {
-      s += '<span class="sa-summary-item"><span class="ns-decl ns-decl-yes">' + (d.carrying || 0) + '</span> carried ' + escapeHtml(d.scope) + '</span>' +
-        '<span class="sa-summary-item"><span class="ns-decl ns-decl-quiet">' + (d.notCarrying || 0) + '</span> active but not seen carrying it</span>';
+      s += '<span class="sa-summary-item"><span class="ns-decl ns-decl-yes">' + (d.carrying || 0) + '</span> ' + tr('carried {region}', { region: escapeHtml(d.scope) }) + '</span>' +
+        '<span class="sa-summary-item"><span class="ns-decl ns-decl-quiet">' + (d.notCarrying || 0) + '</span> ' + tr('active but not seen carrying it') + '</span>';
     }
     return s + '</div>';
   }
@@ -432,7 +446,7 @@
     if (list) list.innerHTML = transportRegions(d.repeaters).map(function (r) { return '<option value="' + escapeHtml(r) + '">'; }).join('');
     if (!d.repeaters.length) {
       searchIndex = {};
-      el.innerHTML = '<div class="ns-empty sa-empty">No repeater was seen forwarding in the last ' + escapeHtml(d.window) + '.</div>';
+      el.innerHTML = '<div class="ns-empty sa-empty">' + tr('No repeater was seen forwarding in the last {window}.', { window: escapeHtml(d.window) }) + '</div>';
       return;
     }
     var rows = d.repeaters.slice();
@@ -442,14 +456,15 @@
     }
     searchIndex = buildTransportSearchIndex(rows);
     el.innerHTML = transportSummaryHtml(d) +
-      '<div class="sa-window-note"><strong>Transported</strong> means seen carrying traffic for that region in the last ' + escapeHtml(d.window) +
-      ', not how the repeater is configured. A repeater whose region sees no traffic in this window looks the same as one that does not carry it, so use a long window for rollout decisions.</div>' +
+      '<div class="sa-window-note">' + tr('{transported} means seen carrying traffic for that region in the last {window}, not how the repeater is configured. A repeater whose region sees no traffic in this window looks the same as one that does not carry it, so use a long window for rollout decisions.', {
+        transported: '<strong>' + tr('Transported') + '</strong>', window: escapeHtml(d.window),
+      }) + '</div>' +
       '<div class="sa-table-wrap"><table class="ns-table sa-table" id="saTable"><thead><tr>' +
-      '<th data-sort-key="name">Repeater</th>' +
-      (d.scope ? '<th data-sort-key="carries" data-type="numeric">Carries ' + escapeHtml(d.scope) + '</th>' : '') +
-      '<th data-sort-key="transported" data-type="numeric" title="Region scopes seen forwarded in this window, with packet counts.">Seen carrying</th>' +
-      '<th data-sort-key="declared" data-type="numeric" title="The repeater\'s own declared regions where an answer exists; green = also seen carried.">Declared</th>' +
-      '<th>Other traffic</th>' +
+      '<th data-sort-key="name">' + tr('Repeater') + '</th>' +
+      (d.scope ? '<th data-sort-key="carries" data-type="numeric">' + tr('Carries {region}', { region: escapeHtml(d.scope) }) + '</th>' : '') +
+      '<th data-sort-key="transported" data-type="numeric" title="' + tr('Region scopes seen forwarded in this window, with packet counts.') + '">' + tr('Seen carrying') + '</th>' +
+      '<th data-sort-key="declared" data-type="numeric" title="' + tr("The repeater's own declared regions where an answer exists; green = also seen carried.").replace(/'/g, '&#39;') + '">' + tr('Declared') + '</th>' +
+      '<th>' + tr('Other traffic') + '</th>' +
       '</tr></thead><tbody>' +
       rows.map(function (r) { return transportRowHtml(r, d.scope || ''); }).join('') +
       '</tbody></table></div>' +
@@ -510,10 +525,11 @@
     }
     if (!countEl) return;
     if (q) {
-      countEl.textContent = 'Showing ' + shown + ' of ' + rows.length + ' repeater' + (rows.length === 1 ? '' : 's') + ' matching “' + searchQuery.trim() + '”.';
+      countEl.textContent = trn(rows.length, 'Showing {shown} of {count} repeater matching “{query}”.', 'Showing {shown} of {count} repeaters matching “{query}”.', { shown: shown, query: searchQuery.trim() });
     } else {
-      countEl.textContent = rows.length + ' repeater' + (rows.length === 1 ? '' : 's') +
-        (mode === 'transport' ? ' seen forwarding.' : ' with a declared region list.');
+      countEl.textContent = mode === 'transport'
+        ? trn(rows.length, '{count} repeater seen forwarding.', '{count} repeaters seen forwarding.')
+        : trn(rows.length, '{count} repeater with a declared region list.', '{count} repeaters with a declared region list.');
     }
   }
 
@@ -533,11 +549,11 @@
     el.innerHTML = configStateSummaryHtml(d.repeaters) +
       windowHonestyNote(d.window) +
       '<div class="sa-table-wrap"><table class="ns-table sa-table" id="saTable"><thead><tr>' +
-      '<th data-sort-key="name">Repeater</th>' +
-      '<th data-sort-key="status" data-type="numeric">Status</th>' +
-      '<th data-sort-key="config">Config</th>' +
-      '<th data-sort-key="notObserved" data-type="numeric" title="Declared regions, coloured by whether forwarding was observed in this window. Green = observed, red = declared but not observed.">Scopes</th>' +
-      '<th data-sort-key="declaredAt" data-type="numeric">Declared age</th>' +
+      '<th data-sort-key="name">' + tr('Repeater') + '</th>' +
+      '<th data-sort-key="status" data-type="numeric">' + tr('Status') + '</th>' +
+      '<th data-sort-key="config">' + tr('Config') + '</th>' +
+      '<th data-sort-key="notObserved" data-type="numeric" title="' + tr('Declared regions, coloured by whether forwarding was observed in this window. Green = observed, red = declared but not observed.') + '">' + tr('Scopes') + '</th>' +
+      '<th data-sort-key="declaredAt" data-type="numeric">' + tr('Declared age') + '</th>' +
       '</tr></thead><tbody>' +
       d.repeaters.map(rowHtml).join('') +
       '</tbody></table></div>' +
@@ -580,14 +596,14 @@
     }
     sortCtl = null;
     var body = document.getElementById('saBody');
-    if (body) body.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading scope audit…</div>';
+    if (body) body.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> ' + tr('Loading scope audit…') + '</div>';
     var d;
     try {
       var obsRegion = (typeof RegionFilter !== 'undefined') ? RegionFilter.getRegionParam() : '';
       d = await api(apiPath(w, mode, region, obsRegion), { ttl: 30000 });
     } catch (e) {
       if (myGen !== loadGen) return;
-      if (body) body.innerHTML = '<div class="ns-empty">Failed to load scope audit: ' + escapeHtml(e.message) + '</div>';
+      if (body) body.innerHTML = '<div class="ns-empty">' + tr('Failed to load scope audit: {message}', { message: escapeHtml(e.message) }) + '</div>';
       return;
     }
     if (myGen !== loadGen) return;

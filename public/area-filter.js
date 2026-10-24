@@ -1,5 +1,7 @@
 /* === CoreScope — area-filter.js (single-select area filter component) === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
 
 (function () {
   var LS_KEY = 'meshcore-area-filter';
@@ -48,9 +50,9 @@
   function areaQueryString() { return _selected ? '&area=' + encodeURIComponent(_selected) : ''; }
 
   function triggerLabel() {
-    if (!_selected) return 'Area: All ▾';
+    if (!_selected) return tr('Area: {area}', { area: tr('All') }) + ' ▾';
     var area = _areas.find(function (a) { return a.key === _selected; });
-    return 'Area: ' + (area ? area.label : _selected) + ' ▾';
+    return tr('Area: {area}', { area: area ? area.label : _selected }) + ' ▾';
   }
 
   function render(container) {
@@ -63,12 +65,12 @@
 
     if (container._areaCleanup) { container._areaCleanup(); container._areaCleanup = null; }
 
-    var html = '<div class="region-dropdown-wrap" role="group" aria-label="Area filter">';
+    var html = '<div class="region-dropdown-wrap" role="group" aria-label="' + tr('Area filter') + '">';
     html += '<button class="region-dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">' +
       triggerLabel() + '</button>';
-    html += '<div class="region-dropdown-menu area-dropdown-menu" role="listbox" aria-label="Select area" hidden>';
+    html += '<div class="region-dropdown-menu area-dropdown-menu" role="listbox" aria-label="' + tr('Select area') + '" hidden>';
     html += '<button class="region-dropdown-item area-dropdown-item' + (!_selected ? ' area-item-active' : '') +
-      '" data-area="__all__">All</button>';
+      '" data-area="__all__">' + tr('All') + '</button>';
     _areas.forEach(function (a) {
       var active = _selected === a.key;
       html += '<button class="region-dropdown-item area-dropdown-item' + (active ? ' area-item-active' : '') +

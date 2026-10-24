@@ -11,6 +11,10 @@
   // token (new defaults) or a legacy emoji/text string (operator config).
   // Return safe HTML — sprite for ph tokens, escaped text for everything
   // else. EMOJI-OK-LEGACY-RENDER below preserves operator-stored emoji.
+  //
+  // Operator text (hero, steps, FAQ, footer labels) goes through tr(): the
+  // built-in and config.example.json defaults are in the dictionaries, text
+  // an operator wrote has no entry and renders exactly as written.
   function _renderHomeGlyph(value) {
     if (value == null) return '';
     const s = String(value);
@@ -22,8 +26,11 @@
     if (label == null) return '';
     const s = String(label);
     const m = s.match(/^(ph:[a-z][a-z0-9-]+)\s+(.*)$/);
-    if (m) return _renderHomeGlyph(m[1]) + ' ' + _escHtml(m[2]);
-    return _escHtml(s); // EMOJI-OK-LEGACY-RENDER
+    if (m) return _renderHomeGlyph(m[1]) + ' ' + _escHtml(tr(m[2]));
+    // Legacy "<emoji> Packets": translate the words, keep the leading emoji.
+    const e = s.match(/^([^\p{L}\p{N}\s]+)\s+(.*)$/u);
+    if (e) return _escHtml(e[1]) + ' ' + _escHtml(tr(e[2])); // EMOJI-OK-LEGACY-RENDER
+    return _escHtml(tr(s)); // EMOJI-OK-LEGACY-RENDER
   }
   function _escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -65,18 +72,18 @@
   function showChooser(container) {
     container.innerHTML = `
       <section class="home-chooser">
-        <h1>Welcome to ${escapeHtml(window.SITE_CONFIG?.branding?.siteName || 'CoreScope')}</h1>
-        <p>How familiar are you with MeshCore?</p>
+        <h1>${tr('Welcome to {site}', { site: escapeHtml(window.SITE_CONFIG?.branding?.siteName || 'CoreScope') })}</h1>
+        <p>${tr('How familiar are you with MeshCore?')}</p>
         <div class="chooser-options">
           <button class="chooser-btn new" id="chooseNew">
             <span class="chooser-icon" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-plant"/></svg></span>
-            <strong>I\u2019m new</strong>
-            <span>Show me setup guides and tips</span>
+            <strong>${tr('I\u2019m new')}</strong>
+            <span>${tr('Show me setup guides and tips')}</span>
           </button>
           <button class="chooser-btn exp" id="chooseExp">
             <span class="chooser-icon" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg></span>
-            <strong>I know what I\u2019m doing</strong>
-            <span>Just the analyzer, skip the guides</span>
+            <strong>${tr('I know what I\u2019m doing')}</strong>
+            <span>${tr('Just the analyzer, skip the guides')}</span>
           </button>
         </div>
       </section>`;
@@ -106,21 +113,21 @@
 <circle cx="540" cy="130" r="13" fill="var(--logo-accent)"/>
 <circle cx="660" cy="130" r="13" fill="var(--logo-accent-hi)"/>
 <text x="426.20" y="161.68" font-family="Aldrich, monospace" font-size="88" text-anchor="end" dominant-baseline="alphabetic" font-weight="700" letter-spacing="4.4" fill="var(--logo-accent)">CORE</text><text x="773.80" y="161.68" font-family="Aldrich, monospace" font-size="88" text-anchor="start" dominant-baseline="alphabetic" font-weight="700" letter-spacing="4.4" fill="var(--logo-accent-hi)">SCOPE</text><text x="604.00" y="279.20" font-family="Aldrich, monospace" font-size="20" text-anchor="middle" dominant-baseline="alphabetic" font-weight="500" letter-spacing="8" fill="var(--logo-muted)">MESH ANALYZER</text></svg>
-        <h1>${hasNodes ? 'My Mesh' : escapeHtml(homeCfg?.heroTitle || siteName)}</h1>
-        <p>${hasNodes ? 'Your nodes at a glance. Add more by searching below.' : escapeHtml(homeCfg?.heroSubtitle || 'Find your nodes to start monitoring them.')}</p>
+        <h1>${hasNodes ? tr('My Mesh') : escapeHtml(tr(homeCfg?.heroTitle || siteName))}</h1>
+        <p>${hasNodes ? tr('Your nodes at a glance. Add more by searching below.') : escapeHtml(tr(homeCfg?.heroSubtitle || 'Find your nodes to start monitoring them.'))}</p>
         <div class="home-search-wrap">
-          <input type="text" id="homeSearch" placeholder="Search by node name or public key…" autocomplete="off" aria-label="Search nodes" role="combobox" aria-expanded="false" aria-owns="homeSuggest" aria-autocomplete="list" aria-activedescendant="">
+          <input type="text" id="homeSearch" placeholder="${tr('Search by node name or public key…')}" autocomplete="off" aria-label="${tr('Search nodes')}" role="combobox" aria-expanded="false" aria-owns="homeSuggest" aria-autocomplete="list" aria-activedescendant="">
           <div class="home-suggest" id="homeSuggest" role="listbox"></div>
         </div>
       </section>
 
-      ${hasNodes ? '<div class="my-nodes-grid" id="myNodesGrid"><div class="my-nodes-loading">Loading your nodes…</div></div>' : '<div class="my-nodes-grid" id="myNodesGrid"></div>'}
+      ${hasNodes ? '<div class="my-nodes-grid" id="myNodesGrid"><div class="my-nodes-loading">' + tr('Loading your nodes…') + '</div></div>' : '<div class="my-nodes-grid" id="myNodesGrid"></div>'}
 
       ${!hasNodes ? `
         <div class="onboarding-prompt">
           <div class="onboard-icon" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg></div>
-          <h2>Claim your first node</h2>
-          <p>Search for your node above, or paste your public key. Once claimed, you'll see live status, signal quality, and who's hearing you.</p>
+          <h2>${tr('Claim your first node')}</h2>
+          <p>${tr('Search for your node above, or paste your public key. Once claimed, you\'ll see live status, signal quality, and who\'s hearing you.')}</p>
         </div>
       ` : ''}
 
@@ -133,22 +140,22 @@
 
       ${exp ? '' : `
       <section class="home-checklist">
-        <h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-rocket"/></svg> Getting on the mesh${homeCfg?.steps ? '' : ' — SF Bay Area'}</h2>
+        <h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-rocket"/></svg> ${homeCfg?.steps ? tr('Getting on the mesh') : tr('Getting on the mesh — SF Bay Area')}</h2>
         ${checklist(homeCfg)}
       </section>`}
 
       <section class="home-footer">
         <div class="home-footer-links">
           ${homeCfg?.footerLinks ? homeCfg.footerLinks.map(l => `<a href="${escapeAttr(l.url)}" class="home-footer-link" target="_blank" rel="noopener">${_renderHomeLabel(l.label)}</a>`).join('') : `
-          <a href="#/packets" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Packets</a>
-          <a href="#/map" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Network Map</a>
-          <a href="#/live" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Live</a>
-          <a href="#/nodes" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> All Nodes</a>
-          <a href="#/channels" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chats"/></svg> Channels</a>`}
+          <a href="#/packets" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> ${tr('Packets')}</a>
+          <a href="#/map" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> ${tr('Network Map')}</a>
+          <a href="#/live" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${tr('Live')}</a>
+          <a href="#/nodes" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${tr('All Nodes')}</a>
+          <a href="#/channels" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chats"/></svg> ${tr('Channels')}</a>`}
         </div>
         <div class="home-level-toggle">
-          <small>${exp ? 'Want setup guides? ' : 'Already know MeshCore? '}
-          <a href="#" id="toggleLevel" style="color:var(--link-color)">${exp ? 'Show new user tips' : 'Hide guides'}</a></small>
+          <small>${exp ? tr('Want setup guides?') : tr('Already know MeshCore?')}
+          <a href="#" id="toggleLevel" style="color:var(--link-color)">${exp ? tr('Show new user tips') : tr('Hide guides')}</a></small>
         </div>
       </section>
     `;
@@ -191,19 +198,19 @@
           const data = await api('/nodes/search?q=' + encodeURIComponent(q), { ttl: CLIENT_TTL.nodeSearch });
           const nodes = data.nodes || [];
           if (!nodes.length) {
-            suggest.innerHTML = '<div class="suggest-empty">No nodes found</div>';
+            suggest.innerHTML = '<div class="suggest-empty">' + tr('No nodes found') + '</div>';
           } else {
             suggest.innerHTML = nodes.slice(0, 10).map((n, idx) => {
               const claimed = isMyNode(n.public_key);
               return `<div class="suggest-item" role="option" id="suggest-${idx}" data-key="${n.public_key}" data-name="${escapeAttr(n.name || '')}">
                 <div class="suggest-main">
-                  <span class="suggest-name">${escapeHtml(n.name || 'Unknown')}</span>
+                  <span class="suggest-name">${escapeHtml(n.name || tr('Unknown'))}</span>
                   <small class="suggest-key">${truncate(n.public_key, 16)}</small>
                 </div>
                 <div class="suggest-actions">
                   <span class="suggest-role badge-${n.role || 'unknown'}">${n.role || '?'}</span>
-                  <button class="suggest-claim ${claimed ? 'claimed' : ''}" data-key="${n.public_key}" data-name="${escapeAttr(n.name || '')}" title="${claimed ? 'Remove from My Mesh' : 'Add to My Mesh'}">
-                    ${claimed ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> Mine' : '+ Claim'}
+                  <button class="suggest-claim ${claimed ? 'claimed' : ''}" data-key="${n.public_key}" data-name="${escapeAttr(n.name || '')}" title="${claimed ? tr('Remove from My Mesh') : tr('Add to My Mesh')}">
+                    ${claimed ? claimedBtnHtml() : claimBtnHtml()}
                   </button>
                 </div>
               </div>`;
@@ -222,11 +229,11 @@
               if (isMyNode(pk)) {
                 removeMyNode(pk);
                 btn.classList.remove('claimed');
-                btn.innerHTML = '+ Claim';
+                btn.innerHTML = claimBtnHtml();
               } else {
                 addMyNode(pk, nm);
                 btn.classList.add('claimed');
-                btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> Mine';
+                btn.innerHTML = claimedBtnHtml();
               }
               loadMyNodes();
             });
@@ -249,6 +256,9 @@
     searchAbort = new AbortController();
     document.addEventListener('click', handleOutsideClick, { signal: searchAbort.signal });
   }
+
+  function claimBtnHtml() { return '+ ' + tr('Claim'); }
+  function claimedBtnHtml() { return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> ' + tr('Mine'); }
 
   function handleOutsideClick(e) {
     const suggest = document.getElementById('homeSuggest');
@@ -276,8 +286,8 @@
     const h1 = document.querySelector('.home-hero h1');
     const heroP = document.querySelector('.home-hero p');
     if (myNodes.length) {
-      if (h1) h1.textContent = 'My Mesh';
-      if (heroP) heroP.textContent = 'Your nodes at a glance. Add more by searching below.';
+      if (h1) h1.textContent = tr('My Mesh');
+      if (heroP) heroP.textContent = tr('Your nodes at a glance. Add more by searching below.');
       // Hide onboarding prompt
       const onboard = document.querySelector('.onboarding-prompt');
       if (onboard) onboard.style.display = 'none';
@@ -300,12 +310,12 @@
         const status = getHealthStatus(node.role, heard) || 'silent';
         const statusCls = status === 'healthy' ? 'status-ok' : status === 'degraded' ? 'status-warn' : 'status-err';
         const statusDot = '<span class="' + statusCls + '" aria-label="' + status + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>';
-        const statusText = status === 'healthy' ? 'Active' : status === 'degraded' ? 'Degraded' : 'Silent';
+        const statusText = status === 'healthy' ? tr('Active') : status === 'degraded' ? tr('Degraded') : tr('Silent');
         const name = node.name || mn.name || truncate(mn.pubkey, 12);
 
         // SNR quality label
         const snrVal = stats.avgSnr;
-        const snrLabel = snrVal != null ? (snrVal > 10 ? 'Excellent' : snrVal > 0 ? 'Good' : snrVal > -5 ? 'Marginal' : 'Poor') : null;
+        const snrLabel = snrVal != null ? snrQualityLabel(snrVal) : null;
         const snrColor = snrVal != null ? (snrVal > 10 ? 'var(--status-green)' : snrVal > 0 ? 'var(--accent)' : snrVal > -5 ? 'var(--status-yellow)' : 'var(--status-red)') : '#6b7280';
 
         // Build sparkline from recent packets (packet timestamps → hourly buckets)
@@ -316,17 +326,17 @@
             <div class="mnc-status">${statusDot}</div>
             <div class="mnc-name">${escapeHtml(name)}</div>
             <div class="mnc-role">${node.role || '?'}</div>
-            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove from My Mesh" aria-label="Remove ${escapeAttr(name)} from My Mesh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+            <button class="mnc-remove" data-key="${mn.pubkey}" title="${tr('Remove from My Mesh')}" aria-label="${tr('Remove {name} from My Mesh', { name: escapeAttr(name) })}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
           <div class="mnc-status-text">${statusText}${heard ? ' · ' + timeAgo(heard) : ''}</div>
           <div class="mnc-metrics">
             <div class="mnc-metric">
               <div class="mnc-val">${stats.packetsToday ?? 0}</div>
-              <div class="mnc-lbl">Packets today</div>
+              <div class="mnc-lbl">${tr('Packets today')}</div>
             </div>
             <div class="mnc-metric">
               <div class="mnc-val">${obs.length}</div>
-              <div class="mnc-lbl">Observers</div>
+              <div class="mnc-lbl">${tr('Observers')}</div>
             </div>
             <div class="mnc-metric">
               <div class="mnc-val" style="color:${snrColor}">${snrVal != null ? Number(snrVal).toFixed(1) + ' dB' : '—'}</div>
@@ -334,32 +344,32 @@
             </div>
             <div class="mnc-metric">
               <div class="mnc-val">${stats.avgHops != null ? stats.avgHops.toFixed(1) : '—'}</div>
-              <div class="mnc-lbl">Avg hops</div>
+              <div class="mnc-lbl">${tr('Avg hops')}</div>
             </div>
           </div>
-          ${obs.length ? `<div class="mnc-observers"><strong>Heard by:</strong> ${obs.map(o => escapeHtml(o.observer_name || o.observer_id)).join(', ')}</div>` : ''}
+          ${obs.length ? `<div class="mnc-observers"><strong>${tr('Heard by:')}</strong> ${obs.map(o => escapeHtml(o.observer_name || o.observer_id)).join(', ')}</div>` : ''}
           ${sparkHtml ? `<div class="mnc-spark">${sparkHtml}</div>` : ''}
           <div class="mnc-actions">
-            <button class="mnc-btn" data-action="node" data-key="${mn.pubkey}">Node page →</button>
-            <button class="mnc-btn" data-action="health" data-key="${mn.pubkey}">Full health →</button>
-            <button class="mnc-btn" data-action="packets" data-key="${mn.pubkey}">View packets →</button>
+            <button class="mnc-btn" data-action="node" data-key="${mn.pubkey}">${tr('Node page')} →</button>
+            <button class="mnc-btn" data-action="health" data-key="${mn.pubkey}">${tr('Full health')} →</button>
+            <button class="mnc-btn" data-action="packets" data-key="${mn.pubkey}">${tr('View packets')} →</button>
           </div>
         </div>`;
       } catch (err) {
         const is404 = err && err.message && err.message.includes('404');
         const statusIcon = is404 ? '<span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg></span>' : '<span class="status-muted"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg></span>';
         const statusMsg = is404
-          ? 'Waiting for first advert — this node has been seen in channel messages but hasn\u2019t advertised yet'
-          : 'Could not load data';
+          ? tr('Waiting for first advert — this node has been seen in channel messages but hasn\u2019t advertised yet')
+          : tr('Could not load data');
         return `<div class="my-node-card silent" data-key="${mn.pubkey}" tabindex="0" role="button">
           <div class="mnc-header">
             <div class="mnc-status">${statusIcon}</div>
             <div class="mnc-name">${escapeHtml(mn.name || truncate(mn.pubkey, 12))}</div>
-            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove" aria-label="Remove ${escapeAttr(mn.name || truncate(mn.pubkey, 12))} from My Mesh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+            <button class="mnc-remove" data-key="${mn.pubkey}" title="${tr('Remove')}" aria-label="${tr('Remove {name} from My Mesh', { name: escapeAttr(mn.name || truncate(mn.pubkey, 12)) })}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
           <div class="mnc-status-text">${statusMsg}</div>
           <div class="mnc-actions">
-            <button class="mnc-btn" data-action="node" data-key="${mn.pubkey}">Node page →</button>
+            <button class="mnc-btn" data-action="node" data-key="${mn.pubkey}">${tr('Node page')} →</button>
           </div>
         </div>`;
       }
@@ -418,7 +428,7 @@
       const opacity = v > 0 ? 0.4 + (v / max) * 0.6 : 0.1;
       return `<div class="home-spark-bar" style="height:${h}px;opacity:${opacity}"></div>`;
     }).join('');
-    return `<div class="home-spark-label">24h activity</div><div class="home-spark-bars">${bars}</div>`;
+    return `<div class="home-spark-label">${tr('24h activity')}</div><div class="home-spark-bars">${bars}</div>`;
   }
 
   // ==================== STATS ====================
@@ -428,10 +438,10 @@
       const el = document.getElementById('homeStats');
       if (!el) return;
       el.innerHTML = `
-        <div class="home-stat"><div class="val">${s.totalTransmissions ?? s.totalPackets ?? '—'}</div><div class="lbl">Transmissions</div></div>
-        <div class="home-stat"><div class="val">${s.totalNodes ?? '—'}</div><div class="lbl">Nodes</div></div>
-        <div class="home-stat"><div class="val">${s.totalObservers ?? '—'}</div><div class="lbl">Observers</div></div>
-        <div class="home-stat"><div class="val">${s.packetsLast24h ?? '—'}</div><div class="lbl">Last 24h</div></div>
+        <div class="home-stat"><div class="val">${s.totalTransmissions ?? s.totalPackets ?? '—'}</div><div class="lbl">${tr('Transmissions')}</div></div>
+        <div class="home-stat"><div class="val">${s.totalNodes ?? '—'}</div><div class="lbl">${tr('Nodes')}</div></div>
+        <div class="home-stat"><div class="val">${s.totalObservers ?? '—'}</div><div class="lbl">${tr('Observers')}</div></div>
+        <div class="home-stat"><div class="val">${s.packetsLast24h ?? '—'}</div><div class="lbl">${tr('Last 24h')}</div></div>
       `;
     } catch {}
   }
@@ -441,7 +451,7 @@
     const card = document.getElementById('homeHealth');
     const journey = document.getElementById('homeJourney');
     if (!card) return;
-    card.innerHTML = '<p style="color:var(--text-muted);padding:12px">Loading…</p>';
+    card.innerHTML = '<p style="color:var(--text-muted);padding:12px">' + tr('Loading…') + '</p>';
     card.classList.add('visible');
     if (journey) journey.classList.remove('visible');
 
@@ -458,29 +468,29 @@
       const heard = stats.lastHeard || node.last_seen;
       const status = getHealthStatus(node.role, heard) || 'silent';
       const color = status === 'healthy' ? 'green' : status === 'degraded' ? 'yellow' : 'red';
-      const statusMsg = heard ? `Last heard ${timeAgo(heard)}` : 'No packets in the current window';
+      const statusMsg = heard ? tr('Last heard {time}', { time: timeAgo(heard) }) : tr('No packets in the current window');
 
       const snrVal = stats.avgSnr;
-      const snrLabel = snrVal != null ? (snrVal > 10 ? 'Excellent' : snrVal > 0 ? 'Good' : snrVal > -5 ? 'Marginal' : 'Poor') : '';
+      const snrLabel = snrVal != null ? snrQualityLabel(snrVal) : '';
 
       card.innerHTML = `
         <div class="health-banner ${color}">
           <span class="${status === 'healthy' ? 'status-ok' : status === 'degraded' ? 'status-warn' : 'status-err'}" aria-label="${status}">${status === 'healthy' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg>' : status === 'degraded' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x-circle"/></svg>'}</span>
           <span><strong>${escapeHtml(node.name || truncate(pubkey, 16))}</strong> — ${statusMsg}</span>
-          ${!claimed ? `<button class="health-claim" data-key="${pubkey}" data-name="${escapeAttr(node.name || '')}">+ Add to My Mesh</button>` : ''}
+          ${!claimed ? `<button class="health-claim" data-key="${pubkey}" data-name="${escapeAttr(node.name || '')}">+ ${tr('Add to My Mesh')}</button>` : ''}
         </div>
         <div class="health-body">
           <div class="health-metrics">
-            <div class="health-metric"><div class="val">${stats.packetsToday ?? '—'}</div><div class="lbl">Packets Today</div></div>
-            <div class="health-metric"><div class="val">${observers.length}</div><div class="lbl">Observers</div></div>
-            <div class="health-metric"><div class="val">${heard ? timeAgo(heard) : '—'}</div><div class="lbl">Last seen</div></div>
-            <div class="health-metric"><div class="val">${snrVal != null ? Number(snrVal).toFixed(1) + ' dB' : '—'}</div><div class="lbl">Avg SNR${snrLabel ? ' · ' + snrLabel : ''}</div></div>
-            <div class="health-metric"><div class="val">${stats.avgHops != null ? stats.avgHops.toFixed(1) : '—'}</div><div class="lbl">Avg Hops</div></div>
+            <div class="health-metric"><div class="val">${stats.packetsToday ?? '—'}</div><div class="lbl">${tr('Packets Today')}</div></div>
+            <div class="health-metric"><div class="val">${observers.length}</div><div class="lbl">${tr('Observers')}</div></div>
+            <div class="health-metric"><div class="val">${heard ? timeAgo(heard) : '—'}</div><div class="lbl">${tr('Last seen')}</div></div>
+            <div class="health-metric"><div class="val">${snrVal != null ? Number(snrVal).toFixed(1) + ' dB' : '—'}</div><div class="lbl">${tr('Avg SNR')}${snrLabel ? ' · ' + snrLabel : ''}</div></div>
+            <div class="health-metric"><div class="val">${stats.avgHops != null ? stats.avgHops.toFixed(1) : '—'}</div><div class="lbl">${tr('Avg Hops')}</div></div>
           </div>
-          ${observers.length ? `<div class="health-observers"><strong>Heard by:</strong> ${observers.map(o => escapeHtml(o.observer_name || o.observer_id)).join(', ')}</div>` : ''}
+          ${observers.length ? `<div class="health-observers"><strong>${tr('Heard by:')}</strong> ${observers.map(o => escapeHtml(o.observer_name || o.observer_id)).join(', ')}</div>` : ''}
           ${hasLocation ? '<div class="health-map" id="healthMap"></div>' : ''}
           <div class="health-timeline">
-            <h3>Recent Activity</h3>
+            <h3>${tr('Recent Activity')}</h3>
             ${packets.length ? packets.slice(0, 10).map(p => {
               const decoded = p.decoded_json ? JSON.parse(p.decoded_json) : {};
               const obsId = p.observer_name || p.observer_id || '?';
@@ -491,11 +501,11 @@
                 time: p.timestamp || p.created_at
               }).replace(/'/g, '&#39;')}'>
                 <span class="badge" style="background:var(--type-${payloadTypeColor(p.payload_type)})">${escapeHtml(payloadTypeName(p.payload_type))}</span>
-                <span>via ${escapeHtml(obsId)}</span>
+                <span>${tr('via {observer}', { observer: escapeHtml(obsId) })}</span>
                 <span class="time">${timeAgo(p.timestamp || p.created_at)}</span>
                 <span class="snr">${p.snr != null ? Number(p.snr).toFixed(1) + ' dB' : ''}</span>
               </div>`;
-            }).join('') : '<p style="color:var(--text-muted);font-size:.85rem">No recent packets found for this node.</p>'}
+            }).join('') : '<p style="color:var(--text-muted);font-size:.85rem">' + tr('No recent packets found for this node.') + '</p>'}
           </div>
         </div>
       `;
@@ -507,7 +517,7 @@
         e.target.remove();
         loadMyNodes();
         const h1 = document.querySelector('.home-hero h1');
-        if (h1) h1.textContent = 'My Mesh';
+        if (h1) h1.textContent = tr('My Mesh');
       });
 
       // Mini map
@@ -534,7 +544,7 @@
         });
       });
     } catch (e) {
-      card.innerHTML = '<p style="color:var(--status-red, #ef4444);padding:12px">Failed to load node health.</p>';
+      card.innerHTML = '<p style="color:var(--status-red, #ef4444);padding:12px">' + tr('Failed to load node health.') + '</p>';
     }
   }
 
@@ -542,15 +552,15 @@
     const el = document.getElementById('homeJourney');
     if (!el) return;
     const nodes = [];
-    nodes.push({ name: data.from, meta: 'Sender' });
+    nodes.push({ name: data.from, meta: tr('Sender') });
     if (data.observers && data.observers.length) {
-      data.observers.forEach(o => nodes.push({ name: o, meta: 'Observer' }));
+      data.observers.forEach(o => nodes.push({ name: o, meta: tr('Observer') }));
     }
     const flow = nodes.map((n, i) => {
       const nodeHtml = `<div class="journey-node"><div class="node-name">${escapeHtml(n.name)}</div><div class="node-meta">${n.meta}</div></div>`;
       return i < nodes.length - 1 ? nodeHtml + '<div class="journey-arrow"></div>' : nodeHtml;
     }).join('');
-    el.innerHTML = `<div class="journey-title">Packet Journey — ${escapeHtml(payloadTypeName(data.type))}</div><div class="journey-flow">${flow}</div>`;
+    el.innerHTML = `<div class="journey-title">${tr('Packet Journey — {type}', { type: escapeHtml(payloadTypeName(data.type)) })}</div><div class="journey-flow">${flow}</div>`;
     el.classList.add('visible');
   }
 
@@ -558,33 +568,38 @@
   function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   function escapeAttr(s) { return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
   function timeSinceMs(d) { return Date.now() - d.getTime(); }
+  function snrQualityLabel(snr) {
+    return snr > 10 ? tr('Excellent') : snr > 0 ? tr('Good') : snr > -5 ? tr('Marginal') : tr('Poor');
+  }
 
   function checklist(homeCfg) {
     var html = '';
     // Render steps (getting started guide)
     if (homeCfg?.steps?.length) {
-      html += homeCfg.steps.map(s => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${_renderHomeGlyph(s.emoji || '')} ${escapeHtml(s.title)}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(s.description) : escapeHtml(s.description)}</div></div>`).join('');
+      html += homeCfg.steps.map(s => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${_renderHomeGlyph(s.emoji || '')} ${escapeHtml(tr(s.title))}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(tr(s.description)) : escapeHtml(tr(s.description))}</div></div>`).join('');
     }
     // Render FAQ/checklist (additional Q&A)
     if (homeCfg?.checklist?.length) {
-      if (html) html += '<h3 style="margin:24px 0 12px;font-size:16px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> FAQ</h3>';
-      html += homeCfg.checklist.map(i => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${escapeHtml(i.question)}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(i.answer) : escapeHtml(i.answer)}</div></div>`).join('');
+      if (html) html += '<h3 style="margin:24px 0 12px;font-size:16px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> ' + tr('FAQ') + '</h3>';
+      html += homeCfg.checklist.map(i => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${escapeHtml(tr(i.question))}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(tr(i.answer)) : escapeHtml(tr(i.answer))}</div></div>`).join('');
     }
-    // Fallback: Bay Area defaults when no config at all
+    // Fallback: Bay Area defaults when no config at all.
+    // Markup stays in code and enters the sentences as {placeholders}, so
+    // translations are plain text.
     if (!html) {
       const items = [
-        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chats"/></svg> First: Join the Bay Area MeshCore Discord',
-          a: '<p>The community Discord is the best place to get help and find local mesh enthusiasts.</p><p><a href="https://discord.gg/q59JzsYTst" target="_blank" rel="noopener" style="color:var(--link-color);font-weight:600">Join the Discord ↗</a></p><p>Start with <strong>#intro-to-meshcore</strong> — it has detailed setup instructions.</p>' },
-        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bluetooth"/></svg> Step 1: Connect via Bluetooth',
-          a: '<p>Flash <strong>BLE companion</strong> firmware from <a href="https://flasher.meshcore.io/" target="_blank" rel="noopener" style="color:var(--link-color)">MeshCore Flasher</a>.</p><ul><li>Screenless devices: default PIN <code>123456</code></li><li>Screen devices: random PIN shown on display</li><li>If pairing fails: forget device, reboot, re-pair</li></ul>' },
-        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> Step 2: Set the right frequency preset',
-          a: '<p><strong>US Recommended:</strong></p><div style="margin:8px 0;padding:8px 12px;background:var(--surface-1);border-radius:6px;font-family:var(--mono);font-size:.85rem">910.525 MHz · BW 62.5 kHz · SF 7 · CR 5</div><p>Select <strong>"US Recommended"</strong> in the app or flasher.</p>' },
-        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Step 3: Advertise yourself',
-          a: '<p>Tap the signal icon → <strong>Flood</strong> to broadcast your node to the mesh. Companions only advert when you trigger it manually.</p>' },
-        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-repeat"/></svg> Step 4: Check "Heard N repeats"',
-          a: '<ul><li><strong>"Sent"</strong> = transmitted, no confirmation</li><li><strong>"Heard 0 repeats"</strong> = no repeater picked it up</li><li><strong>"Heard 1+ repeats"</strong> = you\'re on the mesh!</li></ul>' },
-        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> Repeaters near you?',
-          a: '<p><a href="#/map" style="color:var(--link-color)">Check the network map</a> to see active repeaters.</p>' }
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chats"/></svg> ' + tr('First: Join the Bay Area MeshCore Discord'),
+          a: '<p>' + tr('The community Discord is the best place to get help and find local mesh enthusiasts.') + '</p><p><a href="https://discord.gg/q59JzsYTst" target="_blank" rel="noopener" style="color:var(--link-color);font-weight:600">' + tr('Join the Discord') + ' ↗</a></p><p>' + tr('Start with {channel} — it has detailed setup instructions.', { channel: '<strong>#intro-to-meshcore</strong>' }) + '</p>' },
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bluetooth"/></svg> ' + tr('Step 1: Connect via Bluetooth'),
+          a: '<p>' + tr('Flash {firmware} firmware from {flasher}.', { firmware: '<strong>BLE companion</strong>', flasher: '<a href="https://flasher.meshcore.io/" target="_blank" rel="noopener" style="color:var(--link-color)">MeshCore Flasher</a>' }) + '</p><ul><li>' + tr('Screenless devices: default PIN {pin}', { pin: '<code>123456</code>' }) + '</li><li>' + tr('Screen devices: random PIN shown on display') + '</li><li>' + tr('If pairing fails: forget device, reboot, re-pair') + '</li></ul>' },
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> ' + tr('Step 2: Set the right frequency preset'),
+          a: '<p><strong>' + tr('US Recommended:') + '</strong></p><div style="margin:8px 0;padding:8px 12px;background:var(--surface-1);border-radius:6px;font-family:var(--mono);font-size:.85rem">910.525 MHz · BW 62.5 kHz · SF 7 · CR 5</div><p>' + tr('Select {preset} in the app or flasher.', { preset: '<strong>"US Recommended"</strong>' }) + '</p>' },
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ' + tr('Step 3: Advertise yourself'),
+          a: '<p>' + tr('Tap the signal icon → {flood} to broadcast your node to the mesh. Companions only advert when you trigger it manually.', { flood: '<strong>Flood</strong>' }) + '</p>' },
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-repeat"/></svg> ' + tr('Step 4: Check "Heard N repeats"'),
+          a: '<ul><li>' + tr('{sent} = transmitted, no confirmation', { sent: '<strong>"Sent"</strong>' }) + '</li><li>' + tr('{heard} = no repeater picked it up', { heard: '<strong>"Heard 0 repeats"</strong>' }) + '</li><li>' + tr('{heard} = you\'re on the mesh!', { heard: '<strong>"Heard 1+ repeats"</strong>' }) + '</li></ul>' },
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> ' + tr('Repeaters near you?'),
+          a: '<p>' + tr('{map} to see active repeaters.', { map: '<a href="#/map" style="color:var(--link-color)">' + tr('Check the network map') + '</a>' }) + '</p>' }
       ];
       html = items.map(i => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${i.q}</div><div class="checklist-a">${i.a}</div></div>`).join('');
     }

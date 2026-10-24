@@ -24,19 +24,21 @@
 'use strict';
 
 (function () {
+  // i18n.js defines tr(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
   var REFRESH_MS = 10000;
   var RECENT_PACKET_MS = 5 * 60 * 1000;
   var MOBILE_MAX_PX = 640;          // #1697 — ≤640px gets card layout
   var RESIZE_DEBOUNCE_MS = 150;     // #1697 — resize flip debounce
 
   function fmtRelative(unixSec, now) {
-    if (!unixSec) return 'never';
+    if (!unixSec) return tr('never');
     var ms = (now || Date.now()) - unixSec * 1000;
     if (ms < 0) ms = 0;
-    if (ms < 60000) return Math.floor(ms / 1000) + 's ago';
-    if (ms < 3600000) return Math.floor(ms / 60000) + 'm ago';
-    if (ms < 86400000) return Math.floor(ms / 3600000) + 'h ago';
-    return Math.floor(ms / 86400000) + 'd ago';
+    if (ms < 60000) return tr('{count}s ago', { count: Math.floor(ms / 1000) });
+    if (ms < 3600000) return tr('{count}m ago', { count: Math.floor(ms / 60000) });
+    if (ms < 86400000) return tr('{count}h ago', { count: Math.floor(ms / 3600000) });
+    return tr('{count}d ago', { count: Math.floor(ms / 86400000) });
   }
 
   // classifySource returns 'green' | 'yellow' | 'red' for a source row.
@@ -84,7 +86,7 @@
         + '<td>' + dotSpan(state)
         +   '<strong>' + escapeHTML(s.name) + '</strong></td>'
         + '<td><code style="font-size:12px">' + escapeHTML(s.broker) + '</code></td>'
-        + '<td>' + (s.connected ? 'connected' : 'disconnected') + '</td>'
+        + '<td>' + (s.connected ? tr('connected') : tr('disconnected')) + '</td>'
         + '<td>' + fmtRelative(s.lastPacketUnix, now) + '</td>'
         + '<td style="text-align:right">' + (s.packetsLast5m || 0) + '</td>'
         + '<td style="text-align:right">' + (s.packetsTotal || 0) + '</td>'
@@ -94,13 +96,13 @@
     return ''
       + '<table class="mqtt-status-table" style="width:100%;font-size:var(--fs-sm);border-collapse:collapse">'
       + '<thead><tr style="text-align:left">'
-      +   '<th style="padding:4px 8px">Source</th>'
-      +   '<th style="padding:4px 8px">Broker</th>'
-      +   '<th style="padding:4px 8px">State</th>'
-      +   '<th style="padding:4px 8px">Last packet</th>'
+      +   '<th style="padding:4px 8px">' + tr('Source') + '</th>'
+      +   '<th style="padding:4px 8px">' + tr('Broker') + '</th>'
+      +   '<th style="padding:4px 8px">' + tr('State') + '</th>'
+      +   '<th style="padding:4px 8px">' + tr('Last packet') + '</th>'
       +   '<th style="padding:4px 8px;text-align:right">5m</th>'
-      +   '<th style="padding:4px 8px;text-align:right">Total</th>'
-      +   '<th style="padding:4px 8px;text-align:right">Disc.</th>'
+      +   '<th style="padding:4px 8px;text-align:right">' + tr('Total') + '</th>'
+      +   '<th style="padding:4px 8px;text-align:right">' + tr('Disc.') + '</th>'
       + '</tr></thead>'
       + '<tbody>' + rows + '</tbody>'
       + '</table>';
@@ -114,7 +116,7 @@
   function renderCards(sources, now) {
     return sources.map(function (s) {
       var state = classifySource(s, now);
-      var stateLabel = s.connected ? 'connected' : 'disconnected';
+      var stateLabel = s.connected ? tr('connected') : tr('disconnected');
       var stateColorVar = (state === 'green' || state === 'yellow')
         ? 'var(--status-green)' : 'var(--status-red)';
       return ''
@@ -146,10 +148,10 @@
         +   '<span><span class="text-muted">5m:</span> '
         +     '<strong style="color:var(--text-primary, inherit);font-weight:var(--fw-medium)">'
         +     (s.packetsLast5m || 0) + '</strong></span>'
-        +   '<span><span class="text-muted">Total:</span> '
+        +   '<span><span class="text-muted">' + tr('Total:') + '</span> '
         +     '<strong style="color:var(--text-primary, inherit);font-weight:var(--fw-medium)">'
         +     (s.packetsTotal || 0) + '</strong></span>'
-        +   '<span><span class="text-muted">Disc:</span> '
+        +   '<span><span class="text-muted">' + tr('Disc:') + '</span> '
         +     '<strong style="color:var(--text-primary, inherit);font-weight:var(--fw-medium)">'
         +     (s.disconnectCount || 0) + '</strong></span>'
         + '</div>'
@@ -202,8 +204,7 @@
     if (sources.length === 0) {
       container.innerHTML = '<div class="mqtt-status-empty text-muted" '
         + 'style="padding:8px 0;font-size:var(--fs-sm);color:var(--text-muted)">'
-        + 'No MQTT sources reported yet. The ingestor publishes status '
-        + 'every second; if this persists check the ingestor logs.</div>';
+        + tr('No MQTT sources reported yet. The ingestor publishes status every second; if this persists check the ingestor logs.') + '</div>';
       return;
     }
 
@@ -213,7 +214,7 @@
 
     container.innerHTML = ''
       + '<div class="mqtt-status-panel" style="margin:12px 0">'
-      +   '<h3 style="margin:0 0 6px 0;font-size:14px;font-weight:var(--fw-medium)">MQTT sources</h3>'
+      +   '<h3 style="margin:0 0 6px 0;font-size:14px;font-weight:var(--fw-medium)">' + tr('MQTT sources') + '</h3>'
       +   body
       + '</div>';
   }

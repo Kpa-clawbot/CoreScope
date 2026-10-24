@@ -32,6 +32,8 @@ function renderActions(flag) {
     window: { MC_CLIENT_RX_COVERAGE: flag },
     coverageOn: false,
     statsHtml: '',
+    // English pass-through for the i18n helper (public/i18n.js) the block calls.
+    tr: (s) => s,
   };
   vm.createContext(sandbox);
   return vm.runInContext('(' + block + ')', sandbox);

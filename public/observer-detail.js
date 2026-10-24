@@ -1,5 +1,8 @@
 /* === CoreScope — observer-detail.js === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
 // Issue #1478 — naive-clock banner for observer detail page.
 // Exposed as a window global so a jsdom-style test can call it directly.
@@ -17,7 +20,6 @@ window.ObserverDetailNaiveBanner = {
     } else {
       magnitude = absSec + 's';
     }
-    var dir = sec < 0 ? 'behind' : 'ahead of';
     var count = Number(obs.clock_skew_count_24h || 0);
     var lastAt = obs.clock_last_naive_at ? new Date(obs.clock_last_naive_at).toLocaleString() : '';
     // Neutral inline notice (toned down from the original alert card per #1478 follow-up).
@@ -25,16 +27,15 @@ window.ObserverDetailNaiveBanner = {
     return '<div class="obs-clock-naive-banner" role="note" style="'
       + 'padding:6px 10px;margin-bottom:12px;font-size:13px;line-height:1.4;'
       + 'color:var(--text-muted, #666)">'
-      + 'Observer clock is currently <strong>' + magnitude + ' ' + dir + ' UTC</strong>; '
-      + 'rxTime is normalized to ingest time.'
-      + (count > 0 ? ' (' + count + ' occurrence' + (count === 1 ? '' : 's') + ' in 24 h)' : '')
-      + ' <details style="display:inline;font-size:12px"><summary>How to fix</summary>'
+      + tr('Observer clock is currently {offset}; rxTime is normalized to ingest time.', {
+          offset: '<strong>' + (sec < 0 ? tr('{amount} behind UTC', { amount: magnitude }) : tr('{amount} ahead of UTC', { amount: magnitude })) + '</strong>',
+        })
+      + (count > 0 ? ' (' + trn(count, '{count} occurrence in 24 h', '{count} occurrences in 24 h') + ')' : '')
+      + ' <details style="display:inline;font-size:12px"><summary>' + tr('How to fix') + '</summary>'
       + '<span style="display:block;margin-top:4px">'
-      + 'Set the observer host clock to UTC, or emit Z-suffixed '
-      + '(<code>datetime.now(timezone.utc).isoformat()</code>) or offset-aware timestamps. '
-      + 'If your observer build is older, upgrading to the latest release usually fixes this — '
-      + 'newer builds emit offset-aware timestamps by default. '
-      + 'This notice clears automatically after 24 hours with no new events.'
+      + tr('Set the observer host clock to UTC, or emit Z-suffixed ({example}) or offset-aware timestamps.', { example: '<code>datetime.now(timezone.utc).isoformat()</code>' }) + ' '
+      + tr('If your observer build is older, upgrading to the latest release usually fixes this — newer builds emit offset-aware timestamps by default.') + ' '
+      + tr('This notice clears automatically after 24 hours with no new events.')
       + '</span></details>'
       + '</div>';
   },
@@ -72,39 +73,39 @@ window.ObserverDetailNaiveBanner = {
   function init(app, routeParam) {
     currentId = routeParam;
     if (!currentId) {
-      app.innerHTML = '<div class="text-center text-muted" style="padding:40px">No observer ID specified.</div>';
+      app.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('No observer ID specified.') + '</div>';
       return;
     }
 
     app.innerHTML = `
       <div class="observer-detail-page" style="padding:16px">
         <div class="page-header" style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-          <a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">←</a>
-          <h2 style="margin:0" id="obsTitle">Observer Detail</h2>
-          <a href="#/nodes/${encodeURIComponent(currentId.toLowerCase())}" class="btn-secondary" title="View this pubkey as a node" style="text-decoration:none;font-size:12px;padding:4px 10px">View node detail →</a>
+          <a href="#/observers" class="btn-icon" title="${tr('Back to Observers')}" aria-label="${tr('Back')}">←</a>
+          <h2 style="margin:0" id="obsTitle">${tr('Observer Detail')}</h2>
+          <a href="#/nodes/${encodeURIComponent(currentId.toLowerCase())}" class="btn-secondary" title="${tr('View this pubkey as a node')}" style="text-decoration:none;font-size:12px;padding:4px 10px">${tr('View node detail')} →</a>
           <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <span class="compare-with-group">
-              <label class="sr-only" for="obsCompareWithPicker">Compare with another observer</label>
+              <label class="sr-only" for="obsCompareWithPicker">${tr('Compare with another observer')}</label>
               <select id="obsCompareWithPicker" data-action="compare-with-picker"
-                      aria-label="Compare with another observer"
-                      title="Pick another observer to compare against"
+                      aria-label="${tr('Compare with another observer')}"
+                      title="${tr('Pick another observer to compare against')}"
                       class="time-range-select">
-                <option value="">Compare with…</option>
+                <option value="">${tr('Compare with…')}</option>
               </select>
               <button type="button" data-action="compare-with-go" class="btn-secondary" disabled aria-disabled="true"
-                      title="Open side-by-side comparison">
-                <svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"></use></svg><span>Compare</span>
+                      title="${tr('Open side-by-side comparison')}">
+                <svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"></use></svg><span>${tr('Compare')}</span>
               </button>
             </span>
-            <select id="obsDaysSelect" class="time-range-select" aria-label="Time range">
-              <option value="1">24 Hours</option>
-              <option value="3">3 Days</option>
-              <option value="7" selected>7 Days</option>
-              <option value="30">30 Days</option>
+            <select id="obsDaysSelect" class="time-range-select" aria-label="${tr('Time range')}">
+              <option value="1">${tr('24 Hours')}</option>
+              <option value="3">${tr('3 Days')}</option>
+              <option value="7" selected>${tr('7 Days')}</option>
+              <option value="30">${tr('30 Days')}</option>
             </select>
           </div>
         </div>
-        <div id="obsDetailContent"><div class="text-center text-muted" style="padding:40px">Loading…</div></div>
+        <div id="obsDetailContent"><div class="text-center text-muted" style="padding:40px">${tr('Loading…')}</div></div>
       </div>`;
 
     document.getElementById('obsDaysSelect').addEventListener('change', function (e) {
@@ -162,7 +163,7 @@ window.ObserverDetailNaiveBanner = {
       const errEl = document.getElementById('obsDetailContent');
       if (errEl) {
         errEl.innerHTML = '<div class="text-muted" style="padding:40px"></div>';
-        errEl.firstChild.textContent = 'Error: ' + e.message;
+        errEl.firstChild.textContent = tr('Error: {message}', { message: e.message });
       }
     }
   }
@@ -199,41 +200,41 @@ window.ObserverDetailNaiveBanner = {
     const _obsOnlineMs = (HEALTH_THRESHOLDS && HEALTH_THRESHOLDS.observerOnlineMs) || 3600000;
     const _obsStaleMs = (HEALTH_THRESHOLDS && HEALTH_THRESHOLDS.observerStaleMs) || 86400000;
     const statusCls = ago < _obsOnlineMs ? 'health-green' : ago < _obsStaleMs ? 'health-yellow' : 'health-red';
-    const statusLabel = ago < _obsOnlineMs ? 'Online' : ago < _obsStaleMs ? 'Stale' : 'Offline';
+    const statusLabel = ago < _obsOnlineMs ? tr('Online') : ago < _obsStaleMs ? tr('Stale') : tr('Offline');
 
     el.innerHTML = `
       ${window.ObserverDetailNaiveBanner.render(obs)}
       <div class="obs-info-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px">
         <div class="stat-card">
-          <div class="stat-label">Status</div>
+          <div class="stat-label">${tr('Status')}</div>
           <div class="stat-value"><span class="health-dot ${statusCls}"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg></span> ${statusLabel}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Relay</div>
-          <div class="stat-value">${obs.can_relay === false ? '<span class="badge-listener" title="Firmware reported repeat:off — excluded from path-hop disambiguator (#1290)">listener</span>' : (obs.can_relay === true ? '<span class="badge-repeater" title="Firmware reported repeat:on — eligible as a path hop">repeater</span>' : '<span class="text-muted" title="No repeat field received yet — unknown until firmware publishes a /status">—</span>')}</div>
+          <div class="stat-label">${tr('Relay')}</div>
+          <div class="stat-value">${obs.can_relay === false ? '<span class="badge-listener" title="' + tr('Firmware reported repeat:off — excluded from path-hop disambiguator (#1290)') + '">' + tr('listener') + '</span>' : (obs.can_relay === true ? '<span class="badge-repeater" title="' + tr('Firmware reported repeat:on — eligible as a path hop') + '">' + tr('repeater') + '</span>' : '<span class="text-muted" title="' + tr('No repeat field received yet — unknown until firmware publishes a /status') + '">—</span>')}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Region</div>
+          <div class="stat-label">${tr('Region')}</div>
           <div class="stat-value">${obs.iata ? '<span class="badge-region">' + escapeHtml(obs.iata) + '</span>' : '—'}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Model</div>
+          <div class="stat-label">${tr('Model')}</div>
           <div class="stat-value">${escapeHtml(obs.model || '—')}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Firmware</div>
+          <div class="stat-label">${tr('Firmware')}</div>
           <div class="stat-value" style="font-size:0.8em;word-break:break-all">${escapeHtml(obs.firmware || '—')}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Client</div>
+          <div class="stat-label">${tr('Client')}</div>
           <div class="stat-value" style="font-size:0.8em;word-break:break-all">${escapeHtml(obs.client_version || '—')}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Radio</div>
+          <div class="stat-label">${tr('Radio')}</div>
           <div class="stat-value" style="font-size:0.85em">${radioHtml}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Battery</div>
+          <div class="stat-label">${tr('Battery')}</div>
           <!-- SECURITY (OBS-2, PR #1539): Number() coercion is defense-in-depth.
                Backend extractObserverMeta types this *int (cmd/ingestor), so a
                malicious string SHOULD never reach here. If the API contract
@@ -244,32 +245,32 @@ window.ObserverDetailNaiveBanner = {
           <div class="stat-value">${Number.isFinite(Number(obs.battery_mv)) && Number(obs.battery_mv) ? Number(obs.battery_mv) + ' mV' : '—'}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Uptime</div>
+          <div class="stat-label">${tr('Uptime')}</div>
           <div class="stat-value">${formatDuration(Number.isFinite(Number(obs.uptime_secs)) ? Number(obs.uptime_secs) : 0)}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Noise Floor</div>
+          <div class="stat-label">${tr('Noise Floor')}</div>
           <div class="stat-value">${obs.noise_floor != null && Number.isFinite(Number(obs.noise_floor)) ? Number(obs.noise_floor) + ' dBm' : '—'}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Total Packets</div>
+          <div class="stat-label">${tr('Total Packets')}</div>
           <div class="stat-value">${(obs.packet_count || 0).toLocaleString()}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Packets/Hour</div>
+          <div class="stat-label">${tr('Packets/Hour')}</div>
           <div class="stat-value">${(obs.packetsLastHour || 0).toLocaleString()}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">First Seen</div>
+          <div class="stat-label">${tr('First Seen')}</div>
           <div class="stat-value" style="font-size:0.85em">${obs.first_seen ? new Date(obs.first_seen).toLocaleDateString() : '—'}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Last Status Update</div>
+          <div class="stat-label">${tr('Last Status Update')}</div>
           <div class="stat-value" style="font-size:0.85em">${obs.last_seen ? timeAgo(obs.last_seen) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_seen).toLocaleString() + '</span>' : '—'}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Last Packet Observation</div>
-          <div class="stat-value" style="font-size:0.85em">${obs.last_packet_at ? timeAgo(obs.last_packet_at) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_packet_at).toLocaleString() + '</span>' : '<span style="color:var(--text-muted)">never</span>'}</div>
+          <div class="stat-label">${tr('Last Packet Observation')}</div>
+          <div class="stat-value" style="font-size:0.85em">${obs.last_packet_at ? timeAgo(obs.last_packet_at) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_packet_at).toLocaleString() + '</span>' : '<span style="color:var(--text-muted)">' + tr('never') + '</span>'}</div>
         </div>
       </div>
       <div class="mono" style="font-size:0.75em;color:var(--text-muted);margin-bottom:20px;word-break:break-all">
@@ -277,37 +278,37 @@ window.ObserverDetailNaiveBanner = {
       </div>
       ${obsSkew && obsSkew.samples > 0 ? `
       <div class="node-full-card skew-detail-section" style="margin-bottom:20px;padding:12px">
-        <h4 style="margin:0 0 6px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Clock Offset</h4>
+        <h4 style="margin:0 0 6px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> ${tr('Clock Offset')}</h4>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <span style="font-size:18px;font-weight:700;font-family:var(--mono)">${formatSkew(obsSkew.offsetSec)}</span>
           ${renderSkewBadge(observerSkewSeverity(obsSkew.offsetSec), obsSkew.offsetSec)}
-          <span class="text-muted" style="font-size:12px">${obsSkew.samples} sample${obsSkew.samples !== 1 ? 's' : ''}</span>
+          <span class="text-muted" style="font-size:12px">${trn(obsSkew.samples, '{count} sample', '{count} samples')}</span>
         </div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:8px;max-width:600px">
-          <strong>How this is computed:</strong> when this observer and another observer see the same packet, we compare their receive timestamps. The median deviation across all multi-observer packets is this observer's offset.
+          <strong>${tr('How this is computed:')}</strong> ${tr("when this observer and another observer see the same packet, we compare their receive timestamps. The median deviation across all multi-observer packets is this observer's offset.")}
         </div>
       </div>` : ''}
       <div class="obs-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px">
         <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Packets Over Time</h3>
+          <h3 style="margin:0 0 8px;font-size:0.95em">${tr('Packets Over Time')}</h3>
           <canvas id="obsTimeChart" role="img" aria-label="Packets over time chart"></canvas>
         </div>
         <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Packet Types</h3>
+          <h3 style="margin:0 0 8px;font-size:0.95em">${tr('Packet Types')}</h3>
           <div style="max-width:280px;margin:0 auto"><canvas id="obsTypeChart" role="img" aria-label="Packet types chart"></canvas></div>
         </div>
         <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Unique Nodes Heard</h3>
+          <h3 style="margin:0 0 8px;font-size:0.95em">${tr('Unique Nodes Heard')}</h3>
           <canvas id="obsNodesChart" role="img" aria-label="Unique nodes heard chart"></canvas>
         </div>
         <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">SNR Distribution</h3>
+          <h3 style="margin:0 0 8px;font-size:0.95em">${tr('SNR Distribution')}</h3>
           <canvas id="obsSnrChart" role="img" aria-label="SNR distribution chart"></canvas>
         </div>
       </div>
       <div style="margin-top:20px">
-        <h3 style="font-size:0.95em">Recent Packets</h3>
-        <div id="obsRecentPackets"><div class="text-muted">Loading…</div></div>
+        <h3 style="font-size:0.95em">${tr('Recent Packets')}</h3>
+        <div id="obsRecentPackets"><div class="text-muted">${tr('Loading…')}</div></div>
       </div>`;
 
     // Render charts
@@ -336,7 +337,7 @@ window.ObserverDetailNaiveBanner = {
       data: {
         labels: timeline.map(t => t.label),
         datasets: [{
-          label: 'Packets',
+          label: tr('Packets'),
           data: timeline.map(t => t.count),
           backgroundColor: CHART_COLORS[0] + '80',
           borderColor: CHART_COLORS[0],
@@ -358,7 +359,7 @@ window.ObserverDetailNaiveBanner = {
   function renderTypeChart(types) {
     const ctx = document.getElementById('obsTypeChart');
     if (!ctx) return;
-    const labels = Object.keys(types).map(k => PAYLOAD_LABELS[k] || 'Type ' + k);
+    const labels = Object.keys(types).map(k => PAYLOAD_LABELS[k] || tr('Type {type}', { type: k }));
     const values = Object.values(types);
     const c = new Chart(ctx, {
       type: 'doughnut',
@@ -382,7 +383,7 @@ window.ObserverDetailNaiveBanner = {
       data: {
         labels: timeline.map(t => t.label),
         datasets: [{
-          label: 'Unique Nodes',
+          label: tr('Unique Nodes'),
           data: timeline.map(t => t.count),
           borderColor: CHART_COLORS[2],
           backgroundColor: CHART_COLORS[2] + '20',
@@ -409,7 +410,7 @@ window.ObserverDetailNaiveBanner = {
       data: {
         labels: distribution.map(d => d.range),
         datasets: [{
-          label: 'Packets',
+          label: tr('Packets'),
           data: distribution.map(d => d.count),
           backgroundColor: CHART_COLORS[3] + '80',
           borderColor: CHART_COLORS[3],
@@ -420,7 +421,7 @@ window.ObserverDetailNaiveBanner = {
         responsive: true, maintainAspectRatio: true,
         plugins: { legend: { display: false } },
         scales: {
-          x: { title: { display: true, text: 'SNR (dB)' } },
+          x: { title: { display: true, text: tr('SNR (dB)') } },
           y: { beginAtZero: true, ticks: { precision: 0 } }
         }
       }
@@ -430,9 +431,9 @@ window.ObserverDetailNaiveBanner = {
 
   function renderRecentPackets(packets) {
     const el = document.getElementById('obsRecentPackets');
-    if (!el || !packets.length) { if (el) el.innerHTML = '<div class="text-muted">No recent packets.</div>'; return; }
+    if (!el || !packets.length) { if (el) el.innerHTML = '<div class="text-muted">' + tr('No recent packets.') + '</div>'; return; }
     el.innerHTML = `<table class="data-table" style="font-size:0.85em">
-      <thead><tr><th scope="col">Time</th><th scope="col">Type</th><th scope="col">Hash</th><th scope="col">SNR</th><th scope="col">RSSI</th><th scope="col">Hops</th></tr></thead>
+      <thead><tr><th scope="col">${tr('Time')}</th><th scope="col">${tr('Type')}</th><th scope="col">${tr('Hash')}</th><th scope="col">SNR</th><th scope="col">RSSI</th><th scope="col">${tr('Hops')}</th></tr></thead>
       <tbody>${packets.map(p => {
         const decoded = typeof p.decoded_json === 'string' ? JSON.parse(p.decoded_json) : (p.decoded_json || {});
         const rawHops = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : (p.path_json || []);
@@ -443,7 +444,7 @@ window.ObserverDetailNaiveBanner = {
         const hops = (typeof window !== 'undefined' && window.MC_filterPathHops)
           ? window.MC_filterPathHops(rawHops)
           : rawHops;
-        const typeName = PAYLOAD_LABELS[p.payload_type] || 'Type ' + p.payload_type;
+        const typeName = PAYLOAD_LABELS[p.payload_type] || tr('Type {type}', { type: p.payload_type });
         return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/packets/${p.hash || p.id}">
           <td>${timeAgo(p.timestamp)}</td>
           <td>${typeName}</td>
@@ -486,7 +487,7 @@ window.ObserverDetailNaiveBanner = {
       var list = (data && data.observers ? data.observers : [])
         .filter(function (o) { return String(o.id) !== String(thisId); })
         .sort(function (a, b) { return (a.name || a.id).localeCompare(b.name || b.id); });
-      var opts = ['<option value="">Compare with\u2026</option>'];
+      var opts = ['<option value="">' + tr('Compare with\u2026') + '</option>'];
       for (var i = 0; i < list.length; i++) {
         var o = list[i];
         var label = (o.name || o.id) + (o.iata ? ' (' + o.iata + ')' : '');

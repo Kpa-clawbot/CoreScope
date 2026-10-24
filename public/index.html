@@ -48,6 +48,9 @@
       }
     })();
   </script>
+  <!-- UI language: starts the dictionary fetch before the page scripts load;
+       app.js waits for it before the first route renders. -->
+  <script src="i18n.js?v=__BUST__"></script>
   <link rel="stylesheet" href="style.css?v=__BUST__">
   <link rel="stylesheet" href="route-view.css?v=__BUST__">
   <link rel="stylesheet" href="home.css?v=__BUST__">
@@ -119,10 +122,10 @@
     body[data-cb-sim="trit"]     { filter: url(#cb-trit); }
     body[data-cb-sim="achromat"] { filter: url(#cb-achromat); }
   </style>
-  <a class="skip-link" href="#app">Skip to content</a>
-  <nav class="top-nav" role="navigation" aria-label="Main navigation">
+  <a class="skip-link" href="#app" data-i18n="Skip to content">Skip to content</a>
+  <nav class="top-nav" role="navigation" aria-label="Main navigation" data-i18n-aria-label="Main navigation">
     <div class="nav-left">
-      <a href="#/" class="nav-brand" aria-label="CoreScope home">
+      <a href="#/" class="nav-brand" aria-label="CoreScope home" data-i18n-aria-label="CoreScope home">
         <svg class="brand-logo" xmlns="http://www.w3.org/2000/svg" width="125" height="36" viewBox="150 10 970 280" aria-hidden="true" focusable="false"><path d="M540 100 A 30 30 0 1 0 540 160" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="1.00"/>
 <path d="M540 73 A 57 57 0 1 0 540 187" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.82"/>
 <path d="M540 46 A 84 84 0 1 0 540 214" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.64"/>
@@ -139,48 +142,48 @@
         <svg class="brand-mark-only" xmlns="http://www.w3.org/2000/svg" width="60" height="32" viewBox="425 15 250 230" aria-hidden="true" focusable="false"><path d="M540 100 A 30 30 0 1 0 540 160" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="1.00"/><path d="M540 73 A 57 57 0 1 0 540 187" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.82"/><path d="M540 46 A 84 84 0 1 0 540 214" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.64"/><path d="M540 19 A 111 111 0 1 0 540 241" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.46"/><path d="M660 100 A 30 30 0 1 1 660 160" fill="none" stroke="var(--logo-accent-hi)" stroke-width="8" opacity="1.00"/><path d="M660 73 A 57 57 0 1 1 660 187" fill="none" stroke="var(--logo-accent-hi)" stroke-width="8" opacity="0.82"/><path d="M660 46 A 84 84 0 1 1 660 214" fill="none" stroke="var(--logo-accent-hi)" stroke-width="8" opacity="0.64"/><path d="M660 19 A 111 111 0 1 1 660 241" fill="none" stroke="var(--logo-accent-hi)" stroke-width="8" opacity="0.46"/><circle class="logo-node-a" cx="540" cy="130" r="13" fill="var(--logo-accent)"/><circle class="logo-node-b" cx="660" cy="130" r="13" fill="var(--logo-accent-hi)"/></svg>
         </a>
       <div class="nav-links">
-        <a href="#/home" class="nav-link" data-route="home" data-priority="high">Home</a>
-        <a href="#/packets" class="nav-link" data-route="packets" data-priority="high">Packets</a>
-        <a href="#/map" class="nav-link" data-route="map" data-priority="high">Map</a>
-        <a href="#/live" class="nav-link" data-route="live" data-priority="high"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg> Live</a>
-        <a href="#/channels" class="nav-link" data-route="channels">Channels</a>
-        <a href="#/nodes" class="nav-link" data-route="nodes" data-priority="high">Nodes</a>
-        <a href="#/tools" class="nav-link" data-route="tools">Tools</a>
-        <a href="#/observers" class="nav-link" data-route="observers">Observers</a>
-        <a href="#/analytics" class="nav-link" data-route="analytics">Analytics</a>
-        <a href="#/scope-audit" class="nav-link" data-route="scope-audit">Scope Audit</a>
-        <a href="#/perf" class="nav-link" data-route="perf"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-lightning"></use></svg> Perf</a>
-        <a href="#/audio-lab" class="nav-link" data-route="audio-lab"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-music-note"></use></svg> Lab</a>
+        <a href="#/home" class="nav-link" data-route="home" data-priority="high" data-i18n="Home">Home</a>
+        <a href="#/packets" class="nav-link" data-route="packets" data-priority="high" data-i18n="Packets">Packets</a>
+        <a href="#/map" class="nav-link" data-route="map" data-priority="high" data-i18n="Map">Map</a>
+        <a href="#/live" class="nav-link" data-route="live" data-priority="high"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg> <span data-i18n="Live">Live</span></a>
+        <a href="#/channels" class="nav-link" data-route="channels" data-i18n="Channels">Channels</a>
+        <a href="#/nodes" class="nav-link" data-route="nodes" data-priority="high" data-i18n="Nodes">Nodes</a>
+        <a href="#/tools" class="nav-link" data-route="tools" data-i18n="Tools">Tools</a>
+        <a href="#/observers" class="nav-link" data-route="observers" data-i18n="Observers">Observers</a>
+        <a href="#/analytics" class="nav-link" data-route="analytics" data-i18n="Analytics">Analytics</a>
+        <a href="#/scope-audit" class="nav-link" data-route="scope-audit" data-i18n="Scope Audit">Scope Audit</a>
+        <a href="#/perf" class="nav-link" data-route="perf"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-lightning"></use></svg> <span data-i18n="Perf">Perf</span></a>
+        <a href="#/audio-lab" class="nav-link" data-route="audio-lab"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-music-note"></use></svg> <span data-i18n="Lab">Lab</span></a>
       </div>
       <div class="nav-more-wrap">
-        <button class="nav-btn nav-more-btn" id="navMoreBtn" aria-haspopup="true" aria-expanded="false" aria-controls="navMoreMenu" title="More pages">More ▾</button>
+        <button class="nav-btn nav-more-btn" id="navMoreBtn" aria-haspopup="true" aria-expanded="false" aria-controls="navMoreMenu" title="More pages" data-i18n-title="More pages"><span data-i18n="More">More</span> ▾</button>
         <div class="nav-more-menu" id="navMoreMenu" role="menu"></div>
       </div>
     </div>
     <div class="nav-right">
-      <div class="nav-stats" id="navStats" title="Live stats"></div>
+      <div class="nav-stats" id="navStats" title="Live stats" data-i18n-title="Live stats"></div>
       <div class="nav-fav-wrap">
-        <button class="nav-btn" id="favToggle" title="Favorites" aria-label="Favorites"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></button>
+        <button class="nav-btn" id="favToggle" title="Favorites" aria-label="Favorites" data-i18n-title="Favorites" data-i18n-aria-label="Favorites"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></button>
         <div class="nav-fav-dropdown" id="favDropdown"></div>
       </div>
-      <button class="nav-btn" id="searchToggle" title="Search (Ctrl+K)" aria-label="Search"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"></use></svg></button>
-      <button class="nav-btn" id="customizeToggle" title="Customize theme &amp; branding" aria-label="Customize"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-palette"></use></svg></button>
-      <label class="theme-toggle" id="darkModeToggle" title="Toggle dark mode">
-        <input type="checkbox" id="darkModeCheckbox" role="switch" aria-label="Toggle dark mode">
+      <button class="nav-btn" id="searchToggle" title="Search (Ctrl+K)" aria-label="Search" data-i18n-title="Search (Ctrl+K)" data-i18n-aria-label="Search"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"></use></svg></button>
+      <button class="nav-btn" id="customizeToggle" title="Customize theme &amp; branding" aria-label="Customize" data-i18n-title="Customize theme &amp; branding" data-i18n-aria-label="Customize"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-palette"></use></svg></button>
+      <label class="theme-toggle" id="darkModeToggle" title="Toggle dark mode" data-i18n-title="Toggle dark mode">
+        <input type="checkbox" id="darkModeCheckbox" role="switch" aria-label="Toggle dark mode" data-i18n-aria-label="Toggle dark mode">
         <span class="theme-toggle-track" aria-hidden="true">
           <span class="theme-toggle-thumb"></span>
           <span class="theme-toggle-icon theme-toggle-sun"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-sun"></use></svg></span>
           <span class="theme-toggle-icon theme-toggle-moon"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-moon"></use></svg></span>
         </span>
       </label>
-      <button class="nav-btn hamburger" id="hamburger" title="Menu" aria-label="Toggle navigation menu"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-list"></use></svg></button>
+      <button class="nav-btn hamburger" id="hamburger" title="Menu" aria-label="Toggle navigation menu" data-i18n-title="Menu" data-i18n-aria-label="Toggle navigation menu"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-list"></use></svg></button>
     </div>
   </nav>
 
   <!-- Search overlay -->
-  <div id="searchOverlay" class="search-overlay hidden" role="search" aria-label="Search packets, nodes, channels">
+  <div id="searchOverlay" class="search-overlay hidden" role="search" aria-label="Search packets, nodes, channels" data-i18n-aria-label="Search packets, nodes, channels">
     <div class="search-box">
-      <input type="text" id="searchInput" placeholder="Search packets, nodes, channels…" autofocus>
+      <input type="text" id="searchInput" placeholder="Search packets, nodes, channels…" data-i18n-placeholder="Search packets, nodes, channels…" autofocus>
       <div id="searchResults" class="search-results" role="listbox"></div>
     </div>
   </div>

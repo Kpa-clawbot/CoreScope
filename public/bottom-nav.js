@@ -114,7 +114,7 @@
     var r = accountRoute();
     a.setAttribute('href', escapeHtml(r.hash));
     var lb = a.querySelector('.bottom-nav-sheet-label');
-    if (lb) lb.textContent = r.label;
+    if (lb) lb.textContent = tr(r.label);
   });
 
   var SHEET_ID = 'bottomNavMoreSheet';
@@ -137,7 +137,7 @@
     nav.className = 'bottom-nav';
     nav.setAttribute('data-bottom-nav', '');
     nav.setAttribute('role', 'navigation');
-    nav.setAttribute('aria-label', 'Bottom navigation');
+    nav.setAttribute('aria-label', tr('Bottom navigation'));
 
     TABS.forEach(function (t) {
       var el;
@@ -155,7 +155,9 @@
       el.className = 'bottom-nav-tab';
       el.setAttribute('data-bottom-nav-tab', t.route);
       el.setAttribute('data-route', t.route);
-      el.setAttribute('aria-label', t.label);
+      // data-i18n-* re-applies the labels if the dictionary lands after build().
+      el.setAttribute('aria-label', tr(t.label));
+      el.setAttribute('data-i18n-aria-label', t.label);
 
       var ic = document.createElement('span');
       ic.className = 'bottom-nav-icon';
@@ -164,7 +166,8 @@
 
       var lb = document.createElement('span');
       lb.className = 'bottom-nav-label';
-      lb.textContent = t.label;
+      lb.textContent = tr(t.label);
+      lb.setAttribute('data-i18n', t.label);
 
       el.appendChild(ic);
       el.appendChild(lb);
@@ -233,7 +236,7 @@
     sheet.className = 'bottom-nav-sheet';
     sheet.setAttribute('data-bottom-nav-sheet', '');
     sheet.setAttribute('role', 'menu');
-    sheet.setAttribute('aria-label', 'More navigation');
+    sheet.setAttribute('aria-label', tr('More navigation'));
     sheet.hidden = true;
 
     moreRoutes().forEach(function (r) {
@@ -251,7 +254,7 @@
 
       var lb = document.createElement('span');
       lb.className = 'bottom-nav-sheet-label';
-      lb.textContent = r.label;
+      lb.textContent = tr(r.label);
 
       a.appendChild(ic);
       a.appendChild(lb);
@@ -308,7 +311,7 @@
     if (!btn) return;
     var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
     btn.querySelector('.bottom-nav-sheet-icon').innerHTML = phIconHTML(isDark ? 'moon' : 'sun');
-    btn.querySelector('.bottom-nav-sheet-label').textContent = isDark ? 'Light mode' : 'Dark mode';
+    btn.querySelector('.bottom-nav-sheet-label').textContent = isDark ? tr('Light mode') : tr('Dark mode');
   }
 
   function isSheetOpen() {

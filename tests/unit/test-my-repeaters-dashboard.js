@@ -27,7 +27,7 @@ const a = fs.readFileSync(path.join(REPO_ROOT, 'public', 'analytics.js'), 'utf8'
 const app = fs.readFileSync(path.join(REPO_ROOT, 'public', 'app.js'), 'utf8');
 
 console.log('\n=== tab wiring + dropdown shortcut (structural) ===');
-assert(/data-tab="my-repeaters"[^>]*>\s*My Repeaters\s*</.test(a), 'tab bar has a "My Repeaters" button');
+assert(/data-tab="my-repeaters"[^>]*>\s*(?:My Repeaters|\$\{tr\('My Repeaters'\)\})\s*</.test(a), 'tab bar has a "My Repeaters" button');
 assert(/case 'my-repeaters':\s*await renderMyRepeatersTab\(el\)/.test(a), 'renderTab dispatches my-repeaters');
 assert(/AREA_FILTER_TABS[\s\S]{0,200}'my-repeaters'/.test(a), 'my-repeaters participates in region/area filtering');
 assert(/href="#\/analytics\?tab=my-repeaters"/.test(app) && /Monitor my repeaters/.test(app),
@@ -71,11 +71,13 @@ let lastBindCb = null;
 const bindFavStars = (el, cb) => { lastBindCb = cb; };
 const window = { ROLE_COLORS: { repeater: '#3b82f6', room: '#a855f7' }, aaBadgeStyle: null };
 
+const tr = (s, p) => (p ? s.replace(/\{(\w+)\}/g, (m, k) => (k in p ? String(p[k]) : m)) : s);
+const trn = (n, one, other, p) => tr(n === 1 ? one : other, Object.assign({ count: n }, p));
 const M = new Function(
-  'esc', 'getFavorites', 'RegionFilter', 'AreaFilter', 'fetchAllNodes', 'api', 'CLIENT_TTL',
+  'tr', 'trn', 'esc', 'getFavorites', 'RegionFilter', 'AreaFilter', 'fetchAllNodes', 'api', 'CLIENT_TTL',
   'getHealthStatus', 'renderSkewBadge', 'currentSkewValue', 'favStar', 'timeAgo', 'bindFavStars', 'window',
   block + '\nreturn { renderMyRepeatersTab, _mrStatusCell, _mrSummaryCard };')(
-  esc, getFavorites, RegionFilter, AreaFilter, fetchAllNodes, api, CLIENT_TTL,
+  tr, trn, esc, getFavorites, RegionFilter, AreaFilter, fetchAllNodes, api, CLIENT_TTL,
   getHealthStatus, renderSkewBadge, currentSkewValue, favStar, timeAgo, bindFavStars, window);
 
 function makeEl() { return { _h: '', set innerHTML(v) { this._h = v; }, get innerHTML() { return this._h; } }; }
