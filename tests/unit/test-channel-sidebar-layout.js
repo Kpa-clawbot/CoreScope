@@ -73,7 +73,7 @@ assert(/id="chEncryptedToggle"/.test(chSrc),
   'Encrypted section header is a toggle (button#chEncryptedToggle)');
 assert(/aria-expanded=/.test(chSrc) && /aria-controls="chEncryptedBody"/.test(chSrc),
   'toggle exposes ARIA collapsible state (aria-expanded + aria-controls)');
-assert(/Encrypted \(\$\{encrypted\.length\}\)/.test(chSrc),
+assert(/Encrypted \(\$\{encrypted\.length\}\)|tr\('Encrypted \(\{count\}\)', \{ count: encrypted\.length \}\)/.test(chSrc),
   'Encrypted header shows live count');
 
 console.log('\n=== Results ===');

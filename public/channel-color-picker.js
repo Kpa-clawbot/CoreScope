@@ -9,6 +9,8 @@
  */
 (function() {
   'use strict';
+  // i18n.js defines tr(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s) { return s; };
 
   // 8 maximally-distinct colors on dark backgrounds (#674 Tufte spec)
   var CHANNEL_PALETTE = [
@@ -37,11 +39,11 @@
     var el = document.createElement('div');
     el.className = 'cc-picker-popover';
     el.setAttribute('role', 'dialog');
-    el.setAttribute('aria-label', 'Channel color picker');
+    el.setAttribute('aria-label', tr('Channel color picker'));
     el.style.display = 'none';
     el.innerHTML =
-      '<div class="cc-picker-swatches" role="group" aria-label="Color swatches"></div>' +
-      '<button class="cc-picker-clear">Clear color</button>';
+      '<div class="cc-picker-swatches" role="group" aria-label="' + tr('Color swatches') + '"></div>' +
+      '<button class="cc-picker-clear">' + tr('Clear color') + '</button>';
 
     // Build swatches
     var swatchContainer = el.querySelector('.cc-picker-swatches');

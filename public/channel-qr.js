@@ -19,6 +19,8 @@
  */
 (function (root) {
   'use strict';
+  // i18n.js defines tr(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
 
   const SCHEME_PREFIX = 'meshcore://channel/add';
   const HEX32_RE = /^[0-9a-fA-F]{32}$/;
@@ -103,16 +105,16 @@
         qrBox.innerHTML = qr.createImgTag(4, 4);
         var img = qrBox.querySelector('img');
         if (img) {
-          img.alt = 'QR for ' + name;
+          img.alt = tr('QR for {name}', { name: name });
           img.style.display = 'block';
           img.style.maxWidth = '192px';
           img.style.height = 'auto';
         }
       } catch (e) {
-        qrBox.textContent = '[QR render failed: ' + (e && e.message || e) + ']';
+        qrBox.textContent = '[' + tr('QR render failed: {message}', { message: e && e.message || e }) + ']';
       }
     } else {
-      qrBox.textContent = '[QR library not loaded]';
+      qrBox.textContent = '[' + tr('QR library not loaded') + ']';
     }
 
     // #1101: in qrOnly mode (Share modal), the host renders the hex
@@ -133,7 +135,7 @@
     // #1648 M6: Phosphor sprite for copy/copied state (was 📋 / ✓).
     const ICON_COPY = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg>';
     const ICON_CHECK = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg>';
-    copyBtn.innerHTML = ICON_COPY + ' Copy Key';
+    copyBtn.innerHTML = ICON_COPY + ' ' + tr('Copy Key');
     copyBtn.style.cssText = 'margin-top:6px;';
     copyBtn.addEventListener('click', function () {
       const text = secretHex;
@@ -197,12 +199,12 @@
 
       const status = document.createElement('div');
       status.style.cssText = 'color:#fff;margin-top:12px;font-family:sans-serif;';
-      status.textContent = 'Point camera at a MeshCore channel QR…';
+      status.textContent = tr('Point camera at a MeshCore channel QR…');
       overlay.appendChild(status);
 
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
-      cancelBtn.textContent = 'Cancel';
+      cancelBtn.textContent = tr('Cancel');
       cancelBtn.style.cssText = 'margin-top:12px;';
       overlay.appendChild(cancelBtn);
 
@@ -242,7 +244,7 @@
           if (code && code.data) {
             const parsed = parseChannelUrl(code.data);
             if (parsed) { cleanup(parsed); return; }
-            status.textContent = 'QR found but not a MeshCore channel — keep trying…';
+            status.textContent = tr('QR found but not a MeshCore channel — keep trying…');
           }
         }
         rafId = requestAnimationFrame(tick);
@@ -255,7 +257,7 @@
           video.play().then(function () { tick(); }, function () { tick(); });
         })
         .catch(function () {
-          status.textContent = 'Camera not available — paste key manually.';
+          status.textContent = tr('Camera not available — paste key manually.');
           setTimeout(function () { cleanup(null); }, 1800);
         });
     });
@@ -267,7 +269,7 @@
     note.className = 'channel-qr-fallback';
     note.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);' +
       'background:#222;color:#fff;padding:10px 14px;border-radius:6px;z-index:99999;';
-    note.textContent = 'Camera not available — paste key manually.';
+    note.textContent = tr('Camera not available — paste key manually.');
     document.body.appendChild(note);
     setTimeout(function () {
       if (note.parentNode) note.parentNode.removeChild(note);
