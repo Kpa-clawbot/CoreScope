@@ -2,6 +2,9 @@
 'use strict';
 
 (function () {
+  // i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+  var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
   let _analyticsData = {};
   const sf = (v, d) => (v != null ? v.toFixed(d) : '–'); // safe toFixed
   function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;') : ''; }
@@ -68,7 +71,7 @@
       const y = h - 2 - (v / max) * (h - 4);
       return `${x},${y}`;
     }).join(' ');
-    return `<svg viewBox="0 0 ${w} ${h}" style="width:${w}px;height:${h}px" role="img" aria-label="Sparkline showing trend of ${data.length} data points"><title>Sparkline showing trend of ${data.length} data points</title><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
+    return `<svg viewBox="0 0 ${w} ${h}" style="width:${w}px;height:${h}px" role="img" aria-label="${tr('Sparkline showing trend of {count} data points', { count: data.length })}"><title>${tr('Sparkline showing trend of {count} data points', { count: data.length })}</title><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
   }
 
   // Packets / Hour (#2193): a long history rolls up to coarser bars (at most
@@ -81,7 +84,7 @@
   // the server has already cut the data to it, so nothing is cropped.
   function packetsPerHourCard(pph, opts) {
     const icon = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trend-up"/></svg>';
-    if (!pph || !pph.length) return { html: `<h3>${icon} Packets / Hour</h3><p class="text-muted">No packets in this period.</p>`, from: null };
+    if (!pph || !pph.length) return { html: `<h3>${icon} ${tr('Packets / {unit}', { unit: tr('Hour') })}</h3><p class="text-muted">${tr('No packets in this period.')}</p>`, from: null };
     const at = (h) => Date.parse(h.hour.replace(' ', 'T') + ':00:00Z');
     const days = new Map();
     pph.forEach((h) => days.set(h.hour.slice(0, 10), (days.get(h.hour.slice(0, 10)) || 0) + h.count));
@@ -101,14 +104,14 @@
       if ((t / 3600e3) % every) return '';
       return spanH > 48 && (every >= 24 || hh === 0) ? d.toISOString().slice(5, 10) : String(hh).padStart(2, '0') + 'h';
     });
-    const since = from > first ? ` <span class="text-muted">since ${new Date(from).toISOString().slice(5, 10)}</span>` : '';
-    return { html: `<h3>${icon} Packets / ${name}${since}</h3>${barChart(counts, labels, 'var(--accent)')}`, from };
+    const since = from > first ? ` <span class="text-muted">${tr('since {date}', { date: new Date(from).toISOString().slice(5, 10) })}</span>` : '';
+    return { html: `<h3>${icon} ${tr('Packets / {unit}', { unit: tr(name) })}${since}</h3>${barChart(counts, labels, 'var(--accent)')}`, from };
   }
 
   function barChart(data, labels, colors, w = 800, h = 220, pad = 40) {
     const max = Math.max(...data, 1);
     const barW = Math.max(1, Math.min((w - pad * 2) / data.length - 2, 30));
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Bar chart showing data distribution"><title>Bar chart showing data distribution</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="${tr('Bar chart showing data distribution')}"><title>${tr('Bar chart showing data distribution')}</title>`;
     // Grid
     for (let i = 0; i <= 4; i++) {
       const y = pad + (h - pad * 2) * i / 4;
@@ -151,44 +154,44 @@
     app.innerHTML = `
       <div class="analytics-page">
         <div class="analytics-header">
-          <h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Mesh Analytics</h2>
-          <p class="text-muted">Deep dive into your mesh network data</p>
+          <h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ${tr('Mesh Analytics')}</h2>
+          <p class="text-muted">${tr('Deep dive into your mesh network data')}</p>
           <div class="analytics-filters">
             <div id="analyticsRegionFilter" class="region-filter-container"></div>
             <div id="analyticsAreaFilter" style="display:none"></div>
-            <select id="analyticsTimeWindow" class="analytics-time-window-select" data-testid="analytics-time-window" aria-label="Time window">
-              <option value="">All data</option>
-              <option value="1h">Last 1 hour</option>
-              <option value="24h">Last 24 hours</option>
-              <option value="7d">Last 7 days</option>
-              <option value="30d">Last 30 days</option>
+            <select id="analyticsTimeWindow" class="analytics-time-window-select" data-testid="analytics-time-window" aria-label="${tr('Time window')}">
+              <option value="">${tr('All data')}</option>
+              <option value="1h">${tr('Last 1 hour')}</option>
+              <option value="24h">${tr('Last 24 hours')}</option>
+              <option value="7d">${tr('Last 7 days')}</option>
+              <option value="30d">${tr('Last 30 days')}</option>
             </select>
           </div>
-          <div class="analytics-tabs" id="analyticsTabs" role="tablist" aria-label="Analytics tabs">
-            <button class="tab-btn active" data-tab="overview">Overview</button>
-            <button class="tab-btn" data-tab="rf">RF / Signal</button>
-            <button class="tab-btn" data-tab="topology">Topology</button>
-            <button class="tab-btn" data-tab="channels">Channels</button>
-            <button class="tab-btn" data-tab="hashsizes">Hash Stats</button>
-            <button class="tab-btn" data-tab="collisions">Hash Issues</button>
-            <button class="tab-btn" data-tab="subpaths">Route Patterns</button>
-            <button class="tab-btn" data-tab="nodes">Nodes</button>
-            <button class="tab-btn" data-tab="my-repeaters">My Repeaters</button>
-            <button class="tab-btn" data-tab="repeater-metrics">Repeater Metrics</button>
-            <button class="tab-btn" data-tab="distance">Distance</button>
-            <button class="tab-btn" data-tab="neighbor-graph">Neighbor Graph</button>
-            <button class="tab-btn" data-tab="rf-health">RF Health</button>
-            <button class="tab-btn" data-tab="clock-health">Clock Health</button>
+          <div class="analytics-tabs" id="analyticsTabs" role="tablist" aria-label="${tr('Analytics tabs')}">
+            <button class="tab-btn active" data-tab="overview">${tr('Overview')}</button>
+            <button class="tab-btn" data-tab="rf">${tr('RF / Signal')}</button>
+            <button class="tab-btn" data-tab="topology">${tr('Topology')}</button>
+            <button class="tab-btn" data-tab="channels">${tr('Channels')}</button>
+            <button class="tab-btn" data-tab="hashsizes">${tr('Hash Stats')}</button>
+            <button class="tab-btn" data-tab="collisions">${tr('Hash Issues')}</button>
+            <button class="tab-btn" data-tab="subpaths">${tr('Route Patterns')}</button>
+            <button class="tab-btn" data-tab="nodes">${tr('Nodes')}</button>
+            <button class="tab-btn" data-tab="my-repeaters">${tr('My Repeaters')}</button>
+            <button class="tab-btn" data-tab="repeater-metrics">${tr('Repeater Metrics')}</button>
+            <button class="tab-btn" data-tab="distance">${tr('Distance')}</button>
+            <button class="tab-btn" data-tab="neighbor-graph">${tr('Neighbor Graph')}</button>
+            <button class="tab-btn" data-tab="rf-health">${tr('RF Health')}</button>
+            <button class="tab-btn" data-tab="clock-health">${tr('Clock Health')}</button>
             <!-- #1085 — Roles tab folded in from former /#/roles standalone page.
                  Placed after Clock Health (clock-skew posture is shown per-role
                  inside this tab) and before Prefix Tool (utility tabs trail). -->
-            <button class="tab-btn" data-tab="roles">Roles</button>
-            <button class="tab-btn" data-tab="scopes">Scopes</button>
-            <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
+            <button class="tab-btn" data-tab="roles">${tr('Roles')}</button>
+            <button class="tab-btn" data-tab="scopes">${tr('Scopes')}</button>
+            <button class="tab-btn" data-tab="prefix-tool">${tr('Prefix Tool')}</button>
           </div>
         </div>
         <div id="analyticsContent" class="analytics-content" aria-live="polite">
-          <div class="text-center text-muted" style="padding:40px">Loading analytics…</div>
+          <div class="text-center text-muted" style="padding:40px">${tr('Loading analytics…')}</div>
         </div>
       </div>`;
 
@@ -328,7 +331,7 @@
   // Tabs drawn from the bulk load; the other tabs fetch their own data.
   var BULK_TABS = new Set(['overview', 'rf', 'topology', 'channels', 'hashsizes', 'collisions']);
   function loadErrorHtml(msg) {
-    return `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Failed to load: ${esc(msg)}</div>`;
+    return `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">${tr('Failed to load: {message}', { message: esc(msg) })}</div>`;
   }
 
   async function loadAnalytics() {
@@ -382,7 +385,7 @@
     // (or error) state instead of drawing from missing data (#2200).
     if (BULK_TABS.has(tab) && !d.rfData) {
       el.innerHTML = _loadError ? loadErrorHtml(_loadError)
-        : '<div class="text-center text-muted" style="padding:40px">Loading analytics…</div>';
+        : '<div class="text-center text-muted" style="padding:40px">' + tr('Loading analytics…') + '</div>';
       return;
     }
     switch (tab) {
@@ -437,45 +440,45 @@
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-value">${(rf.totalTransmissions || rf.totalAllPackets || rf.totalPackets).toLocaleString()}</div>
-          <div class="stat-label">Total Transmissions</div>
+          <div class="stat-label">${tr('Total Transmissions')}</div>
           <div class="stat-spark">${sparkSvg(rf.packetsPerHour.map(h=>h.count), 'var(--accent)')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${rf.totalPackets.toLocaleString()}</div>
-          <div class="stat-label">Observations with Signal</div>
+          <div class="stat-label">${tr('Observations with Signal')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${topo.uniqueNodes}</div>
-          <div class="stat-label">Unique Nodes</div>
+          <div class="stat-label">${tr('Unique Nodes')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${sf(rf.snr.avg, 1)} dB</div>
-          <div class="stat-label">Avg SNR</div>
-          <div class="stat-detail">${sf(rf.snr.min, 1)} to ${sf(rf.snr.max, 1)}</div>
+          <div class="stat-label">${tr('Avg SNR')}</div>
+          <div class="stat-detail">${tr('{min} to {max}', { min: sf(rf.snr.min, 1), max: sf(rf.snr.max, 1) })}</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${sf(rf.rssi.avg, 0)} dBm</div>
-          <div class="stat-label">Avg RSSI</div>
-          <div class="stat-detail">${rf.rssi.min} to ${rf.rssi.max}</div>
+          <div class="stat-label">${tr('Avg RSSI')}</div>
+          <div class="stat-detail">${tr('{min} to {max}', { min: rf.rssi.min, max: rf.rssi.max })}</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${sf(topo.avgHops, 1)}</div>
-          <div class="stat-label">Avg Hops</div>
-          <div class="stat-detail">max ${topo.maxHops}</div>
+          <div class="stat-label">${tr('Avg Hops')}</div>
+          <div class="stat-detail">${tr('max {count}', { count: topo.maxHops })}</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${ch.activeChannels}</div>
-          <div class="stat-label">Active Channels</div>
-          <div class="stat-detail">${ch.decryptable} decryptable</div>
+          <div class="stat-label">${tr('Active Channels')}</div>
+          <div class="stat-detail">${tr('{count} decryptable', { count: ch.decryptable })}</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${rf.avgPacketSize} B</div>
-          <div class="stat-label">Avg Packet Size</div>
+          <div class="stat-label">${tr('Avg Packet Size')}</div>
           <div class="stat-detail">${rf.minPacketSize}–${rf.maxPacketSize} B</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${((rf.timeSpanHours || 1)).toFixed(1)}h</div>
-          <div class="stat-label">Data Span</div>
+          <div class="stat-label">${tr('Data Span')}</div>
         </div>
       </div>
 
@@ -485,19 +488,19 @@
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Payload Type Mix</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> ${tr('Payload Type Mix')}</h3>
           ${renderPayloadPie(rf.payloadTypes)}
         </div>
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Hop Count Distribution</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> ${tr('Hop Count Distribution')}</h3>
           ${barChart(topo.hopDistribution.map(h=>h.count), topo.hopDistribution.map(h=>h.hops), ['#3b82f6'])}
         </div>
       </div>
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Relay Airtime Share</h3>
-          <p class="text-muted" style="margin-top:-4px;font-size:12px">Score = LoRa Time-on-Air × distinct repeaters that forwarded the packet (issue #1768). Counts relay re-transmissions; originator TX excluded. Not comparable across meshes — see preset caption below.</p>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${tr('Relay Airtime Share')}</h3>
+          <p class="text-muted" style="margin-top:-4px;font-size:12px">${tr('Score = LoRa Time-on-Air × distinct repeaters that forwarded the packet (issue #1768). Counts relay re-transmissions; originator TX excluded. Not comparable across meshes — see preset caption below.')}</p>
           ${renderRelayAirtimeDumbbell(d.airtimeData)}
         </div>
       </div>
@@ -518,16 +521,16 @@
           var widget = document.createElement('div');
           widget.className = 'analytics-row';
           widget.innerHTML = '<div class="analytics-card flex-1">' +
-            '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Neighbor Affinity Graph</h3>' +
+            '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ' + tr('Neighbor Affinity Graph') + '</h3>' +
             '<div class="stats-grid">' +
-            '<div class="stat-card"><div class="stat-value">' + s.totalEdges + '</div><div class="stat-label">Total Edges</div></div>' +
-            '<div class="stat-card"><div class="stat-value">' + s.totalNodes + '</div><div class="stat-label">Total Nodes</div></div>' +
-            '<div class="stat-card"><div class="stat-value">' + s.resolvedCount + ' <span style="font-size:12px;color:var(--text-muted)">(' + resolvedPct + '%)</span></div><div class="stat-label">Resolved Prefixes</div></div>' +
-            '<div class="stat-card"><div class="stat-value">' + s.ambiguousCount + ' <span style="font-size:12px;color:var(--text-muted)">(' + ambiguousPct + '%)</span></div><div class="stat-label">Ambiguous Prefixes</div></div>' +
-            '<div class="stat-card"><div class="stat-value">' + (s.avgConfidence || 0).toFixed(3) + '</div><div class="stat-label">Avg Confidence</div></div>' +
-            '<div class="stat-card"><div class="stat-value">' + (s.coldStartCoverage || 0).toFixed(1) + '%</div><div class="stat-label">Cold-Start Coverage</div></div>' +
-            '<div class="stat-card"><div class="stat-value">' + (s.cacheAge || 'N/A') + '</div><div class="stat-label">Cache Age</div></div>' +
-            '<div class="stat-card"><div class="stat-value">' + (s.lastRebuild ? s.lastRebuild.substring(0, 19) : 'N/A') + '</div><div class="stat-label">Last Rebuild</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + s.totalEdges + '</div><div class="stat-label">' + tr('Total Edges') + '</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + s.totalNodes + '</div><div class="stat-label">' + tr('Total Nodes') + '</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + s.resolvedCount + ' <span style="font-size:12px;color:var(--text-muted)">(' + resolvedPct + '%)</span></div><div class="stat-label">' + tr('Resolved Prefixes') + '</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + s.ambiguousCount + ' <span style="font-size:12px;color:var(--text-muted)">(' + ambiguousPct + '%)</span></div><div class="stat-label">' + tr('Ambiguous Prefixes') + '</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + (s.avgConfidence || 0).toFixed(3) + '</div><div class="stat-label">' + tr('Avg Confidence') + '</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + (s.coldStartCoverage || 0).toFixed(1) + '%</div><div class="stat-label">' + tr('Cold-Start Coverage') + '</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + (s.cacheAge || tr('N/A')) + '</div><div class="stat-label">' + tr('Cache Age') + '</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + (s.lastRebuild ? s.lastRebuild.substring(0, 19) : tr('N/A')) + '</div><div class="stat-label">' + tr('Last Rebuild') + '</div></div>' +
             '</div></div>';
           el.appendChild(widget);
         })
@@ -559,11 +562,11 @@
   function renderRelayAirtimeDumbbell(data) {
     var rows = (data && Array.isArray(data.rows)) ? data.rows : [];
     if (!rows.length) {
-      return '<div class="text-muted" style="padding:20px">No relay-airtime data in this window.</div>';
+      return '<div class="text-muted" style="padding:20px">' + tr('No relay-airtime data in this window.') + '</div>';
     }
     var totalScore = (data && typeof data.total_score === 'number') ? data.total_score : 0;
     if (totalScore <= 0) {
-      return '<div class="text-muted" style="padding:20px">No relay activity observed in this window.</div>';
+      return '<div class="text-muted" style="padding:20px">' + tr('No relay activity observed in this window.') + '</div>';
     }
     // Issue #1768 — surface the LoRa preset baked into the ToA score. Share
     // numbers are only meaningful relative to one PHY preset; operators must
@@ -580,12 +583,12 @@
       var bwStr = bwKhz ? bwKhz.toFixed(1).replace(/\.0$/, '') : '0';
       presetCaption =
         '<div class="dumbbell-preset text-muted" style="font-size:11px;padding:0 4px 6px 4px">' +
-        'Assumed LoRa preset: ' +
+        tr('Assumed LoRa preset:') + ' ' +
         (freqMHz ? esc(freqMHz.toFixed(3)) + ' MHz / ' : '') +
         'BW ' + esc(bwStr) + ' kHz / ' +
         'SF ' + esc(String(Number(preset.sf || 0))) + ' / ' +
         'CR 4/' + esc(String(Number(preset.cr || 0))) +
-        ' (preamble ' + esc(String(Number(preset.preamble || 0))) + ' sym)' +
+        ' (' + tr('preamble {count} sym', { count: esc(String(Number(preset.preamble || 0))) }) + ')' +
         '</div>';
     }
     // Layout: per row → label | track 0..100% | values
@@ -593,15 +596,15 @@
     var html = '<div class="dumbbell-chart" style="display:flex;flex-direction:column;gap:8px;padding:8px 4px">';
     if (presetCaption) html += presetCaption;
     if (rows.some(function (r) { return r.payload_type === 'ADVERT'; })) {
-      html += '<div class="dumbbell-evidence-note text-muted" style="font-size:11px">Known route evidence: Mixed adverts were observed as both flood and direct with an empty remaining path. An empty path does not prove an original zero-hop send. Other adverts have no classified evidence yet. Background backfill improves classification automatically. Available history is a lower bound; older overwritten observations cannot be recovered, and failed evidence writes may leave gaps.</div>';
+      html += '<div class="dumbbell-evidence-note text-muted" style="font-size:11px">' + tr('Known route evidence: Mixed adverts were observed as both flood and direct with an empty remaining path. An empty path does not prove an original zero-hop send. Other adverts have no classified evidence yet. Background backfill improves classification automatically. Available history is a lower bound; older overwritten observations cannot be recovered, and failed evidence writes may leave gaps.') + '</div>';
     }
     rows.forEach(function (r, i) {
       var name = r.payload_type || 'UNK';
       if (name === 'ADVERT') {
-        if (r.advert_kind === 'flood') name = 'Flood adverts';
-        else if (r.advert_kind === 'zero_hop') name = 'Direct adverts (empty path)';
-        else if (r.advert_kind === 'mixed') name = 'Mixed adverts';
-        else if (r.advert_kind === 'other') name = 'Other adverts';
+        if (r.advert_kind === 'flood') name = tr('Flood adverts');
+        else if (r.advert_kind === 'zero_hop') name = tr('Direct adverts (empty path)');
+        else if (r.advert_kind === 'mixed') name = tr('Mixed adverts');
+        else if (r.advert_kind === 'other') name = tr('Other adverts');
       }
       var cnt = Number(r.count || 0);
       var cpct = Number(r.count_pct || 0);
@@ -620,20 +623,20 @@
         : scoreMs.toFixed(2) + ' ms';
       var tip =
         name + '\n' +
-        'Count: ' + cnt.toLocaleString() + ' (' + cpct.toFixed(2) + '%)\n' +
-        'Airtime: ' + apct.toFixed(2) + '% (score ' + scoreStr + ' · airtime × repeaters)\n' +
-        'Score = LoRa Time-on-Air × distinct repeaters. Within-mesh only.';
+        tr('Count: {count} ({pct}%)', { count: cnt.toLocaleString(), pct: cpct.toFixed(2) }) + '\n' +
+        tr('Airtime: {pct}% (score {score} · airtime × repeaters)', { pct: apct.toFixed(2), score: scoreStr }) + '\n' +
+        tr('Score = LoRa Time-on-Air × distinct repeaters. Within-mesh only.');
       html += '<div class="dumbbell-row" title="' + esc(tip) + '" style="display:grid;grid-template-columns:var(--relay-airtime-columns,80px 1fr 180px);align-items:center;gap:10px;font-size:12px">' +
         '<div class="dumbbell-label" style="font-weight:600;color:var(--text)">' + esc(name) + '</div>' +
         '<div class="dumbbell-track" style="position:relative;height:18px;background:var(--bg-elev,rgba(127,127,127,0.12));border-radius:9px">' +
           '<div class="dumbbell-connector" style="position:absolute;top:50%;left:' + loPct.toFixed(3) + '%;width:' + (hiPct - loPct).toFixed(3) + '%;height:2px;background:var(--text-muted,#888);transform:translateY(-50%);opacity:0.5"></div>' +
-          '<div class="dumbbell-dot dumbbell-dot-count" style="position:absolute;top:50%;left:' + cpct.toFixed(3) + '%;width:10px;height:10px;border-radius:50%;background:var(--text-muted,#888);transform:translate(-50%,-50%);border:1px solid var(--bg,#fff)" aria-label="count share"></div>' +
-          '<div class="dumbbell-dot dumbbell-dot-airtime" style="position:absolute;top:50%;left:' + apct.toFixed(3) + '%;width:12px;height:12px;border-radius:50%;background:' + color + ';transform:translate(-50%,-50%);border:1px solid var(--bg,#fff)" aria-label="airtime share"></div>' +
+          '<div class="dumbbell-dot dumbbell-dot-count" style="position:absolute;top:50%;left:' + cpct.toFixed(3) + '%;width:10px;height:10px;border-radius:50%;background:var(--text-muted,#888);transform:translate(-50%,-50%);border:1px solid var(--bg,#fff)" aria-label="' + tr('count share') + '"></div>' +
+          '<div class="dumbbell-dot dumbbell-dot-airtime" style="position:absolute;top:50%;left:' + apct.toFixed(3) + '%;width:12px;height:12px;border-radius:50%;background:' + color + ';transform:translate(-50%,-50%);border:1px solid var(--bg,#fff)" aria-label="' + tr('airtime share') + '"></div>' +
         '</div>' +
         '<div class="dumbbell-values" style="text-align:right;color:var(--text-muted);font-variant-numeric:tabular-nums">' +
-          '<span style="color:var(--text-muted)">cnt ' + cpct.toFixed(1) + '%</span>' +
+          '<span style="color:var(--text-muted)">' + tr('cnt {pct}%', { pct: cpct.toFixed(1) }) + '</span>' +
           ' &nbsp;·&nbsp; ' +
-          '<span style="display:inline-flex;align-items:center;gap:4px;color:var(--text);font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + '" aria-hidden="true"></span>air ' + apct.toFixed(1) + '%</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px;color:var(--text);font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + '" aria-hidden="true"></span>' + tr('air {pct}%', { pct: apct.toFixed(1) }) + '</span>' +
         '</div>' +
       '</div>';
     });
@@ -643,7 +646,7 @@
       '<div style="display:flex;justify-content:space-between"><span>0%</span><span>50%</span><span>100%</span></div>' +
       '<div></div>' +
     '</div>';
-    html += '<div class="dumbbell-legend" style="display:flex;gap:14px;font-size:11px;color:var(--text-muted);padding:4px 0 0 84px"><span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-muted,#888);vertical-align:middle"></span> count %</span><span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent,#3b82f6);vertical-align:middle"></span> airtime %</span></div>';
+    html += '<div class="dumbbell-legend" style="display:flex;gap:14px;font-size:11px;color:var(--text-muted);padding:4px 0 0 84px"><span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-muted,#888);vertical-align:middle"></span> ' + tr('count %') + '</span><span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent,#3b82f6);vertical-align:middle"></span> ' + tr('airtime %') + '</span></div>';
     html += '</div>';
     return html;
   }
@@ -656,26 +659,26 @@
     el.innerHTML = `
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> SNR Distribution</h3>
-          <p class="text-muted">Signal-to-Noise Ratio (higher = cleaner signal)</p>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> ${tr('SNR Distribution')}</h3>
+          <p class="text-muted">${tr('Signal-to-Noise Ratio (higher = cleaner signal)')}</p>
           ${snrHist.svg}
           <div class="rf-stats">
-            <span>Min: <strong>${sf(rf.snr.min, 1)} dB</strong></span>
-            <span>Mean: <strong>${sf(rf.snr.avg, 1)} dB</strong></span>
-            <span>Median: <strong>${sf(rf.snr.median, 1)} dB</strong></span>
-            <span>Max: <strong>${sf(rf.snr.max, 1)} dB</strong></span>
+            <span>${tr('Min:')} <strong>${sf(rf.snr.min, 1)} dB</strong></span>
+            <span>${tr('Mean:')} <strong>${sf(rf.snr.avg, 1)} dB</strong></span>
+            <span>${tr('Median:')} <strong>${sf(rf.snr.median, 1)} dB</strong></span>
+            <span>${tr('Max:')} <strong>${sf(rf.snr.max, 1)} dB</strong></span>
             <span>σ: <strong>${sf(rf.snr.stddev, 1)} dB</strong></span>
           </div>
         </div>
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> RSSI Distribution</h3>
-          <p class="text-muted">Received Signal Strength (closer to 0 = stronger)</p>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${tr('RSSI Distribution')}</h3>
+          <p class="text-muted">${tr('Received Signal Strength (closer to 0 = stronger)')}</p>
           ${rssiHist.svg}
           <div class="rf-stats">
-            <span>Min: <strong>${rf.rssi.min} dBm</strong></span>
-            <span>Mean: <strong>${sf(rf.rssi.avg, 0)} dBm</strong></span>
-            <span>Median: <strong>${rf.rssi.median} dBm</strong></span>
-            <span>Max: <strong>${rf.rssi.max} dBm</strong></span>
+            <span>${tr('Min:')} <strong>${rf.rssi.min} dBm</strong></span>
+            <span>${tr('Mean:')} <strong>${sf(rf.rssi.avg, 0)} dBm</strong></span>
+            <span>${tr('Median:')} <strong>${rf.rssi.median} dBm</strong></span>
+            <span>${tr('Max:')} <strong>${rf.rssi.max} dBm</strong></span>
             <span>σ: <strong>${sf(rf.rssi.stddev, 1)} dBm</strong></span>
           </div>
         </div>
@@ -683,31 +686,31 @@
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> SNR vs RSSI Scatter</h3>
-          <p class="text-muted">Each dot = one packet. Cluster position reveals link quality.</p>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> ${tr('SNR vs RSSI Scatter')}</h3>
+          <p class="text-muted">${tr('Each dot = one packet. Cluster position reveals link quality.')}</p>
           ${renderScatter(rf.scatterData)}
         </div>
       </div>
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> SNR by Payload Type</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ${tr('SNR by Payload Type')}</h3>
           ${renderSNRByType(rf.snrByType)}
         </div>
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trend-up"/></svg> Signal Quality Over Time</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trend-up"/></svg> ${tr('Signal Quality Over Time')}</h3>
           ${renderSignalTimeline(rf.signalOverTime)}
         </div>
       </div>
 
       <div class="analytics-card">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-ruler"/></svg> Packet Size Distribution</h3>
-        <p class="text-muted">Raw packet length in bytes</p>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-ruler"/></svg> ${tr('Packet Size Distribution')}</h3>
+        <p class="text-muted">${tr('Raw packet length in bytes')}</p>
         ${histogram(rf.packetSizes, 25, '#8b5cf6').svg}
         <div class="rf-stats">
-          <span>Min: <strong>${rf.minPacketSize} B</strong></span>
-          <span>Avg: <strong>${rf.avgPacketSize} B</strong></span>
-          <span>Max: <strong>${rf.maxPacketSize} B</strong></span>
+          <span>${tr('Min:')} <strong>${rf.minPacketSize} B</strong></span>
+          <span>${tr('Avg:')} <strong>${rf.avgPacketSize} B</strong></span>
+          <span>${tr('Max:')} <strong>${rf.maxPacketSize} B</strong></span>
         </div>
       </div>
     `;
@@ -716,7 +719,7 @@
   function renderScatter(data) {
     const w = 600, h = 300, pad = 40;
     const snrMin = -12, snrMax = 15, rssiMin = -130, rssiMax = -5;
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:300px" role="img" aria-label="SNR vs RSSI scatter plot showing signal quality distribution"><title>SNR vs RSSI scatter plot showing signal quality distribution</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:300px" role="img" aria-label="${tr('SNR vs RSSI scatter plot showing signal quality distribution')}"><title>${tr('SNR vs RSSI scatter plot showing signal quality distribution')}</title>`;
     // Axes
     svg += `<line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="var(--text-muted)" stroke-width="0.5"/>`;
     svg += `<line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h-pad}" stroke="var(--text-muted)" stroke-width="0.5"/>`;
@@ -755,7 +758,7 @@
       svg += `<rect x="${x1}" y="${y1}" width="${x2-x1}" height="${y2-y1}" fill="${z.color}"/>`;
       svg += `<rect x="${x1}" y="${y1}" width="${x2-x1}" height="${y2-y1}" fill="url(#${zonePatterns[z.label]})"/>`;
       svg += `<rect x="${x1}" y="${y1}" width="${x2-x1}" height="${y2-y1}" fill="none" stroke="${zoneBorder[z.label]}" stroke-width="1" stroke-dasharray="${zoneDash[z.label]}" opacity="0.6"/>`;
-      svg += `<text x="${x1+4}" y="${y1+12}" font-size="9" fill="var(--text-muted)" opacity="0.7">${z.label}</text>`;
+      svg += `<text x="${x1+4}" y="${y1+12}" font-size="9" fill="var(--text-muted)" opacity="0.7">${tr(z.label)}</text>`;
     });
     // Dots (sample if too many)
     const sample = data.length > 500 ? data.filter((_, i) => i % Math.ceil(data.length / 500) === 0) : data;
@@ -769,8 +772,8 @@
   }
 
   function renderSNRByType(snrByType) {
-    if (!snrByType.length) return '<div class="text-muted">No data</div>';
-    let html = '<table class="analytics-table"><thead><tr><th scope="col">Type</th><th scope="col">Packets</th><th scope="col">Avg SNR</th><th scope="col">Min</th><th scope="col">Max</th><th scope="col">Distribution</th></tr></thead><tbody>';
+    if (!snrByType.length) return '<div class="text-muted">' + tr('No data') + '</div>';
+    let html = '<table class="analytics-table"><thead><tr><th scope="col">' + tr('Type') + '</th><th scope="col">' + tr('Packets') + '</th><th scope="col">' + tr('Avg SNR') + '</th><th scope="col">' + tr('Min') + '</th><th scope="col">' + tr('Max') + '</th><th scope="col">' + tr('Distribution') + '</th></tr></thead><tbody>';
     snrByType.forEach(t => {
       const barPct = Math.max(((t.avg - (-12)) / 27) * 100, 2);
       const color = t.avg > 6 ? statusGreen() : t.avg > 0 ? statusYellow() : statusRed();
@@ -787,10 +790,10 @@
   }
 
   function renderSignalTimeline(data) {
-    if (!data.length) return '<div class="text-muted">No data</div>';
+    if (!data.length) return '<div class="text-muted">' + tr('No data') + '</div>';
     const w = 400, h = 160, pad = 35;
     const maxPkts = Math.max(...data.map(d => d.count), 1);
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:160px" role="img" aria-label="Signal quality over time showing SNR trend and packet volume"><title>Signal quality over time showing SNR trend and packet volume</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:160px" role="img" aria-label="${tr('Signal quality over time showing SNR trend and packet volume')}"><title>${tr('Signal quality over time showing SNR trend and packet volume')}</title>`;
     const snrPts = data.map((d, i) => {
       const x = pad + i * ((w - pad * 2) / Math.max(data.length - 1, 1));
       const y = h - pad - ((d.avgSnr + 12) / 27) * (h - pad * 2);
@@ -815,7 +818,7 @@
       svg += `<text x="${x}" y="${h-pad+14}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${data[i].hour.slice(11)}h</text>`;
     }
     svg += '</svg>';
-    svg += `<div class="timeline-legend"><span><span class="legend-dot" style="background:${statusGreen()}"></span>Avg SNR</span><span><span class="legend-dot" style="background:var(--accent);opacity:0.3"></span>Volume</span></div>`;
+    svg += `<div class="timeline-legend"><span><span class="legend-dot" style="background:${statusGreen()}"></span>${tr('Avg SNR')}</span><span><span class="legend-dot" style="background:var(--accent);opacity:0.3"></span>${tr('Volume')}</span></div>`;
     return svg;
   }
 
@@ -824,61 +827,61 @@
     el.innerHTML = `
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Hop Count Distribution</h3>
-          <p class="text-muted">Number of repeater hops per packet</p>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> ${tr('Hop Count Distribution')}</h3>
+          <p class="text-muted">${tr('Number of repeater hops per packet')}</p>
           ${barChart(topo.hopDistribution.map(h=>h.count), topo.hopDistribution.map(h=>h.hops), ['#3b82f6'])}
           <div class="rf-stats">
-            <span>Avg: <strong>${sf(topo.avgHops, 1)} hops</strong></span>
-            <span>Median: <strong>${topo.medianHops}</strong></span>
-            <span>Max: <strong>${topo.maxHops}</strong></span>
-            <span>1-hop direct: <strong>${topo.hopDistribution[0]?.count || 0}</strong></span>
+            <span>${tr('Avg:')} <strong>${tr('{value} hops', { value: sf(topo.avgHops, 1) })}</strong></span>
+            <span>${tr('Median:')} <strong>${topo.medianHops}</strong></span>
+            <span>${tr('Max:')} <strong>${topo.maxHops}</strong></span>
+            <span>${tr('1-hop direct:')} <strong>${topo.hopDistribution[0]?.count || 0}</strong></span>
           </div>
         </div>
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> Top Repeaters</h3>
-          <p class="text-muted">Nodes appearing most in packet paths</p>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> ${tr('Top Repeaters')}</h3>
+          <p class="text-muted">${tr('Nodes appearing most in packet paths')}</p>
           ${renderRepeaterTable(topo.topRepeaters)}
         </div>
       </div>
 
       <div class="analytics-card" id="retransmission-pressure">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-line"/></svg> Retransmission Pressure (proxy)</h3>
-        <p class="text-muted">Average number of distinct repeaters seen in the observed paths of each flood packet, over time.</p>
-        <div id="rtxPressureChart"><div class="text-muted" style="padding:20px">Loading…</div></div>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-line"/></svg> ${tr('Retransmission Pressure (proxy)')}</h3>
+        <p class="text-muted">${tr('Average number of distinct repeaters seen in the observed paths of each flood packet, over time.')}</p>
+        <div id="rtxPressureChart"><div class="text-muted" style="padding:20px">${tr('Loading…')}</div></div>
       </div>
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-handshake"/></svg> Repeater Pair Heatmap</h3>
-          <p class="text-muted">Which repeaters frequently appear together in paths</p>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-handshake"/></svg> ${tr('Repeater Pair Heatmap')}</h3>
+          <p class="text-muted">${tr('Which repeaters frequently appear together in paths')}</p>
           ${renderPairTable(topo.topPairs)}
         </div>
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Hops vs SNR</h3>
-          <p class="text-muted">Does more hops = worse signal?</p>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ${tr('Hops vs SNR')}</h3>
+          <p class="text-muted">${tr('Does more hops = worse signal?')}</p>
           ${renderHopsSNR(topo.hopsVsSnr)}
         </div>
       </div>
 
       <div class="analytics-card">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Best Path to Each Node</h3>
-        <p class="text-muted">Shortest hop distance seen across all observers</p>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> ${tr('Best Path to Each Node')}</h3>
+        <p class="text-muted">${tr('Shortest hop distance seen across all observers')}</p>
         ${renderBestPath(topo.bestPathList)}
       </div>
 
       <div class="analytics-card">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> Per-Observer Reachability</h3>
-        <p class="text-muted">Nodes at each hop distance, from each observer's perspective</p>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> ${tr('Per-Observer Reachability')}</h3>
+        <p class="text-muted">${tr("Nodes at each hop distance, from each observer's perspective")}</p>
         ${topo.observers.length > 1 ? `<div class="observer-selector" id="obsSelector">
           ${topo.observers.map((o, i) => `<button class="tab-btn ${i === 0 ? 'active' : ''}" data-obs="${o.id}">${esc(o.name)}</button>`).join('')}
-          <button class="tab-btn" data-obs="__all">All Observers</button>
+          <button class="tab-btn" data-obs="__all">${tr('All Observers')}</button>
         </div>` : ''}
         <div id="reachContent">${renderPerObserverReach(topo.perObserverReach, topo.observers[0]?.id)}</div>
       </div>
 
       ${topo.multiObsNodes.length ? `<div class="analytics-card">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-shuffle"/></svg> Cross-Observer Comparison</h3>
-        <p class="text-muted">Nodes seen by multiple observers — hop distance varies by vantage point</p>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-shuffle"/></svg> ${tr('Cross-Observer Comparison')}</h3>
+        <p class="text-muted">${tr('Nodes seen by multiple observers — hop distance varies by vantage point')}</p>
         ${renderCrossObserver(topo.multiObsNodes)}
       </div>` : ''}
     `;
@@ -922,7 +925,7 @@
       var data = await api('/analytics/retransmissions?' + qs.slice(1), { ttl: CLIENT_TTL.analyticsRF });
       html = renderRetransmissionChart(data);
     } catch (e) {
-      html = '<div class="text-muted" role="alert" style="padding:20px">Failed to load retransmission pressure: ' + esc(e.message) + '</div>';
+      html = '<div class="text-muted" role="alert" style="padding:20px">' + tr('Failed to load retransmission pressure: {message}', { message: esc(e.message) }) + '</div>';
     }
     // A newer request (window/region change) or a tab switch wins.
     var host = document.getElementById('rtxPressureChart');
@@ -936,7 +939,7 @@
   // (dashed). Buckets further apart than bucket_seconds break the lines, so a
   // gap in data is never drawn as a trend.
   function renderRetransmissionChart(data) {
-    var noData = '<div class="text-muted" style="padding:20px">No flood packets in this window.</div>';
+    var noData = '<div class="text-muted" style="padding:20px">' + tr('No flood packets in this window.') + '</div>';
     var raw = data && Array.isArray(data.buckets) ? data.buckets : [];
     var pts = [];
     for (var i = 0; i < raw.length; i++) {
@@ -965,7 +968,7 @@
     function yObs(v) { return padT + plotH - (v / maxObs) * plotH * 0.9; }
     function f(n) { return n.toFixed(1); }
 
-    var svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;max-height:' + h + 'px" role="img" aria-label="Average distinct repeaters per flood packet over time"><title>Average distinct repeaters per flood packet over time</title>';
+    var svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;max-height:' + h + 'px" role="img" aria-label="' + tr('Average distinct repeaters per flood packet over time') + '"><title>' + tr('Average distinct repeaters per flood packet over time') + '</title>';
     for (var g = 0; g <= 4; g++) {
       var gy = padT + plotH * g / 4;
       svg += '<line x1="' + padL + '" y1="' + f(gy) + '" x2="' + (w - padR) + '" y2="' + f(gy) + '" stroke="var(--border)" stroke-dasharray="2"/>';
@@ -994,7 +997,7 @@
     });
     // Per-bucket hover targets.
     pts.forEach(function (p) {
-      var tip = p.start + '\nAvg distinct repeaters: ' + p.avg.toFixed(1) + '\nFlood packets: ' + p.packets + '\nObservers: ' + p.observers;
+      var tip = p.start + '\n' + tr('Avg distinct repeaters: {value}', { value: p.avg.toFixed(1) }) + '\n' + tr('Flood packets: {count}', { count: p.packets }) + '\n' + tr('Observers: {count}', { count: p.observers });
       svg += '<circle class="rtx-hit" cx="' + f(x(p.t)) + '" cy="' + f(yAvg(p.avg)) + '" r="5" fill="transparent"><title>' + esc(tip) + '</title></circle>';
     });
     var multiDay = tMax - tMin > 2 * 86400000;
@@ -1010,32 +1013,25 @@
     var oneBytePct = sPackets ? Math.round((Number(s.one_byte_packets) || 0) / sPackets * 100) : 0;
     var html = svg;
     html += '<div class="timeline-legend">' +
-      '<span><span class="legend-dot" style="background:var(--accent)"></span>Avg distinct repeaters per flood packet</span>' +
-      '<span><span class="legend-dot" style="background:var(--text-muted)"></span>Observers (dashed, scaled)</span>' +
-      '<span><span class="legend-dot" style="background:var(--accent);opacity:0.3"></span>Flood packets (bars, scaled)</span>' +
+      '<span><span class="legend-dot" style="background:var(--accent)"></span>' + tr('Avg distinct repeaters per flood packet') + '</span>' +
+      '<span><span class="legend-dot" style="background:var(--text-muted)"></span>' + tr('Observers (dashed, scaled)') + '</span>' +
+      '<span><span class="legend-dot" style="background:var(--accent);opacity:0.3"></span>' + tr('Flood packets (bars, scaled)') + '</span>' +
       '</div>';
     html += '<div class="rf-stats">' +
-      '<span>Avg: <strong>' + esc((Number(s.avg_repeaters) || 0).toFixed(1)) + ' repeaters/packet</strong></span>' +
-      '<span>Flood packets: <strong>' + esc(sPackets.toLocaleString()) + '</strong></span>' +
-      '<span>Observers: <strong>' + esc(String(Number(s.observers) || 0)) + '</strong></span>' +
-      '<span>1-byte hashes: <strong>' + oneBytePct + '%</strong></span>' +
-      '<span>Heard without repeaters: <strong>' + esc(String(Number(s.no_repeater_packets) || 0)) + '</strong></span>' +
+      '<span>' + tr('Avg:') + ' <strong>' + tr('{value} repeaters/packet', { value: esc((Number(s.avg_repeaters) || 0).toFixed(1)) }) + '</strong></span>' +
+      '<span>' + tr('Flood packets:') + ' <strong>' + esc(sPackets.toLocaleString()) + '</strong></span>' +
+      '<span>' + tr('Observers:') + ' <strong>' + esc(String(Number(s.observers) || 0)) + '</strong></span>' +
+      '<span>' + tr('1-byte hashes:') + ' <strong>' + oneBytePct + '%</strong></span>' +
+      '<span>' + tr('Heard without repeaters:') + ' <strong>' + esc(String(Number(s.no_repeater_packets) || 0)) + '</strong></span>' +
       '</div>';
     html += '<p class="text-muted" style="font-size:12px;margin-top:8px">' +
-      'A proxy for collision pressure, not a measured collision rate. ' +
-      'It counts only repeaters that at least one observer heard, so observer coverage moves the line too: ' +
-      'adding or losing observers (dashed line) changes it without any change on air. ' +
-      'Hop prefixes are not resolved to nodes; a prefix counts once per flood, also when two repeaters share it, so the value is a lower bound, ' +
-      'most of all for packets on 1-byte hashes. Flood routes only (TRACE and direct routes excluded). ' +
-      'A packet heard again more than 5 minutes after its previous observation counts as a new flood; ' +
-      'each flood sits in the bucket where it started, so the newest bucket may still be filling. ' +
-      'The area filter does not apply to this chart.' +
+      tr('A proxy for collision pressure, not a measured collision rate. It counts only repeaters that at least one observer heard, so observer coverage moves the line too: adding or losing observers (dashed line) changes it without any change on air. Hop prefixes are not resolved to nodes; a prefix counts once per flood, also when two repeaters share it, so the value is a lower bound, most of all for packets on 1-byte hashes. Flood routes only (TRACE and direct routes excluded). A packet heard again more than 5 minutes after its previous observation counts as a new flood; each flood sits in the bucket where it started, so the newest bucket may still be filling. The area filter does not apply to this chart.') +
       '</p>';
     return html;
   }
 
   function renderRepeaterTable(repeaters) {
-    if (!repeaters.length) return '<div class="text-muted">No data</div>';
+    if (!repeaters.length) return '<div class="text-muted">' + tr('No data') + '</div>';
     const max = repeaters[0].count;
     let html = '<div class="repeater-list">';
     repeaters.slice(0, 15).forEach(r => {
@@ -1050,8 +1046,8 @@
   }
 
   function renderPairTable(pairs) {
-    if (!pairs.length) return '<div class="text-muted">Not enough multi-hop data</div>';
-    let html = '<table class="analytics-table"><thead><tr><th scope="col">Node A</th><th scope="col">Node B</th><th scope="col">Co-appearances</th></tr></thead><tbody>';
+    if (!pairs.length) return '<div class="text-muted">' + tr('Not enough multi-hop data') + '</div>';
+    let html = '<table class="analytics-table"><thead><tr><th scope="col">' + tr('Node A') + '</th><th scope="col">' + tr('Node B') + '</th><th scope="col">' + tr('Co-appearances') + '</th></tr></thead><tbody>';
     pairs.slice(0, 12).forEach(p => {
       html += `<tr>
         <td>${p.nameA ? `<a href="#/nodes/${encodeURIComponent(p.pubkeyA)}" class="analytics-link">${esc(p.nameA)}</a>` : `<span class="mono">${p.hopA}</span>`}</td>
@@ -1063,10 +1059,10 @@
   }
 
   function renderHopsSNR(data) {
-    if (!data.length) return '<div class="text-muted">No data</div>';
+    if (!data.length) return '<div class="text-muted">' + tr('No data') + '</div>';
     const w = 380, h = 160, pad = 40;
     const maxHop = Math.max(...data.map(d => d.hops));
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:160px" role="img" aria-label="Hops vs SNR bubble chart showing signal degradation over distance"><title>Hops vs SNR bubble chart showing signal degradation over distance</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:160px" role="img" aria-label="${tr('Hops vs SNR bubble chart showing signal degradation over distance')}"><title>${tr('Hops vs SNR bubble chart showing signal degradation over distance')}</title>`;
     data.forEach(d => {
       const x = pad + (d.hops / maxHop) * (w - pad * 2);
       const y = h - pad - ((d.avgSnr + 12) / 27) * (h - pad * 2);
@@ -1075,15 +1071,15 @@
       svg += `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="0.6"/>`;
       svg += `<text x="${x}" y="${y-r-3}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${d.hops}h</text>`;
     });
-    svg += `<text x="${w/2}" y="${h-5}" text-anchor="middle" font-size="10" fill="var(--text-muted)">Hops</text>`;
-    svg += `<text x="10" y="${h/2}" text-anchor="middle" font-size="10" fill="var(--text-muted)" transform="rotate(-90,10,${h/2})">Avg SNR</text>`;
+    svg += `<text x="${w/2}" y="${h-5}" text-anchor="middle" font-size="10" fill="var(--text-muted)">${tr('Hops')}</text>`;
+    svg += `<text x="10" y="${h/2}" text-anchor="middle" font-size="10" fill="var(--text-muted)" transform="rotate(-90,10,${h/2})">${tr('Avg SNR')}</text>`;
     svg += '</svg>';
     return svg;
   }
 
   function renderPerObserverReach(perObserverReach, obsId) {
     const data = perObserverReach[obsId];
-    if (!data || !data.rings.length) return '<div class="text-muted">No path data for this observer</div>';
+    if (!data || !data.rings.length) return '<div class="text-muted">' + tr('No path data for this observer') + '</div>';
     let html = `<div class="reach-rings">`;
     data.rings.forEach(ring => {
       const nodeLinks = ring.nodes.slice(0, 8).map(n => {
@@ -1091,11 +1087,11 @@
         const detail = n.distRange ? ` <span class="text-muted">(${n.distRange})</span>` : '';
         return label + detail;
       }).join(', ');
-      const extra = ring.nodes.length > 8 ? ` <span class="text-muted">+${ring.nodes.length - 8} more</span>` : '';
+      const extra = ring.nodes.length > 8 ? ` <span class="text-muted">${tr('+{count} more', { count: ring.nodes.length - 8 })}</span>` : '';
       html += `<div class="reach-ring">
-        <div class="reach-hop">${ring.hops} hop${ring.hops > 1 ? 's' : ''}</div>
+        <div class="reach-hop">${trn(ring.hops, '{count} hop', '{count} hops')}</div>
         <div class="reach-nodes">${nodeLinks}${extra}</div>
-        <div class="reach-count">${ring.nodes.length} node${ring.nodes.length > 1 ? 's' : ''}</div>
+        <div class="reach-count">${trn(ring.nodes.length, '{count} node', '{count} nodes')}</div>
       </div>`;
     });
     return html + '</div>';
@@ -1107,19 +1103,19 @@
       html += `<h4 style="margin:12px 0 6px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${esc(data.observer_name)}</h4>`;
       html += renderPerObserverReach(perObserverReach, obsId);
     }
-    return html || '<div class="text-muted">No data</div>';
+    return html || '<div class="text-muted">' + tr('No data') + '</div>';
   }
 
   function renderCrossObserver(nodes) {
-    if (!nodes.length) return '<div class="text-muted">No nodes seen by multiple observers</div>';
+    if (!nodes.length) return '<div class="text-muted">' + tr('No nodes seen by multiple observers') + '</div>';
     let html = `<table class="analytics-table">
-      <thead><tr><th scope="col">Node</th><th scope="col">Observers</th><th scope="col">Hop Distances</th></tr></thead><tbody>`;
+      <thead><tr><th scope="col">${tr('Node')}</th><th scope="col">${tr('Observers')}</th><th scope="col">${tr('Hop Distances')}</th></tr></thead><tbody>`;
     nodes.forEach(n => {
       const name = n.name
         ? `<a href="#/nodes/${encodeURIComponent(n.pubkey)}" class="analytics-link">${esc(n.name)}</a>`
         : `<span class="mono">${n.hop}</span>`;
       const obsInfo = n.observers.map(o =>
-        `${esc(o.observer_name)}: <strong>${o.minDist} hop${o.minDist > 1 ? 's' : ''}</strong> <span class="text-muted">(${o.count} pkts)</span>`
+        `${esc(o.observer_name)}: <strong>${trn(o.minDist, '{count} hop', '{count} hops')}</strong> <span class="text-muted">(${tr('{count} pkts', { count: o.count })})</span>`
       ).join('<br>');
       html += `<tr><td>${name}</td><td>${n.observers.length}</td><td>${obsInfo}</td></tr>`;
     });
@@ -1127,7 +1123,7 @@
   }
 
   function renderBestPath(nodes) {
-    if (!nodes.length) return '<div class="text-muted">No data</div>';
+    if (!nodes.length) return '<div class="text-muted">' + tr('No data') + '</div>';
     // Group by distance for a cleaner view
     const byDist = {};
     nodes.forEach(n => {
@@ -1140,13 +1136,13 @@
         const label = n.name
           ? `<a href="#/nodes/${encodeURIComponent(n.pubkey)}" class="analytics-link">${esc(n.name)}</a>`
           : `<span class="mono">${n.hop}</span>`;
-        return label + ` <span class="text-muted">via ${esc(n.observer_name)}</span>`;
+        return label + ` <span class="text-muted">${tr('via {name}', { name: esc(n.observer_name) })}</span>`;
       }).join(', ');
-      const extra = nodes.length > 10 ? ` <span class="text-muted">+${nodes.length - 10} more</span>` : '';
+      const extra = nodes.length > 10 ? ` <span class="text-muted">${tr('+{count} more', { count: nodes.length - 10 })}</span>` : '';
       html += `<div class="reach-ring">
-        <div class="reach-hop">${dist} hop${+dist > 1 ? 's' : ''}</div>
+        <div class="reach-hop">${trn(+dist, '{count} hop', '{count} hops')}</div>
         <div class="reach-nodes">${nodeLinks}${extra}</div>
-        <div class="reach-count">${nodes.length} node${nodes.length > 1 ? 's' : ''}</div>
+        <div class="reach-count">${trn(nodes.length, '{count} node', '{count} nodes')}</div>
       </div>`;
     });
     return html + '</div>';
@@ -1220,7 +1216,7 @@
     // go through esc() — never trust c.name / c.displayName as HTML.
     var nameHtml = c.displayNameHtml
       ? c.displayNameHtml
-      : esc(c.displayName || c.name || 'Unknown');
+      : esc(c.displayName || c.name || tr('Unknown'));
     return '<tr class="clickable-row" data-action="navigate" data-value="#/channels?ch=' + c.hash + '" tabindex="0" role="row">' +
       '<td><strong>' + nameHtml + '</strong></td>' +
       '<td class="mono">' + (typeof c.hash === 'number' ? '0x' + c.hash.toString(16).toUpperCase().padStart(2, '0') : c.hash) + '</td>' +
@@ -1263,9 +1259,9 @@
           var hex = !isNaN(hashNum)
             ? ' (0x' + hashNum.toString(16).toUpperCase().padStart(2, '0') + ')'
             : '';
-          copy.displayName = 'Encrypted' + hex;
+          copy.displayName = tr('Encrypted') + hex;
           copy.displayNameHtml =
-            '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> Encrypted' + hex;
+            '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ' + tr('Encrypted') + hex;
           copy.group = 'encrypted';
         } else {
           // Server gave us a real name (rainbow table hit) for an encrypted ch.
@@ -1273,7 +1269,7 @@
           copy.group = 'network';
         }
       } else {
-        copy.displayName = rawName || 'Unknown';
+        copy.displayName = rawName || tr('Unknown');
         copy.group = 'network';
       }
       out.push(copy);
@@ -1313,9 +1309,9 @@
         (groups[g] || (groups[g] = [])).push(sorted[gi]);
       }
       var sections = [
-        { key: 'mine', label: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-key"/></svg> My Channels' },
-        { key: 'network', label: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> Network' },
-        { key: 'encrypted', label: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> Encrypted' },
+        { key: 'mine', label: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-key"/></svg> ' + tr('My Channels') },
+        { key: 'network', label: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> ' + tr('Network') },
+        { key: 'encrypted', label: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ' + tr('Encrypted') },
       ];
       for (var si = 0; si < sections.length; si++) {
         var rows = groups[sections[si].key] || [];
@@ -1355,7 +1351,7 @@
     for (var i = 0; i < cols.length; i++) {
       var c = cols[i];
       ths += '<th scope="col" class="sortable' + (c.key === activeCol ? ' sort-active' : '') + '" data-sort-col="' + c.key + '">' +
-        c.label + channelSortArrow(c.key, activeCol, dir) + '</th>';
+        tr(c.label) + channelSortArrow(c.key, activeCol, dir) + '</th>';
     }
     return '<thead><tr>' + ths + '</tr></thead>';
   }
@@ -1400,12 +1396,12 @@
 
     var timelineHtml = renderChannelTimeline(ch.channelTimeline);
     var topSendersHtml = renderTopSenders(ch.topSenders);
-    var histoHtml = ch.msgLengths.length ? histogram(ch.msgLengths, 20, '#8b5cf6').svg : '<div class="text-muted">No decrypted messages</div>';
+    var histoHtml = ch.msgLengths.length ? histogram(ch.msgLengths, 20, '#8b5cf6').svg : '<div class="text-muted">' + tr('No decrypted messages') + '</div>';
 
     el.innerHTML =
       '<div class="analytics-card">' +
-        '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> Channel Activity</h3>' +
-        '<p class="text-muted">' + ch.activeChannels + ' active channels, ' + ch.decryptable + ' decryptable</p>' +
+        '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> ' + tr('Channel Activity') + '</h3>' +
+        '<p class="text-muted">' + tr('{active} active channels, {decryptable} decryptable', { active: ch.activeChannels, decryptable: ch.decryptable }) + '</p>' +
         '<table class="analytics-table" id="channelsTable">' +
           channelTheadHtml(_channelSortState.col, _channelSortState.dir) +
           '<tbody id="channelsTbody">' +
@@ -1415,16 +1411,16 @@
       '</div>' +
       '<div class="analytics-row">' +
         '<div class="analytics-card flex-1">' +
-          '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg> Messages / Hour by Channel</h3>' +
+          '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg> ' + tr('Messages / Hour by Channel') + '</h3>' +
           timelineHtml +
         '</div>' +
         '<div class="analytics-card flex-1">' +
-          '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-megaphone"/></svg> Top Senders</h3>' +
+          '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-megaphone"/></svg> ' + tr('Top Senders') + '</h3>' +
           topSendersHtml +
         '</div>' +
       '</div>' +
       '<div class="analytics-card">' +
-        '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Message Length Distribution</h3>' +
+        '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ' + tr('Message Length Distribution') + '</h3>' +
         histoHtml +
       '</div>';
 
@@ -1450,7 +1446,7 @@
   var CHANNEL_TIMELINE_MAX_SERIES = 8;
 
   function renderChannelTimeline(data) {
-    if (!data.length) return '<div class="text-muted">No data</div>';
+    if (!data.length) return '<div class="text-muted">' + tr('No data') + '</div>';
     var hours = []; var hourSet = {};
     var channelList = []; var channelSet = {};
     var lookup = {};
@@ -1480,7 +1476,7 @@
     var w = 600, h = 180, pad = 35;
     var xScale = (w - pad * 2) / Math.max(hours.length - 1, 1);
     var yScale = (h - pad * 2) / maxCount;
-    var svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;max-height:180px" role="img" aria-label="Channel message activity over time"><title>Channel message activity over time</title>';
+    var svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;max-height:180px" role="img" aria-label="' + tr('Channel message activity over time') + '"><title>' + tr('Channel message activity over time') + '</title>';
     for (var ci = 0; ci < visibleChannels.length; ci++) {
       var pts = [];
       for (var hi = 0; hi < hours.length; hi++) {
@@ -1502,21 +1498,21 @@
       legendParts.push('<span><span class="legend-dot" style="background:' + colors[lci % colors.length] + '"></span>' + esc(visibleChannels[lci]) + '</span>');
     }
     if (hiddenCount > 0) {
-      legendParts.push('<span class="text-muted">+' + hiddenCount + ' more</span>');
+      legendParts.push('<span class="text-muted">' + tr('+{count} more', { count: hiddenCount }) + '</span>');
     }
     svg += '<div class="timeline-legend">' + legendParts.join('') + '</div>';
     return svg;
   }
 
   function renderTopSenders(senders) {
-    if (!senders.length) return '<div class="text-muted">No decrypted messages</div>';
+    if (!senders.length) return '<div class="text-muted">' + tr('No decrypted messages') + '</div>';
     const max = senders[0].count;
     let html = '<div class="repeater-list">';
     senders.slice(0, 10).forEach(s => {
       html += `<div class="repeater-row">
         <div class="repeater-name"><strong>${esc(s.name)}</strong></div>
         <div class="repeater-bar"><div class="hash-bar-track"><div class="hash-bar-fill" style="width:${(s.count/max*100).toFixed(0)}%;background:#8b5cf6"></div></div></div>
-        <div class="repeater-count">${s.count} msgs</div>
+        <div class="repeater-count">${tr('{count} msgs', { count: s.count })}</div>
       </div>`;
     });
     return html + '</div>';
@@ -1532,15 +1528,15 @@
     el.innerHTML = `
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>Hash Size Distribution</h3>
-          <p class="text-muted">${total.toLocaleString()} packets with path hops</p>
+          <h3>${tr('Hash Size Distribution')}</h3>
+          <p class="text-muted">${tr('{count} packets with path hops', { count: total.toLocaleString() })}</p>
           <div class="hash-bars">
             ${[1, 2, 3].map(size => {
               const count = d[size] || 0;
               const width = Math.max((count / maxCount) * 100, count ? 2 : 0);
               const colors = { 1: '#ef4444', 2: '#22c55e', 3: '#3b82f6' };
               return `<div class="hash-bar-row">
-              <div class="hash-bar-label"><strong>${size}-byte</strong> <span class="text-muted">(${size * 8}-bit, ${Math.pow(256, size).toLocaleString()} IDs)</span></div>
+              <div class="hash-bar-label"><strong>${trn(size, '{count}-byte', '{count}-byte')}</strong> <span class="text-muted">(${tr('{bits}-bit, {ids} IDs', { bits: size * 8, ids: Math.pow(256, size).toLocaleString() })})</span></div>
               <div class="hash-bar-track"><div class="hash-bar-fill" style="width:${width}%;background:${colors[size]}"></div></div>
               <div class="hash-bar-value">${count.toLocaleString()} <span class="text-muted">(${pct(count)}%)</span></div>
             </div>`;
@@ -1552,14 +1548,14 @@
             const rpct = (n) => totalRepeaters ? (n / totalRepeaters * 100).toFixed(1) : '0';
             const maxRepeaters = Math.max(dr[1] || 0, dr[2] || 0, dr[3] || 0, 1);
             const colors = { 1: '#ef4444', 2: '#22c55e', 3: '#3b82f6' };
-            return `<h4 style="margin:16px 0 4px">By Repeaters</h4>
-              <p class="text-muted">${totalRepeaters.toLocaleString()} unique repeaters</p>
+            return `<h4 style="margin:16px 0 4px">${tr('By Repeaters')}</h4>
+              <p class="text-muted">${tr('{count} unique repeaters', { count: totalRepeaters.toLocaleString() })}</p>
               <div class="hash-bars">
                 ${[1, 2, 3].map(size => {
                   const count = dr[size] || 0;
                   const width = Math.max((count / maxRepeaters) * 100, count ? 2 : 0);
                   return `<div class="hash-bar-row">
-                  <div class="hash-bar-label"><strong>${size}-byte</strong></div>
+                  <div class="hash-bar-label"><strong>${trn(size, '{count}-byte', '{count}-byte')}</strong></div>
                   <div class="hash-bar-track"><div class="hash-bar-fill" style="width:${width}%;background:${colors[size]};opacity:0.7"></div></div>
                   <div class="hash-bar-value">${count.toLocaleString()} <span class="text-muted">(${rpct(count)}%)</span></div>
                 </div>`;
@@ -1568,7 +1564,7 @@
           })() : ''}
         </div>
         <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trend-up"/></svg> Hash Size Over Time</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trend-up"/></svg> ${tr('Hash Size Over Time')}</h3>
           ${renderHashTimeline(data.hourly)}
         </div>
       </div>
@@ -1577,16 +1573,16 @@
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>Top Path Hops</h3>
+          <h3>${tr('Top Path Hops')}</h3>
         <table class="analytics-table">
-          <thead><tr><th scope="col">Hop</th><th scope="col">Node</th><th scope="col">Bytes</th><th scope="col">Appearances</th></tr></thead>
+          <thead><tr><th scope="col">${tr('Hop')}</th><th scope="col">${tr('Node')}</th><th scope="col">${tr('Bytes')}</th><th scope="col">${tr('Appearances')}</th></tr></thead>
           <tbody>
             ${data.topHops.map(h => {
               const link = h.pubkey ? `#/nodes/${encodeURIComponent(h.pubkey)}` : `#/packets?search=${h.hex}`;
               return `<tr class="clickable-row" data-action="navigate" data-value="${link}" tabindex="0" role="row">
               <td class="mono">${h.hex}</td>
-              <td>${h.name ? `<strong>${esc(h.name)}</strong>` : '<span class="text-muted">unknown</span>'}</td>
-              <td><span class="badge badge-hash-${h.size}">${h.size}-byte</span></td>
+              <td>${h.name ? `<strong>${esc(h.name)}</strong>` : '<span class="text-muted">' + tr('unknown') + '</span>'}</td>
+              <td><span class="badge badge-hash-${h.size}">${trn(h.size, '{count}-byte', '{count}-byte')}</span></td>
               <td>${h.count.toLocaleString()}</td>
             </tr>`;
             }).join('')}
@@ -1624,48 +1620,48 @@
       var filtered = filter === 'all' ? rows : rows.filter(function(r) { return r.status === filter; });
       return (filtered.length ? '<table class="analytics-table" id="mbAdoptersTable" style="margin-top:12px">' +
           '<thead><tr>' +
-            '<th scope="col" data-sort="name">Node</th>' +
-            '<th scope="col" data-sort="role">Role</th>' +
-            '<th scope="col" data-sort="status">Status</th>' +
-            '<th scope="col" data-sort="hashSize">Hash Size</th>' +
-            '<th scope="col" data-sort="packets">Adverts</th>' +
-            '<th scope="col" data-sort="lastSeen">Last Seen</th>' +
+            '<th scope="col" data-sort="name">' + tr('Node') + '</th>' +
+            '<th scope="col" data-sort="role">' + tr('Role') + '</th>' +
+            '<th scope="col" data-sort="status">' + tr('Status') + '</th>' +
+            '<th scope="col" data-sort="hashSize">' + tr('Hash Size') + '</th>' +
+            '<th scope="col" data-sort="packets">' + tr('Adverts') + '</th>' +
+            '<th scope="col" data-sort="lastSeen">' + tr('Last Seen') + '</th>' +
           '</tr></thead>' +
           '<tbody>' +
             filtered.map(function(r) {
               var roleColor = (window.ROLE_COLORS || {})[r.role] || '#6b7280';
               return '<tr class="clickable-row" data-action="navigate" data-value="#/nodes/' + encodeURIComponent(r.pubkey) + '" tabindex="0" role="row">' +
                 '<td><strong>' + esc(r.name) + '</strong></td>' +
-                '<td><span class="badge" style="' + (window.aaBadgeStyle ? window.aaBadgeStyle(roleColor) : 'background:' + roleColor + ';color:#fff') + '">' + esc(r.role || 'unknown') + '</span></td>' +
+                '<td><span class="badge" style="' + (window.aaBadgeStyle ? window.aaBadgeStyle(roleColor) : 'background:' + roleColor + ';color:#fff') + '">' + esc(r.role ? tr(r.role) : tr('unknown')) + '</span></td>' +
                 '<td><span style="color:' + (statusColor[r.status] || statusColor.unknown) + '">' +
-                  (statusIcon[r.status] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>') + ' ' + (statusLabel[r.status] || 'Unknown') + '</span></td>' +
-                '<td><span class="badge badge-hash-' + r.hashSize + '">' + r.hashSize + '-byte</span></td>' +
+                  (statusIcon[r.status] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>') + ' ' + tr(statusLabel[r.status] || 'Unknown') + '</span></td>' +
+                '<td><span class="badge badge-hash-' + r.hashSize + '">' + trn(r.hashSize, '{count}-byte', '{count}-byte') + '</span></td>' +
                 '<td>' + r.packets + '</td>' +
                 '<td>' + (r.lastSeen ? timeAgo(r.lastSeen) : '—') + '</td>' +
               '</tr>';
             }).join('') +
           '</tbody>' +
-        '</table>' : '<div class="text-muted" style="padding:16px">No adopters match this filter.</div>');
+        '</table>' : '<div class="text-muted" style="padding:16px">' + tr('No adopters match this filter.') + '</div>');
     }
 
     if (!rows.length) return '<div class="analytics-row"><div class="analytics-card flex-1">' +
-      '<h3>Multi-Byte Hash Adopters</h3>' +
-      '<div class="text-muted" style="padding:16px">No multi-byte adopters found</div></div></div>';
+      '<h3>' + tr('Multi-Byte Hash Adopters') + '</h3>' +
+      '<div class="text-muted" style="padding:16px">' + tr('No multi-byte adopters found') + '</div></div></div>';
 
     var html = '<div class="analytics-row"><div class="analytics-card flex-1" id="mbAdoptersSection">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">' +
         '<div>' +
-          '<h3 style="margin:0">Multi-Byte Hash Adopters</h3>' +
-          '<p class="text-muted" style="margin:4px 0 0;font-size:0.8em">Nodes advertising with 2+ byte hash paths. ' +
-          '<strong>Confirmed</strong> = seen advertising with multi-byte hash. ' +
-          '<strong>Suspected</strong> = prefix appeared in a multi-byte path. ' +
-          '<strong>Unknown</strong> = no multi-byte evidence yet.</p>' +
+          '<h3 style="margin:0">' + tr('Multi-Byte Hash Adopters') + '</h3>' +
+          '<p class="text-muted" style="margin:4px 0 0;font-size:0.8em">' + tr('Nodes advertising with 2+ byte hash paths.') + ' ' +
+          '<strong>' + tr('Confirmed') + '</strong> = ' + tr('seen advertising with multi-byte hash.') + ' ' +
+          '<strong>' + tr('Suspected') + '</strong> = ' + tr('prefix appeared in a multi-byte path.') + ' ' +
+          '<strong>' + tr('Unknown') + '</strong> = ' + tr('no multi-byte evidence yet.') + '</p>' +
         '</div>' +
         '<div style="display:flex;gap:4px;flex-wrap:wrap" id="mbCapFilters">' +
-          '<button class="tab-btn active" data-mb-filter="all">All (' + rows.length + ')</button>' +
-          '<button class="tab-btn" data-mb-filter="confirmed" style="--filter-color:var(--success, #22c55e)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Confirmed (' + counts.confirmed + ')</button>' +
-          '<button class="tab-btn" data-mb-filter="suspected" style="--filter-color:var(--warning, #eab308)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Suspected (' + counts.suspected + ')</button>' +
-          '<button class="tab-btn" data-mb-filter="unknown" style="--filter-color:var(--text-muted, #888)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> Unknown (' + counts.unknown + ')</button>' +
+          '<button class="tab-btn active" data-mb-filter="all">' + tr('All ({count})', { count: rows.length }) + '</button>' +
+          '<button class="tab-btn" data-mb-filter="confirmed" style="--filter-color:var(--success, #22c55e)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('Confirmed ({count})', { count: counts.confirmed }) + '</button>' +
+          '<button class="tab-btn" data-mb-filter="suspected" style="--filter-color:var(--warning, #eab308)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + tr('Suspected ({count})', { count: counts.suspected }) + '</button>' +
+          '<button class="tab-btn" data-mb-filter="unknown" style="--filter-color:var(--text-muted, #888)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> ' + tr('Unknown ({count})', { count: counts.unknown }) + '</button>' +
         '</div>' +
       '</div>' +
       '<div id="mbAdoptersTableWrap">' + buildTableContent(rows, 'all') + '</div>' +
@@ -1730,41 +1726,50 @@
   async function renderCollisionTab(el, data, collisionData) {
     el.innerHTML = `
       <nav id="hashIssuesToc" style="display:flex;gap:12px;margin-bottom:12px;font-size:13px;flex-wrap:wrap">
-        <a data-hash-section="inconsistentHashSection" href="#/analytics?tab=collisions&section=inconsistentHashSection" style="color:var(--link-color)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Inconsistent Sizes</a>
+        <a data-hash-section="inconsistentHashSection" href="#/analytics?tab=collisions&section=inconsistentHashSection" style="color:var(--link-color)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${tr('Inconsistent Sizes')}</a>
         <span style="color:var(--border)">|</span>
-        <a data-hash-section="hashMatrixSection" href="#/analytics?tab=collisions&section=hashMatrixSection" style="color:var(--link-color)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> Hash Matrix</a>
+        <a data-hash-section="hashMatrixSection" href="#/analytics?tab=collisions&section=hashMatrixSection" style="color:var(--link-color)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> ${tr('Hash Matrix')}</a>
         <span style="color:var(--border)">|</span>
-        <a data-hash-section="collisionRiskSection" href="#/analytics?tab=collisions&section=collisionRiskSection" style="color:var(--link-color)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bomb"/></svg> Collision Risk</a>
+        <a data-hash-section="collisionRiskSection" href="#/analytics?tab=collisions&section=collisionRiskSection" style="color:var(--link-color)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bomb"/></svg> ${tr('Collision Risk')}</a>
         <span style="color:var(--border)">|</span>
-        <a href="#/analytics?tab=prefix-tool" style="color:var(--link-color)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Check a prefix →</a>
+        <a href="#/analytics?tab=prefix-tool" style="color:var(--link-color)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ${tr('Check a prefix')} →</a>
       </nav>
-      <p class="text-muted" style="margin:0 0 12px;font-size:0.78em">Collisions <strong>actually observed in packet traffic</strong> — among <strong>repeaters</strong> grouped by their configured hash size. For <em>theoretical</em> address conflicts that <em>would</em> occur if all repeaters used a given hash size, see the <a href="#/analytics?tab=prefix-tool" style="color:var(--link-color)">Prefix Tool</a> tab.</p>
+      <p class="text-muted" style="margin:0 0 12px;font-size:0.78em">${tr('Collisions {observed} — among {repeaters} grouped by their configured hash size. For {theoretical} address conflicts that {would} occur if all repeaters used a given hash size, see the {link} tab.', {
+        observed: '<strong>' + tr('actually observed in packet traffic') + '</strong>',
+        repeaters: '<strong>' + tr('repeaters') + '</strong>',
+        theoretical: '<em>' + tr('theoretical') + '</em>',
+        would: '<em>' + tr('would') + '</em>',
+        link: '<a href="#/analytics?tab=prefix-tool" style="color:var(--link-color)">' + tr('Prefix Tool') + '</a>',
+      })}</p>
 
       <div class="analytics-card" id="inconsistentHashSection">
-        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Inconsistent Hash Sizes</h3><a data-hash-section="" href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
-        <p class="text-muted" style="margin:4px 0 8px;font-size:0.8em">Repeaters and room servers sending adverts with varying hash sizes in the last 7 days. Originally caused by a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--link-color)">firmware bug</a> where automatic adverts ignored the configured multibyte path setting, fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--link-color)">repeater v1.14.1</a>. Companion nodes are excluded.</p>
-        <div id="inconsistentHashList"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading…</div></div>
+        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${tr('Inconsistent Hash Sizes')}</h3><a data-hash-section="" href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ ${tr('top')}</a></div>
+        <p class="text-muted" style="margin:4px 0 8px;font-size:0.8em">${tr('Repeaters and room servers sending adverts with varying hash sizes in the last 7 days. Originally caused by a {bug} where automatic adverts ignored the configured multibyte path setting, fixed in {release}. Companion nodes are excluded.', {
+          bug: '<a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--link-color)">' + tr('firmware bug') + '</a>',
+          release: '<a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--link-color)">repeater v1.14.1</a>',
+        })}</p>
+        <div id="inconsistentHashList"><div class="text-muted" style="padding:8px"><span class="spinner"></span> ${tr('Loading…')}</div></div>
       </div>
 
       <div class="analytics-card" id="hashMatrixSection">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <h3 style="margin:0" id="hashMatrixTitle"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> Hash Usage Matrix</h3>
-          <a data-hash-section="" href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a>
+          <h3 style="margin:0" id="hashMatrixTitle"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> ${tr('Hash Usage Matrix')}</h3>
+          <a data-hash-section="" href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ ${tr('top')}</a>
         </div>
         <div style="display:flex;align-items:center;gap:16px;margin:8px 0">
           <div class="hash-byte-selector" id="hashByteSelector" style="display:flex;gap:4px">
-            <button class="hash-byte-btn active" data-bytes="1">1-Byte</button>
-            <button class="hash-byte-btn" data-bytes="2">2-Byte</button>
-            <button class="hash-byte-btn" data-bytes="3">3-Byte</button>
+            <button class="hash-byte-btn active" data-bytes="1">${trn(1, '{count}-Byte', '{count}-Byte')}</button>
+            <button class="hash-byte-btn" data-bytes="2">${trn(2, '{count}-Byte', '{count}-Byte')}</button>
+            <button class="hash-byte-btn" data-bytes="3">${trn(3, '{count}-Byte', '{count}-Byte')}</button>
           </div>
-          <p class="text-muted" id="hashMatrixDesc" style="margin:0;font-size:0.8em">Click a cell to see which nodes share that prefix.</p>
+          <p class="text-muted" id="hashMatrixDesc" style="margin:0;font-size:0.8em">${tr('Click a cell to see which nodes share that prefix.')}</p>
         </div>
         <div id="hashMatrix"></div>
       </div>
 
       <div class="analytics-card" id="collisionRiskSection">
-        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0" id="collisionRiskTitle"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bomb"/></svg> Collision Risk</h3><a data-hash-section="" href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
-        <div id="collisionList"><div class="text-muted" style="padding:8px">Loading…</div></div>
+        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0" id="collisionRiskTitle"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bomb"/></svg> ${tr('Collision Risk')}</h3><a data-hash-section="" href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ ${tr('top')}</a></div>
+        <div id="collisionList"><div class="text-muted" style="padding:8px">${tr('Loading…')}</div></div>
       </div>
     `;
     // Use pre-computed collision data from server (no more /nodes?limit=2000 fetch)
@@ -1773,10 +1778,10 @@
     const ihEl = document.getElementById('inconsistentHashList');
     if (ihEl) {
       if (!inconsistent.length) {
-        ihEl.innerHTML = '<div class="text-muted" style="padding:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No inconsistencies detected — all nodes are reporting consistent hash sizes.</div>';
+        ihEl.innerHTML = '<div class="text-muted" style="padding:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('No inconsistencies detected — all nodes are reporting consistent hash sizes.') + '</div>';
       } else {
         ihEl.innerHTML = `<table class="analytics-table" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;overflow:hidden">
-          <thead><tr><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Current Hash</th><th scope="col">Sizes Seen</th></tr></thead>
+          <thead><tr><th scope="col">${tr('Node')}</th><th scope="col">${tr('Role')}</th><th scope="col">${tr('Current Hash')}</th><th scope="col">${tr('Sizes Seen')}</th></tr></thead>
           <tbody>${inconsistent.map((n, i) => {
             const roleColor = window.ROLE_COLORS?.[n.role] || '#6b7280';
             const prefix = n.hash_size ? n.public_key.slice(0, n.hash_size * 2).toUpperCase() : '?';
@@ -1788,13 +1793,13 @@
             const stripe = i % 2 === 1 ? 'background:var(--row-stripe)' : '';
             return `<tr style="${stripe}">
               <td><a href="#/nodes/${encodeURIComponent(n.public_key)}?section=node-packets" style="font-weight:600;color:var(--link-color)">${esc(n.name || n.public_key.slice(0, 12))}</a></td>
-              <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(roleColor)) || ('background:'+roleColor+';color:#fff')}">${n.role}</span></td>
+              <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(roleColor)) || ('background:'+roleColor+';color:#fff')}">${tr(n.role)}</span></td>
               <td><code style="font-family:var(--mono);font-weight:700">${prefix}</code> <span class="text-muted">(${n.hash_size || '?'}B)</span></td>
               <td>${sizeBadges}</td>
             </tr>`;
           }).join('')}</tbody>
         </table>
-        <p class="text-muted" style="margin:8px 0 0;font-size:0.8em">${inconsistent.length} node${inconsistent.length > 1 ? 's' : ''} affected. Click a node name to see which adverts have different hash sizes.</p>`;
+        <p class="text-muted" style="margin:8px 0 0;font-size:0.8em">${trn(inconsistent.length, '{count} node affected.', '{count} nodes affected.')} ${tr('Click a node name to see which adverts have different hash sizes.')}</p>`;
       }
     }
 
@@ -1818,12 +1823,12 @@
       const matrixTitle = document.getElementById('hashMatrixTitle');
       const matrixDesc = document.getElementById('hashMatrixDesc');
       const riskTitle = document.getElementById('collisionRiskTitle');
-      if (matrixTitle) matrixTitle.innerHTML = bytes === 3 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> Hash Usage Matrix' : `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> ${bytes}-Byte Hash Usage Matrix`;
-      if (riskTitle) riskTitle.innerHTML = `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bomb"/></svg> ${bytes}-Byte Collision Risk`;
+      if (matrixTitle) matrixTitle.innerHTML = bytes === 3 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> ' + tr('Hash Usage Matrix') : `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> ${trn(bytes, '{count}-Byte Hash Usage Matrix', '{count}-Byte Hash Usage Matrix')}`;
+      if (riskTitle) riskTitle.innerHTML = `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bomb"/></svg> ${trn(bytes, '{count}-Byte Collision Risk', '{count}-Byte Collision Risk')}`;
       if (matrixDesc) {
-        if (bytes === 1) matrixDesc.textContent = 'Cells include the first byte of all repeaters — including those using 2- or 3-byte prefixes — so this reflects real conflicts in the 1-byte hash space. Click a cell to see the nodes.';
-        else if (bytes === 2) matrixDesc.textContent = 'Each cell = first-byte group. Color shows worst 2-byte collision within. Click a cell to see the breakdown.';
-        else matrixDesc.textContent = '3-byte prefix space is too large to visualize as a matrix — collision table is shown below.';
+        if (bytes === 1) matrixDesc.textContent = tr('Cells include the first byte of all repeaters — including those using 2- or 3-byte prefixes — so this reflects real conflicts in the 1-byte hash space. Click a cell to see the nodes.');
+        else if (bytes === 2) matrixDesc.textContent = tr('Each cell = first-byte group. Color shows worst 2-byte collision within. Click a cell to see the breakdown.');
+        else matrixDesc.textContent = tr('3-byte prefix space is too large to visualize as a matrix — collision table is shown below.');
       }
       renderHashMatrixFromServer(cData.by_size[String(bytes)], bytes);
       // Show collision risk section for all byte sizes
@@ -1843,11 +1848,11 @@
   }
 
   function renderHashTimeline(hourly) {
-    if (!hourly.length) return '<div class="text-muted">Not enough data</div>';
+    if (!hourly.length) return '<div class="text-muted">' + tr('Not enough data') + '</div>';
     const w = 800, h = 180, pad = 35;
     const maxVal = Math.max(...hourly.map(h => Math.max(h[1] || 0, h[2] || 0, h[3] || 0)), 1);
     const colors = { 1: '#ef4444', 2: '#22c55e', 3: '#3b82f6' };
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:180px" role="img" aria-label="Hash size distribution over time showing 1-byte, 2-byte, and 3-byte hash trends"><title>Hash size distribution over time showing 1-byte, 2-byte, and 3-byte hash trends</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:180px" role="img" aria-label="${tr('Hash size distribution over time showing 1-byte, 2-byte, and 3-byte hash trends')}"><title>${tr('Hash size distribution over time showing 1-byte, 2-byte, and 3-byte hash trends')}</title>`;
     for (const size of [1, 2, 3]) {
       const pts = hourly.map((d, i) => {
         const x = pad + i * ((w - pad * 2) / Math.max(hourly.length - 1, 1));
@@ -1862,7 +1867,7 @@
       svg += `<text x="${x}" y="${h-5}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${hourly[i].hour.slice(11)}h</text>`;
     }
     svg += '</svg>';
-    svg += `<div class="timeline-legend"><span><span class="legend-dot" style="background:#ef4444"></span>1-byte</span><span><span class="legend-dot" style="background:#22c55e"></span>2-byte</span><span><span class="legend-dot" style="background:#3b82f6"></span>3-byte</span></div>`;
+    svg += `<div class="timeline-legend"><span><span class="legend-dot" style="background:#ef4444"></span>${trn(1, '{count}-byte', '{count}-byte')}</span><span><span class="legend-dot" style="background:#22c55e"></span>${trn(2, '{count}-byte', '{count}-byte')}</span><span><span class="legend-dot" style="background:#3b82f6"></span>${trn(3, '{count}-byte', '{count}-byte')}</span></div>`;
     return svg;
   }
 
@@ -1950,20 +1955,20 @@
     const spaceLabel = spaceSize >= 1e6 ? (spaceSize / 1e6).toFixed(1) + 'M' : spaceSize.toLocaleString();
     return `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div class="analytics-stat-card" style="flex:1;min-width:110px">
-        <div class="analytics-stat-label">Nodes tracked</div>
+        <div class="analytics-stat-label">${tr('Nodes tracked')}</div>
         <div class="analytics-stat-value">${totalNodes.toLocaleString()}</div>
       </div>
       <div class="analytics-stat-card" style="flex:1;min-width:110px">
-        <div class="analytics-stat-label">Using ${sizeLabel} ID</div>
+        <div class="analytics-stat-label">${tr('Using {size} ID', { size: sizeLabel })}</div>
         <div class="analytics-stat-value">${usingCount.toLocaleString()}</div>
       </div>
       <div class="analytics-stat-card" style="flex:1;min-width:110px">
-        <div class="analytics-stat-label">Prefix space used</div>
+        <div class="analytics-stat-label">${tr('Prefix space used')}</div>
         <div class="analytics-stat-value" style="font-size:16px">${pctStr}%</div>
-        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${usedCount > 256 ? usedCount + ' of ' : 'of '}${spaceLabel} possible</div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${usedCount > 256 ? tr('{used} of {space} possible', { used: usedCount, space: spaceLabel }) : tr('of {space} possible', { space: spaceLabel })}</div>
       </div>
-      <div class="analytics-stat-card" style="flex:1;min-width:110px;border-color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--border)'}${collisionCount > 0 ? ';cursor:pointer' : ''}" ${collisionCount > 0 ? 'onclick="document.getElementById(\'collisionRiskSection\')?.scrollIntoView({behavior:\'smooth\',block:\'start\'})"' : ''} ${collisionCount > 0 ? 'title="Click to see collision details"' : ''}>
-        <div class="analytics-stat-label">Prefix collisions</div>
+      <div class="analytics-stat-card" style="flex:1;min-width:110px;border-color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--border)'}${collisionCount > 0 ? ';cursor:pointer' : ''}" ${collisionCount > 0 ? 'onclick="document.getElementById(\'collisionRiskSection\')?.scrollIntoView({behavior:\'smooth\',block:\'start\'})"' : ''} ${collisionCount > 0 ? 'title="' + tr('Click to see collision details') + '"' : ''}>
+        <div class="analytics-stat-label">${tr('Prefix collisions')}</div>
         <div class="analytics-stat-value" style="color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--status-green)'}">${collisionCount}${collisionCount > 0 ? ' <span style="font-size:11px;opacity:0.7"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></span>' : ''}</div>
       </div>
     </div>`;
@@ -1987,7 +1992,7 @@
 
   function hashMatrixLegendHtml(labels) {
     return `<div style="margin-top:8px;font-size:0.8em;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
-      ${labels.map(l => `<span><span class="legend-swatch ${l.cls}"${l.style ? ' style="'+l.style+'"' : ''}></span> ${l.text}</span>`).join('\n')}
+      ${labels.map(l => `<span><span class="legend-swatch ${l.cls}"${l.style ? ' style="'+l.style+'"' : ''}></span> ${tr(l.text)}</span>`).join('\n')}
     </div>`;
   }
 
@@ -2064,15 +2069,15 @@
 
   function renderHashMatrixFromServer(sizeData, bytes) {
     const el = document.getElementById('hashMatrix');
-    if (!sizeData) { el.innerHTML = '<div class="text-muted">No data</div>'; return; }
+    if (!sizeData) { el.innerHTML = '<div class="text-muted">' + tr('No data') + '</div>'; return; }
     const stats = sizeData.stats || {};
     const totalNodes = stats.total_nodes || 0;
 
     // 3-byte: show a summary panel instead of a matrix
     if (bytes === 3) {
-      el.innerHTML = hashStatCardsHtml(totalNodes, stats.using_this_size || 0, '3-byte', 16777216, stats.unique_prefixes || 0, stats.collision_count || 0) +
-        `<p class="text-muted" style="margin:0;font-size:0.8em">The 3-byte prefix space (16.7M values) is too large to visualize as a grid.${(stats.collision_count || 0) > 0 ? ' See collision details below.' : ''}</p>` +
-        `<p class="text-muted" style="margin:8px 0 0;font-size:0.8em">ℹ️ This tab only counts collisions among repeaters configured for this hash size. The <a href="#/analytics?tab=prefix-tool" style="color:var(--link-color)">Prefix Tool</a> checks all repeaters regardless of configured hash size.</p>`;
+      el.innerHTML = hashStatCardsHtml(totalNodes, stats.using_this_size || 0, trn(3, '{count}-byte', '{count}-byte'), 16777216, stats.unique_prefixes || 0, stats.collision_count || 0) +
+        `<p class="text-muted" style="margin:0;font-size:0.8em">${tr('The 3-byte prefix space (16.7M values) is too large to visualize as a grid.')}${(stats.collision_count || 0) > 0 ? ' ' + tr('See collision details below.') : ''}</p>` +
+        `<p class="text-muted" style="margin:8px 0 0;font-size:0.8em">ℹ️ ${tr('This tab only counts collisions among repeaters configured for this hash size. The {link} checks all repeaters regardless of configured hash size.', { link: '<a href="#/analytics?tab=prefix-tool" style="color:var(--link-color)">' + tr('Prefix Tool') + '</a>' })}</p>`;
       return;
     }
 
@@ -2083,7 +2088,7 @@
       const oneCollisions = Object.values(oneByteCells).filter(v => v.length > 1).length;
 
       renderHashMatrixPanel(el,
-        hashStatCardsHtml(totalNodes, oneByteCount, '1-byte', 256, oneUsed, oneCollisions),
+        hashStatCardsHtml(totalNodes, oneByteCount, trn(1, '{count}-byte', '{count}-byte'), 256, oneUsed, oneCollisions),
         (hex, cs) => {
           const nodes = oneByteCells[hex] || [];
           const count = nodes.length;
@@ -2091,13 +2096,13 @@
           const isCollision = count >= 2 && repeaterCount >= 2;
           const isPossible = count >= 2 && !isCollision;
           const { cls, bg } = classifyHashCell(count, isCollision, isPossible);
-          const nodeLabel = m => (m.name || m.public_key.slice(0,12)) + (!m.role ? ' (unknown role)' : '');
+          const nodeLabel = m => (m.name || m.public_key.slice(0,12)) + (!m.role ? ' (' + tr('unknown role') + ')' : '');
           const previewLines = nodes.slice(0,5).map(nodeLabel);
-          if (nodes.length > 5) previewLines.push(`+${nodes.length-5} more`);
-          const tip = count === 0 ? hashTooltipSpec(`0x${hex}`, 'Available')
-            : count === 1 ? hashTooltipSpec(`0x${hex}`, 'One node — no collision', [nodeLabel(nodes[0])])
-            : isPossible ? hashTooltipSpec(`0x${hex}`, `${count} nodes — POSSIBLE CONFLICT`, previewLines)
-            : hashTooltipSpec(`0x${hex}`, `${count} nodes — COLLISION`, previewLines);
+          if (nodes.length > 5) previewLines.push(tr('+{count} more', { count: nodes.length-5 }));
+          const tip = count === 0 ? hashTooltipSpec(`0x${hex}`, tr('Available'))
+            : count === 1 ? hashTooltipSpec(`0x${hex}`, tr('One node — no collision'), [nodeLabel(nodes[0])])
+            : isPossible ? hashTooltipSpec(`0x${hex}`, tr('{count} nodes — POSSIBLE CONFLICT', { count: count }), previewLines)
+            : hashTooltipSpec(`0x${hex}`, tr('{count} nodes — COLLISION', { count: count }), previewLines);
           return hashCellTd(hex, cs, cls, bg, count, tip, count >= 2 ? '700' : '400');
         },
         400,
@@ -2111,11 +2116,11 @@
           const hex = td.dataset.hex.toUpperCase();
           const matches = oneByteCells[hex] || [];
           const detail = document.getElementById('hashDetail');
-          if (!matches.length) { detail.innerHTML = `<strong class="mono">0x${hex}</strong><br><span class="text-muted">No known nodes</span>`; return; }
-          detail.innerHTML = `<strong class="mono" style="font-size:1.1em">0x${hex}</strong> — ${matches.length} node${matches.length !== 1 ? 's' : ''}` +
+          if (!matches.length) { detail.innerHTML = `<strong class="mono">0x${hex}</strong><br><span class="text-muted">${tr('No known nodes')}</span>`; return; }
+          detail.innerHTML = `<strong class="mono" style="font-size:1.1em">0x${hex}</strong> — ${trn(matches.length, '{count} node', '{count} nodes')}` +
             `<div style="margin-top:8px">${matches.map(m => {
-              const coords = (m.lat && m.lon && !(m.lat === 0 && m.lon === 0)) ? `<span class="text-muted" style="font-size:0.8em">(${m.lat.toFixed(2)}, ${m.lon.toFixed(2)})</span>` : '<span class="text-muted" style="font-size:0.8em">(no coords)</span>';
-              const role = m.role ? `<span class="badge" style="font-size:0.7em;padding:1px 4px;background:var(--border)">${esc(m.role)}</span> ` : '';
+              const coords = (m.lat && m.lon && !(m.lat === 0 && m.lon === 0)) ? `<span class="text-muted" style="font-size:0.8em">(${m.lat.toFixed(2)}, ${m.lon.toFixed(2)})</span>` : '<span class="text-muted" style="font-size:0.8em">(' + tr('no coords') + ')</span>';
+              const role = m.role ? `<span class="badge" style="font-size:0.7em;padding:1px 4px;background:var(--border)">${esc(tr(m.role))}</span> ` : '';
               return `<div style="padding:3px 0">${role}<a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link">${esc(m.name || m.public_key.slice(0,12))}</a> ${coords}</div>`;
             }).join('')}</div>`;
         }
@@ -2128,7 +2133,7 @@
       const twoCollisions = Object.values(twoByteCells).filter(v => v.collision_count > 0).length;
 
       renderHashMatrixPanel(el,
-        hashStatCardsHtml(totalNodes, twoByteCount, '2-byte', 65536, uniqueTwoBytePrefixes, twoCollisions),
+        hashStatCardsHtml(totalNodes, twoByteCount, trn(2, '{count}-byte', '{count}-byte'), 65536, uniqueTwoBytePrefixes, twoCollisions),
         (hex, cs) => {
           const info = twoByteCells[hex] || { group_nodes: [], max_collision: 0, collision_count: 0, two_byte_map: {} };
           const nodeCount = (info.group_nodes || []).length;
@@ -2139,11 +2144,11 @@
           const { cls, bg } = classifyHashCell(maxCol > 0 ? maxCol : nodeCount === 0 ? 0 : 1, hasConfirmed, hasPossible);
           const nodeLabel2 = m => (m.name || m.public_key.slice(0,8)) + (!m.role ? ' (?)' : '');
           const tip = nodeCount === 0
-            ? hashTooltipSpec(`0x${hex}__`, 'No nodes in this group')
+            ? hashTooltipSpec(`0x${hex}__`, tr('No nodes in this group'))
             : (info.collision_count || 0) === 0
-              ? hashTooltipSpec(`0x${hex}__`, `${nodeCount} node${nodeCount>1?'s':''} — no 2-byte collisions`)
+              ? hashTooltipSpec(`0x${hex}__`, trn(nodeCount, '{count} node — no 2-byte collisions', '{count} nodes — no 2-byte collisions'))
               : hashTooltipSpec(`0x${hex}__`,
-                  hasConfirmed ? (info.collision_count||0) + ' collision' + ((info.collision_count||0)>1?'s':'') : 'Possible conflict',
+                  hasConfirmed ? trn(info.collision_count || 0, '{count} collision', '{count} collisions') : tr('Possible conflict'),
                   Object.entries(info.two_byte_map||{}).filter(([,v])=>v.length>1).slice(0,4).map(([p,ns])=>`${p} — ${ns.map(nodeLabel2).join(', ')}`));
           return hashCellTd(hex, cs, cls, bg, nodeCount, tip, maxCol > 0 ? '700' : '400');
         },
@@ -2160,9 +2165,9 @@
           const detail = document.getElementById('hashDetail');
           if (!info || !(info.group_nodes || []).length) { detail.innerHTML = ''; return; }
           const groupNodes = info.group_nodes || [];
-          let dhtml = `<strong class="mono" style="font-size:1.1em">0x${hex}__</strong> — ${groupNodes.length} node${groupNodes.length !== 1 ? 's' : ''} in group`;
+          let dhtml = `<strong class="mono" style="font-size:1.1em">0x${hex}__</strong> — ${trn(groupNodes.length, '{count} node in group', '{count} nodes in group')}`;
           if ((info.collision_count || 0) === 0) {
-            dhtml += `<div class="text-muted" style="margin-top:6px;font-size:0.85em"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No 2-byte collisions in this group</div>`;
+            dhtml += `<div class="text-muted" style="margin-top:6px;font-size:0.85em"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ${tr('No 2-byte collisions in this group')}</div>`;
             dhtml += `<div style="margin-top:8px">${groupNodes.map(m => {
               const prefix = m.public_key.slice(0,4).toUpperCase();
               return `<div style="padding:2px 0"><code class="mono" style="font-size:0.85em">${prefix}</code> <a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link">${esc(m.name || m.public_key.slice(0,12))}</a></div>`;
@@ -2172,7 +2177,7 @@
             for (const [twoHex, nodes] of Object.entries(info.two_byte_map || {}).sort()) {
               const isCollision = nodes.length > 1;
               dhtml += `<div style="margin-bottom:6px;padding:4px 6px;border-radius:4px;background:${isCollision ? 'rgba(220,50,30,0.1)' : 'transparent'};border:1px solid ${isCollision ? 'rgba(220,50,30,0.3)' : 'transparent'}">`;
-              dhtml += `<code class="mono" style="font-size:0.9em;font-weight:${isCollision?'700':'400'}">${twoHex}</code>${isCollision ? ' <span style="color:var(--danger);font-size:0.75em;font-weight:700">COLLISION</span>' : ''} `;
+              dhtml += `<code class="mono" style="font-size:0.9em;font-weight:${isCollision?'700':'400'}">${twoHex}</code>${isCollision ? ' <span style="color:var(--danger);font-size:0.75em;font-weight:700">' + tr('COLLISION') + '</span>' : ''} `;
               dhtml += nodes.map(m => `<a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link" style="font-size:0.85em">${esc(m.name || m.public_key.slice(0,12))}</a>`).join(', ');
               dhtml += `</div>`;
             }
@@ -2186,13 +2191,13 @@
 
   function renderCollisionsFromServer(sizeData, bytes) {
     const el = document.getElementById('collisionList');
-    if (!sizeData) { el.innerHTML = '<div class="text-muted">No data</div>'; return; }
+    if (!sizeData) { el.innerHTML = '<div class="text-muted">' + tr('No data') + '</div>'; return; }
     const collisions = sizeData.collisions || [];
 
     if (!collisions.length) {
       const cleanMsg = bytes === 3
-        ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No 3-byte prefix collisions detected — all repeaters have unique 3-byte prefixes.'
-        : `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No ${bytes}-byte collisions detected`;
+        ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('No 3-byte prefix collisions detected — all repeaters have unique 3-byte prefixes.')
+        : `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ${tr('No {count}-byte collisions detected', { count: bytes })}`;
       el.innerHTML = `<div class="text-muted" style="padding:8px">${cleanMsg}</div>`;
       return;
     }
@@ -2202,26 +2207,26 @@
     const t200 = formatDistanceRound(200);
     el.innerHTML = `<table class="analytics-table">
       <thead><tr>
-        <th scope="col">Prefix</th>
-        ${showAppearances ? '<th scope="col">Appearances</th>' : ''}
-        <th scope="col">Max Distance</th>
-        <th scope="col">Assessment</th>
-        <th scope="col">Colliding Nodes</th>
+        <th scope="col">${tr('Prefix')}</th>
+        ${showAppearances ? '<th scope="col">' + tr('Appearances') + '</th>' : ''}
+        <th scope="col">${tr('Max Distance')}</th>
+        <th scope="col">${tr('Assessment')}</th>
+        <th scope="col">${tr('Colliding Nodes')}</th>
       </tr></thead>
       <tbody>${collisions.map(c => {
         let badge, tooltip;
         if (c.classification === 'local') {
-          badge = `<span class="badge" style="background:var(--status-green);color:#fff" title="All nodes within ${t50} — likely true collision, same RF neighborhood"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-buildings"/></svg> Local</span>`;
-          tooltip = 'Nodes close enough for direct RF — probably genuine prefix collision';
+          badge = `<span class="badge" style="background:var(--status-green);color:#fff" title="${tr('All nodes within {distance} — likely true collision, same RF neighborhood', { distance: t50 })}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-buildings"/></svg> ${tr('Local')}</span>`;
+          tooltip = tr('Nodes close enough for direct RF — probably genuine prefix collision');
         } else if (c.classification === 'regional') {
-          badge = `<span class="badge" style="background:var(--status-yellow);color:#fff" title="Nodes ${t50}–${t200} apart — edge of LoRa range, could be atmospheric"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg> Regional</span>`;
-          tooltip = 'At edge of 915MHz range — could indicate atmospheric ducting or hilltop-to-hilltop links';
+          badge = `<span class="badge" style="background:var(--status-yellow);color:#fff" title="${tr('Nodes {min}–{max} apart — edge of LoRa range, could be atmospheric', { min: t50, max: t200 })}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg> ${tr('Regional')}</span>`;
+          tooltip = tr('At edge of 915MHz range — could indicate atmospheric ducting or hilltop-to-hilltop links');
         } else if (c.classification === 'distant') {
-          badge = `<span class="badge" style="background:var(--status-red);color:#fff" title="Nodes >${t200} apart — beyond typical 915MHz range"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> Distant</span>`;
-          tooltip = 'Beyond typical LoRa range — likely internet bridging, MQTT gateway, or separate mesh networks sharing prefix';
+          badge = `<span class="badge" style="background:var(--status-red);color:#fff" title="${tr('Nodes >{distance} apart — beyond typical 915MHz range', { distance: t200 })}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> ${tr('Distant')}</span>`;
+          tooltip = tr('Beyond typical LoRa range — likely internet bridging, MQTT gateway, or separate mesh networks sharing prefix');
         } else {
-          badge = '<span class="badge" style="background:#6b7280;color:#fff"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> Unknown</span>';
-          tooltip = 'Not enough coordinate data to classify';
+          badge = '<span class="badge" style="background:#6b7280;color:#fff"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> ' + tr('Unknown') + '</span>';
+          tooltip = tr('Not enough coordinate data to classify');
         }
         const nodes = c.nodes || [];
         const distStr = c.with_coords >= 2 ? formatDistanceRound(c.max_dist_km) : '<span class="text-muted">—</span>';
@@ -2233,20 +2238,20 @@
           <td>${nodes.map(m => {
             const loc = (m.lat && m.lon && !(m.lat === 0 && m.lon === 0))
               ? ` <span class="text-muted" style="font-size:0.75em">(${m.lat.toFixed(2)}, ${m.lon.toFixed(2)})</span>`
-              : ' <span class="text-muted" style="font-size:0.75em">(no coords)</span>';
+              : ' <span class="text-muted" style="font-size:0.75em">(' + tr('no coords') + ')</span>';
             return `<a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link">${esc(m.name || m.public_key.slice(0,12))}</a>${loc}`;
           }).join('<br>')}</td>
         </tr>`;
       }).join('')}</tbody>
     </table>
     <div class="text-muted" style="padding:8px;font-size:0.8em">
-      <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-buildings"/></svg> Local</strong> &lt;${t50}: true prefix collision, same mesh area &nbsp;
-      <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg> Regional</strong> ${t50}–${t200}: edge of LoRa range, possible atmospheric propagation &nbsp;
-      <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> Distant</strong> &gt;${t200}: beyond 915MHz range — internet bridge, MQTT gateway, or separate networks
+      <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-buildings"/></svg> ${tr('Local')}</strong> &lt;${t50}: ${tr('true prefix collision, same mesh area')} &nbsp;
+      <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg> ${tr('Regional')}</strong> ${t50}–${t200}: ${tr('edge of LoRa range, possible atmospheric propagation')} &nbsp;
+      <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> ${tr('Distant')}</strong> &gt;${t200}: ${tr('beyond 915MHz range — internet bridge, MQTT gateway, or separate networks')}
     </div>`;
   }
     async function renderSubpaths(el) {
-    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Analyzing route patterns…</div>';
+    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Analyzing route patterns…') + '</div>';
     try {
       const rq = RegionFilter.regionQueryString();
       // Issue #1217: thread the Time window picker into the Route Patterns
@@ -2258,7 +2263,7 @@
       const [d2, d3, d4, d5] = bulk.results;
 
       function renderTable(data, title) {
-        if (!data.subpaths.length) return `<h4>${title}</h4><div class="text-muted">No data</div>`;
+        if (!data.subpaths.length) return `<h4>${title}</h4><div class="text-muted">${tr('No data')}</div>`;
         // #1633 — when "Hide 1-byte path hops" is ON, filter route patterns
         // whose underlying rawHops contain any 1-byte hex token. We filter
         // INPUT (not just CSS-hide) so the displayed % and ordering reflect
@@ -2285,19 +2290,19 @@
           : data.subpaths;
         if (!subpaths.length) {
           var _reason = [];
-          if (_hide1) _reason.push('1-byte hide toggle');
-          if (_trustTT >= 2) _reason.push(_trustTT + '-byte trust threshold');
-          return `<h4>${title}</h4><div class="text-muted">No data (all matching routes filtered: ${_reason.join(' + ')} — adjust in customizer or config.json)</div>`;
+          if (_hide1) _reason.push(tr('1-byte hide toggle'));
+          if (_trustTT >= 2) _reason.push(trn(_trustTT, '{count}-byte trust threshold', '{count}-byte trust threshold'));
+          return `<h4>${title}</h4><div class="text-muted">${tr('No data (all matching routes filtered: {reasons} — adjust in customizer or config.json)', { reasons: _reason.join(' + ') })}</div>`;
         }
         const maxCount = subpaths[0]?.count || 1;
         var _filterNote = '';
-        if (_hide1 && _trustTT >= 2) _filterNote = ` · showing ${subpaths.length} of ${data.subpaths.length} (1-byte hide + ${_trustTT}-byte trust)`;
-        else if (_hide1) _filterNote = ` · showing ${subpaths.length} of ${data.subpaths.length} (1-byte filtered)`;
-        else if (_trustTT >= 2) _filterNote = ` · showing ${subpaths.length} of ${data.subpaths.length} (${_trustTT}-byte trust threshold applied)`;
+        if (_hide1 && _trustTT >= 2) _filterNote = ' · ' + tr('showing {shown} of {total} (1-byte hide + {count}-byte trust)', { shown: subpaths.length, total: data.subpaths.length, count: _trustTT });
+        else if (_hide1) _filterNote = ' · ' + tr('showing {shown} of {total} (1-byte filtered)', { shown: subpaths.length, total: data.subpaths.length });
+        else if (_trustTT >= 2) _filterNote = ' · ' + tr('showing {shown} of {total} ({count}-byte trust threshold applied)', { shown: subpaths.length, total: data.subpaths.length, count: _trustTT });
         return `<h4>${title}</h4>
-          <p class="text-muted" style="margin:4px 0 8px">From ${data.totalPaths.toLocaleString()} paths with 2+ hops${_filterNote}</p>
+          <p class="text-muted" style="margin:4px 0 8px">${tr('From {count} paths with 2+ hops', { count: data.totalPaths.toLocaleString() })}${_filterNote}</p>
           <table class="analytics-table"><thead><tr>
-            <th scope="col">#</th><th scope="col">Route</th><th scope="col">Occurrences</th><th scope="col">% of paths</th><th scope="col">Frequency</th>
+            <th scope="col">#</th><th scope="col">${tr('Route')}</th><th scope="col">${tr('Occurrences')}</th><th scope="col">${tr('% of paths')}</th><th scope="col">${tr('Frequency')}</th>
           </tr></thead><tbody>
           ${subpaths.map((s, i) => {
             const barW = Math.max(2, Math.round(s.count / maxCount * 100));
@@ -2308,7 +2313,7 @@
             const prefixDisplay = rawHops.join(' → ');
             return `<tr data-hops="${esc(rawHops.join(','))}" ${hasSelfLoop ? 'class="subpath-selfloop"' : ''} style="cursor:pointer">
               <td>${i + 1}</td>
-              <td>${routeDisplay}${hasSelfLoop ? ' <span title="Contains self-loop — likely 1-byte prefix collision" style="cursor:help"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"/></svg></span>' : ''}<br><span class="hop-prefix mono">${esc(prefixDisplay)}</span></td>
+              <td>${routeDisplay}${hasSelfLoop ? ' <span title="' + tr('Contains self-loop — likely 1-byte prefix collision') + '" style="cursor:help"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"/></svg></span>' : ''}<br><span class="hop-prefix mono">${esc(prefixDisplay)}</span></td>
               <td>${s.count.toLocaleString()}</td>
               <td>${s.pct}%</td>
               <td><div style="background:${hasSelfLoop ? 'var(--status-yellow)' : 'var(--accent)'};height:14px;border-radius:3px;width:${barW}%;opacity:0.7"></div></td>
@@ -2320,25 +2325,25 @@
       el.innerHTML = `
         <div class="subpath-layout">
           <div class="subpath-list" id="subpathList">
-            <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg> Route Pattern Analysis</h3>
-            <p>Click a route to see details. Most common subpaths — reveals backbone routes, bottlenecks, and preferred relay chains.</p>
+            <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg> ${tr('Route Pattern Analysis')}</h3>
+            <p>${tr('Click a route to see details. Most common subpaths — reveals backbone routes, bottlenecks, and preferred relay chains.')}</p>
             <label style="display:inline-flex;align-items:center;gap:6px;margin-bottom:12px;cursor:pointer;font-size:0.9em">
-              <input type="checkbox" id="hideCollisions" aria-label="Hide likely prefix collisions" ${localStorage.getItem('subpath-hide-collisions') === '1' ? 'checked' : ''}> Hide likely prefix collisions (self-loops)
+              <input type="checkbox" id="hideCollisions" aria-label="${tr('Hide likely prefix collisions')}" ${localStorage.getItem('subpath-hide-collisions') === '1' ? 'checked' : ''}> ${tr('Hide likely prefix collisions (self-loops)')}
             </label>
             <div class="subpath-jump-nav">
-              <span>Jump to:</span>
-              <a href="#sp-pairs">Pairs</a>
-              <a href="#sp-triples">Triples</a>
-              <a href="#sp-quads">Quads</a>
-              <a href="#sp-long">5+ hops</a>
+              <span>${tr('Jump to:')}</span>
+              <a href="#sp-pairs">${tr('Pairs')}</a>
+              <a href="#sp-triples">${tr('Triples')}</a>
+              <a href="#sp-quads">${tr('Quads')}</a>
+              <a href="#sp-long">${tr('5+ hops')}</a>
             </div>
-            <div id="sp-pairs">${renderTable(d2, 'Pairs (2-hop links)')}</div>
-            <div id="sp-triples">${renderTable(d3, 'Triples (3-hop chains)')}</div>
-            <div id="sp-quads">${renderTable(d4, 'Quads (4-hop chains)')}</div>
-            <div id="sp-long">${renderTable(d5, 'Long chains (5+ hops)')}</div>
+            <div id="sp-pairs">${renderTable(d2, tr('Pairs (2-hop links)'))}</div>
+            <div id="sp-triples">${renderTable(d3, tr('Triples (3-hop chains)'))}</div>
+            <div id="sp-quads">${renderTable(d4, tr('Quads (4-hop chains)'))}</div>
+            <div id="sp-long">${renderTable(d5, tr('Long chains (5+ hops)'))}</div>
           </div>
           <div class="subpath-detail collapsed" id="subpathDetail">
-            <div class="text-muted" style="padding:40px;text-align:center">Select a route to view details</div>
+            <div class="text-muted" style="padding:40px;text-align:center">${tr('Select a route to view details')}</div>
           </div>
         </div>`;
 
@@ -2370,19 +2375,19 @@
       toggle.addEventListener('change', applyCollisionFilter);
       applyCollisionFilter();
     } catch (e) {
-      el.innerHTML = `<div class="text-muted">Error loading subpath data: ${e.message}</div>`;
+      el.innerHTML = `<div class="text-muted">${tr('Error loading subpath data: {message}', { message: esc(e.message) })}</div>`;
     }
   }
 
   async function loadSubpathDetail(hopsStr) {
     const panel = document.getElementById('subpathDetail');
     panel.classList.remove('collapsed');
-    panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+    panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Loading…') + '</div>';
     try {
       const data = await api('/analytics/subpath-detail?hops=' + encodeURIComponent(hopsStr), { ttl: CLIENT_TTL.analyticsRF });
       renderSubpathDetail(panel, data);
     } catch (e) {
-      panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
+      panel.innerHTML = `<div class="text-muted">${tr('Error: {message}', { message: esc(e.message) })}</div>`;
     }
   }
 
@@ -2396,11 +2401,11 @@
         <h4>${data.nodes.map(n => esc(n.name)).join(' → ')}</h4>
         <div class="subpath-meta">
           <span class="hop-prefix mono">${data.hops.join(' → ')}</span>
-          <span>${data.totalMatches.toLocaleString()} occurrences</span>
+          <span>${tr('{count} occurrences', { count: data.totalMatches.toLocaleString() })}</span>
         </div>
 
         ${nodesWithLoc.length >= 2 ? `<div class="subpath-section">
-          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-ruler"/></svg> Hop Distances</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-ruler"/></svg> ${tr('Hop Distances')}</h5>
           ${(() => {
             const dists = [];
             let total = 0;
@@ -2414,10 +2419,10 @@
                 const cls = km > 200 ? 'color:var(--status-red);font-weight:bold' : km > 50 ? 'color:var(--status-yellow)' : 'color:var(--status-green-text)';
                 dists.push(`<div style="padding:2px 0"><span style="${cls}">${formatDistance(km)}</span> <span class="text-muted">${esc(a.name)} → ${esc(b.name)}</span></div>`);
               } else {
-                dists.push(`<div style="padding:2px 0"><span class="text-muted">? ${esc(a.name)} → ${esc(b.name)} (no coords)</span></div>`);
+                dists.push(`<div style="padding:2px 0"><span class="text-muted">? ${esc(a.name)} → ${esc(b.name)} (${tr('no coords')})</span></div>`);
               }
             }
-            if (dists.length > 1) dists.push(`<div style="padding:4px 0;border-top:1px solid var(--border);margin-top:4px"><strong>Total: ${formatDistance(total)}</strong></div>`);
+            if (dists.length > 1) dists.push(`<div style="padding:4px 0;border-top:1px solid var(--border);margin-top:4px"><strong>${tr('Total: {distance}', { distance: formatDistance(total) })}</strong></div>`);
             return dists.join('');
           })()}
         </div>` : ''}
@@ -2425,36 +2430,36 @@
         ${hasMap ? '<div id="subpathMap" style="height:200px;border-radius:8px;margin:12px 0;border:1px solid var(--border,#e5e7eb)"></div>' : ''}
 
         <div class="subpath-section">
-          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Observer Receive Signal</h5>
-          <p class="text-muted" style="font-size:0.8em;margin:0 0 4px">Last hop → observer only, not between nodes in the route</p>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${tr('Observer Receive Signal')}</h5>
+          <p class="text-muted" style="font-size:0.8em;margin:0 0 4px">${tr('Last hop → observer only, not between nodes in the route')}</p>
           ${data.signal.avgSnr != null
-            ? `<div>Avg SNR: <strong>${data.signal.avgSnr} dB</strong> · Avg RSSI: <strong>${data.signal.avgRssi} dBm</strong> · ${data.signal.samples} samples</div>`
-            : '<div class="text-muted">No signal data</div>'}
+            ? `<div>${tr('Avg SNR:')} <strong>${data.signal.avgSnr} dB</strong> · ${tr('Avg RSSI:')} <strong>${data.signal.avgRssi} dBm</strong> · ${trn(data.signal.samples, '{count} samples', '{count} samples')}</div>`
+            : '<div class="text-muted">' + tr('No signal data') + '</div>'}
         </div>
 
         <div class="subpath-section">
-          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Activity by Hour (UTC)</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> ${tr('Activity by Hour (UTC)')}</h5>
           <div class="hour-chart">
-            ${data.hourDistribution.map((c, h) => `<div class="hour-bar" title="${h}:00 UTC — ${c} packets" style="height:${Math.max(2, c / maxHour * 100)}%"></div>`).join('')}
+            ${data.hourDistribution.map((c, h) => `<div class="hour-bar" title="${tr('{hour}:00 UTC — {count} packets', { hour: h, count: c })}" style="height:${Math.max(2, c / maxHour * 100)}%"></div>`).join('')}
           </div>
           <div class="hour-labels"><span>0</span><span>6</span><span>12</span><span>18</span><span>23</span></div>
         </div>
 
         <div class="subpath-section">
-          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Timeline</h5>
-          <div>First seen: ${data.firstSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.firstSeen) : new Date(data.firstSeen).toLocaleString()) : '—'}</div>
-          <div>Last seen: ${data.lastSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.lastSeen) : new Date(data.lastSeen).toLocaleString()) : '—'}</div>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> ${tr('Timeline')}</h5>
+          <div>${tr('First seen:')} ${data.firstSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.firstSeen) : new Date(data.firstSeen).toLocaleString()) : '—'}</div>
+          <div>${tr('Last seen:')} ${data.lastSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.lastSeen) : new Date(data.lastSeen).toLocaleString()) : '—'}</div>
         </div>
 
         ${data.observers.length ? `
         <div class="subpath-section">
-          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Observers</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${tr('Observers')}</h5>
           ${data.observers.map(o => `<div>${esc(o.name)}: ${o.count}</div>`).join('')}
         </div>` : ''}
 
         ${data.parentPaths.length ? `
         <div class="subpath-section">
-          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Full Paths Containing This Route</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> ${tr('Full Paths Containing This Route')}</h5>
           <div class="parent-paths">
             ${data.parentPaths.map(p => `<div class="parent-path"><span class="mono" style="font-size:0.85em">${esc(p.path)}</span> <span class="text-muted">×${p.count}</span></div>`).join('')}
           </div>
@@ -2485,7 +2490,7 @@
   }
 
   async function renderNodesTab(el) {
-    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading node analytics…</div>';
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">' + tr('Loading node analytics…') + '</div>';
     try {
       const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
       const [nodesResp, bulkHealth] = await Promise.all([
@@ -2523,120 +2528,120 @@
         return `<a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">${esc(n.name || n.public_key.slice(0, 12))}</a>`;
       }
       function claimedBadge(n) {
-        return myKeys.has(n.public_key) ? ' <span style="color:var(--link-color);font-size:10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> MINE</span>' : '';
+        return myKeys.has(n.public_key) ? ' <span style="color:var(--link-color);font-size:10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> ' + tr('MINE') + '</span>' : '';
       }
 
       // ROLE_COLORS from shared roles.js
 
       el.innerHTML = `
         <div class="analytics-section">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Network Status</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ${tr('Network Status')}</h3>
           <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px">
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
               <div style="font-size:28px;font-weight:700;color:var(--status-green-text)">${active}</div>
-              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Active</div>
+              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ${tr('Active')}</div>
             </div>
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
               <div style="font-size:28px;font-weight:700;color:var(--status-yellow)">${degraded}</div>
-              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Degraded</div>
+              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ${tr('Degraded')}</div>
             </div>
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
               <div style="font-size:28px;font-weight:700;color:var(--status-red)">${silent}</div>
-              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Silent</div>
+              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ${tr('Silent')}</div>
             </div>
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
               <div style="font-size:28px;font-weight:700">${totalNodes}</div>
-              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)">Total Nodes</div>
+              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)">${tr('Total Nodes')}</div>
             </div>
           </div>
 
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Role Breakdown</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ${tr('Role Breakdown')}</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px">
             ${Object.entries(roleCounts).sort((a,b) => b[1]-a[1]).map(([role, count]) => {
               const c = ROLE_COLORS[role] || '#6b7280';
-              return `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(c)) || ('background:'+c+';color:#fff')};padding:6px 12px;font-size:13px">${role}: ${count}</span>`;
+              return `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(c)) || ('background:'+c+';color:#fff')};padding:6px 12px;font-size:13px">${tr(role)}: ${count}</span>`;
             }).join('')}
           </div>
 
-          ${myKeys.size ? `<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> My Claimed Nodes</h3>
+          ${myKeys.size ? `<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> ${tr('My Claimed Nodes')}</h3>
           <table class="analytics-table" style="margin-bottom:24px">
-            <thead><tr><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Packets</th><th scope="col">Avg SNR</th><th scope="col">Observers</th><th scope="col">Last Heard</th></tr></thead>
+            <thead><tr><th scope="col">${tr('Node')}</th><th scope="col">${tr('Role')}</th><th scope="col">${tr('Packets')}</th><th scope="col">${tr('Avg SNR')}</th><th scope="col">${tr('Observers')}</th><th scope="col">${tr('Last Heard')}</th></tr></thead>
             <tbody>
               ${enriched.filter(n => myKeys.has(n.public_key)).map(n => {
                 const s = n.health.stats;
                 return `<tr>
                   <td>${nodeLink(n)}</td>
-                  <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
+                  <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${tr(n.role)}</span></td>
                   <td>${s.totalTransmissions || s.totalPackets || 0}</td>
                   <td>${s.avgSnr != null ? s.avgSnr.toFixed(1) + ' dB' : '—'}</td>
                   <td>${n.health.observers?.length || 0}</td>
                   <td>${s.lastHeard ? timeAgo(s.lastHeard) : '—'}</td>
                 </tr>`;
-              }).join('') || '<tr><td colspan="6" class="text-muted">No claimed nodes have health data</td></tr>'}
+              }).join('') || '<tr><td colspan="6" class="text-muted">' + tr('No claimed nodes have health data') + '</td></tr>'}
             </tbody>
           </table>` : ''}
 
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Most Active Nodes</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> ${tr('Most Active Nodes')}</h3>
           <table class="analytics-table" style="margin-bottom:24px">
-            <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Total Packets</th><th scope="col">Packets Today</th><th scope="col">Analytics</th></tr></thead>
+            <thead><tr><th scope="col">#</th><th scope="col">${tr('Node')}</th><th scope="col">${tr('Role')}</th><th scope="col">${tr('Total Packets')}</th><th scope="col">${tr('Packets Today')}</th><th scope="col">${tr('Analytics')}</th></tr></thead>
             <tbody>
               ${byPackets.slice(0, 15).map((n, i) => `<tr>
                 <td>${i + 1}</td>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
-                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
+                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${tr(n.role)}</span></td>
                 <td>${n.health.stats.totalTransmissions || n.health.stats.totalPackets || 0}</td>
                 <td>${n.health.stats.packetsToday || 0}</td>
-                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
+                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="${tr('Per-node analytics')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
               </tr>`).join('')}
             </tbody>
           </table>
 
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> Best Signal Quality</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> ${tr('Best Signal Quality')}</h3>
           <table class="analytics-table" style="margin-bottom:24px">
-            <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Avg SNR</th><th scope="col">Observers</th><th scope="col">Analytics</th></tr></thead>
+            <thead><tr><th scope="col">#</th><th scope="col">${tr('Node')}</th><th scope="col">${tr('Role')}</th><th scope="col">${tr('Avg SNR')}</th><th scope="col">${tr('Observers')}</th><th scope="col">${tr('Analytics')}</th></tr></thead>
             <tbody>
               ${bySnr.slice(0, 15).map((n, i) => `<tr>
                 <td>${i + 1}</td>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
-                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
+                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${tr(n.role)}</span></td>
                 <td>${n.health.stats.avgSnr.toFixed(1)} dB</td>
                 <td>${n.health.observers?.length || 0}</td>
-                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
+                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="${tr('Per-node analytics')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
               </tr>`).join('')}
             </tbody>
           </table>
 
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Most Observed Nodes</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${tr('Most Observed Nodes')}</h3>
           <table class="analytics-table" style="margin-bottom:24px">
-            <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Observers</th><th scope="col">Avg SNR</th><th scope="col">Analytics</th></tr></thead>
+            <thead><tr><th scope="col">#</th><th scope="col">${tr('Node')}</th><th scope="col">${tr('Role')}</th><th scope="col">${tr('Observers')}</th><th scope="col">${tr('Avg SNR')}</th><th scope="col">${tr('Analytics')}</th></tr></thead>
             <tbody>
               ${byObservers.slice(0, 15).map((n, i) => `<tr>
                 <td>${i + 1}</td>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
-                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
+                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${tr(n.role)}</span></td>
                 <td>${n.health.observers?.length || 0}</td>
                 <td>${n.health.stats.avgSnr != null ? n.health.stats.avgSnr.toFixed(1) + ' dB' : '—'}</td>
-                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
+                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="${tr('Per-node analytics')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
               </tr>`).join('')}
             </tbody>
           </table>
 
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Recently Active</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> ${tr('Recently Active')}</h3>
           <table class="analytics-table" style="margin-bottom:24px">
-            <thead><tr><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Last Heard</th><th scope="col">Packets Today</th><th scope="col">Analytics</th></tr></thead>
+            <thead><tr><th scope="col">${tr('Node')}</th><th scope="col">${tr('Role')}</th><th scope="col">${tr('Last Heard')}</th><th scope="col">${tr('Packets Today')}</th><th scope="col">${tr('Analytics')}</th></tr></thead>
             <tbody>
               ${byRecent.slice(0, 15).map(n => `<tr>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
-                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
+                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${tr(n.role)}</span></td>
                 <td>${timeAgo(n.health.stats.lastHeard)}</td>
                 <td>${n.health.stats.packetsToday || 0}</td>
-                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
+                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="${tr('Per-node analytics')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
               </tr>`).join('')}
             </tbody>
           </table>
         </div>`;
     } catch (e) {
-      el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load node analytics: ${esc(e.message)}</div>`;
+      el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">${tr('Failed to load node analytics: {message}', { message: esc(e.message) })}</div>`;
     }
   }
 
@@ -2650,7 +2655,7 @@
   function _mrSummaryCard(value, label, color) {
     return `<div class="analytics-stat-card" style="flex:1;min-width:110px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
       <div style="font-size:26px;font-weight:700${color ? ';color:' + color : ''}">${esc(String(value))}</div>
-      <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)">${esc(label)}</div>
+      <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)">${esc(tr(label))}</div>
     </div>`;
   }
 
@@ -2666,22 +2671,25 @@
     // Fall back to an explicit "Unknown" rather than silently mislabelling an
     // unexpected status as "Silent".
     const m = MR_STATUS_META[status] || MR_STATUS_META.unknown;
-    return `<span style="display:inline-flex;gap:5px;align-items:center;white-space:nowrap"><span style="color:${m.color}" aria-hidden="true"><svg class="ph-icon"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span><span style="font-size:11px">${m.label}</span></span>`;
+    return `<span style="display:inline-flex;gap:5px;align-items:center;white-space:nowrap"><span style="color:${m.color}" aria-hidden="true"><svg class="ph-icon"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span><span style="font-size:11px">${tr(m.label)}</span></span>`;
   }
 
   function _mrEmptyState() {
     return `
       <div class="analytics-section" style="text-align:center;padding:48px 24px;color:var(--text-muted)">
         <svg class="ph-icon" aria-hidden="true" style="width:40px;height:40px;opacity:0.6"><use href="/icons/phosphor-sprite.svg#ph-star"/></svg>
-        <h3 style="margin:12px 0 6px">No favorite repeaters yet</h3>
-        <p>Star a repeater (the <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star"/></svg> on the <a href="#/nodes" class="analytics-link">Nodes</a> page or a node's detail) to add it to your watch-list. Starred repeaters show up here for at-a-glance monitoring.</p>
+        <h3 style="margin:12px 0 6px">${tr('No favorite repeaters yet')}</h3>
+        <p>${tr("Star a repeater (the {star} on the {nodes} page or a node's detail) to add it to your watch-list. Starred repeaters show up here for at-a-glance monitoring.", {
+          star: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star"/></svg>',
+          nodes: '<a href="#/nodes" class="analytics-link">' + tr('Nodes') + '</a>',
+        })}</p>
       </div>`;
   }
 
   async function renderMyRepeatersTab(el) {
     const haveFavs = () => (typeof getFavorites === 'function' ? getFavorites() : []);
     if (!haveFavs().length) { el.innerHTML = _mrEmptyState(); return; }
-    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading your repeaters…</div>';
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">' + tr('Loading your repeaters…') + '</div>';
     try {
       const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
       // When a region/area filter is active the node fetch is scoped, so a
@@ -2724,7 +2732,7 @@
         const rc = window.ROLE_COLORS || {};
         const c = rc[role] || rc.unknown || 'var(--role-unknown, #6b7280)';
         const style = (window.aaBadgeStyle && window.aaBadgeStyle(c)) || ('background:' + c + ';color:#fff');
-        return `<span class="badge" style="${style}">${esc(role)}</span>`;
+        return `<span class="badge" style="${style}">${esc(tr(role))}</span>`;
       }
 
       // Re-renders from the cached fetch using the LIVE favorites set, so an
@@ -2746,7 +2754,7 @@
         // ("not shown with the active filter") rather than claiming a cause.
         const hiddenByFilter = [...favs].filter(pk => !allByPk.has(pk)).length;
         const filterNotice = (filterActive && hiddenByFilter > 0)
-          ? `<p class="text-muted" style="display:flex;gap:6px;align-items:center"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-funnel"/></svg>${hiddenByFilter} favorite${hiddenByFilter === 1 ? '' : 's'} not shown with the active region/area filter.</p>`
+          ? `<p class="text-muted" style="display:flex;gap:6px;align-items:center"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-funnel"/></svg>${trn(hiddenByFilter, '{count} favorite not shown with the active region/area filter.', '{count} favorites not shown with the active region/area filter.')}</p>`
           : '';
 
         let active = 0, degraded = 0, silent = 0, clockOk = 0, totalRelay24 = 0;
@@ -2790,17 +2798,17 @@
           .sort((a, b) => (b.score || 0) - (a.score || 0));
         let affinityHtml;
         if (!myEdges.length) {
-          affinityHtml = `<p class="text-muted" style="padding:8px 0">No affinity links detected between your repeaters yet — they may be too far apart, or not enough shared traffic has been observed.</p>`;
+          affinityHtml = `<p class="text-muted" style="padding:8px 0">${tr('No affinity links detected between your repeaters yet — they may be too far apart, or not enough shared traffic has been observed.')}</p>`;
         } else {
           affinityHtml = `<table class="analytics-table">
-            <thead><tr><th scope="col">Link</th><th scope="col" style="text-align:right">Affinity</th><th scope="col" style="text-align:right">Packets</th><th scope="col" style="text-align:right">Avg SNR</th></tr></thead>
+            <thead><tr><th scope="col">${tr('Link')}</th><th scope="col" style="text-align:right">${tr('Affinity')}</th><th scope="col" style="text-align:right">${tr('Packets')}</th><th scope="col" style="text-align:right">${tr('Avg SNR')}</th></tr></thead>
             <tbody>${myEdges.map(e => {
               // The affinity graph is undirected — the server marks every edge
               // bidirectional — so the link glyph is always a double arrow.
               const arrow = '&harr;';
               const snr = (e.avg_snr != null) ? e.avg_snr.toFixed(1) + ' dB' : '—';
               return `<tr>
-                <td>${esc(nameByPk[e.source] || e.source.slice(0, 12))} ${arrow} ${esc(nameByPk[e.target] || e.target.slice(0, 12))}${e.ambiguous ? ' <svg class="ph-icon" role="img" aria-label="Path attribution ambiguous"><title>Path attribution ambiguous</title><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>' : ''}</td>
+                <td>${esc(nameByPk[e.source] || e.source.slice(0, 12))} ${arrow} ${esc(nameByPk[e.target] || e.target.slice(0, 12))}${e.ambiguous ? ' <svg class="ph-icon" role="img" aria-label="' + tr('Path attribution ambiguous') + '"><title>' + tr('Path attribution ambiguous') + '</title><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>' : ''}</td>
                 <td style="text-align:right">${pct(e.score)}</td>
                 <td style="text-align:right">${e.weight != null ? e.weight : '—'}</td>
                 <td style="text-align:right">${snr}</td>
@@ -2811,8 +2819,8 @@
 
         el.innerHTML = `
           <div class="analytics-section">
-            <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> My Repeaters</h3>
-            <p class="text-muted">At-a-glance monitoring over the repeaters you have starred. Un-star a row to drop it from this list.</p>
+            <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> ${tr('My Repeaters')}</h3>
+            <p class="text-muted">${tr('At-a-glance monitoring over the repeaters you have starred. Un-star a row to drop it from this list.')}</p>
             ${filterNotice}
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:16px;margin-bottom:20px">
               ${_mrSummaryCard(myNodes.length, 'My Repeaters')}
@@ -2825,24 +2833,24 @@
 
             <table class="analytics-table" id="my-repeaters-table">
               <thead><tr>
-                <th scope="col" aria-label="Favorite"></th>
-                <th scope="col">Repeater</th>
-                <th scope="col">Role</th>
-                <th scope="col">Status</th>
-                <th scope="col">Clock</th>
-                <th scope="col" style="text-align:right">Traffic</th>
-                <th scope="col" style="text-align:right">Bridge</th>
-                <th scope="col" style="text-align:right" title="Relays in the last hour">Relays 1h</th>
-                <th scope="col" style="text-align:right" title="Relays in the last 24 hours">Relays 24h</th>
-                <th scope="col">Last Relayed</th>
-                <th scope="col">Last Heard</th>
-                <th scope="col" style="text-align:right">Battery</th>
+                <th scope="col" aria-label="${tr('Favorite')}"></th>
+                <th scope="col">${tr('Repeater')}</th>
+                <th scope="col">${tr('Role')}</th>
+                <th scope="col">${tr('Status')}</th>
+                <th scope="col">${tr('Clock')}</th>
+                <th scope="col" style="text-align:right">${tr('Traffic')}</th>
+                <th scope="col" style="text-align:right">${tr('Bridge')}</th>
+                <th scope="col" style="text-align:right" title="${tr('Relays in the last hour')}">${tr('Relays 1h')}</th>
+                <th scope="col" style="text-align:right" title="${tr('Relays in the last 24 hours')}">${tr('Relays 24h')}</th>
+                <th scope="col">${tr('Last Relayed')}</th>
+                <th scope="col">${tr('Last Heard')}</th>
+                <th scope="col" style="text-align:right">${tr('Battery')}</th>
               </tr></thead>
-              <tbody>${rowsHtml || '<tr><td colspan="12" class="text-muted">None of your favorites are repeaters/rooms in this view.</td></tr>'}</tbody>
+              <tbody>${rowsHtml || '<tr><td colspan="12" class="text-muted">' + tr('None of your favorites are repeaters/rooms in this view.') + '</td></tr>'}</tbody>
             </table>
 
-            <h3 style="margin-top:28px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> Links Between My Repeaters</h3>
-            <p class="text-muted">Affinity sub-graph filtered to your favorites — how much traffic flows directly between them.</p>
+            <h3 style="margin-top:28px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> ${tr('Links Between My Repeaters')}</h3>
+            <p class="text-muted">${tr('Affinity sub-graph filtered to your favorites — how much traffic flows directly between them.')}</p>
             ${affinityHtml}
           </div>`;
 
@@ -2851,7 +2859,7 @@
       }
       paint();
     } catch (e) {
-      el.innerHTML = `<div style="padding:40px;text-align:center;color:var(--status-red)">Failed to load your repeaters: ${esc(e.message)}</div>`;
+      el.innerHTML = `<div style="padding:40px;text-align:center;color:var(--status-red)">${tr('Failed to load your repeaters: {message}', { message: esc(e.message) })}</div>`;
     }
   }
   // === MY REPEATERS BLOCK END (test harness slices the renderer block to here) ===
@@ -2936,7 +2944,7 @@
     const plotW = w - pad * 2, plotH = h - pad * 2;
     const xOf = v => pad + (v - xAxis.min) / (xAxis.max - xAxis.min || 1) * plotW;
     const yOf = v => h - pad - (v - yAxis.min) / (yAxis.max - yAxis.min || 1) * plotH;
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:420px" role="img" aria-label="Scatter plot of repeaters: ${esc(xAxis.label)} versus ${esc(yAxis.label)}"><title>Repeater metric scatter: ${esc(xAxis.label)} (x) vs ${esc(yAxis.label)} (y)</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:420px" role="img" aria-label="${tr('Scatter plot of repeaters: {x} versus {y}', { x: esc(tr(xAxis.label)), y: esc(tr(yAxis.label)) })}"><title>${tr('Repeater metric scatter: {x} (x) vs {y} (y)', { x: esc(tr(xAxis.label)), y: esc(tr(yAxis.label)) })}</title>`;
     // Gridlines + tick labels (5 steps per axis).
     for (let i = 0; i <= 5; i++) {
       const gx = pad + plotW * i / 5;
@@ -2951,12 +2959,12 @@
     // Axis lines + titles.
     svg += `<line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="var(--text-muted)" stroke-width="0.75"/>`;
     svg += `<line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h-pad}" stroke="var(--text-muted)" stroke-width="0.75"/>`;
-    svg += `<text x="${pad + plotW/2}" y="${h-6}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${esc(xAxis.label)}</text>`;
-    svg += `<text x="14" y="${pad + plotH/2}" text-anchor="middle" font-size="11" fill="var(--text-muted)" transform="rotate(-90,14,${pad + plotH/2})">${esc(yAxis.label)}</text>`;
+    svg += `<text x="${pad + plotW/2}" y="${h-6}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${esc(tr(xAxis.label))}</text>`;
+    svg += `<text x="14" y="${pad + plotH/2}" text-anchor="middle" font-size="11" fill="var(--text-muted)" transform="rotate(-90,14,${pad + plotH/2})">${esc(tr(yAxis.label))}</text>`;
     // Only points with BOTH axis values present are plottable.
     const plottable = points.filter(p => xAxis.get(p) != null && yAxis.get(p) != null);
     if (!plottable.length) {
-      svg += `<text x="${pad + plotW / 2}" y="${pad + plotH / 2}" text-anchor="middle" font-size="12" fill="var(--text-muted)">No repeaters have values for both selected metrics.</text></svg>`;
+      svg += `<text x="${pad + plotW / 2}" y="${pad + plotH / 2}" text-anchor="middle" font-size="12" fill="var(--text-muted)">${tr('No repeaters have values for both selected metrics.')}</text></svg>`;
       return svg;
     }
     // Cap plotted points to keep the SVG snappy (~2000 stays smooth in a
@@ -2983,7 +2991,7 @@
     // Sampling disclosure (graphical integrity): if we strided the points
     // down, say so in-plot rather than silently hiding the rest.
     if (sample.length < plottable.length) {
-      svg += `<text x="${w - pad}" y="${pad - 6}" text-anchor="end" font-size="9" fill="var(--text-muted)">showing ${sample.length} of ${plottable.length} points</text>`;
+      svg += `<text x="${w - pad}" y="${pad - 6}" text-anchor="end" font-size="9" fill="var(--text-muted)">${tr('showing {shown} of {total} points', { shown: sample.length, total: plottable.length })}</text>`;
     }
     // Draw favorites last so their rings are never hidden behind other dots.
     const ordered = sample.slice().sort((a, b) => (a.fav === b.fav ? 0 : a.fav ? 1 : -1));
@@ -2997,7 +3005,7 @@
       const color = (window.ROLE_COLORS && window.ROLE_COLORS[p.role]) || 'var(--text-muted)';
       // ' · ' separators, not '\n': SVG <title> tooltips collapse whitespace,
       // so newlines would render as a run-on string.
-      const tip = `${p.name} · ${xAxis.label}: ${_axisFmt(xAxis, xAxis.get(p))} · ${yAxis.label}: ${_axisFmt(yAxis, yAxis.get(p))}`;
+      const tip = `${p.name} · ${tr(xAxis.label)}: ${_axisFmt(xAxis, xAxis.get(p))} · ${tr(yAxis.label)}: ${_axisFmt(yAxis, yAxis.get(p))}`;
       // tabindex="-1": with up to 2000 points we keep them clickable but out
       // of the sequential keyboard tab order (the Nodes table is the
       // keyboard-navigable surface for per-node drill-down).
@@ -3010,7 +3018,7 @@
   }
 
   async function renderRepeaterMetricsTab(el) {
-    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading repeater metrics…</div>';
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">' + tr('Loading repeater metrics…') + '</div>';
     try {
       const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
       const resp = await fetchAllNodes('&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList });
@@ -3020,8 +3028,8 @@
 
       if (!points.length) {
         el.innerHTML = `<div class="analytics-section">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> Repeater Metric Scatter</h3>
-          <div class="text-muted" style="padding:24px">No repeater or room nodes in this view.</div>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> ${tr('Repeater Metric Scatter')}</h3>
+          <div class="text-muted" style="padding:24px">${tr('No repeater or room nodes in this view.')}</div>
         </div>`;
         return;
       }
@@ -3031,21 +3039,21 @@
       // (single validation path); the <select> then just shows its first option.
       let xKey = localStorage.getItem('meshcore-repeater-scatter-x') || 'traffic';
       let yKey = localStorage.getItem('meshcore-repeater-scatter-y') || 'bridge';
-      const opts = sel => REPEATER_METRIC_AXES.map(a => `<option value="${a.key}"${a.key === sel ? ' selected' : ''}>${esc(a.label)}</option>`).join('');
+      const opts = sel => REPEATER_METRIC_AXES.map(a => `<option value="${a.key}"${a.key === sel ? ' selected' : ''}>${esc(tr(a.label))}</option>`).join('');
 
       el.innerHTML = `
         <div class="analytics-section">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> Repeater Metric Scatter</h3>
-          <p class="text-muted">Each point is a repeater or room. Pick two metrics to compare — colors follow node role, favorites are ringed. Click a point for its analytics.</p>
-          <p class="text-muted" style="font-size:12px;margin-top:-6px">Units — <strong>Traffic share</strong>: % of non-advert traffic relayed. <strong>Bridge score</strong>: 0–100% (network-normalized betweenness). <strong>Relays (1h/24h)</strong> and <strong>Adverts</strong>: packet counts. Axes auto-scale to the data.</p>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> ${tr('Repeater Metric Scatter')}</h3>
+          <p class="text-muted">${tr('Each point is a repeater or room. Pick two metrics to compare — colors follow node role, favorites are ringed. Click a point for its analytics.')}</p>
+          <p class="text-muted" style="font-size:12px;margin-top:-6px">${tr('Units —')} <strong>${tr('Traffic share')}</strong>: ${tr('% of non-advert traffic relayed.')} <strong>${tr('Bridge score')}</strong>: ${tr('0–100% (network-normalized betweenness).')} <strong>${tr('Relays (1h/24h)')}</strong> ${tr('and')} <strong>${tr('Adverts')}</strong>: ${tr('packet counts. Axes auto-scale to the data.')}</p>
           <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
-            <label style="display:flex;gap:6px;align-items:center">X axis
-              <select id="metricScatterX" class="analytics-time-window-select" aria-label="X axis metric">${opts(xKey)}</select>
+            <label style="display:flex;gap:6px;align-items:center">${tr('X axis')}
+              <select id="metricScatterX" class="analytics-time-window-select" aria-label="${tr('X axis metric')}">${opts(xKey)}</select>
             </label>
-            <label style="display:flex;gap:6px;align-items:center">Y axis
-              <select id="metricScatterY" class="analytics-time-window-select" aria-label="Y axis metric">${opts(yKey)}</select>
+            <label style="display:flex;gap:6px;align-items:center">${tr('Y axis')}
+              <select id="metricScatterY" class="analytics-time-window-select" aria-label="${tr('Y axis metric')}">${opts(yKey)}</select>
             </label>
-            <span class="text-muted">${points.length} repeater${points.length === 1 ? '' : 's'}</span>
+            <span class="text-muted">${trn(points.length, '{count} repeater', '{count} repeaters')}</span>
           </div>
           <div id="metricScatterPlot"></div>
           <div id="metricScatterLegend" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12px"></div>
@@ -3072,11 +3080,11 @@
         const roles = Array.from(new Set(points.map(p => p.role)));
         let lg = roles.map(r => {
           const c = (window.ROLE_COLORS && window.ROLE_COLORS[r]) || 'var(--text-muted)';
-          return `<span style="display:inline-flex;gap:6px;align-items:center"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="${c}"/></svg>${esc(r)}</span>`;
+          return `<span style="display:inline-flex;gap:6px;align-items:center"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="${c}"/></svg>${esc(tr(r))}</span>`;
         }).join('');
         const favCount = points.filter(p => p.fav).length;
         if (favCount) {
-          lg += `<span style="display:inline-flex;gap:6px;align-items:center"><svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="var(--text)" stroke-width="1.75"/></svg>Favorite (${favCount})</span>`;
+          lg += `<span style="display:inline-flex;gap:6px;align-items:center"><svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="var(--text)" stroke-width="1.75"/></svg>${tr('Favorite ({count})', { count: favCount })}</span>`;
         }
         legendEl.innerHTML = lg;
       }
@@ -3091,7 +3099,7 @@
       wireAxis(ySel, 'meshcore-repeater-scatter-y');
       draw();
     } catch (e) {
-      el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load repeater metrics: ${esc(e.message)}</div>`;
+      el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">${tr('Failed to load repeater metrics: {message}', { message: esc(e.message) })}</div>`;
     }
   }
 
@@ -3110,8 +3118,8 @@
       if (_distanceIsBuilding(data)) {
         const secs = Math.round(_distanceRetryDelayMs(data) / 1000);
         el.innerHTML = '<div class="text-center text-muted" id="distanceBuilding" style="padding:40px">' +
-          'Building the distance index…' +
-          '<div style="font-size:12px;margin-top:8px">This runs once per instance. Retrying in ' + secs + 's.</div></div>';
+          tr('Building the distance index…') +
+          '<div style="font-size:12px;margin-top:8px">' + tr('This runs once per instance. Retrying in {seconds}s.', { seconds: secs }) + '</div></div>';
         _distanceRetryTimer = setTimeout(function () {
           _distanceRetryTimer = null;
           // The user may have switched tabs or left while this was pending.
@@ -3125,16 +3133,16 @@
 
       const s = data.summary;
       let html = `<div class="analytics-grid">
-        <div class="stat-card"><div class="stat-value">${s.totalHops.toLocaleString()}</div><div class="stat-label">Total Hops Analyzed</div></div>
-        <div class="stat-card"><div class="stat-value">${s.totalPaths.toLocaleString()}</div><div class="stat-label">Paths Analyzed</div></div>
-        <div class="stat-card"><div class="stat-value">${formatDistance(s.avgDist)}</div><div class="stat-label">Avg Hop Distance</div></div>
-        <div class="stat-card"><div class="stat-value">${formatDistance(s.maxDist)}</div><div class="stat-label">Max Hop Distance</div></div>
+        <div class="stat-card"><div class="stat-value">${s.totalHops.toLocaleString()}</div><div class="stat-label">${tr('Total Hops Analyzed')}</div></div>
+        <div class="stat-card"><div class="stat-value">${s.totalPaths.toLocaleString()}</div><div class="stat-label">${tr('Paths Analyzed')}</div></div>
+        <div class="stat-card"><div class="stat-value">${formatDistance(s.avgDist)}</div><div class="stat-label">${tr('Avg Hop Distance')}</div></div>
+        <div class="stat-card"><div class="stat-value">${formatDistance(s.maxDist)}</div><div class="stat-label">${tr('Max Hop Distance')}</div></div>
       </div>`;
 
       // Category stats
       const cats = data.catStats;
       const distUnitLabel = getDistanceUnit() === 'mi' ? 'mi' : 'km';
-      html += `<div class="analytics-section"><h3>Distance by Link Type</h3><table class="data-table"><thead><tr><th scope="col">Type</th><th scope="col">Count</th><th scope="col">Avg (${distUnitLabel})</th><th scope="col">Median (${distUnitLabel})</th><th scope="col">Min (${distUnitLabel})</th><th scope="col">Max (${distUnitLabel})</th></tr></thead><tbody>`;
+      html += `<div class="analytics-section"><h3>${tr('Distance by Link Type')}</h3><table class="data-table"><thead><tr><th scope="col">${tr('Type')}</th><th scope="col">${tr('Count')}</th><th scope="col">${tr('Avg ({unit})', { unit: distUnitLabel })}</th><th scope="col">${tr('Median ({unit})', { unit: distUnitLabel })}</th><th scope="col">${tr('Min ({unit})', { unit: distUnitLabel })}</th><th scope="col">${tr('Max ({unit})', { unit: distUnitLabel })}</th></tr></thead><tbody>`;
       for (const [cat, st] of Object.entries(cats)) {
         if (!st.count) continue;
         html += `<tr><td><strong>${esc(cat)}</strong></td><td>${st.count.toLocaleString()}</td><td>${formatDistance(st.avg)}</td><td>${formatDistance(st.median)}</td><td>${formatDistance(st.min)}</td><td>${formatDistance(st.max)}</td></tr>`;
@@ -3145,16 +3153,16 @@
       if (data.distHistogram && data.distHistogram.bins) {
         const buckets = data.distHistogram.bins.map(b => b.count);
         const labels = data.distHistogram.bins.map(b => b.x.toFixed(1));
-        html += `<div class="analytics-section"><h3>Hop Distance Distribution</h3>${barChart(buckets, labels, statusGreen())}</div>`;
+        html += `<div class="analytics-section"><h3>${tr('Hop Distance Distribution')}</h3>${barChart(buckets, labels, statusGreen())}</div>`;
       }
 
       // Distance over time
       if (data.distOverTime && data.distOverTime.length > 1) {
-        html += `<div class="analytics-section"><h3>Average Distance Over Time</h3>${sparkSvg(data.distOverTime.map(d => d.avg), 'var(--accent)', 800, 120)}</div>`;
+        html += `<div class="analytics-section"><h3>${tr('Average Distance Over Time')}</h3>${sparkSvg(data.distOverTime.map(d => d.avg), 'var(--accent)', 800, 120)}</div>`;
       }
 
       // Top hops leaderboard
-      html += `<div class="analytics-section"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Top 20 Longest Hops</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Distance (${distUnitLabel})</th><th scope="col">Type</th><th scope="col">Obs</th><th scope="col">Best SNR</th><th scope="col">Median SNR</th><th scope="col">Packet</th><th scope="col" class="col-action"></th></tr></thead><tbody>`;
+      html += `<div class="analytics-section"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> ${tr('Top 20 Longest Hops')}</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">${tr('From')}</th><th scope="col">${tr('To')}</th><th scope="col">${tr('Distance ({unit})', { unit: distUnitLabel })}</th><th scope="col">${tr('Type')}</th><th scope="col">${tr('Obs')}</th><th scope="col">${tr('Best SNR')}</th><th scope="col">${tr('Median SNR')}</th><th scope="col">${tr('Packet')}</th><th scope="col" class="col-action"></th></tr></thead><tbody>`;
       const top20 = data.topHops.slice(0, 20);
       top20.forEach((h, i) => {
         const fromLink = h.fromPk ? `<a href="#/nodes/${encodeURIComponent(h.fromPk)}" class="analytics-link">${esc(h.fromName)}</a>` : esc(h.fromName || '?');
@@ -3163,15 +3171,15 @@
         const medianSnr = h.medianSnr != null ? Number(h.medianSnr).toFixed(1) + ' dB' : '<span class="text-muted">—</span>';
         const obs = h.obsCount != null ? h.obsCount : 1;
         const pktLink = h.hash ? `<a href="#/packet/${encodeURIComponent(h.hash)}" class="analytics-link mono" style="font-size:0.85em">${esc(h.hash.slice(0, 12))}…</a>` : '—';
-        const mapBtn = h.fromPk && h.toPk ? `<button class="btn-icon dist-map-hop" data-from="${esc(h.fromPk)}" data-to="${esc(h.toPk)}" title="View on map" aria-label="View on map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg></button>` : '';
-        const tsTitle = h.timestamp ? `Best observation: ${h.timestamp}` : '';
+        const mapBtn = h.fromPk && h.toPk ? `<button class="btn-icon dist-map-hop" data-from="${esc(h.fromPk)}" data-to="${esc(h.toPk)}" title="${tr('View on map')}" aria-label="${tr('View on map')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg></button>` : '';
+        const tsTitle = h.timestamp ? tr('Best observation: {time}', { time: h.timestamp }) : '';
         html += `<tr title="${esc(tsTitle)}"><td>${i+1}</td><td>${fromLink}</td><td>${toLink}</td><td><strong>${formatDistance(h.dist)}</strong></td><td>${esc(h.type)}</td><td>${obs}</td><td>${bestSnr}</td><td>${medianSnr}</td><td>${pktLink}</td><td class="col-action">${mapBtn}</td></tr>`;
       });
       html += `</tbody></table></div>`;
 
       // Top paths
       if (data.topPaths.length) {
-        html += `<div class="analytics-section"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg> Top 10 Longest Multi-Hop Paths</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">Total Distance (${distUnitLabel})</th><th scope="col">Hops</th><th scope="col">Route</th><th scope="col">Packet</th><th scope="col" class="col-action"></th></tr></thead><tbody>`;
+        html += `<div class="analytics-section"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg> ${tr('Top 10 Longest Multi-Hop Paths')}</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">${tr('Total Distance ({unit})', { unit: distUnitLabel })}</th><th scope="col">${tr('Hops')}</th><th scope="col">${tr('Route')}</th><th scope="col">${tr('Packet')}</th><th scope="col" class="col-action"></th></tr></thead><tbody>`;
         data.topPaths.slice(0, 10).forEach((p, i) => {
           const route = p.hops.map(h => esc(h.fromName)).concat(esc(p.hops[p.hops.length-1].toName)).join(' → ');
           const pktLink = p.hash ? `<a href="#/packet/${encodeURIComponent(p.hash)}" class="analytics-link mono" style="font-size:0.85em">${esc(p.hash.slice(0, 12))}…</a>` : '—';
@@ -3179,7 +3187,7 @@
           const pathPks = [];
           p.hops.forEach(h => { if (h.fromPk && !pathPks.includes(h.fromPk)) pathPks.push(h.fromPk); });
           if (p.hops.length && p.hops[p.hops.length-1].toPk) { const last = p.hops[p.hops.length-1].toPk; if (!pathPks.includes(last)) pathPks.push(last); }
-          const mapBtn = pathPks.length >= 2 ? `<button class="btn-icon dist-map-path" data-hops='${JSON.stringify(pathPks)}' title="View on map" aria-label="View on map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg></button>` : '';
+          const mapBtn = pathPks.length >= 2 ? `<button class="btn-icon dist-map-path" data-hops='${JSON.stringify(pathPks)}' title="${tr('View on map')}" aria-label="${tr('View on map')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg></button>` : '';
           html += `<tr><td>${i+1}</td><td><strong>${formatDistance(p.totalDist)}</strong></td><td>${p.hopCount}</td><td style="font-size:0.9em">${route}</td><td>${pktLink}</td><td class="col-action">${mapBtn}</td></tr>`;
         });
         html += `</tbody></table></div>`;
@@ -3204,7 +3212,7 @@
         });
       });
     } catch (e) {
-      el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load distance analytics: ${esc(e.message)}</div>`;
+      el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">${tr('Failed to load distance analytics: {message}', { message: esc(e.message) })}</div>`;
     }
   }
 
@@ -3238,29 +3246,29 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
   async function renderNeighborGraphTab(el) {
     el.innerHTML = `
       <div class="analytics-card" id="ngCard">
-        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> Neighbor Graph</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> ${tr('Neighbor Graph')}</h3>
         <div id="ngFilters" class="ng-filters" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
-          <label style="font-size:13px">Roles:
+          <label style="font-size:13px">${tr('Roles:')}
             <span id="ngRoleChecks" style="margin-left:4px"></span>
           </label>
-          <label style="font-size:13px">Min Score: <input type="range" id="ngMinScore" min="0" max="100" value="70" style="width:100px;vertical-align:middle">
+          <label style="font-size:13px">${tr('Min Score:')} <input type="range" id="ngMinScore" min="0" max="100" value="70" style="width:100px;vertical-align:middle">
             <span id="ngMinScoreVal">0.70</span>
           </label>
-          <label style="font-size:13px">Confidence:
+          <label style="font-size:13px">${tr('Confidence:')}
             <select id="ngConfidence" style="font-size:12px;padding:2px 4px">
-              <option value="all">Show All</option>
-              <option value="high">High Only</option>
-              <option value="hide-ambiguous">Hide Ambiguous</option>
+              <option value="all">${tr('Show All')}</option>
+              <option value="high">${tr('High Only')}</option>
+              <option value="hide-ambiguous">${tr('Hide Ambiguous')}</option>
             </select>
           </label>
         </div>
         <div id="ngStats" class="stat-row" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px"></div>
         <div style="position:relative;border:1px solid var(--border);border-radius:6px;overflow:hidden">
-          <canvas id="ngCanvas" width="900" height="600" style="width:100%;height:600px;cursor:grab;outline-offset:2px" role="img" aria-label="Neighbor affinity graph visualization — interactive force-directed network topology" tabindex="0"></canvas>
+          <canvas id="ngCanvas" width="900" height="600" style="width:100%;height:600px;cursor:grab;outline-offset:2px" role="img" aria-label="${tr('Neighbor affinity graph visualization — interactive force-directed network topology')}" tabindex="0"></canvas>
           <div id="ngTooltip" style="position:absolute;display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,0.2)"></div>
         </div>
         <details id="ngAccessibleList" style="margin-top:12px">
-          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Text-based neighbor list (accessible alternative)</summary>
+          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> ${tr('Text-based neighbor list (accessible alternative)')}</summary>
           <div id="ngTextList" style="font-size:12px;max-height:300px;overflow-y:auto;padding:8px;background:var(--bg-secondary);border-radius:4px;margin-top:4px"></div>
         </details>
       </div>`;
@@ -3274,11 +3282,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const roles = ['repeater','companion','room','sensor'];
     const rcEl = document.getElementById('ngRoleChecks');
     roles.forEach(r => {
-      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="${r}" checked> <span class="role-swatch role-swatch--${r}">${esc(r)}</span></label>`;
+      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="${r}" checked> <span class="role-swatch role-swatch--${r}">${esc(tr(r))}</span></label>`;
     });
     // Observer checkbox — unchecked by default (observers create hub-and-spoke noise)
     {
-      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="observer"> <span class="role-swatch role-swatch--observer">observer</span></label>`;
+      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="observer"> <span class="role-swatch role-swatch--observer">${tr('observer')}</span></label>`;
     }
 
     // Load data
@@ -3288,7 +3296,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     try {
       graphData = await api('/analytics/neighbor-graph' + sep + (sep ? '&' : '?') + 'min_count=1&min_score=0', { ttl: CLIENT_TTL.analyticsRF });
     } catch (e) {
-      el.innerHTML = `<div class="analytics-card"><p class="text-muted">Failed to load neighbor graph: ${esc(e.message)}</p></div>`;
+      el.innerHTML = `<div class="analytics-card"><p class="text-muted">${tr('Failed to load neighbor graph: {message}', { message: esc(e.message) })}</p></div>`;
       return;
     }
 
@@ -3395,16 +3403,16 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const statsEl = document.getElementById('ngStats');
     if (!statsEl) return;
     statsEl.innerHTML = `
-      <div class="stat-card"><div class="stat-value">${nodes.length}</div><div class="stat-label">Nodes</div></div>
-      <div class="stat-card"><div class="stat-value">${edges.length}</div><div class="stat-label">Edges</div></div>
-      <div class="stat-card"><div class="stat-value">${avgScore.toFixed(2)}</div><div class="stat-label">Avg Score</div></div>
-      <div class="stat-card"><div class="stat-value">${resolved.toFixed(0)}%</div><div class="stat-label">Resolved</div></div>
-      <div class="stat-card"><div class="stat-value">${ambiguous}</div><div class="stat-label">Ambiguous</div></div>`;
+      <div class="stat-card"><div class="stat-value">${nodes.length}</div><div class="stat-label">${tr('Nodes')}</div></div>
+      <div class="stat-card"><div class="stat-value">${edges.length}</div><div class="stat-label">${tr('Edges')}</div></div>
+      <div class="stat-card"><div class="stat-value">${avgScore.toFixed(2)}</div><div class="stat-label">${tr('Avg Score')}</div></div>
+      <div class="stat-card"><div class="stat-value">${resolved.toFixed(0)}%</div><div class="stat-label">${tr('Resolved')}</div></div>
+      <div class="stat-card"><div class="stat-value">${ambiguous}</div><div class="stat-label">${tr('Ambiguous')}</div></div>`;
 
     // Update canvas aria-label with current graph summary
     var canvas = document.getElementById('ngCanvas');
     if (canvas) {
-      canvas.setAttribute('aria-label', 'Neighbor affinity graph: ' + nodes.length + ' nodes, ' + edges.length + ' edges, ' + resolved.toFixed(0) + '% resolved. Use arrow keys to pan, +/- to zoom, 0 to reset.');
+      canvas.setAttribute('aria-label', tr('Neighbor affinity graph: {nodes} nodes, {edges} edges, {pct}% resolved. Use arrow keys to pan, +/- to zoom, 0 to reset.', { nodes: nodes.length, edges: edges.length, pct: resolved.toFixed(0) }));
     }
 
     // Update accessible text list
@@ -3416,7 +3424,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     if (!listEl) return;
     var nodes = st.nodes, edges = st.edges;
     if (nodes.length === 0) {
-      listEl.innerHTML = '<p class="text-muted">No nodes to display.</p>';
+      listEl.innerHTML = '<p class="text-muted">' + tr('No nodes to display.') + '</p>';
       return;
     }
     // Build adjacency for text list
@@ -3429,7 +3437,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     });
     var nodeMap = {};
     nodes.forEach(function(n) { nodeMap[n.pubkey] = n; });
-    var html = '<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">Node</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">Role</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">Neighbors</th></tr></thead><tbody>';
+    var html = '<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">' + tr('Node') + '</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">' + tr('Role') + '</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">' + tr('Neighbors') + '</th></tr></thead><tbody>';
     nodes.slice().sort(function(a, b) { return (a.name || a.pubkey).localeCompare(b.name || b.pubkey); }).forEach(function(n) {
       var neighbors = (adj[n.pubkey] || []).map(function(nb) {
         var peer = nodeMap[nb.pk];
@@ -3437,10 +3445,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         var conf = nb.ambiguous ? ' ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : (nb.score >= 0.5 ? ' ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>' : ' ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle"/></svg>');
         return esc(name) + conf;
       }).join(', ');
-      html += '<tr><td style="padding:4px;border-bottom:1px solid var(--border)">' + esc(n.name || n.pubkey.slice(0, 12)) + '</td><td style="padding:4px;border-bottom:1px solid var(--border)">' + esc(n.role || 'unknown') + '</td><td style="padding:4px;border-bottom:1px solid var(--border)">' + (neighbors || '<em>none</em>') + '</td></tr>';
+      html += '<tr><td style="padding:4px;border-bottom:1px solid var(--border)">' + esc(n.name || n.pubkey.slice(0, 12)) + '</td><td style="padding:4px;border-bottom:1px solid var(--border)">' + esc(tr(n.role || 'unknown')) + '</td><td style="padding:4px;border-bottom:1px solid var(--border)">' + (neighbors || '<em>' + tr('none') + '</em>') + '</td></tr>';
     });
     html += '</tbody></table>';
-    html += '<p style="margin-top:8px;font-size:11px;color:var(--text-secondary)">' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>' + ' = high confidence (score ≥ 0.5), ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle"/></svg>' + ' = low confidence, ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' + ' = ambiguous/unresolved</p>';
+    html += '<p style="margin-top:8px;font-size:11px;color:var(--text-secondary)">' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>' + ' = ' + tr('high confidence (score ≥ 0.5)') + ', ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle"/></svg>' + ' = ' + tr('low confidence') + ', ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' + ' = ' + tr('ambiguous/unresolved') + '</p>';
     listEl.innerHTML = html;
   }
 
@@ -3501,7 +3509,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
             tip.style.display = 'block';
             tip.style.left = (cx + 12) + 'px';
             tip.style.top = (cy - 8) + 'px';
-            tip.innerHTML = `<strong>${escapeHtml(n.name || n.pubkey.slice(0, 12) + '…')}</strong><br>Role: ${escapeHtml(n.role || 'unknown')}<br>Neighbors: ${n.neighbor_count || 0}`;
+            tip.innerHTML = `<strong>${escapeHtml(n.name || n.pubkey.slice(0, 12) + '…')}</strong><br>${tr('Role:')} ${escapeHtml(tr(n.role || 'unknown'))}<br>${tr('Neighbors:')} ${n.neighbor_count || 0}`;
           } else if (tip) {
             tip.style.display = 'none';
           }
@@ -3606,7 +3614,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       skipMsg.textContent = '';
       var skipP = document.createElement('p');
       skipP.className = 'text-muted';
-      skipP.textContent = _ngState.nodes.length + ' of ' + ngTotal + ' nodes match the current filters (limit: ' + NODE_LIMIT + '). Force simulation skipped for performance — tighten the filters to render.';
+      skipP.textContent = tr('{shown} of {total} nodes match the current filters (limit: {limit}). Force simulation skipped for performance — tighten the filters to render.', { shown: _ngState.nodes.length, total: ngTotal, limit: NODE_LIMIT });
       skipMsg.appendChild(skipP);
       return;
     }
@@ -3753,7 +3761,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
   // --- Prefix Tool ---
   async function renderPrefixTool(el) {
-    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading prefix data…</div>';
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">' + tr('Loading prefix data…') + '</div>';
 
     const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
     const regionLabel = rq ? (new URLSearchParams(rq.slice(1)).get('region') || '') : '';
@@ -3768,7 +3776,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         api('/analytics/hash-sizes' + rq, { ttl: CLIENT_TTL.analyticsRF }).catch(() => null),
       ]);
     } catch (e) {
-      el.innerHTML = `<div class="text-muted" role="alert" style="padding:40px">Failed to load: ${esc(e.message)}</div>`;
+      el.innerHTML = `<div class="text-muted" role="alert" style="padding:40px">${tr('Failed to load: {message}', { message: esc(e.message) })}</div>`;
       return;
     }
 
@@ -3785,7 +3793,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const nodes = allNodes.filter(n => n.role === 'repeater');
 
     if (nodes.length === 0) {
-      el.innerHTML = `<div class="analytics-card"><p class="text-muted">No repeaters in the network yet. Any prefix is available!</p></div>`;
+      el.innerHTML = `<div class="analytics-card"><p class="text-muted">${tr('No repeaters in the network yet. Any prefix is available!')}</p></div>`;
       return;
     }
 
@@ -3858,7 +3866,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     // colliding entries `[ [prefix, [node, ...]], ... ]`.
     function renderCollideTable(entries) {
       if (!entries || !entries.length) {
-        return '<div class="text-muted" style="padding:8px;font-size:0.8em">No collisions.</div>';
+        return '<div class="text-muted" style="padding:8px;font-size:0.8em">' + tr('No collisions.') + '</div>';
       }
       const rows = entries.map(([prefix, arr]) => {
         const nodeLinks = arr.map(n => {
@@ -3872,8 +3880,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       }).join('');
       return `<table style="width:100%;border-collapse:collapse;font-size:0.85em">
         <thead><tr>
-          <th scope="col" style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--bg-secondary,var(--bg))">Prefix</th>
-          <th scope="col" style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--bg-secondary,var(--bg))">Nodes sharing it</th>
+          <th scope="col" style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--bg-secondary,var(--bg))">${tr('Prefix')}</th>
+          <th scope="col" style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--bg-secondary,var(--bg))">${tr('Nodes sharing it')}</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
@@ -3883,11 +3891,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const totalNodes = nodes.length;
     let rec, recDetail;
     if (totalNodes < 20) {
-      rec = '1-byte'; recDetail = `With only ${totalNodes} repeaters, 1-byte prefixes have low collision risk.`;
+      rec = trn(1, '{count}-byte', '{count}-byte'); recDetail = tr('With only {count} repeaters, 1-byte prefixes have low collision risk.', { count: totalNodes });
     } else if (totalNodes < 500) {
-      rec = '2-byte'; recDetail = `With ${totalNodes} repeaters, 2-byte prefixes are recommended to avoid collisions.`;
+      rec = trn(2, '{count}-byte', '{count}-byte'); recDetail = tr('With {count} repeaters, 2-byte prefixes are recommended to avoid collisions.', { count: totalNodes });
     } else {
-      rec = '2-byte'; recDetail = `With ${totalNodes} repeaters, 2-byte prefixes are strongly recommended.`;
+      rec = trn(2, '{count}-byte', '{count}-byte'); recDetail = tr('With {count} repeaters, 2-byte prefixes are strongly recommended.', { count: totalNodes });
     }
 
     // URL params for pre-fill / auto-run
@@ -3896,23 +3904,23 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const initGenerate = hashParams.get('generate') || '';
 
     const regionNote = regionLabel
-      ? `<p class="text-muted" style="font-size:0.85em;margin:4px 0 0">Showing data for region: <strong>${esc(regionLabel)}</strong>. <a href="#/analytics?tab=prefix-tool" style="color:var(--link-color)">Check all repeaters →</a></p>`
+      ? `<p class="text-muted" style="font-size:0.85em;margin:4px 0 0">${tr('Showing data for region: {region}.', { region: '<strong>' + esc(regionLabel) + '</strong>' })} <a href="#/analytics?tab=prefix-tool" style="color:var(--link-color)">${tr('Check all repeaters')} →</a></p>`
       : '';
 
     el.innerHTML = `
       <div class="analytics-card" id="ptOverview">
         <div style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none" id="ptOverviewToggle">
           <span id="ptOverviewChevron" class="pt-overview-chevron" style="color:var(--text-muted);transition:transform 0.2s;display:inline-flex;align-items:center"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-right"/></svg></span>
-          <h3 style="margin:0">Network Overview</h3>
+          <h3 style="margin:0">${tr('Network Overview')}</h3>
         </div>
         <div id="ptOverviewBody" style="display:none">
           ${regionNote}
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 16px">
             <div class="analytics-stat-card" style="flex:1;min-width:110px">
-              <div class="analytics-stat-label">Total repeaters</div>
+              <div class="analytics-stat-label">${tr('Total repeaters')}</div>
               <div class="analytics-stat-value">${totalNodes.toLocaleString()}</div>
               <div class="text-muted" style="font-size:0.78em;margin-top:4px">
-                ${totalConfigured.toLocaleString()} with known hash size
+                ${tr('{count} with known hash size', { count: totalConfigured.toLocaleString() })}
               </div>
             </div>
             ${[1, 2, 3].map(b => {
@@ -3928,8 +3936,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
               // distinguish theoretical/would-collide-if-used from packet-
               // traffic-observed collisions shown on the Hash Issues tab.
               const opLine = opC === 0
-                ? `<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No address conflicts among configured repeaters</span>`
-                : `<span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${opC} address conflict${opC !== 1 ? 's' : ''} among configured repeaters (would-collide-if-used)</span>`;
+                ? `<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ${tr('No address conflicts among configured repeaters')}</span>`
+                : `<span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${trn(opC, '{count} address conflict among configured repeaters (would-collide-if-used)', '{count} address conflicts among configured repeaters (would-collide-if-used)')}</span>`;
               // #1306: expandable WHICH-collides toggles (op + theoretical)
               const opEntries = collEntries.operational[b];
               const theoEntries = collEntries.theoretical[b];
@@ -3940,7 +3948,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
                   <button type="button" class="pt-collide-toggle-btn" data-pt-collide-toggle="op-${b}" data-target="${opTogId}"
                     aria-expanded="false"
                     style="background:none;border:none;color:var(--link-color);cursor:pointer;font-size:0.82em;padding:0">
-                    Show ${opC} colliding slice${opC !== 1 ? 's' : ''} →
+                    ${trn(opC, 'Show {count} colliding slice', 'Show {count} colliding slices')} →
                   </button>
                   <div id="${opTogId}" data-pt-collide-panel="op-${b}" style="display:none;margin-top:6px;max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
                     ${renderCollideTable(opEntries)}
@@ -3951,7 +3959,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
                   <button type="button" class="pt-collide-toggle-btn" data-pt-collide-toggle="theo-${b}" data-target="${theoTogId}"
                     aria-expanded="false"
                     style="background:none;border:none;color:var(--link-color);cursor:pointer;font-size:0.78em;padding:0">
-                    Show ${theoC} would-collide slice${theoC !== 1 ? 's' : ''} (across all repeaters) →
+                    ${trn(theoC, 'Show {count} would-collide slice (across all repeaters)', 'Show {count} would-collide slices (across all repeaters)')} →
                   </button>
                   <div id="${theoTogId}" data-pt-collide-panel="theo-${b}" style="display:none;margin-top:6px;max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
                     ${renderCollideTable(theoEntries)}
@@ -3959,77 +3967,87 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
                 </div>` : '';
               return `
             <div class="analytics-stat-card" style="flex:1;min-width:170px;border-color:${borderVar}">
-              <div class="analytics-stat-label">${b}-byte prefixes</div>
+              <div class="analytics-stat-label">${trn(b, '{count}-byte prefixes', '{count}-byte prefixes')}</div>
               <div class="analytics-stat-value" style="font-size:1em"
                    data-pt-configured="${b}" data-value="${cfg}">
                 ${cfg.toLocaleString()}
-                <span class="text-muted" style="font-size:0.7em"> of ${totalNodes.toLocaleString()} repeaters configured</span>
+                <span class="text-muted" style="font-size:0.7em"> ${tr('of {count} repeaters configured', { count: totalNodes.toLocaleString() })}</span>
               </div>
               <div style="font-size:0.82em;margin-top:4px">${opLine}</div>
               ${opToggle}
               <div class="text-muted" style="font-size:0.72em;margin-top:6px;border-top:1px dashed var(--border);padding-top:4px">
-                <em>Theoretical:</em> ${stats[b].usedPrefixes.toLocaleString()} unique ${b}-byte slice${stats[b].usedPrefixes !== 1 ? 's' : ''}
-                across all repeater pubkeys (of ${spaceSizes[b].toLocaleString()} possible)${theoC > 0 ? ` — ${theoC} would-collide if every repeater used ${b}-byte` : ''}
+                <em>${tr('Theoretical:')}</em> ${trn(stats[b].usedPrefixes, '{count} unique {size}-byte slice', '{count} unique {size}-byte slices', { count: stats[b].usedPrefixes.toLocaleString(), size: b })}
+                ${tr('across all repeater pubkeys (of {space} possible)', { space: spaceSizes[b].toLocaleString() })}${theoC > 0 ? ' — ' + tr('{count} would-collide if every repeater used {size}-byte', { count: theoC, size: b }) : ''}
               </div>
               ${theoToggle}
             </div>`;
             }).join('')}
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--accent);border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:0.85em">
-            <strong>ℹ️ Theoretical vs observed:</strong> These are <em>theoretical address conflicts</em> that would occur IF all repeaters used this hash size (would-collide-if-used). For collisions <em>actually observed in packet traffic</em>, see the <a href="#/analytics?tab=collisions" style="color:var(--link-color)">Hash Issues</a> tab.
+            <strong>ℹ️ ${tr('Theoretical vs observed:')}</strong> ${tr('These are {theoretical} that would occur IF all repeaters used this hash size (would-collide-if-used). For collisions {observed}, see the {link} tab.', {
+              theoretical: '<em>' + tr('theoretical address conflicts') + '</em>',
+              observed: '<em>' + tr('actually observed in packet traffic') + '</em>',
+              link: '<a href="#/analytics?tab=collisions" style="color:var(--link-color)">' + tr('Hash Issues') + '</a>',
+            })}
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:12px">
-            <strong>Recommendation: ${rec} prefixes</strong> — ${recDetail}
-            <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">Hash size is configured per-node in firmware. Changing requires reflashing.</span>
+            <strong>${tr('Recommendation: {size} prefixes', { size: rec })}</strong> — ${recDetail}
+            <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">${tr('Hash size is configured per-node in firmware. Changing requires reflashing.')}</span>
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:0.85em">
-            <strong>ℹ️ About these numbers:</strong> The primary count is how many repeaters are <em>configured</em> for each hash size (their advertised path hash byte length), matching the
-            <a href="#/analytics?tab=hashsizes" style="color:var(--link-color)">Hash Stats</a> tab. Address conflicts (would-collide-if-used) count colliding slices among repeaters configured for the same hash size — same definition the
-            <a href="#/analytics?tab=collisions" style="color:var(--link-color)">Hash Issues</a> tab uses, except Hash Issues counts collisions <em>actually observed in packet traffic</em> rather than theoretical. The <em>theoretical</em> line shows the math fact: how many distinct slices appear when every repeater pubkey is truncated to N bytes, regardless of configured hash size.
+            <strong>ℹ️ ${tr('About these numbers:')}</strong> ${tr('The primary count is how many repeaters are {configured} for each hash size (their advertised path hash byte length), matching the {hashStats} tab. Address conflicts (would-collide-if-used) count colliding slices among repeaters configured for the same hash size — same definition the {hashIssues} tab uses, except Hash Issues counts collisions {observed} rather than theoretical. The {theoretical} line shows the math fact: how many distinct slices appear when every repeater pubkey is truncated to N bytes, regardless of configured hash size.', {
+              configured: '<em>' + tr('configured') + '</em>',
+              hashStats: '<a href="#/analytics?tab=hashsizes" style="color:var(--link-color)">' + tr('Hash Stats') + '</a>',
+              hashIssues: '<a href="#/analytics?tab=collisions" style="color:var(--link-color)">' + tr('Hash Issues') + '</a>',
+              observed: '<em>' + tr('actually observed in packet traffic') + '</em>',
+              theoretical: '<em>' + tr('theoretical') + '</em>',
+            })}
           </div>
         </div>
       </div>
 
       <div class="analytics-card" id="ptChecker">
-        <h3 style="margin-top:0">Check a Prefix</h3>
-        <p class="text-muted" style="margin-top:0;font-size:0.9em">Enter a 1-byte (2 hex chars), 2-byte (4 hex chars), or 3-byte (6 hex chars) prefix — or paste a full public key.</p>
+        <h3 style="margin-top:0">${tr('Check a Prefix')}</h3>
+        <p class="text-muted" style="margin-top:0;font-size:0.9em">${tr('Enter a 1-byte (2 hex chars), 2-byte (4 hex chars), or 3-byte (6 hex chars) prefix — or paste a full public key.')}</p>
         <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
-          <input id="ptPrefixInput" type="text" placeholder="e.g. A3F1" maxlength="64"
+          <input id="ptPrefixInput" type="text" placeholder="${tr('e.g. {example}', { example: 'A3F1' })}" maxlength="64"
             style="font-family:var(--mono);font-size:1em;padding:6px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;min-width:180px;flex:1"
             value="${esc(initPrefix)}">
-          <button id="ptCheckBtn" class="btn-active-accent" style="padding:6px 16px;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Check</button>
+          <button id="ptCheckBtn" class="btn-active-accent" style="padding:6px 16px;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">${tr('Check')}</button>
         </div>
         <div id="ptCheckerResults" style="margin-top:14px"></div>
       </div>
 
       <div class="analytics-card" id="ptGenerator">
-        <h3 style="margin-top:0">Generate Available Prefix</h3>
-        <p class="text-muted" style="margin-top:0;font-size:0.9em">Find a prefix with zero current collisions.</p>
+        <h3 style="margin-top:0">${tr('Generate Available Prefix')}</h3>
+        <p class="text-muted" style="margin-top:0;font-size:0.9em">${tr('Find a prefix with zero current collisions.')}</p>
         <p class="text-muted" style="margin:4px 0 10px;font-size:0.82em">
           <span aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-prohibit"/></svg></span>
-          <strong>0x00 and 0xFF excluded</strong> as a first byte — the MeshCore firmware keygen routine re-rolls identities whose <code>pub_key[0]</code> is <code>00</code> or <code>FF</code>, so by convention you should not see those prefixes on real nodes (see
-          <a href="https://github.com/meshcore-dev/MeshCore/blob/8ede7641/examples/simple_repeater/main.cpp#L83"
-             target="_blank" rel="noopener noreferrer" style="color:var(--link-color)">simple_repeater/main.cpp:83</a>).
+          ${tr('{excluded} as a first byte — the MeshCore firmware keygen routine re-rolls identities whose {field} is {zero} or {ff}, so by convention you should not see those prefixes on real nodes (see {link}).', {
+            excluded: '<strong>' + tr('0x00 and 0xFF excluded') + '</strong>',
+            field: '<code>pub_key[0]</code>', zero: '<code>00</code>', ff: '<code>FF</code>',
+            link: '<a href="https://github.com/meshcore-dev/MeshCore/blob/8ede7641/examples/simple_repeater/main.cpp#L83" target="_blank" rel="noopener noreferrer" style="color:var(--link-color)">simple_repeater/main.cpp:83</a>',
+          })}
         </p>
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="radio" name="ptGenSize" value="1" ${initGenerate === '1' ? 'checked' : ''}> 1-byte
+            <input type="radio" name="ptGenSize" value="1" ${initGenerate === '1' ? 'checked' : ''}> ${trn(1, '{count}-byte', '{count}-byte')}
           </label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="radio" name="ptGenSize" value="2" ${initGenerate !== '1' && initGenerate !== '3' ? 'checked' : ''}> 2-byte
-            <span class="text-muted" style="font-size:0.8em">(recommended)</span>
+            <input type="radio" name="ptGenSize" value="2" ${initGenerate !== '1' && initGenerate !== '3' ? 'checked' : ''}> ${trn(2, '{count}-byte', '{count}-byte')}
+            <span class="text-muted" style="font-size:0.8em">(${tr('recommended')})</span>
           </label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="radio" name="ptGenSize" value="3" ${initGenerate === '3' ? 'checked' : ''}> 3-byte
+            <input type="radio" name="ptGenSize" value="3" ${initGenerate === '3' ? 'checked' : ''}> ${trn(3, '{count}-byte', '{count}-byte')}
           </label>
-          <button id="ptGenBtn" class="btn-active-accent" style="padding:6px 16px;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Generate</button>
+          <button id="ptGenBtn" class="btn-active-accent" style="padding:6px 16px;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">${tr('Generate')}</button>
         </div>
         <div id="ptGenResult"></div>
         <div style="margin-top:14px;padding:10px 14px;border:1px solid var(--accent);border-radius:6px;background:var(--bg-secondary,var(--bg));font-size:0.88em">
-          <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-book-open"/></svg> <strong>New to multi-byte prefixes?</strong>
+          <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-book-open"/></svg> <strong>${tr('New to multi-byte prefixes?')}</strong>
           <a href="https://github.com/meshcore-dev/MeshCore/blob/main/docs/faq.md#39-q-what-is-multi-byte-support--what-do-1-byte-2-byte-3-byte-adverts-and-messages-mean"
             target="_blank" rel="noopener noreferrer" style="color:var(--link-color);margin-left:4px">
-            Read the MeshCore FAQ on multi-byte support →
+            ${tr('Read the MeshCore FAQ on multi-byte support')} →
           </a>
         </div>
       </div>`;
@@ -4037,16 +4055,16 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     // --- Helpers ---
     function nodeEntry(n) {
       const name = esc(n.name || n.public_key.slice(0, 12));
-      const role = n.role ? `<span class="text-muted" style="font-size:0.82em">${esc(n.role)}</span>` : '';
-      const hs = n.hash_size ? ` <span class="text-muted" style="font-size:0.78em;opacity:0.7">${n.hash_size}B hash</span>` : '';
+      const role = n.role ? `<span class="text-muted" style="font-size:0.82em">${esc(tr(n.role))}</span>` : '';
+      const hs = n.hash_size ? ` <span class="text-muted" style="font-size:0.78em;opacity:0.7">${tr('{count}B hash', { count: n.hash_size })}</span>` : '';
       const when = n.last_seen ? ` <span class="text-muted" style="font-size:0.8em">${(typeof formatAbsoluteTimestamp === 'function') ? formatAbsoluteTimestamp(n.last_seen) : new Date(n.last_seen).toLocaleDateString()}</span>` : '';
       return `<div style="padding:3px 0"><a href="#/nodes/${encodeURIComponent(n.public_key)}" class="analytics-link">${name}</a> ${role}${hs}${when}</div>`;
     }
 
     function severityBadge(count) {
-      if (count === 0) return '<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Unique</span>';
-      if (count <= 2) return `<span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${count} collision${count !== 1 ? 's' : ''}</span>`;
-      return `<span style="color:var(--status-red)"><span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ${count} collisions</span>`;
+      if (count === 0) return '<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('Unique') + '</span>';
+      if (count <= 2) return `<span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${trn(count, '{count} collision', '{count} collisions')}</span>`;
+      return `<span style="color:var(--status-red)"><span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ${trn(count, '{count} collision', '{count} collisions')}</span>`;
     }
 
     // --- Checker ---
@@ -4057,11 +4075,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       if (!input) { resultsEl.innerHTML = ''; return; }
 
       if (!/^[0-9A-F]+$/.test(input)) {
-        resultsEl.innerHTML = '<p style="color:var(--status-red);margin:0">Invalid input — hex characters only (0-9, A-F).</p>';
+        resultsEl.innerHTML = '<p style="color:var(--status-red);margin:0">' + tr('Invalid input — hex characters only (0-9, A-F).') + '</p>';
         return;
       }
       if (input.length % 2 !== 0 || (input.length !== 2 && input.length !== 4 && input.length !== 6 && input.length < 8)) {
-        resultsEl.innerHTML = '<p style="color:var(--status-red);margin:0">Prefix must be 2, 4, or 6 hex characters. For a full public key, use 64 characters.</p>';
+        resultsEl.innerHTML = '<p style="color:var(--status-red);margin:0">' + tr('Prefix must be 2, 4, or 6 hex characters. For a full public key, use 64 characters.') + '</p>';
         return;
       }
 
@@ -4078,15 +4096,18 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       if (typeof PrefixReserved !== 'undefined' && PrefixReserved &&
           PrefixReserved.isReservedPrefix(input)) {
         html += `<div role="alert" style="margin-bottom:10px;padding:10px 14px;border:1px solid var(--status-yellow);border-radius:6px;background:var(--bg-secondary,var(--bg))">
-          <strong style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Firmware avoids this first byte</strong>
+          <strong style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${tr('Firmware avoids this first byte')}</strong>
           <div class="text-muted" style="font-size:0.85em;margin-top:4px">
-            <code class="mono">${input.slice(0,2)}</code> as the first byte of a node pubkey is avoided by the MeshCore firmware keygen convention (the standard repeater re-rolls identities whose <code class="mono">pub_key[0]</code> is <code class="mono">00</code> or <code class="mono">FF</code>). You generally shouldn't see this on real nodes.
+            ${tr("{byte} as the first byte of a node pubkey is avoided by the MeshCore firmware keygen convention (the standard repeater re-rolls identities whose {field} is {zero} or {ff}). You generally shouldn't see this on real nodes.", {
+              byte: '<code class="mono">' + input.slice(0,2) + '</code>',
+              field: '<code class="mono">pub_key[0]</code>', zero: '<code class="mono">00</code>', ff: '<code class="mono">FF</code>',
+            })}
           </div>
         </div>`;
       }
       if (isFullKey) {
         const inNetwork = nodes.some(n => n.public_key.toUpperCase() === input);
-        html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">Derived prefixes: <code class="mono">${input.slice(0,2)}</code> / <code class="mono">${input.slice(0,4)}</code> / <code class="mono">${input.slice(0,6)}</code>${!inNetwork ? ' — <em>this node is not yet in the network</em>' : ''}</p>`;
+        html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">${tr('Derived prefixes:')} <code class="mono">${input.slice(0,2)}</code> / <code class="mono">${input.slice(0,4)}</code> / <code class="mono">${input.slice(0,6)}</code>${!inNetwork ? ' — <em>' + tr('this node is not yet in the network') + '</em>' : ''}</p>`;
       }
 
       tiers.forEach(({ b, prefix }) => {
@@ -4097,11 +4118,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
           <div style="margin-bottom:10px;padding:10px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary,var(--bg))">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
               <code class="mono" style="font-weight:700">${prefix}</code>
-              <span class="text-muted" style="font-size:0.82em">${b}-byte</span>
+              <span class="text-muted" style="font-size:0.82em">${trn(b, '{count}-byte', '{count}-byte')}</span>
               ${severityBadge(count)}
             </div>
             ${count === 0
-              ? '<div class="text-muted" style="font-size:0.85em">No existing nodes use this prefix.</div>'
+              ? '<div class="text-muted" style="font-size:0.85em">' + tr('No existing nodes use this prefix.') + '</div>'
               : `<div style="font-size:0.85em;max-height:140px;overflow-y:auto">${colliders.map(nodeEntry).join('')}</div>`}
           </div>`;
       });
@@ -4136,8 +4157,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       const available = totalSpace - idx[b].size - (reservedTotal - reservedUsed);
 
       if (available <= 0) {
-        const next = b < 3 ? (b + 1) + '-byte' : 'a different size';
-        genResultEl.innerHTML = `<p style="color:var(--status-red);margin:0">No collision-free ${b}-byte prefixes available. Try ${next}.</p>`;
+        const next = b < 3 ? trn(b + 1, '{count}-byte', '{count}-byte') : tr('a different size');
+        genResultEl.innerHTML = `<p style="color:var(--status-red);margin:0">${tr('No collision-free {size}-byte prefixes available. Try {next}.', { size: b, next: next })}</p>`;
         return;
       }
 
@@ -4174,14 +4195,14 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         <div style="padding:12px 16px;border:1px solid var(--status-green);border-radius:6px;background:var(--bg-secondary,var(--bg))">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <code class="mono" style="font-size:1.3em;font-weight:700;color:var(--status-green-text)">${prefix}</code>
-            <span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No existing nodes use this prefix</span>
+            <span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ${tr('No existing nodes use this prefix')}</span>
           </div>
-          <div class="text-muted" style="font-size:0.85em;margin-top:6px">${available.toLocaleString()} of ${totalSpace.toLocaleString()} ${b}-byte prefixes are available.</div>
+          <div class="text-muted" style="font-size:0.85em;margin-top:6px">${tr('{available} of {total} {size}-byte prefixes are available.', { available: available.toLocaleString(), total: totalSpace.toLocaleString(), size: b })}</div>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <button id="ptRegenBtn" style="padding:5px 14px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:0.9em">Try another</button>
+            <button id="ptRegenBtn" style="padding:5px 14px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:0.9em">${tr('Try another')}</button>
             <a href="https://agessaman.github.io/meshcore-web-keygen/?prefix=${prefix}" target="_blank" rel="noopener noreferrer"
               style="padding:5px 14px;background:var(--bg);color:var(--link-color);border:1px solid var(--border);border-radius:4px;text-decoration:none;font-size:0.9em">
-              Generate key with this prefix →
+              ${tr('Generate key with this prefix')} →
             </a>
           </div>
         </div>`;
@@ -4279,20 +4300,20 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       <div class="rf-health-container">
         <div class="rf-time-selector">
           ${rangeButtons}
-          <button class="rf-range-btn${_rfHealthState.range === 'custom' ? ' active' : ''}" data-range="custom">Custom</button>
+          <button class="rf-range-btn${_rfHealthState.range === 'custom' ? ' active' : ''}" data-range="custom">${tr('Custom')}</button>
           <span class="rf-custom-inputs" style="display:${_rfHealthState.range === 'custom' ? 'inline' : 'none'}">
             <input type="datetime-local" class="rf-datetime" id="rfFrom" value="${_rfHealthState.customFrom}">
             <span>→</span>
             <input type="datetime-local" class="rf-datetime" id="rfTo" value="${_rfHealthState.customTo}">
-            <button class="rf-range-btn" id="rfCustomApply">Apply</button>
+            <button class="rf-range-btn" id="rfCustomApply">${tr('Apply')}</button>
           </span>
         </div>
         <div class="rf-health-split">
           <div id="rfHealthGrid" class="rf-health-grid">
-            <div class="text-muted" style="padding:20px">Loading RF metrics…</div>
+            <div class="text-muted" style="padding:20px">${tr('Loading RF metrics…')}</div>
           </div>
           <div id="rfHealthDetail" class="rf-health-detail rf-panel-empty">
-            <span>Select an observer to view details</span>
+            <span>${tr('Select an observer to view details')}</span>
           </div>
         </div>
       </div>`;
@@ -4344,7 +4365,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       });
 
       if (!filteredObservers.length) {
-        grid.innerHTML = '<div class="text-muted" style="padding:20px">No RF metrics data available yet. Metrics are collected from observer status messages every ~5 minutes.</div>';
+        grid.innerHTML = '<div class="text-muted" style="padding:20px">' + tr('No RF metrics data available yet. Metrics are collected from observer status messages every ~5 minutes.') + '</div>';
         return;
       }
 
@@ -4364,7 +4385,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
           else if (obs.current_noise_floor >= -100) nfClass = 'rf-nf-warning';
         }
 
-        return `<div class="rf-cell${isSelected ? ' rf-cell-selected' : ''}" data-observer="${esc(obs.observer_id)}" tabindex="0" role="button" aria-label="Observer ${esc(name)}, noise floor ${nf} dBm">
+        return `<div class="rf-cell${isSelected ? ' rf-cell-selected' : ''}" data-observer="${esc(obs.observer_id)}" tabindex="0" role="button" aria-label="${tr('Observer {name}, noise floor {nf} dBm', { name: esc(name), nf: nf })}">
           <div class="rf-cell-header">
             <span class="rf-cell-name">${esc(name)}</span>
             <span class="rf-cell-nf ${nfClass}">${nf} dBm</span>
@@ -4372,9 +4393,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
           </div>
           <div class="rf-cell-sparkline" id="rf-spark-${esc(obs.observer_id)}"></div>
           <div class="rf-cell-stats">
-            <span>avg: ${avgNf}</span>
-            <span>max: ${maxNf}</span>
-            <span>${obs.sample_count} samples</span>
+            <span>${tr('avg:')} ${avgNf}</span>
+            <span>${tr('max:')} ${maxNf}</span>
+            <span>${trn(obs.sample_count, '{count} samples', '{count} samples')}</span>
             <span data-testid="rf-cell-airtime">TX 1h: ${ObserverAirtime.badge(obs.tx_airtime_pct_1h, summaryData.duty_cycle_warn_pct)}</span>
           </div>
         </div>`;
@@ -4413,7 +4434,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         }
       }
     } catch (e) {
-      grid.innerHTML = `<div class="text-muted" style="padding:20px">Failed to load RF health data: ${esc(e.message)}</div>`;
+      grid.innerHTML = `<div class="text-muted" style="padding:20px">${tr('Failed to load RF health data: {message}', { message: esc(e.message) })}</div>`;
     }
   }
 
@@ -4427,7 +4448,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       if (container && nfValues.length > 1) {
         container.innerHTML = rfNFSparkline(nfValues, 140, 24);
       } else if (container) {
-        container.innerHTML = '<span class="text-muted" style="font-size:10px">insufficient data</span>';
+        container.innerHTML = '<span class="text-muted" style="font-size:10px">' + tr('insufficient data') + '</span>';
       }
     } catch (e) {
       // Non-fatal — sparkline just won't render
@@ -4454,12 +4475,12 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       refs += `<line x1="0" y1="${y100.toFixed(1)}" x2="${w}" y2="${y100.toFixed(1)}" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="2"/>`;
     }
 
-    return `<svg viewBox="0 0 ${w} ${h}" style="width:${w}px;height:${h}px" role="img" aria-label="Noise floor sparkline"><title>Noise floor trend</title>${refs}<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>`;
+    return `<svg viewBox="0 0 ${w} ${h}" style="width:${w}px;height:${h}px" role="img" aria-label="${tr('Noise floor sparkline')}"><title>${tr('Noise floor trend')}</title>${refs}<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>`;
   }
 
   async function loadRFHealthDetail(observerId, container) {
     container.classList.remove('rf-panel-empty');
-    container.innerHTML = '<div class="text-muted" style="padding:10px">Loading detail…</div>';
+    container.innerHTML = '<div class="text-muted" style="padding:10px">' + tr('Loading detail…') + '</div>';
 
     const { since, until } = rfHealthTimeRangeToParams(_rfHealthState.range, _rfHealthState.customFrom, _rfHealthState.customTo);
     // Choose resolution based on time range
@@ -4474,7 +4495,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       const name = data.observer_name || observerId.substring(0, 8);
 
       if (!metrics.length) {
-        container.innerHTML = `<div class="text-muted" style="padding:10px">No metrics data for ${esc(name)} in selected time range.</div>`;
+        container.innerHTML = `<div class="text-muted" style="padding:10px">${tr('No metrics data for {name} in selected time range.', { name: esc(name) })}</div>`;
         return;
       }
 
@@ -4504,7 +4525,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       container.innerHTML = `
         <div class="rf-detail-header">
           <h3>${esc(name)}</h3>
-          <button class="rf-detail-close" aria-label="Close detail" title="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
+          <button class="rf-detail-close" aria-label="${tr('Close detail')}" title="${tr('Close')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
         </div>
         <div class="rf-detail-charts">
           <div class="rf-detail-chart" id="rfDetailNFChart"></div>
@@ -4513,13 +4534,13 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
           ${hasBattery ? '<div class="rf-detail-chart" id="rfDetailBatteryChart"></div>' : ''}
         </div>
         <div class="rf-detail-summary">
-          NF: ${curNf} dBm | avg: ${avgNf} | min: ${minNf} | max: ${maxNf} | TX: ${curTx} | RX: ${curRx} | Err: ${curErr} | Batt: ${curBatt}${reboots.length ? ' | ' + reboots.length + ' reboots' : ''}
+          NF: ${curNf} dBm | ${tr('avg:')} ${avgNf} | ${tr('min:')} ${minNf} | ${tr('max:')} ${maxNf} | TX: ${curTx} | RX: ${curRx} | ${tr('Err:')} ${curErr} | ${tr('Batt:')} ${curBatt}${reboots.length ? ' | ' + trn(reboots.length, '{count} reboots', '{count} reboots') : ''}
         </div>`;
 
       // Close button
       container.querySelector('.rf-detail-close').addEventListener('click', () => {
         container.classList.add('rf-panel-empty');
-        container.innerHTML = '<span>Select an observer to view details</span>';
+        container.innerHTML = '<span>' + tr('Select an observer to view details') + '</span>';
         _rfHealthState.selectedObserver = null;
         rfHealthUpdateHash();
         document.querySelectorAll('.rf-cell').forEach(c => c.classList.remove('rf-cell-selected'));
@@ -4535,7 +4556,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       if (nfEl && nfData.length > 1) {
         nfEl.innerHTML = rfNFColumnChart(nfData, nfEl.clientWidth || 700, 180, reboots, minT, maxT);
       } else if (nfEl) {
-        nfEl.innerHTML = '<span class="text-muted">Not enough noise floor data</span>';
+        nfEl.innerHTML = '<span class="text-muted">' + tr('Not enough noise floor data') + '</span>';
       }
 
       // Render airtime chart
@@ -4562,7 +4583,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         }
       }
     } catch (e) {
-      container.innerHTML = `<div class="text-muted" style="padding:10px">Failed to load detail: ${esc(e.message)}</div>`;
+      container.innerHTML = `<div class="text-muted" style="padding:10px">${tr('Failed to load detail: {message}', { message: esc(e.message) })}</div>`;
     }
   }
 
@@ -4573,7 +4594,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       const x = sx(rt);
       if (x >= pad.left && x <= w - pad.right) {
         svg += `<line x1="${x.toFixed(1)}" y1="${pad.top}" x2="${x.toFixed(1)}" y2="${(h - pad.bottom).toFixed(1)}" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.6"/>`;
-        svg += `<text x="${(x + 2).toFixed(1)}" y="${(pad.top + 8).toFixed(1)}" font-size="7" fill="var(--text-muted)" opacity="0.7">reboot</text>`;
+        svg += `<text x="${(x + 2).toFixed(1)}" y="${(pad.top + 8).toFixed(1)}" font-size="7" fill="var(--text-muted)" opacity="0.7">${tr('reboot')}</text>`;
       }
     }
     return svg;
@@ -4625,10 +4646,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const sx = t => pad.left + ((t - minT) / rangeT) * cw;
     const sy = v => pad.top + ch - (v / yMax) * ch;
 
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Airtime chart"><title>Airtime %</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="${tr('Airtime chart')}"><title>${tr('Airtime %')}</title>`;
 
     // Chart title
-    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Airtime %</text>`;
+    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">${tr('Airtime %')}</text>`;
 
     // Y-axis: 5 ticks from 0 to yMax
     const yTicks = 4;
@@ -4699,10 +4720,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const sx = t => pad.left + ((t - minT) / rangeT) * cw;
     const sy = v => pad.top + ch - (v / rangeV) * ch;
 
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Error rate chart"><title>Error Rate</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="${tr('Error rate chart')}"><title>${tr('Error Rate')}</title>`;
 
     // Chart title
-    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Error Rate %</text>`;
+    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">${tr('Error Rate %')}</text>`;
 
     // Y-axis
     const yTicks = 4;
@@ -4730,7 +4751,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     svg += rfXAxisLabels(errData, sx, h, pad);
 
     // Hover tooltips
-    svg += rfTooltipCircles(errData, sx, sy, 'Err', '%', v => v.toFixed(2));
+    svg += rfTooltipCircles(errData, sx, sy, tr('Err'), '%', v => v.toFixed(2));
 
     svg += '</svg>';
     return svg;
@@ -4752,10 +4773,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const sx = t => pad.left + ((t - minT) / rangeT) * cw;
     const sy = v => pad.top + ch - ((v - minV) / rangeV) * ch;
 
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Battery voltage chart"><title>Battery</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="${tr('Battery voltage chart')}"><title>${tr('Battery')}</title>`;
 
     // Chart title
-    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Battery</text>`;
+    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">${tr('Battery')}</text>`;
 
     // Y-axis (in volts)
     const yTicks = 4;
@@ -4771,7 +4792,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     if (lowBattMv >= minV && lowBattMv <= maxV) {
       const y = sy(lowBattMv);
       svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--warning, #f39c12)" stroke-width="0.5" stroke-dasharray="4,2"/>`;
-      svg += `<text x="${w - pad.right + 2}" y="${(y + 3).toFixed(1)}" font-size="8" fill="var(--warning, #f39c12)">3.3V low</text>`;
+      svg += `<text x="${w - pad.right + 2}" y="${(y + 3).toFixed(1)}" font-size="8" fill="var(--warning, #f39c12)">${tr('3.3V low')}</text>`;
     }
 
     // Reboot markers
@@ -4791,7 +4812,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     svg += rfXAxisLabels(battData, sx, h, pad);
 
     // Hover tooltips
-    svg += rfTooltipCircles(battData, sx, sy, 'Batt', 'V', v => (v/1000).toFixed(2));
+    svg += rfTooltipCircles(battData, sx, sy, tr('Batt'), 'V', v => (v/1000).toFixed(2));
 
     svg += '</svg>';
     return svg;
@@ -4829,13 +4850,13 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
     const times = data.map(d => new Date(d.t).getTime());
 
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Noise floor column chart"><title>Noise floor over time</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="${tr('Noise floor column chart')}"><title>${tr('Noise floor over time')}</title>`;
 
     // Inline style for hover highlighting
     svg += `<style>.nf-bar{transition:opacity 0.05s}.nf-bar:hover{opacity:0.75;stroke:var(--text);stroke-width:1}</style>`;
 
     // Chart title
-    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Noise Floor dBm</text>`;
+    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">${tr('Noise Floor dBm')}</text>`;
 
     // Y-axis labels + grid lines
     const yTicks = 5;
@@ -4891,12 +4912,12 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
   // #690 — Clock Health fleet view (M3)
   async function renderClockHealthTab(el) {
-    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading clock health data…</div>';
+    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Loading clock health data…') + '</div>';
     try {
       const aqs = AreaFilter.areaQueryString();
       var data = await (await fetch('/api/nodes/clock-skew' + (aqs ? '?' + aqs.slice(1) : ''))).json();
       if (!Array.isArray(data) || !data.length) {
-        el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No clock skew data available. Nodes need recent adverts for clock analysis.</div>';
+        el.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('No clock skew data available. Nodes need recent adverts for clock analysis.') + '</div>';
         return;
       }
 
@@ -4934,7 +4955,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         var filterHtml = '<div style="margin-bottom:10px">' + filters.map(function(f) {
           var dot = f !== 'all' ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + filterColors[f] + ';margin-right:4px;vertical-align:middle"></span>' : '';
           return '<button class="clock-filter-btn' + (activeFilter === f ? ' active' : '') + '" data-filter="' + f + '">' +
-            dot + (f === 'all' ? 'All (' + data.length + ')' : (SKEW_SEVERITY_LABELS[f] || f) + ' (' + (counts[f] || 0) + ')') +
+            dot + (f === 'all' ? tr('All ({count})', { count: data.length }) : tr(SKEW_SEVERITY_LABELS[f] || f) + ' (' + (counts[f] || 0) + ')') +
             '</button>';
         }).join('') + '</div>';
 
@@ -4943,7 +4964,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
           var rowClass = 'clock-fleet-row--' + (n.severity || 'ok');
           var lastAdv = n.lastObservedTS ? new Date(n.lastObservedTS * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC') : '—';
           var skewVal = window.currentSkewValue(n);
-          var skewText = n.severity === 'no_clock' ? 'No Clock' : formatSkew(skewVal);
+          var skewText = n.severity === 'no_clock' ? tr('No Clock') : formatSkew(skewVal);
           var driftText = n.severity === 'no_clock' || !n.driftPerDaySec ? '–' : formatDrift(n.driftPerDaySec);
           return '<tr class="' + rowClass + '" data-pubkey="' + esc(n.pubkey) + '" style="cursor:pointer">' +
             '<td><strong>' + esc(n.nodeName || n.pubkey.slice(0, 12)) + '</strong></td>' +
@@ -4954,15 +4975,15 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
             '</tr>';
         }).join('');
 
-        el.innerHTML = '<h3 style="margin:0 0 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Clock Health</h3>' +
+        el.innerHTML = '<h3 style="margin:0 0 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> ' + tr('Clock Health') + '</h3>' +
           filterHtml +
           '<table class="data-table analytics-table" id="clock-health-table">' +
           '<thead><tr>' +
-          '<th data-sort-col="name" style="cursor:pointer">Name</th>' +
-          '<th data-sort-col="skew" style="cursor:pointer">Skew</th>' +
-          '<th data-sort-col="severity" style="cursor:pointer">Severity</th>' +
-          '<th data-sort-col="drift" style="cursor:pointer">Drift Rate</th>' +
-          '<th>Last Advert</th>' +
+          '<th data-sort-col="name" style="cursor:pointer">' + tr('Name') + '</th>' +
+          '<th data-sort-col="skew" style="cursor:pointer">' + tr('Skew') + '</th>' +
+          '<th data-sort-col="severity" style="cursor:pointer">' + tr('Severity') + '</th>' +
+          '<th data-sort-col="drift" style="cursor:pointer">' + tr('Drift Rate') + '</th>' +
+          '<th>' + tr('Last Advert') + '</th>' +
           '</tr></thead><tbody>' + rowsHtml + '</tbody></table>';
 
         // Bind filter clicks
@@ -4993,7 +5014,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
       render();
     } catch (err) {
-      el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">Failed to load clock health data: ' + esc(String(err)) + '</div>';
+      el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">' + tr('Failed to load clock health data: {message}', { message: esc(String(err)) }) + '</div>';
     }
   }
 
@@ -5001,24 +5022,22 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
   // #1979: flood adverts by sender role, split by scope state. Descriptive
   // only: it shows what each role sent, not why.
   function scopeAdvertsByRoleHtml(rows) {
-    var html = '<h4 style="margin:16px 0 4px">Flood adverts by node role</h4>' +
+    var html = '<h4 style="margin:16px 0 4px">' + tr('Flood adverts by node role') + '</h4>' +
       '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
-        'Flood adverts (routes 0 and 1) in this window, grouped by the sender\'s role. ' +
-        'Shares are of the row. Unknown scope means scoped, but this instance could not name the region. ' +
-        'This shows what each role sent; it does not show why.' +
+        tr("Flood adverts (routes 0 and 1) in this window, grouped by the sender's role. Shares are of the row. Unknown scope means scoped, but this instance could not name the region. This shows what each role sent; it does not show why.") +
       '</p>';
     if (!rows || !rows.length) {
-      return html + '<p class="text-muted" style="font-size:0.85em;margin:0">No flood adverts in this window.</p>';
+      return html + '<p class="text-muted" style="font-size:0.85em;margin:0">' + tr('No flood adverts in this window.') + '</p>';
     }
     return html +
       '<table class="data-table analytics-table">' +
-        '<thead><tr><th>Role</th><th>Adverts</th><th>Unscoped</th><th>Unknown scope</th><th>Named scope</th></tr></thead>' +
+        '<thead><tr><th>' + tr('Role') + '</th><th>' + tr('Adverts') + '</th><th>' + tr('Unscoped') + '</th><th>' + tr('Unknown scope') + '</th><th>' + tr('Named scope') + '</th></tr></thead>' +
         '<tbody>' + rows.map(function(r) {
           var total = r.unscoped + r.unknownScope + r.named;
           function cell(n) {
             return '<td>' + n.toLocaleString() + ' <span class="text-muted">(' + (n / total * 100).toFixed(1) + '%)</span></td>';
           }
-          return '<tr data-role="' + esc(r.role) + '"><td>' + esc(r.role) + '</td>' +
+          return '<tr data-role="' + esc(r.role) + '"><td>' + esc(tr(r.role)) + '</td>' +
             '<td>' + total.toLocaleString() + '</td>' +
             cell(r.unscoped) + cell(r.unknownScope) + cell(r.named) + '</tr>';
         }).join('') + '</tbody>' +
@@ -5032,9 +5051,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     // Fix 5: write static frame only once
     if (!el.querySelector('#scopes-cards')) {
       el.innerHTML =
-        '<h3 style="margin:0 0 4px">Scope Statistics</h3>' +
+        '<h3 style="margin:0 0 4px">' + tr('Scope Statistics') + '</h3>' +
         '<p class="text-muted" style="margin:0 0 12px;font-size:0.85em">' +
-          'Denominator is all observed transmissions. Only TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) routes carry a scope; FLOOD (1) and DIRECT (2) are inherently unscoped per MeshCore protocol.' +
+          tr('Denominator is all observed transmissions. Only TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) routes carry a scope; FLOOD (1) and DIRECT (2) are inherently unscoped per MeshCore protocol.') +
         '</p>' +
         '<div style="margin-bottom:12px">' +
           ['1h', '24h', '7d'].map(function(v) {
@@ -5042,9 +5061,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
           }).join('') +
         '</div>' +
         '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
-        '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">Loading scope stats…</div>' +
+        '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">' + tr('Loading scope stats…') + '</div>' +
         '<table class="data-table analytics-table" style="margin-bottom:8px">' +
-          '<thead><tr><th>Region</th><th>Messages</th><th>% of Scoped</th></tr></thead>' +
+          '<thead><tr><th>' + tr('Region') + '</th><th>' + tr('Messages') + '</th><th>' + tr('% of Scoped') + '</th></tr></thead>' +
           '<tbody id="scopes-tbody"></tbody>' +
         '</table>' +
         '<div id="scopes-chart"></div>' +
@@ -5082,7 +5101,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       } catch (err) {
         if (loadingEl) loadingEl.style.display = 'none';
         var cardsEl3 = document.getElementById('scopes-cards');
-        if (cardsEl3) cardsEl3.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load scope stats: ' + esc(String(err)) + '</div>';
+        if (cardsEl3) cardsEl3.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:20px">' + tr('Failed to load scope stats: {message}', { message: esc(String(err)) }) + '</div>';
       }
     }
 
@@ -5098,10 +5117,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       var cardsEl = document.getElementById('scopes-cards');
       if (cardsEl) {
         cardsEl.innerHTML = [
-          { label: 'Transport Total', value: total.toLocaleString(), note: 'routes 0,3 (carry scope)' },
-          { label: 'Scoped', value: s.scoped.toLocaleString(), note: pct(s.scoped, overall) + ' of all traffic' },
-          { label: 'Unscoped', value: s.unscoped.toLocaleString(), note: pct(s.unscoped, overall) + ' of all traffic' },
-          { label: 'Unknown Scope', value: s.unknownScope.toLocaleString(), note: pct(s.unknownScope, s.scoped) + ' of scoped' },
+          { label: tr('Transport Total'), value: total.toLocaleString(), note: tr('routes 0,3 (carry scope)') },
+          { label: tr('Scoped'), value: s.scoped.toLocaleString(), note: tr('{pct} of all traffic', { pct: pct(s.scoped, overall) }) },
+          { label: tr('Unscoped'), value: s.unscoped.toLocaleString(), note: tr('{pct} of all traffic', { pct: pct(s.unscoped, overall) }) },
+          { label: tr('Unknown Scope'), value: s.unknownScope.toLocaleString(), note: tr('{pct} of scoped', { pct: pct(s.unknownScope, s.scoped) }) },
         ].map(function(c) {
           return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
             '<div class="stat-label">' + c.label + '</div>' +
@@ -5121,14 +5140,14 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
               '<td>' + pct(r.count, s.scoped) + '</td></tr>';
           }).join('');
           if (s.unknownScope > 0) {
-            tableBody += '<tr><td><em class="text-muted">Unknown scope</em></td>' +
+            tableBody += '<tr><td><em class="text-muted">' + tr('Unknown scope') + '</em></td>' +
               '<td>' + s.unknownScope.toLocaleString() + '</td>' +
               '<td>' + pct(s.unknownScope, s.scoped) + '</td></tr>';
           }
         } else if (s.scoped === 0) {
-          tableBody = '<tr><td colspan="3" class="text-muted" style="text-align:center">No scoped messages in this window</td></tr>';
+          tableBody = '<tr><td colspan="3" class="text-muted" style="text-align:center">' + tr('No scoped messages in this window') + '</td></tr>';
         } else {
-          tableBody = '<tr><td colspan="3" class="text-muted" style="text-align:center">No regions configured — add <code>hashRegions</code> to your config</td></tr>';
+          tableBody = '<tr><td colspan="3" class="text-muted" style="text-align:center">' + tr('No regions configured — add {key} to your config', { key: '<code>hashRegions</code>' }) + '</td></tr>';
         }
         tbodyEl.innerHTML = tableBody;
       }
@@ -5163,17 +5182,17 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
           var legendX = padL + plotW - 120;
           chartHtml = '<div style="margin-top:16px">' +
-            '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-height:' + H + 'px" role="img" aria-label="Scope time series">' +
+            '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-height:' + H + 'px" role="img" aria-label="' + tr('Scope time series') + '">' +
             grid +
             '<polyline points="' + pts(scopedVals) + '" fill="none" stroke="var(--accent)" stroke-width="2"/>' +
             '<polyline points="' + pts(unscopedVals) + '" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-dasharray="4"/>' +
             '<rect x="' + legendX + '" y="' + padT + '" width="10" height="10" fill="var(--accent)"/>' +
-            '<text x="' + (legendX + 14) + '" y="' + (padT + 9) + '" font-size="10" fill="var(--text)">Scoped</text>' +
+            '<text x="' + (legendX + 14) + '" y="' + (padT + 9) + '" font-size="10" fill="var(--text)">' + tr('Scoped') + '</text>' +
             '<rect x="' + legendX + '" y="' + (padT + 16) + '" width="10" height="10" fill="var(--text-muted)"/>' +
-            '<text x="' + (legendX + 14) + '" y="' + (padT + 25) + '" font-size="10" fill="var(--text)">Unscoped</text>' +
+            '<text x="' + (legendX + 14) + '" y="' + (padT + 25) + '" font-size="10" fill="var(--text)">' + tr('Unscoped') + '</text>' +
             '</svg></div>';
         } else {
-          chartHtml = '<p class="text-muted" style="font-size:0.85em;margin:12px 0 0">Insufficient data points to render chart — wait for more observations in this window.</p>';
+          chartHtml = '<p class="text-muted" style="font-size:0.85em;margin:12px 0 0">' + tr('Insufficient data points to render chart — wait for more observations in this window.') + '</p>';
         }
         chartEl.innerHTML = chartHtml;
       }
@@ -5199,7 +5218,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
   // Auto-refreshes every 60s while the Roles tab is active (matches the
   // behavior of the former standalone roles-page.js).
   async function renderRolesTab(el) {
-    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading roles…</div>';
+    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Loading roles…') + '</div>';
     await _renderRolesTabBody(el);
     // (Re)start the 60s auto-refresh.
     _stopRolesRefresh();
@@ -5218,7 +5237,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       var roles = (data && data.roles) || [];
       var total = (data && data.totalNodes) || 0;
       if (!roles.length) {
-        el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No roles to show.</div>';
+        el.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('No roles to show.') + '</div>';
         return;
       }
       var maxCount = roles.reduce(function (m, r) { return Math.max(m, r.nodeCount || 0); }, 0) || 1;
@@ -5226,14 +5245,14 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         var pct = total > 0 ? ((r.nodeCount / total) * 100).toFixed(1) : '0.0';
         var barW = Math.round((r.nodeCount / maxCount) * 100);
         var sevCells =
-          '<span title="OK (skew &lt; 5min)" style="color:var(--color-success,#0a0)">' + (r.okCount || 0) + '</span> / ' +
-          '<span title="Warning (5min – 1h)" style="color:var(--color-warning,#e80)">' + (r.warningCount || 0) + '</span> / ' +
-          '<span title="Critical (1h – 30d)" style="color:var(--color-error,#c00)">' + (r.criticalCount || 0) + '</span> / ' +
-          '<span title="Absurd (&gt; 30d)" style="color:#a0a">' + (r.absurdCount || 0) + '</span> / ' +
-          '<span title="No clock (&gt; 365d)" style="color:var(--text-muted)">' + (r.noClockCount || 0) + '</span>';
+          '<span title="' + tr('OK (skew < 5min)').replace('<', '&lt;') + '" style="color:var(--color-success,#0a0)">' + (r.okCount || 0) + '</span> / ' +
+          '<span title="' + tr('Warning (5min – 1h)') + '" style="color:var(--color-warning,#e80)">' + (r.warningCount || 0) + '</span> / ' +
+          '<span title="' + tr('Critical (1h – 30d)') + '" style="color:var(--color-error,#c00)">' + (r.criticalCount || 0) + '</span> / ' +
+          '<span title="' + tr('Absurd (> 30d)').replace('>', '&gt;') + '" style="color:#a0a">' + (r.absurdCount || 0) + '</span> / ' +
+          '<span title="' + tr('No clock (> 365d)').replace('>', '&gt;') + '" style="color:var(--text-muted)">' + (r.noClockCount || 0) + '</span>';
         return '' +
           '<tr data-role="' + esc(r.role) + '">' +
-            '<td>' + _rolesEmoji(r.role) + ' <strong>' + esc(r.role) + '</strong></td>' +
+            '<td>' + _rolesEmoji(r.role) + ' <strong>' + esc(tr(r.role)) + '</strong></td>' +
             '<td style="text-align:right">' + r.nodeCount + '</td>' +
             '<td style="text-align:right">' + pct + '%</td>' +
             '<td style="min-width:140px">' +
@@ -5248,25 +5267,25 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
           '</tr>';
       }).join('');
       el.innerHTML =
-        '<p class="text-muted" style="margin:0 0 12px 0">Distribution of node roles across the mesh, with per-role clock-skew posture.</p>' +
+        '<p class="text-muted" style="margin:0 0 12px 0">' + tr('Distribution of node roles across the mesh, with per-role clock-skew posture.') + '</p>' +
         '<div class="roles-summary" style="margin-bottom:12px;color:var(--text-muted)">' +
-          '<strong>' + total + '</strong> nodes across <strong>' + roles.length + '</strong> roles' +
+          tr('{nodes} nodes across {roles} roles', { nodes: '<strong>' + total + '</strong>', roles: '<strong>' + roles.length + '</strong>' }) +
         '</div>' +
         '<table id="rolesTable" class="data-table analytics-table" style="width:100%">' +
           '<thead><tr>' +
-            '<th>Role</th>' +
-            '<th style="text-align:right">Count</th>' +
-            '<th style="text-align:right">Share</th>' +
-            '<th>Distribution</th>' +
-            '<th style="text-align:right" title="Nodes with clock-skew samples">w/ Skew</th>' +
-            '<th style="text-align:right" title="Median absolute skew">Median |skew|</th>' +
-            '<th style="text-align:right" title="Mean absolute skew">Mean |skew|</th>' +
-            '<th title="OK / Warning / Critical / Absurd / No-clock">Severity</th>' +
+            '<th>' + tr('Role') + '</th>' +
+            '<th style="text-align:right">' + tr('Count') + '</th>' +
+            '<th style="text-align:right">' + tr('Share') + '</th>' +
+            '<th>' + tr('Distribution') + '</th>' +
+            '<th style="text-align:right" title="' + tr('Nodes with clock-skew samples') + '">' + tr('w/ Skew') + '</th>' +
+            '<th style="text-align:right" title="' + tr('Median absolute skew') + '">' + tr('Median |skew|') + '</th>' +
+            '<th style="text-align:right" title="' + tr('Mean absolute skew') + '">' + tr('Mean |skew|') + '</th>' +
+            '<th title="' + tr('OK / Warning / Critical / Absurd / No-clock') + '">' + tr('Severity') + '</th>' +
           '</tr></thead>' +
           '<tbody>' + rows + '</tbody>' +
         '</table>';
     } catch (err) {
-      el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">Failed to load roles: ' + esc(String(err.message || err)) + '</div>';
+      el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">' + tr('Failed to load roles: {message}', { message: esc(String(err.message || err)) }) + '</div>';
     }
   }
 
