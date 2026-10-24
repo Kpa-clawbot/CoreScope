@@ -23,7 +23,7 @@ const src = fs.readFileSync(REPO_ROOT + '/public/nodes.js', 'utf8');
 
 test('nodes table header includes a "First Seen" column', () => {
   // Match a <th> with text "First Seen" (case-insensitive)
-  assert.ok(/<th[^>]*>\s*First Seen\s*<\/th>/i.test(src),
+  assert.ok(/<th[^>]*>\s*(?:First Seen|\$\{tr\('First Seen'\)\})\s*<\/th>/i.test(src),
     'expected <th>First Seen</th> in public/nodes.js (nodes table header)');
 });
 

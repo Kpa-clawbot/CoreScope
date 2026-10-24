@@ -3,6 +3,8 @@
  * views of nodes.js. Pure helpers; no fetching here. */
 window.RfParams = (function () {
   'use strict';
+  // i18n.js defines tr(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -19,9 +21,9 @@ window.RfParams = (function () {
 
   function ago(ms) {
     var h = Math.floor(ms / 3600000);
-    if (h < 1) return 'under 1h ago';
-    if (h < 24) return h + 'h ago';
-    return Math.floor(h / 24) + 'd ago';
+    if (h < 1) return tr('under 1h ago');
+    if (h < 24) return tr('{time} ago', { time: h + 'h' });
+    return tr('{time} ago', { time: Math.floor(h / 24) + 'd' });
   }
 
   function settingText(s) {
@@ -29,7 +31,7 @@ window.RfParams = (function () {
   }
 
   function deviationTitle(dev) {
-    return dev.agree + ' of ' + dev.peers + ' nearby nodes on this band use ' + settingText(dev.majority);
+    return tr('{agree} of {peers} nearby nodes on this band use {setting}', { agree: dev.agree, peers: dev.peers, setting: settingText(dev.majority) });
   }
 
   // deviationBadge marks a node whose frequency, SF or bandwidth differs
@@ -42,19 +44,19 @@ window.RfParams = (function () {
       if (f === 'sf') return 'SF' + p.sf;
       return 'BW' + p.bw;
     });
-    return ' <span class="badge-lora-diff" title="' + esc('LoRa settings differ: ' + deviationTitle(dev)) + '">LoRa ' + esc(parts.join(' ')) + '</span>';
+    return ' <span class="badge-lora-diff" title="' + esc(tr('LoRa settings differ: {detail}', { detail: deviationTitle(dev) })) + '">LoRa ' + esc(parts.join(' ')) + '</span>';
   }
 
   function detailHtml(p, presets, nowMs, dev) {
     if (!p) {
-      return '<span class="text-muted" title="Not on the MeshCore map, or no advert there within the configured age">Not on the MeshCore map</span>';
+      return '<span class="text-muted" title="' + esc(tr('Not on the MeshCore map, or no advert there within the configured age')) + '">' + esc(tr('Not on the MeshCore map')) + '</span>';
     }
     var q = preset(p, presets);
     var when = Date.parse(p.last_advert);
     return Number(p.freq).toFixed(3) + ' MHz · SF' + p.sf + ' · BW ' + p.bw + ' kHz · CR 4/' + p.cr +
       (q ? ' <span class="badge-region">' + esc(q.title) + '</span>' : '') +
-      (isNaN(when) ? '' : ' <span class="text-muted" title="Advert received by the MeshCore map">(map advert ' + ago(nowMs - when) + ')</span>') +
-      (dev ? '<div class="lora-deviation" data-testid="lora-deviation">Differs from ' + esc(dev.agree + ' of ' + dev.peers + ' nearby nodes on this band, which use ' + settingText(dev.majority)) + '</div>' : '');
+      (isNaN(when) ? '' : ' <span class="text-muted" title="' + esc(tr('Advert received by the MeshCore map')) + '">(' + esc(tr('map advert {time}', { time: ago(nowMs - when) })) + ')</span>') +
+      (dev ? '<div class="lora-deviation" data-testid="lora-deviation">' + esc(tr('Differs from {agree} of {peers} nearby nodes on this band, which use {setting}', { agree: dev.agree, peers: dev.peers, setting: settingText(dev.majority) })) + '</div>' : '');
   }
 
   return { detailHtml: detailHtml, deviationBadge: deviationBadge };

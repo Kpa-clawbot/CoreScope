@@ -1,5 +1,7 @@
 /* === CoreScope — roles.js (shared config module) === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
 
 /*
  * Centralized roles, thresholds, tile URLs, and UI constants.
@@ -618,7 +620,7 @@
         covLink.href = '#/rx-coverage';
         covLink.className = 'nav-link';
         covLink.setAttribute('data-route', 'rx-coverage');
-        covLink.innerHTML = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg> Coverage';
+        covLink.innerHTML = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg> <span data-i18n="Coverage">' + tr('Coverage') + '</span>';
         navAnchor.insertAdjacentElement('afterend', covLink);
         window.dispatchEvent(new Event('resize'));
       }
@@ -964,15 +966,15 @@
     if (!severity) return '';
     var cls = 'skew-badge skew-badge--' + severity;
     if (severity === 'no_clock') {
-      return '<span class="' + cls + '" title="Uninitialized RTC — no valid clock"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-prohibit"/></svg> No Clock</span>';
+      return '<span class="' + cls + '" title="' + tr('Uninitialized RTC — no valid clock') + '"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-prohibit"/></svg> ' + tr('No Clock') + '</span>';
     }
     if (severity === 'bimodal_clock' && cs) {
       var badPct = cs.goodFraction != null ? Math.round((1 - cs.goodFraction) * 100) : '?';
       var label = '⏰ ' + window.formatSkew(skewSec);
-      return '<span class="' + cls + '" title="Clock skew: ' + window.formatSkew(skewSec) + ' (bimodal: ' + badPct + '% of recent adverts have nonsense timestamps)">' + label + '</span>';
+      return '<span class="' + cls + '" title="' + tr('Clock skew: {skew} (bimodal: {pct}% of recent adverts have nonsense timestamps)', { skew: window.formatSkew(skewSec), pct: badPct }) + '">' + label + '</span>';
     }
     var label = severity === 'ok' ? '⏰' : '⏰ ' + window.formatSkew(skewSec);
-    return '<span class="' + cls + '" title="Clock skew: ' + window.formatSkew(skewSec) + ' (' + (SKEW_SEVERITY_LABELS[severity] || severity) + ')">' + label + '</span>';
+    return '<span class="' + cls + '" title="' + tr('Clock skew: {skew} ({severity})', { skew: window.formatSkew(skewSec), severity: SKEW_SEVERITY_LABELS[severity] ? tr(SKEW_SEVERITY_LABELS[severity]) : severity }) + '">' + label + '</span>';
   };
 
   /** Compute severity for an observer's clock offset (seconds). */
@@ -1043,8 +1045,8 @@
     }).join(' ');
     // Zero line
     var zeroY = h / 2;
-    return '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:' + w + 'px;height:' + h + 'px" role="img" aria-label="Clock skew sparkline">' +
-      '<title>Clock skew over time</title>' +
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:' + w + 'px;height:' + h + 'px" role="img" aria-label="' + tr('Clock skew sparkline') + '">' +
+      '<title>' + tr('Clock skew over time') + '</title>' +
       '<line x1="0" y1="' + zeroY + '" x2="' + w + '" y2="' + zeroY + '" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="2"/>' +
       '<polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>';
   };

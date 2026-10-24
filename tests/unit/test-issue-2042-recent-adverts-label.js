@@ -34,7 +34,8 @@ const SRC = fs.readFileSync(path.join(REPO_ROOT, 'public/nodes.js'), 'utf8');
 console.log('\n=== #2042: the node detail advert section is labelled honestly ===');
 
 test('both copies of the section are headed "Recent Adverts"', () => {
-  const n = (SRC.match(/<h4[^>]*>Recent Adverts \(/g) || []).length;
+  // Plain text or the same text passed to tr() (public/i18n.js).
+  const n = (SRC.match(/<h4[^>]*>(?:Recent Adverts \(|\$\{tr\('Recent Adverts \(\{count\}\)')/g) || []).length;
   // Two: the full node page and the side pane. If this becomes one, a copy was
   // removed or renamed and the other may have drifted back.
   assert.strictEqual(n, 2, 'expected 2 headings, found ' + n);
@@ -56,7 +57,7 @@ test('the heading explains why it is adverts only', () => {
   // The reporter asked either to widen the section or rename it. Renaming
   // without saying why invites the same report again, so the tooltip carries
   // the reason: from_pubkey is advert-only.
-  const m = SRC.match(/<h4([^>]*)>Recent Adverts \(/);
+  const m = SRC.match(/<h4([^>]*)>(?:Recent Adverts \(|\$\{tr\('Recent Adverts \(\{count\}\)')/);
   assert.ok(m, 'heading not found');
   assert.ok(/title="/.test(m[1]), 'heading carries no explanation: ' + m[1]);
   assert.ok(/from_pubkey/.test(m[1]), 'the explanation should name the column that limits it');
