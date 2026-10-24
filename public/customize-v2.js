@@ -4,6 +4,9 @@
 'use strict';
 
 (function () {
+  // i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+  var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
   // ── Constants ──
 
   var DEFAULT_HOME = {
@@ -1054,9 +1057,9 @@
     _saveStatus = status;
     var el = document.getElementById('cv2-save-status');
     if (!el) return;
-    if (status === 'saved') { el.textContent = 'All changes saved'; el.style.color = 'var(--text-muted)'; }
-    else if (status === 'saving') { el.textContent = 'Saving...'; el.style.color = 'var(--text-muted)'; }
-    else if (status === 'error') { el.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Storage full — changes may not be saved'; el.style.color = '#ef4444'; }
+    if (status === 'saved') { el.textContent = tr('All changes saved'); el.style.color = 'var(--text-muted)'; }
+    else if (status === 'saving') { el.textContent = tr('Saving...'); el.style.color = 'var(--text-muted)'; }
+    else if (status === 'error') { el.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + tr('Storage full — changes may not be saved'); el.style.color = '#ef4444'; }
   }
 
   function _showQuotaWarning() {
@@ -1128,7 +1131,7 @@
 
   function _overrideDot(section, key) {
     if (!_isOverridden(section, key)) return '';
-    return '<span class="cv2-override-dot" data-reset-s="' + (section || '') + '" data-reset-k="' + key + '" title="Reset to server default"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>';
+    return '<span class="cv2-override-dot" data-reset-s="' + (section || '') + '" data-reset-k="' + key + '" title="' + tr('Reset to server default') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>';
   }
 
   function _injectStyles() {
@@ -1221,8 +1224,8 @@
       tabs = tabs.filter(function (t) { return disabled.indexOf(t.id) === -1; });
     }
     return '<div class="cust-tabs">' + tabs.map(function (t) {
-      return '<button class="cust-tab' + (t.id === _activeTab ? ' active' : '') + '" data-tab="' + t.id + '" title="' + t.title + '">' +
-        renderConfigGlyph(t.glyph) + ' <span class="cust-tab-text">' + t.title + '</span>' + (t.badge || '') + '</button>';
+      return '<button class="cust-tab' + (t.id === _activeTab ? ' active' : '') + '" data-tab="' + t.id + '" title="' + tr(t.title) + '">' +
+        renderConfigGlyph(t.glyph) + ' <span class="cust-tab-text">' + tr(t.title) + '</span>' + (t.badge || '') + '</button>';
     }).join('') + '</div>';
   }
 
@@ -1241,8 +1244,8 @@
         '<span class="cust-hex">' + val + '</span>';
     }
     return '<div class="cust-color-row">' +
-      '<div><label>' + (THEME_LABELS[key] || key) + dot + '</label>' +
-      '<div class="cust-hint">' + (THEME_HINTS[key] || '') + '</div></div>' +
+      '<div><label>' + (THEME_LABELS[key] ? tr(THEME_LABELS[key]) : key) + dot + '</label>' +
+      '<div class="cust-hint">' + (THEME_HINTS[key] ? tr(THEME_HINTS[key]) : '') + '</div></div>' +
       inputHtml +
     '</div>';
   }
@@ -1284,7 +1287,7 @@
 
   function _renderPresets() {
     var active = _detectActivePreset();
-    var html = '<div style="margin-bottom:16px"><p class="cust-section-title">Theme Presets</p><div style="display:flex;gap:8px;flex-wrap:wrap">';
+    var html = '<div style="margin-bottom:16px"><p class="cust-section-title">' + tr('Theme Presets') + '</p><div style="display:flex;gap:8px;flex-wrap:wrap">';
     for (var id in PRESETS) {
       var p = PRESETS[id];
       var isActive = id === active;
@@ -1294,8 +1297,8 @@
       }
       html += '<button class="cust-preset-btn' + (isActive ? ' active' : '') + '" data-preset="' + id + '">' +
         '<div style="display:flex;gap:3px">' + dots + '</div>' +
-        '<span style="font-size:11px;font-weight:' + (isActive ? '700' : '500') + '">' + esc(p.name) + '</span>' +
-        '<span style="font-size:9px;color:var(--text-muted)">' + esc(p.desc) + '</span></button>';
+        '<span style="font-size:11px;font-weight:' + (isActive ? '700' : '500') + '">' + esc(tr(p.name)) + '</span>' +
+        '<span style="font-size:9px;color:var(--text-muted)">' + esc(tr(p.desc)) + '</span></button>';
     }
     html += '</div></div>';
     return html;
@@ -1304,13 +1307,13 @@
   function _renderBranding() {
     var eff = _getEffective();
     var b = eff.branding || {};
-    var logoPreview = b.logoUrl ? '<img class="cust-preview-img" src="' + escAttr(b.logoUrl) + '" alt="Logo preview" onerror="this.style.display=\'none\'">' : '';
+    var logoPreview = b.logoUrl ? '<img class="cust-preview-img" src="' + escAttr(b.logoUrl) + '" alt="' + tr('Logo preview') + '" onerror="this.style.display=\'none\'">' : '';
     return '<div class="cust-panel' + (_activeTab === 'branding' ? ' active' : '') + '" data-panel="branding">' +
-      '<div class="cust-field"><label>Site Name' + _overrideDot('branding', 'siteName') + '</label><input type="text" data-cv2-field="branding.siteName" value="' + escAttr(b.siteName || '') + '"></div>' +
-      '<div class="cust-field"><label>Tagline' + _overrideDot('branding', 'tagline') + '</label><input type="text" data-cv2-field="branding.tagline" value="' + escAttr(b.tagline || '') + '"></div>' +
-      '<div class="cust-field"><label>Logo URL' + _overrideDot('branding', 'logoUrl') + '</label><input type="text" data-cv2-field="branding.logoUrl" value="' + escAttr(b.logoUrl || '') + '" placeholder="https://...">' + logoPreview + '</div>' +
-      '<div class="cust-field"><label>Home URL' + _overrideDot('branding', 'homeUrl') + '</label><input type="text" data-cv2-field="branding.homeUrl" value="' + escAttr(b.homeUrl || '') + '" placeholder="https://your-site.example/ or #/"></div>' +
-      '<div class="cust-field"><label>Favicon URL' + _overrideDot('branding', 'faviconUrl') + '</label><input type="text" data-cv2-field="branding.faviconUrl" value="' + escAttr(b.faviconUrl || '') + '" placeholder="https://..."></div>' +
+      '<div class="cust-field"><label>' + tr('Site Name') + _overrideDot('branding', 'siteName') + '</label><input type="text" data-cv2-field="branding.siteName" value="' + escAttr(b.siteName || '') + '"></div>' +
+      '<div class="cust-field"><label>' + tr('Tagline') + _overrideDot('branding', 'tagline') + '</label><input type="text" data-cv2-field="branding.tagline" value="' + escAttr(b.tagline || '') + '"></div>' +
+      '<div class="cust-field"><label>' + tr('Logo URL') + _overrideDot('branding', 'logoUrl') + '</label><input type="text" data-cv2-field="branding.logoUrl" value="' + escAttr(b.logoUrl || '') + '" placeholder="https://...">' + logoPreview + '</div>' +
+      '<div class="cust-field"><label>' + tr('Home URL') + _overrideDot('branding', 'homeUrl') + '</label><input type="text" data-cv2-field="branding.homeUrl" value="' + escAttr(b.homeUrl || '') + '" placeholder="' + tr('{example1} or {example2}', { example1: 'https://your-site.example/', example2: '#/' }) + '"></div>' +
+      '<div class="cust-field"><label>' + tr('Favicon URL') + _overrideDot('branding', 'faviconUrl') + '</label><input type="text" data-cv2-field="branding.faviconUrl" value="' + escAttr(b.faviconUrl || '') + '" placeholder="https://..."></div>' +
     '</div>';
   }
 
@@ -1321,7 +1324,7 @@
     var server = _getServer();
     var current = dark ? Object.assign({}, eff.theme || {}, eff.themeDark || {}) : (eff.theme || {});
     var serverCurrent = dark ? Object.assign({}, server.theme || {}, server.themeDark || {}) : (server.theme || {});
-    var modeLabel = dark ? (renderConfigGlyph('ph:moon') + ' Dark Mode') : (renderConfigGlyph('ph:sun') + ' Light Mode');
+    var modeLabel = dark ? (renderConfigGlyph('ph:moon') + ' ' + tr('Dark Mode')) : (renderConfigGlyph('ph:sun') + ' ' + tr('Light Mode'));
 
     var basicRows = '';
     for (var i = 0; i < BASIC_KEYS.length; i++) basicRows += _renderColorRow(BASIC_KEYS[i], section, current[BASIC_KEYS[i]], serverCurrent[BASIC_KEYS[i]]);
@@ -1333,10 +1336,10 @@
     return '<div class="cust-panel' + (_activeTab === 'theme' ? ' active' : '') + '" data-panel="theme">' +
       _renderPresets() +
       '<p class="cust-section-title">' + modeLabel + '</p>' +
-      '<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px">Toggle ' + renderConfigGlyph('ph:sun') + '/' + renderConfigGlyph('ph:moon') + ' in nav to edit the other mode.</p>' +
+      '<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px">' + tr('Toggle {icons} in nav to edit the other mode.', { icons: renderConfigGlyph('ph:sun') + '/' + renderConfigGlyph('ph:moon') }) + '</p>' +
       basicRows +
-      '<details class="cust-advanced"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);margin:12px 0 8px">Advanced (' + ADVANCED_KEYS.length + ' options)</summary>' + advancedRows + '</details>' +
-      '<details class="cust-fonts" style="margin-top:12px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);margin:12px 0 8px">Fonts</summary>' + fontRows + '</details>' +
+      '<details class="cust-advanced"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);margin:12px 0 8px">' + tr('Advanced ({count} options)', { count: ADVANCED_KEYS.length }) + '</summary>' + advancedRows + '</details>' +
+      '<details class="cust-fonts" style="margin-top:12px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);margin:12px 0 8px">' + tr('Fonts') + '</summary>' + fontRows + '</details>' +
     '</div>';
   }
 
@@ -1361,10 +1364,8 @@
         '</div>' +
       '</label>';
     }).join('');
-    return '<p class="cust-section-title">Optional: Colorblind-Safe Preset</p>' +
-      '<p class="cust-hint" style="margin-bottom:8px">A CB preset is an end-user opt-in that swaps the role/status palette for color-vision variants. ' +
-      'Leave unset to use the operator\'s configured colors (or pick from above). ' +
-      'Achromatopsia uses a luminance-only ramp and relies on the shape/letter/glyph carriers from #1356/#1357.</p>' +
+    return '<p class="cust-section-title">' + tr('Optional: Colorblind-Safe Preset') + '</p>' +
+      '<p class="cust-hint" style="margin-bottom:8px">' + tr("A CB preset is an end-user opt-in that swaps the role/status palette for color-vision variants. Leave unset to use the operator's configured colors (or pick from above). Achromatopsia uses a luminance-only ramp and relies on the shape/letter/glyph carriers from #1356/#1357.") + '</p>' +
       '<div class="cust-cb-presets" data-cv2-cb-preset-group>' + clearOpt + options + '</div>' +
       _renderCbSimSelector() +
       _renderCbResetButton() +
@@ -1402,13 +1403,13 @@
       return '<label class="cust-cb-sim-row" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;cursor:pointer">' +
         '<input type="radio" name="cv2-cb-sim" data-cv2-cb-sim ' + (VALUE_ATTRS[s.id] || ('value="' + escAttr(s.id) + '"')) + checked + ' style="margin-top:3px">' +
         '<div style="flex:1">' +
-          '<div style="font-weight:600">' + esc(s.label) + '</div>' +
-          '<div class="cust-hint" style="font-size:12px;color:var(--text-muted)">' + esc(s.desc) + '</div>' +
+          '<div style="font-weight:600">' + esc(tr(s.label)) + '</div>' +
+          '<div class="cust-hint" style="font-size:12px;color:var(--text-muted)">' + esc(tr(s.desc)) + '</div>' +
         '</div>' +
       '</label>';
     }).join('');
-    return '<p class="cust-section-title" style="margin-top:12px">Simulation overlay <span style="font-weight:normal;color:var(--text-muted);font-size:11px">(preview-only)</span></p>' +
-      '<p class="cust-hint" style="margin-bottom:8px">Apply a Brettel/Vienot 1997 dichromatic filter to the entire page to preview how the UI reads to colorblind viewers. Not persisted — clears on reload.</p>' +
+    return '<p class="cust-section-title" style="margin-top:12px">' + tr('Simulation overlay') + ' <span style="font-weight:normal;color:var(--text-muted);font-size:11px">(' + tr('preview-only') + ')</span></p>' +
+      '<p class="cust-hint" style="margin-bottom:8px">' + tr('Apply a Brettel/Vienot 1997 dichromatic filter to the entire page to preview how the UI reads to colorblind viewers. Not persisted — clears on reload.') + '</p>' +
       '<div class="cust-cb-sim" data-cv2-cb-sim-group>' + rows + '</div>';
   }
 
@@ -1418,9 +1419,9 @@
     return '<div style="margin-top:12px">' +
       '<button type="button" data-cv2-cb-reset class="cust-btn" ' +
       'style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface-1);color:var(--text);cursor:pointer;font-size:12px">' +
-      'Reset to default Wong</button>' +
+      tr('Reset to default Wong') + '</button>' +
       '<div class="cust-hint" style="font-size:11px;color:var(--text-muted);margin-top:4px">' +
-      'Restores the Wong 2011 palette and clears any saved colorblind preset.</div>' +
+      tr('Restores the Wong 2011 palette and clears any saved colorblind preset.') + '</div>' +
       '</div>';
   }
 
@@ -1453,8 +1454,8 @@
     return '<label class="cust-cb-preset-row" style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;cursor:pointer">' +
       '<input type="radio" name="cv2-cb-preset" data-cv2-cb-preset value="" data-cv2-cb-preset-none' + checked + ' style="margin-top:3px">' +
       '<div style="flex:1">' +
-        '<div style="font-weight:600">No preset (use operator / custom colors)</div>' +
-        '<div class="cust-hint" style="font-size:12px;color:var(--text-muted)">Default — server-configured colors apply, then any per-role overrides above.</div>' +
+        '<div style="font-weight:600">' + tr('No preset (use operator / custom colors)') + '</div>' +
+        '<div class="cust-hint" style="font-size:12px;color:var(--text-muted)">' + tr('Default — server-configured colors apply, then any per-role overrides above.') + '</div>' +
       '</div>' +
     '</label>';
   }
@@ -1467,7 +1468,7 @@
     var failing = rep.filter(function (r) { return dark ? !r.passDark : !r.passLight; });
     if (!failing.length) return '';
     var names = failing.map(function (r) { return r.role; }).join(', ');
-    return '<div class="cust-cb-warn" style="margin-top:4px;font-size:11px;color:var(--status-yellow);background:rgba(255,200,0,0.08);padding:4px 6px;border-radius:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> WCAG 1.4.11: ' + esc(names) + ' below 3:1 vs ' + (dark ? 'dark' : 'light') + ' tiles</div>';
+    return '<div class="cust-cb-warn" style="margin-top:4px;font-size:11px;color:var(--status-yellow);background:rgba(255,200,0,0.08);padding:4px 6px;border-radius:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> WCAG 1.4.11: ' + (dark ? tr('{roles} below 3:1 vs dark tiles', { roles: esc(names) }) : tr('{roles} below 3:1 vs light tiles', { roles: esc(names) })) + '</div>';
   }
 
   function _renderNodes() {
@@ -1479,8 +1480,8 @@
     for (var key in NODE_LABELS) {
       var val = nc[key] || '#000000';
       rows += '<div class="cust-color-row">' +
-        '<div><label>' + renderConfigGlyph(NODE_EMOJI[key]) + ' ' + NODE_LABELS[key] + _overrideDot('nodeColors', key) + '</label>' +
-        '<div class="cust-hint">' + (NODE_HINTS[key] || '') + '</div></div>' +
+        '<div><label>' + renderConfigGlyph(NODE_EMOJI[key]) + ' ' + tr(NODE_LABELS[key]) + _overrideDot('nodeColors', key) + '</label>' +
+        '<div class="cust-hint">' + (NODE_HINTS[key] ? tr(NODE_HINTS[key]) : '') + '</div></div>' +
         '<input type="color" data-cv2-field="nodeColors.' + key + '" value="' + val + '">' +
         '<span class="cust-node-dot" style="background:' + val + '"></span>' +
         '<span class="cust-hex">' + val + '</span></div>';
@@ -1494,7 +1495,7 @@
       var tval = tc[tkey] || fallbackTC[tkey] || '#000000';
       typeRows += '<div class="cust-color-row">' +
         '<div><label>' + renderConfigGlyph(TYPE_EMOJI[tkey] || '') + ' ' + TYPE_LABELS[tkey] + _overrideDot('typeColors', tkey) + '</label>' +
-        '<div class="cust-hint">' + (TYPE_HINTS[tkey] || '') + '</div></div>' +
+        '<div class="cust-hint">' + (TYPE_HINTS[tkey] ? tr(TYPE_HINTS[tkey]) : '') + '</div></div>' +
         '<input type="color" data-cv2-field="typeColors.' + tkey + '" value="' + tval + '">' +
         '<span class="cust-node-dot" style="background:' + tval + '"></span>' +
         '<span class="cust-hex">' + tval + '</span></div>';
@@ -1516,36 +1517,36 @@
     var msOpacityPct = Math.round(msOpacity * 100);
 
     return '<div class="cust-panel' + (_activeTab === 'nodes' ? ' active' : '') + '" data-panel="nodes">' +
-      '<p class="cust-section-title">Node Role Colors</p>' +
-      '<p class="cust-hint" style="margin-bottom:8px">These are the canonical role colors used across the app. They inherit from your server config (or built-in defaults), and can be optionally remapped by a colorblind-safe preset below.</p>' +
+      '<p class="cust-section-title">' + tr('Node Role Colors') + '</p>' +
+      '<p class="cust-hint" style="margin-bottom:8px">' + tr('These are the canonical role colors used across the app. They inherit from your server config (or built-in defaults), and can be optionally remapped by a colorblind-safe preset below.') + '</p>' +
       rows +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
       _renderColorblindPresetSelector() +
-      '<p class="cust-section-title">Packet Type Colors</p>' + typeRows +
+      '<p class="cust-section-title">' + tr('Packet Type Colors') + '</p>' + typeRows +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
-      '<p class="cust-section-title">Heatmap Opacity</p>' +
-      '<div class="cust-color-row"><div><label><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Nodes Map' + _overrideDot(null, 'heatmapOpacity') + '</label>' +
-        '<div class="cust-hint">Heatmap overlay on the Nodes → Map page (0–100%)</div></div>' +
+      '<p class="cust-section-title">' + tr('Heatmap Opacity') + '</p>' +
+      '<div class="cust-color-row"><div><label><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> ' + tr('Nodes Map') + _overrideDot(null, 'heatmapOpacity') + '</label>' +
+        '<div class="cust-hint">' + tr('Heatmap overlay on the Nodes → Map page (0–100%)') + '</div></div>' +
         '<input type="range" data-cv2-slider="heatmapOpacity" min="0" max="100" value="' + heatPct + '" style="width:120px;cursor:pointer">' +
         '<span class="cust-hex" id="cv2HeatPct">' + heatPct + '%</span></div>' +
-      '<div class="cust-color-row"><div><label><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Live Map' + _overrideDot(null, 'liveHeatmapOpacity') + '</label>' +
-        '<div class="cust-hint">Heatmap overlay on the Live page (0–100%)</div></div>' +
+      '<div class="cust-color-row"><div><label><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ' + tr('Live Map') + _overrideDot(null, 'liveHeatmapOpacity') + '</label>' +
+        '<div class="cust-hint">' + tr('Heatmap overlay on the Live page (0–100%)') + '</div></div>' +
         '<input type="range" data-cv2-slider="liveHeatmapOpacity" min="0" max="100" value="' + liveHeatPct + '" style="width:120px;cursor:pointer">' +
         '<span class="cust-hex" id="cv2LiveHeatPct">' + liveHeatPct + '%</span></div>' +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
-      '<p class="cust-section-title">Marker Stroke <span style="font-weight:normal;color:var(--text-muted);font-size:11px">(#1488)</span></p>' +
-      '<p class="cust-hint" style="margin-bottom:8px">Outline around each map marker. Dial these down when hundreds of nodes make the default white border overwhelming. Changes are live on every mounted marker.</p>' +
-      '<div class="cust-color-row"><div><label>Color' + _overrideDot('markerStroke', 'color') + '</label>' +
-        '<div class="cust-hint">Marker outline color. Defaults to white for contrast on dark + light tiles.</div></div>' +
+      '<p class="cust-section-title">' + tr('Marker Stroke') + ' <span style="font-weight:normal;color:var(--text-muted);font-size:11px">(#1488)</span></p>' +
+      '<p class="cust-hint" style="margin-bottom:8px">' + tr('Outline around each map marker. Dial these down when hundreds of nodes make the default white border overwhelming. Changes are live on every mounted marker.') + '</p>' +
+      '<div class="cust-color-row"><div><label>' + tr('Color') + _overrideDot('markerStroke', 'color') + '</label>' +
+        '<div class="cust-hint">' + tr('Marker outline color. Defaults to white for contrast on dark + light tiles.') + '</div></div>' +
         '<input type="color" data-cv2-field="markerStroke.color" value="' + esc(msColor) + '">' +
         '<span class="cust-node-dot" style="background:' + esc(msColor) + '"></span>' +
         '<span class="cust-hex">' + esc(msColor) + '</span></div>' +
-      '<div class="cust-color-row"><div><label>Width' + _overrideDot('markerStroke', 'width') + '</label>' +
-        '<div class="cust-hint">Stroke thickness in SVG units (0–4). Set to 0 to remove the outline entirely.</div></div>' +
+      '<div class="cust-color-row"><div><label>' + tr('Width') + _overrideDot('markerStroke', 'width') + '</label>' +
+        '<div class="cust-hint">' + tr('Stroke thickness in SVG units (0–4). Set to 0 to remove the outline entirely.') + '</div></div>' +
         '<input type="range" data-cv2-marker-stroke="width" min="0" max="4" step="0.1" value="' + msWidth + '" style="width:120px;cursor:pointer">' +
         '<span class="cust-hex" id="cv2MarkerStrokeW">' + msWidth + '</span></div>' +
-      '<div class="cust-color-row"><div><label>Opacity' + _overrideDot('markerStroke', 'opacity') + '</label>' +
-        '<div class="cust-hint">Stroke alpha (0–100%). Drop this to ~30% for a softer outline.</div></div>' +
+      '<div class="cust-color-row"><div><label>' + tr('Opacity') + _overrideDot('markerStroke', 'opacity') + '</label>' +
+        '<div class="cust-hint">' + tr('Stroke alpha (0–100%). Drop this to ~30% for a softer outline.') + '</div></div>' +
         '<input type="range" data-cv2-marker-stroke="opacity" min="0" max="100" value="' + msOpacityPct + '" style="width:120px;cursor:pointer">' +
         '<span class="cust-hex" id="cv2MarkerStrokeO">' + msOpacityPct + '%</span></div>' +
     '</div>';
@@ -1563,35 +1564,35 @@
     var showAbs = tsMode === 'absolute' ? '' : ' style="display:none"';
 
     return '<div class="cust-panel' + (_activeTab === 'display' ? ' active' : '') + '" data-panel="display">' +
-      '<p class="cust-section-title">Display Settings</p>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">UI preferences that affect how data is shown across pages.</p>' +
+      '<p class="cust-section-title">' + tr('Display Settings') + '</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">' + tr('UI preferences that affect how data is shown across pages.') + '</p>' +
       _renderLanguageSelector() +
-      '<p class="cust-section-title" style="font-size:14px;margin-bottom:8px">Timestamps</p>' +
-      '<div class="cust-field"><label>Timestamp Display' + _overrideDot('timestamps', 'defaultMode') + '</label>' +
+      '<p class="cust-section-title" style="font-size:14px;margin-bottom:8px">' + tr('Timestamps') + '</p>' +
+      '<div class="cust-field"><label>' + tr('Timestamp Display') + _overrideDot('timestamps', 'defaultMode') + '</label>' +
         '<select data-cv2-select="timestamps.defaultMode" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
-          '<option value="ago"' + (tsMode === 'ago' ? ' selected' : '') + '>Relative (3m ago)</option>' +
-          '<option value="absolute"' + (tsMode === 'absolute' ? ' selected' : '') + '>Absolute (ISO timestamp)</option></select></div>' +
-      '<div class="cust-field"><label>Timezone' + _overrideDot('timestamps', 'timezone') + '</label>' +
+          '<option value="ago"' + (tsMode === 'ago' ? ' selected' : '') + '>' + tr('Relative (3m ago)') + '</option>' +
+          '<option value="absolute"' + (tsMode === 'absolute' ? ' selected' : '') + '>' + tr('Absolute (ISO timestamp)') + '</option></select></div>' +
+      '<div class="cust-field"><label>' + tr('Timezone') + _overrideDot('timestamps', 'timezone') + '</label>' +
         '<select data-cv2-select="timestamps.timezone" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
-          '<option value="local"' + (tsTz === 'local' ? ' selected' : '') + '>Local time</option>' +
+          '<option value="local"' + (tsTz === 'local' ? ' selected' : '') + '>' + tr('Local time') + '</option>' +
           '<option value="utc"' + (tsTz === 'utc' ? ' selected' : '') + '>UTC</option></select></div>' +
-      '<div class="cust-field" data-ts-abs="format"' + showAbs + '><label>Format' + _overrideDot('timestamps', 'formatPreset') + '</label>' +
+      '<div class="cust-field" data-ts-abs="format"' + showAbs + '><label>' + tr('Format') + _overrideDot('timestamps', 'formatPreset') + '</label>' +
         '<select data-cv2-select="timestamps.formatPreset" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
           '<option value="iso"' + (tsFmt === 'iso' ? ' selected' : '') + '>ISO (2024-01-15 14:30:00)</option>' +
           '<option value="iso-seconds"' + (tsFmt === 'iso-seconds' ? ' selected' : '') + '>ISO + ms</option>' +
-          '<option value="locale"' + (tsFmt === 'locale' ? ' selected' : '') + '>Locale (browser)</option></select></div>' +
-      (canCustom ? '<div class="cust-field" data-ts-abs="custom"' + showAbs + '><label>Custom Format' + _overrideDot('timestamps', 'customFormat') + '</label>' +
+          '<option value="locale"' + (tsFmt === 'locale' ? ' selected' : '') + '>' + tr('Locale (browser)') + '</option></select></div>' +
+      (canCustom ? '<div class="cust-field" data-ts-abs="custom"' + showAbs + '><label>' + tr('Custom Format') + _overrideDot('timestamps', 'customFormat') + '</label>' +
         '<input type="text" data-cv2-field="timestamps.customFormat" value="' + escAttr(customFmt) + '" placeholder="YYYY-MM-DD HH:mm:ss"></div>' : '') +
-      '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Distances</p>' +
-      '<div class="cust-field"><label>Distance Unit' + _overrideDot(null, 'distanceUnit') + '</label>' +
+      '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">' + tr('Distances') + '</p>' +
+      '<div class="cust-field"><label>' + tr('Distance Unit') + _overrideDot(null, 'distanceUnit') + '</label>' +
         '<select data-cv2-select="distanceUnit" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
-          '<option value="auto"' + (distUnit === 'auto' ? ' selected' : '') + '>Auto (browser locale)</option>' +
-          '<option value="km"' + (distUnit === 'km' ? ' selected' : '') + '>Kilometers (km)</option>' +
-          '<option value="mi"' + (distUnit === 'mi' ? ' selected' : '') + '>Miles (mi)</option>' +
+          '<option value="auto"' + (distUnit === 'auto' ? ' selected' : '') + '>' + tr('Auto (browser locale)') + '</option>' +
+          '<option value="km"' + (distUnit === 'km' ? ' selected' : '') + '>' + tr('Kilometers (km)') + '</option>' +
+          '<option value="mi"' + (distUnit === 'mi' ? ' selected' : '') + '>' + tr('Miles (mi)') + '</option>' +
         '</select></div>' +
-      '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Gesture Hints</p>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Re-show first-visit gesture discoverability hints (swipe rows, swipe tabs, edge-swipe drawer, pull-to-refresh).</p>' +
-      '<button type="button" class="cust-dl-btn" data-cv2-reset-hints data-reset-gesture-hints>↺ Reset gesture hints</button>' +
+      '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">' + tr('Gesture Hints') + '</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">' + tr('Re-show first-visit gesture discoverability hints (swipe rows, swipe tabs, edge-swipe drawer, pull-to-refresh).') + '</p>' +
+      '<button type="button" class="cust-dl-btn" data-cv2-reset-hints data-reset-gesture-hints>↺ ' + tr('Reset gesture hints') + '</button>' +
       _renderChannelsShowEncryptedToggle() +
       _renderHide1ByteHopsToggle() +
       _renderTileProviderSelector() +
@@ -1634,14 +1635,14 @@
       ? window.MC_getPathTrustThreshold()
       : 1;
     var trustDesc = trustThreshold >= 2
-      ? '1-byte path-hash prefixes collide ~8-way at ~2k relays and are excluded from topology/mapping evidence (minHashBytesForMapping: ' + trustThreshold + '). Routes below this threshold show as speculative or are excluded. Change via pathTrust.minHashBytesForMapping in config.json.'
-      : '1-byte path-hash prefixes collide ~8-way at ~2k relays — many polylines and rows they produce are visual noise. Hide them here without changing what\'s stored. Set pathTrust.minHashBytesForMapping in config.json to 2 or 3 for stricter server-side evidence requirements.';
-    return '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Path Display</p>' +
+      ? tr('1-byte path-hash prefixes collide ~8-way at ~2k relays and are excluded from topology/mapping evidence (minHashBytesForMapping: {threshold}). Routes below this threshold show as speculative or are excluded. Change via pathTrust.minHashBytesForMapping in config.json.', { threshold: trustThreshold })
+      : tr("1-byte path-hash prefixes collide ~8-way at ~2k relays — many polylines and rows they produce are visual noise. Hide them here without changing what's stored. Set pathTrust.minHashBytesForMapping in config.json to 2 or 3 for stricter server-side evidence requirements.");
+    return '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">' + tr('Path Display') + '</p>' +
       '<div class="cust-field" style="display:flex;align-items:center;gap:8px">' +
         '<input type="checkbox" id="cv2-hide-1byte-hops" data-cv2-hide-1byte-hops' +
           (on ? ' checked' : '') +
           ' style="width:16px;height:16px;cursor:pointer">' +
-        '<label for="cv2-hide-1byte-hops" style="cursor:pointer;margin:0">Hide short (1-byte) path-hash hops</label>' +
+        '<label for="cv2-hide-1byte-hops" style="cursor:pointer;margin:0">' + tr('Hide short (1-byte) path-hash hops') + '</label>' +
       '</div>' +
       '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin:6px 0 0">' + trustDesc + '</p>';
   }
@@ -1654,13 +1655,13 @@
   function _renderChannelsShowEncryptedToggle() {
     var on = false;
     try { on = localStorage.getItem('channels-show-encrypted') === 'true'; } catch (_e) {}
-    return '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Channels</p>' +
-      '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Encrypted channels appear as "Encrypted (0xAB)" with no name. Operators usually leave this off.</p>' +
+    return '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">' + tr('Channels') + '</p>' +
+      '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">' + tr('Encrypted channels appear as "{example}" with no name. Operators usually leave this off.', { example: tr('Encrypted') + ' (0xAB)' }) + '</p>' +
       '<div class="cust-field" style="display:flex;align-items:center;gap:8px">' +
         '<input type="checkbox" id="cv2-channels-show-encrypted" data-cv2-channels-show-encrypted' +
           (on ? ' checked' : '') +
           ' style="width:16px;height:16px;cursor:pointer">' +
-        '<label for="cv2-channels-show-encrypted" style="cursor:pointer;margin:0">Show encrypted channels</label>' +
+        '<label for="cv2-channels-show-encrypted" style="cursor:pointer;margin:0">' + tr('Show encrypted channels') + '</label>' +
       '</div>';
   }
 
@@ -1682,8 +1683,8 @@
     
     if (darkIds.length === 0 && lightIds.length === 0) return ''; // hide if no options
     
-    var html = '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Map Tiles</p>' +
-      '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Choose the basemap providers. Available options depend on server configuration.</p>';
+    var html = '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">' + tr('Map Tiles') + '</p>' +
+      '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">' + tr('Choose the basemap providers. Available options depend on server configuration.') + '</p>';
       
     if (lightIds.length > 0) {
       var optionsLight = lightIds.map(function (id) {
@@ -1691,7 +1692,7 @@
         var sel   = id === activeLight ? ' selected' : '';
         return '<option value="' + escAttr(id) + '"' + sel + '>' + esc(label) + '</option>';
       }).join('');
-      html += '<div class="cust-field"><label for="cv2-light-tile-provider">Light Mode Provider</label>' +
+      html += '<div class="cust-field"><label for="cv2-light-tile-provider">' + tr('Light Mode Provider') + '</label>' +
         '<select id="cv2-light-tile-provider" data-cv2-light-tile-provider style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
         optionsLight +
         '</select></div>';
@@ -1703,7 +1704,7 @@
         var sel   = id === activeDark ? ' selected' : '';
         return '<option value="' + escAttr(id) + '"' + sel + '>' + esc(label) + '</option>';
       }).join('');
-      html += '<div class="cust-field"><label for="cv2-dark-tile-provider">Dark Mode Provider</label>' +
+      html += '<div class="cust-field"><label for="cv2-dark-tile-provider">' + tr('Dark Mode Provider') + '</label>' +
         '<select id="cv2-dark-tile-provider" data-cv2-dark-tile-provider style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
         optionsDark +
         '</select></div>';
@@ -1725,74 +1726,74 @@
           // operator emoji values still display via renderConfigGlyph().
           '<span class="cust-emoji-preview" aria-hidden="true" style="min-width:1em;display:inline-block">' + renderConfigGlyph(s.emoji) + '</span>' +
           '<input class="cust-emoji-input" data-cv2-home="steps.' + i + '.emoji" value="' + escAttr(s.emoji) + '" placeholder="ph:broadcast">' +
-          '<input data-cv2-home="steps.' + i + '.title" value="' + escAttr(s.title) + '" placeholder="Title">' +
+          '<input data-cv2-home="steps.' + i + '.title" value="' + escAttr(s.title) + '" placeholder="' + tr('Title') + '">' +
           '<button class="cust-list-btn" data-cv2-move="steps.' + i + '.up"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-up"/></svg></button>' +
           '<button class="cust-list-btn" data-cv2-move="steps.' + i + '.down"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></button>' +
           '<button class="cust-list-btn danger" data-cv2-rm="steps.' + i + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>' +
         '</div>' +
-        '<textarea data-cv2-home="steps.' + i + '.description" placeholder="Description" rows="2">' + esc(s.description) + '</textarea>' +
+        '<textarea data-cv2-home="steps.' + i + '.description" placeholder="' + tr('Description') + '" rows="2">' + esc(s.description) + '</textarea>' +
         '<div class="cust-md-hint">Markdown: <code>**bold**</code> <code>*italic*</code> <code>`code`</code> <code>[text](url)</code></div></div>';
     }).join('');
 
     var checkHtml = checklist.map(function (c, i) {
       return '<div class="cust-list-item">' +
-        '<div class="cust-list-row"><input data-cv2-home="checklist.' + i + '.question" value="' + escAttr(c.question) + '" placeholder="Question">' +
+        '<div class="cust-list-row"><input data-cv2-home="checklist.' + i + '.question" value="' + escAttr(c.question) + '" placeholder="' + tr('Question') + '">' +
           '<button class="cust-list-btn danger" data-cv2-rm="checklist.' + i + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div>' +
-        '<textarea data-cv2-home="checklist.' + i + '.answer" placeholder="Answer" rows="2">' + esc(c.answer) + '</textarea></div>';
+        '<textarea data-cv2-home="checklist.' + i + '.answer" placeholder="' + tr('Answer') + '" rows="2">' + esc(c.answer) + '</textarea></div>';
     }).join('');
 
     var linksHtml = footerLinks.map(function (l, i) {
       return '<div class="cust-list-item">' +
-        '<div class="cust-list-row"><input data-cv2-home="footerLinks.' + i + '.label" value="' + escAttr(l.label) + '" placeholder="Label (e.g. ph:package Packets)">' +
+        '<div class="cust-list-row"><input data-cv2-home="footerLinks.' + i + '.label" value="' + escAttr(l.label) + '" placeholder="' + tr('Label (e.g. {example})', { example: 'ph:package Packets' }) + '">' +
           '<button class="cust-list-btn danger" data-cv2-rm="footerLinks.' + i + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div>' +
-        '<input data-cv2-home="footerLinks.' + i + '.url" value="' + escAttr(l.url) + '" placeholder="URL"></div>';
+        '<input data-cv2-home="footerLinks.' + i + '.url" value="' + escAttr(l.url) + '" placeholder="' + tr('URL') + '"></div>';
     }).join('');
 
     return '<div class="cust-panel' + (_activeTab === 'home' ? ' active' : '') + '" data-panel="home">' +
-      '<div class="cust-field"><label>Hero Title' + _overrideDot('home', 'heroTitle') + '</label>' +
+      '<div class="cust-field"><label>' + tr('Hero Title') + _overrideDot('home', 'heroTitle') + '</label>' +
         '<input type="text" data-cv2-field="home.heroTitle" value="' + escAttr(h.heroTitle || '') + '"></div>' +
-      '<div class="cust-field"><label>Hero Subtitle' + _overrideDot('home', 'heroSubtitle') + '</label>' +
+      '<div class="cust-field"><label>' + tr('Hero Subtitle') + _overrideDot('home', 'heroSubtitle') + '</label>' +
         '<input type="text" data-cv2-field="home.heroSubtitle" value="' + escAttr(h.heroSubtitle || '') + '"></div>' +
-      '<p class="cust-section-title" style="margin-top:20px">Steps</p>' + stepsHtml +
-      '<button class="cust-add-btn" data-cv2-add="steps">+ Add Step</button>' +
-      '<p class="cust-section-title" style="margin-top:24px">FAQ / Checklist</p>' + checkHtml +
-      '<button class="cust-add-btn" data-cv2-add="checklist">+ Add Question</button>' +
-      '<p class="cust-section-title" style="margin-top:24px">Footer Links</p>' + linksHtml +
-      '<button class="cust-add-btn" data-cv2-add="footerLinks">+ Add Link</button>' +
+      '<p class="cust-section-title" style="margin-top:20px">' + tr('Steps') + '</p>' + stepsHtml +
+      '<button class="cust-add-btn" data-cv2-add="steps">+ ' + tr('Add Step') + '</button>' +
+      '<p class="cust-section-title" style="margin-top:24px">' + tr('FAQ / Checklist') + '</p>' + checkHtml +
+      '<button class="cust-add-btn" data-cv2-add="checklist">+ ' + tr('Add Question') + '</button>' +
+      '<p class="cust-section-title" style="margin-top:24px">' + tr('Footer Links') + '</p>' + linksHtml +
+      '<button class="cust-add-btn" data-cv2-add="footerLinks">+ ' + tr('Add Link') + '</button>' +
     '</div>';
   }
 
   function _renderGeoFilter() {
     return '<div class="cust-panel' + (_activeTab === 'geofilter' ? ' active' : '') + '" data-panel="geofilter">' +
-      '<p class="cust-section-title">Geographic Filter</p>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Shows the active geographic filter. Nodes outside this area are excluded at ingest time and in API responses.</p>' +
+      '<p class="cust-section-title">' + tr('Geographic Filter') + '</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">' + tr('Shows the active geographic filter. Nodes outside this area are excluded at ingest time and in API responses.') + '</p>' +
       '<div style="position:relative;margin-bottom:8px">' +
         '<div id="cv2-gf-map" style="height:200px;border-radius:6px;border:1px solid var(--border);background:var(--surface-1);cursor:pointer"></div>' +
-        '<div style="position:absolute;top:7px;right:7px;background:rgba(255,255,255,0.88);border-radius:4px;padding:3px 8px;font-size:11px;color:#444;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,0.15)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> click to expand</div>' +
+        '<div style="position:absolute;top:7px;right:7px;background:rgba(255,255,255,0.88);border-radius:4px;padding:3px 8px;font-size:11px;color:#444;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,0.15)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ' + tr('click to expand') + '</div>' +
       '</div>' +
-      '<div id="cv2-gf-status" style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Loading current filter…</div>' +
+      '<div id="cv2-gf-status" style="font-size:12px;color:var(--text-muted);margin-bottom:10px">' + tr('Loading current filter…') + '</div>' +
       // Edit controls — hidden until server confirms write access (writeEnabled=true)
       '<div id="cv2-gf-edit" style="display:none">' +
         '<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">' +
-          '<label style="font-size:12px;color:var(--text-muted)">Buffer km:</label>' +
+          '<label style="font-size:12px;color:var(--text-muted)">' + tr('Buffer km:') + '</label>' +
           '<input type="number" id="cv2-gf-buffer" value="20" min="0" max="500" style="width:64px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px">' +
         '</div>' +
-        '<div class="cust-field" id="cv2-gf-apikey-field"><label>Server API Key</label>' +
-          '<input type="password" id="cv2-gf-apikey" placeholder="apiKey from config.json" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px">' +
+        '<div class="cust-field" id="cv2-gf-apikey-field"><label>' + tr('Server API Key') + '</label>' +
+          '<input type="password" id="cv2-gf-apikey" placeholder="' + tr('apiKey from config.json') + '" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px">' +
         '</div>' +
         '<div style="display:flex;gap:8px;margin-top:12px">' +
-          '<button id="cv2-gf-save" style="padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">Save to server</button>' +
-          '<button id="cv2-gf-remove" style="padding:7px 14px;background:var(--surface-1);color:var(--status-red);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px">Remove filter</button>' +
+          '<button id="cv2-gf-save" style="padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">' + tr('Save to server') + '</button>' +
+          '<button id="cv2-gf-remove" style="padding:7px 14px;background:var(--surface-1);color:var(--status-red);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px">' + tr('Remove filter') + '</button>' +
         '</div>' +
         '<div id="cv2-gf-msg" style="margin-top:8px;font-size:12px;display:none"></div>' +
         // Prune section — only shown when a polygon is active (toggled in _initGeoFilterTab)
         '<div id="cv2-gf-prune-section" style="display:none;margin-top:16px;border-top:1px solid var(--border);padding-top:14px">' +
-          '<p class="cust-section-title" style="font-size:13px;margin-bottom:6px">Prune historical nodes</p>' +
-          '<p style="font-size:11px;color:var(--text-muted);margin-bottom:10px">Remove nodes already in the database that fall outside the current filter. Run once after first enabling geo filtering.</p>' +
-          '<button id="cv2-gf-prune-preview" style="padding:6px 14px;background:var(--surface-1);color:var(--text-muted);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12px">Preview prune</button>' +
+          '<p class="cust-section-title" style="font-size:13px;margin-bottom:6px">' + tr('Prune historical nodes') + '</p>' +
+          '<p style="font-size:11px;color:var(--text-muted);margin-bottom:10px">' + tr('Remove nodes already in the database that fall outside the current filter. Run once after first enabling geo filtering.') + '</p>' +
+          '<button id="cv2-gf-prune-preview" style="padding:6px 14px;background:var(--surface-1);color:var(--text-muted);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12px">' + tr('Preview prune') + '</button>' +
           '<div id="cv2-gf-prune-result" style="display:none;margin-top:10px">' +
             '<div id="cv2-gf-prune-list" style="font-size:11px;color:var(--text-muted);max-height:100px;overflow-y:auto;margin-bottom:8px;background:var(--surface-1);border:1px solid var(--border);border-radius:4px;padding:6px 8px"></div>' +
-            '<button id="cv2-gf-prune-confirm" style="padding:6px 14px;background:var(--status-red);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500">Delete nodes</button>' +
+            '<button id="cv2-gf-prune-confirm" style="padding:6px 14px;background:var(--status-red);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500">' + tr('Delete nodes') + '</button>' +
           '</div>' +
           '<div id="cv2-gf-prune-msg" style="margin-top:8px;font-size:12px;display:none"></div>' +
         '</div>' +
@@ -1816,17 +1817,17 @@
     toolbarEl.style.cssText = 'padding:10px 14px;display:flex;gap:8px;align-items:center;border-bottom:1px solid #e0e0e0;background:#f5f5f5;flex-shrink:0;';
     var title = document.createElement('span');
     title.style.cssText = 'font-weight:600;color:#333;font-size:14px;';
-    title.textContent = _gfWriteEnabled ? 'Edit GeoFilter — click map to add points' : 'GeoFilter — read only';
+    title.textContent = _gfWriteEnabled ? tr('Edit GeoFilter — click map to add points') : tr('GeoFilter — read only');
     toolbarEl.appendChild(title);
 
     if (_gfWriteEnabled) {
       var undoBtn = document.createElement('button');
       undoBtn.id = 'cv2-gfm-undo';
-      undoBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-u-up-left"/></svg> Undo';
+      undoBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-u-up-left"/></svg> ' + tr('Undo');
       undoBtn.style.cssText = 'padding:5px 10px;background:#eee;color:#555;border:1px solid #ccc;border-radius:6px;cursor:pointer;font-size:12px;';
       var clearBtn = document.createElement('button');
       clearBtn.id = 'cv2-gfm-clear';
-      clearBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg> Clear';
+      clearBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg> ' + tr('Clear');
       clearBtn.style.cssText = 'padding:5px 10px;background:#fee;color:#c44;border:1px solid #fcc;border-radius:6px;cursor:pointer;font-size:12px;';
       var countEl = document.createElement('span');
       countEl.id = 'cv2-gfm-count';
@@ -1835,7 +1836,7 @@
       spacer.style.cssText = 'flex:1;';
       var doneBtn = document.createElement('button');
       doneBtn.id = 'cv2-gfm-done';
-      doneBtn.textContent = 'Done';
+      doneBtn.textContent = tr('Done');
       doneBtn.style.cssText = 'padding:7px 18px;background:#4a9eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;';
       toolbarEl.appendChild(undoBtn);
       toolbarEl.appendChild(clearBtn);
@@ -1850,7 +1851,7 @@
 
     var closeBtn = document.createElement('button');
     closeBtn.id = 'cv2-gfm-close';
-    closeBtn.textContent = _gfWriteEnabled ? 'Cancel' : 'Close';
+    closeBtn.textContent = _gfWriteEnabled ? tr('Cancel') : tr('Close');
     closeBtn.style.cssText = 'padding:7px 14px;background:#eee;color:#555;border:1px solid #ccc;border-radius:6px;cursor:pointer;font-size:13px;';
     toolbarEl.appendChild(closeBtn);
 
@@ -1892,7 +1893,7 @@
         modalClosingLine = L.polyline(modalPoints, { color: '#4a9eff', weight: 2, dashArray: '5,5' }).addTo(_gfModalMap);
       }
       var ce = document.getElementById('cv2-gfm-count');
-      if (ce) ce.textContent = modalPoints.length + ' point' + (modalPoints.length !== 1 ? 's' : '');
+      if (ce) ce.textContent = trn(modalPoints.length, '{count} point', '{count} points');
     }
 
     function closeModal() {
@@ -2022,9 +2023,9 @@
   }
 
   function _gfSave(container) {
-    if (_gfPoints.length < 3) { _gfMsg(container, 'Need at least 3 polygon points.', false); return; }
+    if (_gfPoints.length < 3) { _gfMsg(container, tr('Need at least 3 polygon points.'), false); return; }
     var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' }, window.CSAuth);
-    if (!headers) { _gfMsg(container, 'API key required to save.', false); return; }
+    if (!headers) { _gfMsg(container, tr('API key required to save.'), false); return; }
     var bufferKm = parseFloat((container.querySelector('#cv2-gf-buffer') || {}).value) || 0;
     fetch('/api/config/geo-filter', {
       method: 'PUT',
@@ -2033,15 +2034,15 @@
     }).then(function (r) {
       if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
       if (_gfServer) _gfServer = Object.assign({}, _gfServer, { polygon: _gfPoints.slice() });
-      _gfMsg(container, 'Saved. Filter is active immediately.', true);
-      _gfStatus(container, _gfPoints.length + ' points · bufferKm=' + bufferKm + ' · saved');
-    }).catch(function (e) { _gfMsg(container, 'Error: ' + e.message, false); });
+      _gfMsg(container, tr('Saved. Filter is active immediately.'), true);
+      _gfStatus(container, tr('{count} points · bufferKm={buffer} · saved', { count: _gfPoints.length, buffer: bufferKm }));
+    }).catch(function (e) { _gfMsg(container, tr('Error: {message}', { message: e.message }), false); });
   }
 
   function _gfRemove(container) {
     var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' }, window.CSAuth);
-    if (!headers) { _gfMsg(container, 'API key required.', false); return; }
-    if (!confirm('Remove geo filter? All nodes will be allowed through.')) return;
+    if (!headers) { _gfMsg(container, tr('API key required.'), false); return; }
+    if (!confirm(tr('Remove geo filter? All nodes will be allowed through.'))) return;
     fetch('/api/config/geo-filter', {
       method: 'PUT',
       headers: headers,
@@ -2051,9 +2052,9 @@
       _gfPoints = []; _gfLoaded = true;
       if (_gfServer) _gfServer = Object.assign({}, _gfServer, { polygon: null });
       _gfRender();
-      _gfStatus(container, 'No geo filter. Click the map to draw a polygon.');
-      _gfMsg(container, 'Geo filter removed.', true);
-    }).catch(function (e) { _gfMsg(container, 'Error: ' + e.message, false); });
+      _gfStatus(container, tr('No geo filter. Click the map to draw a polygon.'));
+      _gfMsg(container, tr('Geo filter removed.'), true);
+    }).catch(function (e) { _gfMsg(container, tr('Error: {message}', { message: e.message }), false); });
   }
 
   var _gfPruneNodes = []; // nodes returned by last dry-run preview
@@ -2068,9 +2069,9 @@
 
   function _gfPrunePreview(container) {
     var headers = _gfAuthHeaders(container, {}, window.CSAuth);
-    if (!headers) { _gfPruneMsg(container, 'API key required.', false); return; }
+    if (!headers) { _gfPruneMsg(container, tr('API key required.'), false); return; }
     var btn = container.querySelector('#cv2-gf-prune-preview');
-    if (btn) btn.textContent = 'Loading…';
+    if (btn) btn.textContent = tr('Loading…');
     fetch('/api/admin/prune-geo-filter', {
       method: 'POST',
       headers: headers
@@ -2078,7 +2079,7 @@
       if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
       return r.json();
     }).then(function (data) {
-      if (btn) btn.textContent = 'Preview prune';
+      if (btn) btn.textContent = tr('Preview prune');
       _gfPruneNodes = data.nodes || [];
       var count = data.count || 0;
       var resultEl = container.querySelector('#cv2-gf-prune-result');
@@ -2086,7 +2087,7 @@
       var confirmBtn = container.querySelector('#cv2-gf-prune-confirm');
       if (!resultEl || !listEl || !confirmBtn) return;
       if (count === 0) {
-        _gfPruneMsg(container, 'No nodes outside the filter. Nothing to prune.', true);
+        _gfPruneMsg(container, tr('No nodes outside the filter. Nothing to prune.'), true);
         resultEl.style.display = 'none';
         return;
       }
@@ -2094,21 +2095,21 @@
         var coords = n.lat != null ? (' · ' + n.lat.toFixed(4) + ', ' + n.lon.toFixed(4)) : '';
         return '<div>' + esc(n.name || n.pubkey.slice(0, 12)) + coords + '</div>';
       }).join('');
-      confirmBtn.textContent = 'Delete ' + count + ' node' + (count !== 1 ? 's' : '');
+      confirmBtn.textContent = trn(count, 'Delete {count} node', 'Delete {count} nodes');
       resultEl.style.display = '';
       _gfPruneMsg(container, '', true);
     }).catch(function (e) {
-      if (btn) btn.textContent = 'Preview prune';
-      _gfPruneMsg(container, 'Error: ' + e.message, false);
+      if (btn) btn.textContent = tr('Preview prune');
+      _gfPruneMsg(container, tr('Error: {message}', { message: e.message }), false);
     });
   }
 
   function _gfPruneConfirm(container) {
-    if (!_gfPruneNodes.length) { _gfPruneMsg(container, 'Run preview first.', false); return; }
+    if (!_gfPruneNodes.length) { _gfPruneMsg(container, tr('Run preview first.'), false); return; }
     var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' }, window.CSAuth);
-    if (!headers) { _gfPruneMsg(container, 'API key required.', false); return; }
+    if (!headers) { _gfPruneMsg(container, tr('API key required.'), false); return; }
     var count = _gfPruneNodes.length;
-    if (!confirm('Delete ' + count + ' node' + (count !== 1 ? 's' : '') + ' from the database? This cannot be undone.')) return;
+    if (!confirm(trn(count, 'Delete {count} node from the database? This cannot be undone.', 'Delete {count} nodes from the database? This cannot be undone.'))) return;
     var pubkeys = _gfPruneNodes.map(function (n) { return n.pubkey; });
     fetch('/api/admin/prune-geo-filter?confirm=true', {
       method: 'POST',
@@ -2122,8 +2123,8 @@
       var resultEl = container.querySelector('#cv2-gf-prune-result');
       if (resultEl) resultEl.style.display = 'none';
       var n = data.deleted;
-      _gfPruneMsg(container, 'Deleted ' + n + ' node' + (n !== 1 ? 's' : '') + '.', true);
-    }).catch(function (e) { _gfPruneMsg(container, 'Error: ' + e.message, false); });
+      _gfPruneMsg(container, trn(n, 'Deleted {count} node.', 'Deleted {count} nodes.'), true);
+    }).catch(function (e) { _gfPruneMsg(container, tr('Error: {message}', { message: e.message }), false); });
   }
 
   function _initGeoFilterTab(container) {
@@ -2152,15 +2153,15 @@
           if (buf) buf.value = gf.bufferKm || 0;
           _gfRender();
           if (_gfPolygon) _gfMap.fitBounds(_gfPolygon.getBounds(), { padding: [20, 20] });
-          _gfStatus(container, gf.polygon.length + ' points · bufferKm=' + (gf.bufferKm || 0));
+          _gfStatus(container, tr('{count} points · bufferKm={buffer}', { count: gf.polygon.length, buffer: gf.bufferKm || 0 }));
         } else {
-          _gfStatus(container, canEdit ? 'No geo filter. Click the map to open the editor.' : 'No geo filter configured.');
+          _gfStatus(container, canEdit ? tr('No geo filter. Click the map to open the editor.') : tr('No geo filter configured.'));
           _gfMap.setView([50.5, 4.4], 5);
         }
         _gfLoaded = true;
         setTimeout(function () { if (_gfMap) _gfMap.invalidateSize(); }, 100);
       }).catch(function () {
-        _gfStatus(container, 'Could not load current filter.');
+        _gfStatus(container, tr('Could not load current filter.'));
         _gfMap.setView([50.5, 4.4], 5);
         _gfLoaded = true;
         setTimeout(function () { if (_gfMap) _gfMap.invalidateSize(); }, 100);
@@ -2169,10 +2170,10 @@
       if (_gfPoints.length >= 3) {
         _gfRender();
         if (_gfPolygon) _gfMap.fitBounds(_gfPolygon.getBounds(), { padding: [20, 20] });
-        _gfStatus(container, _gfPoints.length + ' points.');
+        _gfStatus(container, tr('{count} points.', { count: _gfPoints.length }));
       } else {
         _gfMap.setView([50.5, 4.4], 5);
-        _gfStatus(container, _gfPoints.length ? _gfPoints.length + ' points (need at least 3).' : 'Click the map to draw a polygon.');
+        _gfStatus(container, _gfPoints.length ? tr('{count} points (need at least 3).', { count: _gfPoints.length }) : tr('Click the map to draw a polygon.'));
         _gfRender();
       }
       if (_gfServer) _gfReapply(container, _gfServer, window.CSAuth);
@@ -2205,22 +2206,22 @@
     var hasDelta = Object.keys(delta).length > 0;
 
     return '<div class="cust-panel' + (_activeTab === 'export' ? ' active' : '') + '" data-panel="export">' +
-      '<p class="cust-section-title">Export / Import</p>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Your customizations are stored in your browser. Export to share or back up.</p>' +
+      '<p class="cust-section-title">' + tr('Export / Import') + '</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">' + tr('Your customizations are stored in your browser. Export to share or back up.') + '</p>' +
       '<div class="cust-export-btns">' +
-        '<button class="cust-dl-btn" id="cv2Download"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-floppy-disk"/></svg> Download JSON</button>' +
-        '<button class="cust-dl-btn" id="cv2ImportFile"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> Import File</button>' +
+        '<button class="cust-dl-btn" id="cv2Download"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-floppy-disk"/></svg> ' + tr('Download JSON') + '</button>' +
+        '<button class="cust-dl-btn" id="cv2ImportFile"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> ' + tr('Import File') + '</button>' +
         '<input type="file" id="cv2ImportInput" accept=".json,application/json" style="display:none">' +
-        '<button class="cust-copy-btn" id="cv2Copy"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Copy</button>' +
+        '<button class="cust-copy-btn" id="cv2Copy"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> ' + tr('Copy') + '</button>' +
       '</div>' +
-      (hasDelta ? '<div style="margin-top:12px"><button class="cust-reset-all" id="cv2ResetAll"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trash"/></svg> Reset All Customizations</button></div>' : '') +
-      '<details style="margin-top:12px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted)">Raw JSON</summary>' +
+      (hasDelta ? '<div style="margin-top:12px"><button class="cust-reset-all" id="cv2ResetAll"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trash"/></svg> ' + tr('Reset All Customizations') + '</button></div>' : '') +
+      '<details style="margin-top:12px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted)">' + tr('Raw JSON') + '</summary>' +
         '<textarea id="cv2ExportJson" style="width:100%;min-height:200px;font-family:var(--mono);font-size:12px;background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:12px;color:var(--text);resize:vertical;box-sizing:border-box;margin-top:8px">' + esc(json) + '</textarea>' +
       '</details>' +
-      '<p class="cust-section-title" style="margin-top:20px">Tools</p>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Server-side configuration helpers.</p>' +
-      '<a href="/geofilter-builder.html" target="_blank" style="display:inline-block;padding:7px 14px;background:var(--surface-1);border:1px solid var(--border);border-radius:6px;color:var(--link-color);font-size:13px;text-decoration:none;font-weight:500"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> GeoFilter Builder →</a>' +
-      '<p style="font-size:11px;color:var(--text-muted);margin-top:6px">Draw a polygon on the map to generate a <code style="font-family:var(--mono)">geo_filter</code> block for <code style="font-family:var(--mono)">config.json</code>.</p>' +
+      '<p class="cust-section-title" style="margin-top:20px">' + tr('Tools') + '</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">' + tr('Server-side configuration helpers.') + '</p>' +
+      '<a href="/geofilter-builder.html" target="_blank" style="display:inline-block;padding:7px 14px;background:var(--surface-1);border:1px solid var(--border);border-radius:6px;color:var(--link-color);font-size:13px;text-decoration:none;font-weight:500"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> ' + tr('GeoFilter Builder') + ' →</a>' +
+      '<p style="font-size:11px;color:var(--text-muted);margin-top:6px">' + tr('Draw a polygon on the map to generate a {block} block for {file}.', { block: '<code style="font-family:var(--mono)">geo_filter</code>', file: '<code style="font-family:var(--mono)">config.json</code>' }) + '</p>' +
     '</div>';
   }
 
@@ -2662,8 +2663,8 @@
       var json = JSON.stringify(readOverrides(), null, 2);
       if (window.copyToClipboard) {
         window.copyToClipboard(json, function () {
-          copyBtn.textContent = 'Copied!';
-          setTimeout(function () { copyBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Copy'; }, 2000);
+          copyBtn.textContent = tr('Copied!');
+          setTimeout(function () { copyBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> ' + tr('Copy'); }, 2000);
         });
       }
     });
@@ -2683,17 +2684,17 @@
             var result = validateShape(data);
             if (!result.valid) {
               importBtn.textContent = result.errors[0];
-              setTimeout(function () { importBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> Import File'; }, 3000);
+              setTimeout(function () { importBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> ' + tr('Import File'); }, 3000);
               return;
             }
             writeOverrides(data);
             _runPipeline();
             _renderPanel(container);
-            importBtn.textContent = 'Imported!';
-            setTimeout(function () { importBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> Import File'; }, 2000);
+            importBtn.textContent = tr('Imported!');
+            setTimeout(function () { importBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> ' + tr('Import File'); }, 2000);
           } catch (e) {
-            importBtn.textContent = 'Invalid JSON';
-            setTimeout(function () { importBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> Import File'; }, 3000);
+            importBtn.textContent = tr('Invalid JSON');
+            setTimeout(function () { importBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> ' + tr('Import File'); }, 3000);
           }
         };
         reader.readAsText(file);
@@ -2706,7 +2707,7 @@
     // public API so tests can drive it without a DOM button.
     var resetBtn = document.getElementById('cv2ResetAll');
     if (resetBtn) resetBtn.addEventListener('click', function () {
-      if (!confirm('Reset all customizations to server defaults?')) return;
+      if (!confirm(tr('Reset all customizations to server defaults?'))) return;
       _resetAll();
       _runPipeline();
       _renderPanel(container);
@@ -2738,10 +2739,10 @@
     _panelEl = document.createElement('div');
     _panelEl.className = 'cust-overlay';
     _panelEl.innerHTML =
-      '<div class="cust-header"><h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg> Customize</h2><button class="cust-close" title="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div>' +
-      '<div class="cv2-local-banner">These settings are saved in your browser only and don\'t affect other users.</div>' +
+      '<div class="cust-header"><h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg> ' + tr('Customize') + '</h2><button class="cust-close" title="' + tr('Close') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div>' +
+      '<div class="cv2-local-banner">' + tr("These settings are saved in your browser only and don't affect other users.") + '</div>' +
       '<div class="cust-inner"></div>' +
-      '<div class="cv2-footer"><span id="cv2-save-status">All changes saved</span></div>';
+      '<div class="cv2-footer"><span id="cv2-save-status">' + tr('All changes saved') + '</span></div>';
     document.body.appendChild(_panelEl);
 
     _panelEl.querySelector('.cust-close').addEventListener('click', function () {
