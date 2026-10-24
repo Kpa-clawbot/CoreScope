@@ -3,6 +3,8 @@
    Reach Leaflet map, from the /api/nodes/{pubkey}/rx-coverage GeoJSON.
    No external deps; colours via CSS variables. */
 'use strict';
+// i18n.js defines tr(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
 (function () {
   // coverageColorVar maps a GeoJSON feature's properties to a CSS variable name.
   // Grey = received but no signal metric; otherwise SF8 SNR thresholds: ≥ −5 green
@@ -49,7 +51,7 @@
           L.polygon(ring, { color: col, weight: 1, fillColor: col, fillOpacity: coverageFillOpacity(f.properties) })
             .addTo(group)
             .bindTooltip('n=' + f.properties.count +
-              (f.properties.best_snr != null ? ' · SNR ' + f.properties.best_snr : ' · no signal'));
+              (f.properties.best_snr != null ? ' · SNR ' + f.properties.best_snr : ' · ' + tr('no signal')));
         });
       }).catch(function (e) {
         // Leave the layer empty on error; never crash the reach page.

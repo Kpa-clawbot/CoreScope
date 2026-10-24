@@ -1,12 +1,15 @@
 /* === CoreScope: node-hop-analytics.js === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 // Hop count at this node (issue #1812): for every flood packet the node
 // forwarded, the number of hops the packet already had when the node's
 // flood.max check ran. Data: GET /api/nodes/{pubkey}/hop_analytics?days=N.
 (function () {
   // One filter per repeater CLI limit (firmware src/helpers/RoutingPolicy.h):
   // flood.max applies to every flood, flood.max.unscoped to un-scoped floods,
-  // flood.max.advert to adverts.
+  // flood.max.advert to adverts. `noun` is English; tr() it where shown.
   const FILTERS = [
     { id: 'flood', label: 'flood.max', tag: null, noun: 'flood packets' },
     { id: 'flood_unscoped', label: 'flood.max.unscoped', tag: 'unscoped', noun: 'un-scoped flood packets' },
@@ -57,9 +60,6 @@
     return { n: s.length, min: s[0], q1, median, q3, max: s[s.length - 1], whiskerLow, whiskerHigh, outliers };
   }
 
-  function plural(n, word) {
-    return n + ' ' + word + (n === 1 ? '' : 's');
-  }
 
   function renderHopSection(data, filterId) {
     const filter = filterById(filterId);
@@ -69,17 +69,18 @@
     const chips = FILTERS.map(f =>
       `<button type="button" data-hop-filter="${f.id}" aria-pressed="${f.id === filter.id}"${f.id === filter.id ? ' class="active"' : ''}>${f.label}</button>`
     ).join('');
+    const noun = tr(filter.noun);
     const summary = stats
-      ? `${plural(stats.n, 'packet')} (${filter.noun}) · median ${stats.median} · middle half ${stats.q1} to ${stats.q3} · max ${stats.max} hops`
+      ? `${trn(stats.n, '{count} packet', '{count} packets')} (${noun}) · ${tr('median {median} · middle half {q1} to {q3} · max {max} hops', { median: stats.median, q1: stats.q1, q3: stats.q3, max: stats.max })}`
       : '';
     const body = stats
-      ? `<canvas id="hopCountChart" role="img" aria-label="Histogram and box plot of hop counts at this node for ${filter.noun}"></canvas>`
-      : `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">No forwarded ${filter.noun} attributed to this node in this window.</div>`;
+      ? `<canvas id="hopCountChart" role="img" aria-label="${tr('Histogram and box plot of hop counts at this node for {noun}', { noun: noun })}"></canvas>`
+      : `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">${tr('No forwarded {noun} attributed to this node in this window.', { noun: noun })}</div>`;
     const note = ambiguous
-      ? `<div class="analytics-chart-desc">${plural(ambiguous, 'packet')} left out: the path prefix of this node is shared with another node there, so its hop position is unknown.</div>`
+      ? `<div class="analytics-chart-desc">${trn(ambiguous, '{count} packet left out: the path prefix of this node is shared with another node there, so its hop position is unknown.', '{count} packets left out: the path prefix of this node is shared with another node there, so its hop position is unknown.')}</div>`
       : '';
     return `
-      <div class="analytics-time-range" role="group" aria-label="Hop limit to inspect">${chips}</div>
+      <div class="analytics-time-range" role="group" aria-label="${tr('Hop limit to inspect')}">${chips}</div>
       <div style="font-size:12px;margin-bottom:6px">${summary}</div>
       ${body}
       ${note}`;
@@ -134,15 +135,15 @@
       type: 'bar',
       data: {
         labels: counts.map((_, h) => String(h)),
-        datasets: [{ label: 'Packets', data: counts, backgroundColor: cssVar('--accent'), borderWidth: 0 }]
+        datasets: [{ label: tr('Packets'), data: counts, backgroundColor: cssVar('--accent'), borderWidth: 0 }]
       },
       options: {
         responsive: true,
         layout: { padding: { top: 32 } },
         plugins: { legend: { display: false } },
         scales: {
-          x: { title: { display: true, text: 'Hops already in the path when this node forwarded' } },
-          y: { beginAtZero: true, title: { display: true, text: 'Packets' } }
+          x: { title: { display: true, text: tr('Hops already in the path when this node forwarded') } },
+          y: { beginAtZero: true, title: { display: true, text: tr('Packets') } }
         }
       },
       plugins: [boxPlotPlugin(hopBoxStats(values))]
@@ -163,7 +164,7 @@
     try {
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/hop_analytics?days=' + days, { ttl: CLIENT_TTL.nodeAnalytics });
     } catch (e) {
-      container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">Hop counts unavailable: ' + escapeHtml(e.message) + '</div>';
+      container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">' + tr('Hop counts unavailable: {message}', { message: escapeHtml(e.message) }) + '</div>';
       return;
     }
     if (!container.isConnected) return;

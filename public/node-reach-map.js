@@ -7,6 +7,8 @@
    the single source of the thresholds). */
 (function () {
   'use strict';
+  // i18n.js defines tr(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
 
   function cssVar(name) {
     var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -25,9 +27,9 @@
     ctl.onAdd = function () {
       var div = L.DomUtil.create('div', 'nq-legend');
       var rows = tiers.map(function (t) {
-        return '<div><span class="nq-sw" style="background:' + colors[t.varName] + '"></span>' + escapeHtml(t.legend) + '</div>';
+        return '<div><span class="nq-sw" style="background:' + colors[t.varName] + '"></span>' + escapeHtml(tr(t.legend)) + '</div>';
       }).join('');
-      div.innerHTML = '<div><strong>Bottleneck</strong> (weaker direction)</div>' + rows;
+      div.innerHTML = '<div><strong>' + tr('Bottleneck') + '</strong> (' + tr('weaker direction') + ')</div>' + rows;
       return div;
     };
     return ctl;
