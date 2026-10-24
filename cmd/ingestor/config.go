@@ -65,6 +65,7 @@ type Config struct {
 	ClientRfSamples      *ClientRfSamplesConfig      `json:"clientRfSamples,omitempty"`
 	ClientRegions        *ClientRegionsConfig        `json:"clientRegions,omitempty"`
 	ClientNodeNames      *ClientNodeNamesConfig      `json:"clientNodeNames,omitempty"`
+	NeighborBattery      *NeighborBatteryConfig      `json:"neighborBattery,omitempty"`
 	GeoFilter            *GeoFilterConfig            `json:"geo_filter,omitempty"`
 	// PathTrust configures the minimum path-hash prefix length trusted as
 	// mapping/topology evidence (issue #1784).
@@ -236,6 +237,30 @@ func (c *Config) ClientNodeNamesEnabled() bool {
 	return c.ClientNodeNames != nil && c.ClientNodeNames.Enabled
 }
 
+// NeighborBatteryConfig controls the battery readings observers publish for
+// the repeaters they poll directly (meshcore/<region>/<observer>/battery).
+type NeighborBatteryConfig struct {
+	Enabled bool `json:"enabled"`
+	// MinIntervalMinutes: at most one stored reading per node per observer in
+	// this many minutes (default 10).
+	MinIntervalMinutes int `json:"minIntervalMinutes"`
+}
+
+// NeighborBatteryEnabled reports whether /battery messages are stored.
+// Default false.
+func (c *Config) NeighborBatteryEnabled() bool {
+	return c.NeighborBattery != nil && c.NeighborBattery.Enabled
+}
+
+// NeighborBatteryMinIntervalMinutes returns neighborBattery.minIntervalMinutes
+// or the default.
+func (c *Config) NeighborBatteryMinIntervalMinutes() int {
+	if c.NeighborBattery != nil && c.NeighborBattery.MinIntervalMinutes > 0 {
+		return c.NeighborBattery.MinIntervalMinutes
+	}
+	return batteryDefaultMinMinutes
+}
+
 // RetentionConfig controls how long stale nodes are kept before being moved to inactive_nodes.
 type RetentionConfig struct {
 	NodeDays     int `json:"nodeDays"`
@@ -270,6 +295,9 @@ type RetentionConfig struct {
 	// ClientNodeNamesDays is the retention window (by observed_at) for the
 	// client_node_names table; 0 disables.
 	ClientNodeNamesDays int `json:"clientNodeNamesDays"`
+	// NeighborBatteryDays is the retention window (by sampled_at) for the
+	// neighbor_battery table; 0 disables.
+	NeighborBatteryDays int `json:"neighborBatteryDays"`
 	// HopIndexDays turns on the observation_hops inverted index (the
 	// accelerator behind /api/nodes/{pk}/reach) and bounds it to this many
 	// days. 0 or unset = off: no table, no triggers, and a previously installed
@@ -347,6 +375,15 @@ func (c *Config) ClientRegionsDaysOrZero() int {
 func (c *Config) ClientNodeNamesDaysOrZero() int {
 	if c.Retention != nil && c.Retention.ClientNodeNamesDays > 0 {
 		return c.Retention.ClientNodeNamesDays
+	}
+	return 0
+}
+
+// NeighborBatteryDaysOrZero returns retention.neighborBatteryDays or 0
+// (disabled) if not set.
+func (c *Config) NeighborBatteryDaysOrZero() int {
+	if c.Retention != nil && c.Retention.NeighborBatteryDays > 0 {
+		return c.Retention.NeighborBatteryDays
 	}
 	return 0
 }

@@ -178,7 +178,7 @@ function loadRouter() {
     t.page.destroy(); t.nav.gen++;
     battery.resolve({ status: 'ok', latest_mv: 4100, samples: [] });
     await flush();
-    assert(t.els.batteryStatusBadge.textContent === '' && t.els.batteryEmpty.style.display === undefined,
+    assert(t.els.batteryStatusBadge.innerHTML === '' && t.els.batteryEmpty.style.display === undefined,
       'a late battery answer does not touch the next page');
   }
   {
@@ -198,7 +198,7 @@ function loadRouter() {
     await flush();
     t.call('/nodes/' + PK + '/battery')[0].resolve({ status: 'ok', latest_mv: 4100, samples: [] });
     await flush();
-    assert(t.els.batteryStatusBadge.textContent.includes('4100 mV'), 'the current battery answer still renders');
+    assert(t.els.batteryStatusBadge.innerHTML.includes('4100 mV'), 'the current battery answer still renders');
   }
 
   console.log('Node Analytics: the current error still renders');

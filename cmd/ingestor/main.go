@@ -388,6 +388,16 @@ func main() {
 		}
 	}
 
+	// Neighbour battery retention. 0 = disabled.
+	neighborBatteryDays := cfg.NeighborBatteryDaysOrZero()
+	if neighborBatteryDays > 0 {
+		if n, err := store.PruneOldNeighborBattery(neighborBatteryDays); err != nil {
+			log.Printf("[prune] neighbor_battery: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d neighbor_battery older than %d days", n, neighborBatteryDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -486,7 +496,7 @@ func main() {
 	// node_declared_regions retention (Task 6) rather than starting a second
 	// ticker — the four flags are independent (0 disables each separately),
 	// so the ticker itself must run when any is set.
-	if clientRxDays > 0 || clientRxObsDays > 0 || clientRfDays > 0 || clientRegionsDays > 0 || clientNodeNamesDays > 0 {
+	if clientRxDays > 0 || clientRxObsDays > 0 || clientRfDays > 0 || clientRegionsDays > 0 || clientNodeNamesDays > 0 || neighborBatteryDays > 0 {
 		clientRxRetentionTicker := time.NewTicker(24 * time.Hour)
 		go func() {
 			for range clientRxRetentionTicker.C {
@@ -525,6 +535,13 @@ func main() {
 						store.RunIncrementalVacuum(vacuumPages)
 					}
 				}
+				if neighborBatteryDays > 0 {
+					if n, err := store.PruneOldNeighborBattery(neighborBatteryDays); err != nil {
+						log.Printf("[prune] neighbor_battery: %v", err)
+					} else if n > 0 {
+						store.RunIncrementalVacuum(vacuumPages)
+					}
+				}
 			}
 		}()
 		if clientRxDays > 0 {
@@ -541,6 +558,9 @@ func main() {
 		}
 		if clientNodeNamesDays > 0 {
 			log.Printf("[prune] auto-prune enabled: client_node_names older than %d days will be removed daily", clientNodeNamesDays)
+		}
+		if neighborBatteryDays > 0 {
+			log.Printf("[prune] auto-prune enabled: neighbor_battery older than %d days will be removed daily", neighborBatteryDays)
 		}
 	}
 
@@ -998,6 +1018,16 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	// does not apply.
 	if len(parts) >= 4 && parts[3] == "neighbors" {
 		handleNeighborsReport(store, tag, parts[2], msg)
+		return
+	}
+
+	// Battery topic: meshcore/<region>/<observer_id>/battery. Readings the
+	// observer took from repeaters it polls directly; observer metadata like
+	// /neighbors, so the per-source packet IATA filter does not apply.
+	if len(parts) >= 4 && parts[3] == "battery" {
+		if cfg.NeighborBatteryEnabled() {
+			handleBatteryReport(store, cfg, tag, parts[2], msg)
+		}
 		return
 	}
 

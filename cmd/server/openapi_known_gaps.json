@@ -14,7 +14,6 @@
     "/api/known-channels",
     "/api/nodes/clock-skew",
     "/api/nodes/resolve",
-    "/api/nodes/{pubkey}/battery",
     "/api/nodes/{pubkey}/clock-skew",
     "/api/nodes/{pubkey}/reach",
     "/api/nodes/{pubkey}/rx-coverage",

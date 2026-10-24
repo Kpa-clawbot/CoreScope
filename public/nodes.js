@@ -822,6 +822,7 @@
           })() : ''}
           ${(n.role === 'repeater' || n.role === 'room') && Array.isArray(n.transported_scopes) && n.transported_scopes.length ? `<tr id="row-transported-scopes"><td title="Distinct region scopes (transmissions.scope_name) of the non-advert packets whose path names this repeater by its full pubkey. Shows which regions' traffic it has carried (#1751). Packets that only carry a 1-byte hop are excluded: that byte is shared by every node with the same pubkey prefix, so it cannot say which of them relayed (#1902).">Transported scopes</td><td><span style="display:inline-flex;flex-wrap:wrap;gap:3px;vertical-align:middle">${n.transported_scopes.map(sc => '<span class="badge">' + escapeHtml(String(sc)) + '</span>').join('')}</span></td></tr>` : ''}
           ${'configured_scope' in n && n.configured_scope !== null ? `<tr id="row-configured-scope"><td title="Region scopes this node has CONFIGURED, confirmed via an observer /neighbors report (status=responded) — concrete evidence, distinct from observed default scope and transported scopes (#1865).${n.configured_scope_at ? ' Last confirmed ' + escapeHtml(String(n.configured_scope_at)) + '.' : ''}">Configured scope <span style="color:var(--status-green-text)" role="img" aria-label="confirmed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg></span></td><td>${n.configured_scope === '' ? '<span style="color:var(--text-muted)">none configured</span>' : `<code style="color:var(--link-color)">${escapeHtml(n.configured_scope)}</code>`}</td></tr>` : ''}
+          <tr id="nodeBatteryFull" hidden><td title="Latest battery voltage: from the node's own status report, or from an observer that polls it directly. The history is on the Analytics page.">Battery</td><td class="nb-val"></td></tr>
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>${renderPacketCountLabel('fullNodePacketCountHelp')}</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
@@ -909,6 +910,7 @@
 
         <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
       if (window.CSNotify) window.CSNotify.mount(document.getElementById('nodeNotifySlotFull'), n.public_key);
+      if (window.NodeBattery) window.NodeBattery.mount(document.getElementById('nodeBatteryFull'), n.public_key);
 
       // Map
       if (hasLoc) {
@@ -1910,6 +1912,7 @@
           <h4>Overview</h4>
           <dl class="detail-meta">
             <dt>Last Heard</dt><dd>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</dd>
+            <div id="nodeBattery" hidden><dt>Battery</dt><dd class="nb-val"></dd></div>
             <dt>First Seen</dt><dd>${renderNodeTimestampHtml(n.first_seen)}</dd>
             <dt>${renderPacketCountLabel('nodePacketCountHelp')}</dt><dd>${totalPackets}</dd>
             <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
@@ -1978,6 +1981,7 @@
         <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
       </div>`;
     if (window.CSNotify) window.CSNotify.mount(document.getElementById('nodeNotifySlot'), n.public_key);
+    if (window.NodeBattery) window.NodeBattery.mount(document.getElementById('nodeBattery'), n.public_key);
 
     // Init map
     if (hasLoc) {

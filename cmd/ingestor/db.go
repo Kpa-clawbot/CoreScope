@@ -495,6 +495,27 @@ func applySchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_cnn_target ON client_node_names(target, observed_at);
 		CREATE INDEX IF NOT EXISTS idx_cnn_prune  ON client_node_names(observed_at);
+
+		-- Repeater battery readings published by observers that poll their
+		-- direct neighbours (meshcore/<region>/<observer>/battery). Observations,
+		-- never state: one row per reading. battery_mv 0 means no battery
+		-- fitted. source is 'poll' (the observer's own direct request) or
+		-- 'reused' (a reply to someone else's); reply_hops is how many hops the
+		-- reply took.
+		CREATE TABLE IF NOT EXISTS neighbor_battery (
+			node_id     TEXT    NOT NULL,
+			observer_id TEXT    NOT NULL,
+			sampled_at  TEXT    NOT NULL,
+			battery_mv  INTEGER NOT NULL,
+			snr         REAL,
+			rssi        INTEGER,
+			method      TEXT    NOT NULL,
+			source      TEXT    NOT NULL,
+			reply_hops  INTEGER NOT NULL,
+			received_at TEXT    NOT NULL,
+			PRIMARY KEY (node_id, observer_id, sampled_at)
+		) WITHOUT ROWID;
+		CREATE INDEX IF NOT EXISTS idx_nb_prune ON neighbor_battery(sampled_at);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)

@@ -33,10 +33,18 @@ func (c *Config) CriticalBatteryMv() int {
 	return 3000
 }
 
-// NodeBatterySample is a single (timestamp, battery_mv) point.
+// NodeBatterySample is a single (timestamp, battery_mv) point. Source says
+// where it came from: "self" (the node's own observer status report) or
+// "neighbor" (an observer that polled the node directly; observer_id names
+// it).
 type NodeBatterySample struct {
-	Timestamp string `json:"timestamp"`
-	BatteryMv int    `json:"battery_mv"`
+	Timestamp    string   `json:"timestamp"`
+	BatteryMv    int      `json:"battery_mv"`
+	Source       string   `json:"source"`
+	ObserverID   string   `json:"observer_id,omitempty"`
+	ObserverName string   `json:"observer_name,omitempty"`
+	SNR          *float64 `json:"snr,omitempty"`
+	ReplyHops    *int     `json:"reply_hops,omitempty"`
 }
 
 // nodeBatteryHistorySQL matches the observer ID in lowercase and in
@@ -74,19 +82,24 @@ func (db *DB) GetNodeBatteryHistory(pubkey, since string) ([]NodeBatterySample, 
 		if err := rows.Scan(&ts, &mv); err != nil {
 			return nil, err
 		}
-		out = append(out, NodeBatterySample{Timestamp: ts, BatteryMv: mv})
+		out = append(out, NodeBatterySample{Timestamp: ts, BatteryMv: mv, Source: batterySourceSelf})
 	}
 	return out, rows.Err()
 }
 
 // handleNodeBattery serves GET /api/nodes/{pubkey}/battery?days=N (#663).
 //
-// Returns voltage time-series for a node and a status flag based on the most
-// recent sample evaluated against configured thresholds:
-//   - "critical" : latest_mv < CriticalBatteryMv
-//   - "low"      : latest_mv < LowBatteryMv
-//   - "ok"       : latest_mv >= LowBatteryMv
-//   - "unknown"  : no samples in window
+// Returns voltage time-series for a node from two sources: its own observer
+// status reports ("self") and readings from observers that poll it directly
+// ("neighbor", see neighbor_battery.go). sources summarises each one and
+// selected names the one latest_mv and status come from
+// (selectBatterySource). Status grades the selected latest value against the
+// configured thresholds:
+//   - "no_battery" : latest_mv == 0 (nothing fitted)
+//   - "critical"   : latest_mv < CriticalBatteryMv
+//   - "low"        : latest_mv < LowBatteryMv
+//   - "ok"         : latest_mv >= LowBatteryMv
+//   - "unknown"    : no samples in window
 func (s *Server) handleNodeBattery(w http.ResponseWriter, r *http.Request) {
 	pubkey := mux.Vars(r)["pubkey"]
 	if pubkey == "" {
@@ -116,6 +129,12 @@ func (s *Server) handleNodeBattery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	neighbor, err := s.db.GetNeighborBatteryHistory(pubkey, since)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	samples = mergeBatterySamples(samples, neighbor)
 	if samples == nil {
 		samples = []NodeBatterySample{}
 	}
@@ -123,27 +142,27 @@ func (s *Server) handleNodeBattery(w http.ResponseWriter, r *http.Request) {
 	low := s.cfg.LowBatteryMv()
 	crit := s.cfg.CriticalBatteryMv()
 
+	sources := summariseBatterySources(samples)
+	selected := selectBatterySource(sources, time.Now().UTC())
+
 	status := "unknown"
 	var latestMv interface{}
 	var latestTs interface{}
-	if n := len(samples); n > 0 {
-		mv := samples[n-1].BatteryMv
+	var selectedOut interface{}
+	if selected != nil {
+		mv := selected.LatestMv
 		latestMv = mv
-		latestTs = samples[n-1].Timestamp
-		switch {
-		case mv < crit:
-			status = "critical"
-		case mv < low:
-			status = "low"
-		default:
-			status = "ok"
-		}
+		latestTs = selected.LatestTs
+		selectedOut = selected
+		status = batteryStatus(mv, low, crit)
 	}
 
 	writeJSON(w, map[string]interface{}{
 		"public_key": strings.ToLower(pubkey),
 		"days":       days,
 		"samples":    samples,
+		"sources":    sources,
+		"selected":   selectedOut,
 		"latest_mv":  latestMv,
 		"latest_ts":  latestTs,
 		"status":     status,
@@ -152,4 +171,20 @@ func (s *Server) handleNodeBattery(w http.ResponseWriter, r *http.Request) {
 			"critical_mv": crit,
 		},
 	})
+}
+
+// batteryStatus grades a reading. 0 mV is what a node with no battery
+// fitted reports (an openHop repeater without a power sensor), so it is
+// "no_battery", never "critical".
+func batteryStatus(mv, low, crit int) string {
+	switch {
+	case mv == 0:
+		return "no_battery"
+	case mv < crit:
+		return "critical"
+	case mv < low:
+		return "low"
+	default:
+		return "ok"
+	}
 }

@@ -3526,6 +3526,9 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .analytics-chart-card canvas { max-width: 100%; height: auto; display: block; }
 .analytics-chart-card h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin-bottom: 4px; }
 .analytics-chart-desc { font-size: 10px; color: var(--text-muted); margin-bottom: 8px; font-style: italic; }
+.battery-reported-by { font-size: 12px; margin-bottom: 8px; }
+/* .analytics-chart-card svg makes chart SVGs block-level and auto-height; icons stay inline at 1em. */
+.analytics-chart-card svg.ph-icon { display: inline-block; width: 1em; height: 1em; max-width: none; }
 .analytics-heatmap { display: grid; grid-template-columns: 40px repeat(24, 1fr); gap: 2px; }
 .analytics-heatmap-cell { aspect-ratio: 1; border-radius: 2px; cursor: default; }
 .analytics-heatmap-label { font-size: 10px; color: var(--text-muted); display: flex; align-items: center; }
