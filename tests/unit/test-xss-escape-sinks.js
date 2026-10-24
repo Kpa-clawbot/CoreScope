@@ -373,9 +373,9 @@ test('TRACE-1: traces.js urlHash interpolation escapes URL-fragment payload', ()
   const m = src.match(/(<input type="text" id="traceHashInput"[^`]*?value="\$\{[^}]+\}"[^`]*?>)/);
   assert.ok(m, 'TRACE-1: <input value="${urlHash}"> template not found in traces.js');
   const tpl = m[1];
-  const fn = new Function('urlHash', 'escapeHtml',
+  const fn = new Function('urlHash', 'escapeHtml', 'tr',
     'return `' + tpl + '`;');
-  const html = fn(TAG_PAYLOAD + ATTR_PAYLOAD, escapeHtml);
+  const html = fn(TAG_PAYLOAD + ATTR_PAYLOAD, escapeHtml, tr);
   assertNoXss(html, 'TRACE-1 traces.js urlHash input');
 });
 
@@ -599,7 +599,7 @@ console.log('\n=== E. URL-derived strings ===');
 
 test('app.js unknown-route page escapes the route taken from location.hash', () => {
   const html = evalTemplate('public/app.js',
-    /(<div style="padding:40px;text-align:center;color:#6b7280"><h2>\$\{[^}]*route[^}]*\}<\/h2><p>Page not yet implemented\.<\/p><\/div>)/,
+    /(<div style="padding:40px;text-align:center;color:#6b7280"><h2>\$\{[^}]*route[^}]*\}<\/h2><p>(?:Page not yet implemented\.|\$\{tr\('Page not yet implemented\.'\)\})<\/p><\/div>)/,
     { route: TAG_PAYLOAD + ATTR_PAYLOAD });
   assertNoXss(html, 'app.js unknown route');
 });

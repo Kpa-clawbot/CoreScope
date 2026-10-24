@@ -1163,10 +1163,10 @@ registerPage('tools-landing', {
   init: function (container) {
     container.innerHTML =
       '<div class="tools-landing">' +
-        '<h2>Tools</h2>' +
+        '<h2>' + tr('Tools') + '</h2>' +
         '<div class="tools-menu">' +
-          '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
-          '<a href="#/tools/trace/" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
+          '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ' + tr('Path Inspector') + '</h3><p>' + tr('Resolve prefix paths to candidate full-pubkey routes with confidence scoring.') + '</p></a>' +
+          '<a href="#/tools/trace/" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ' + tr('Trace Viewer') + '</h3><p>' + tr('View detailed packet traces by hash.') + '</p></a>' +
         '</div>' +
       '</div>';
   },
@@ -1327,7 +1327,7 @@ function navigate() {
       else { app.setAttribute('tabindex', '-1'); app.focus({ preventScroll: true }); }
     });
   } else {
-    app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${escapeHtml(route)}</h2><p>Page not yet implemented.</p></div>`;
+    app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${escapeHtml(route)}</h2><p>${tr('Page not yet implemented.')}</p></div>`;
   }
 }
 

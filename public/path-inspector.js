@@ -2,6 +2,8 @@
 // IIFE; exports window.PathInspector for testability.
 (function () {
   'use strict';
+  // i18n.js defines tr(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
 
   var container = null;
   var currentResults = null;
@@ -13,11 +15,11 @@
 
     container.innerHTML =
       '<div class="path-inspector-page">' +
-        '<h2>Path Inspector</h2>' +
-        '<p class="help-text">Enter comma or space-separated hex prefixes (1-3 bytes each, e.g. <code>2C,A1,F4</code> or <code>2C A1 F4</code>).</p>' +
+        '<h2>' + tr('Path Inspector') + '</h2>' +
+        '<p class="help-text">' + tr('Enter comma or space-separated hex prefixes (1-3 bytes each, e.g. {comma} or {space}).', { comma: '<code>2C,A1,F4</code>', space: '<code>2C A1 F4</code>' }) + '</p>' +
         '<div class="path-inspector-input-row">' +
-          '<input type="text" id="path-inspector-input" class="input" placeholder="2C,A1,F4 or 2C A1 F4" value="' + escapeAttr(prefixParam) + '">' +
-          '<button id="path-inspector-submit" class="btn btn-primary">Inspect</button>' +
+          '<input type="text" id="path-inspector-input" class="input" placeholder="' + tr('{comma} or {space}', { comma: '2C,A1,F4', space: '2C A1 F4' }) + '" value="' + escapeAttr(prefixParam) + '">' +
+          '<button id="path-inspector-submit" class="btn btn-primary">' + tr('Inspect') + '</button>' +
         '</div>' +
         '<div id="path-inspector-error" class="path-inspector-error"></div>' +
         '<div id="path-inspector-results"></div>' +
@@ -46,18 +48,18 @@
   }
 
   function validatePrefixes(prefixes) {
-    if (prefixes.length === 0) return 'Enter at least one prefix.';
-    if (prefixes.length > 64) return 'Too many prefixes (max 64).';
+    if (prefixes.length === 0) return tr('Enter at least one prefix.');
+    if (prefixes.length > 64) return tr('Too many prefixes (max 64).');
     var hexRe = /^[0-9a-f]+$/;
     var byteLen = -1;
     for (var i = 0; i < prefixes.length; i++) {
       var p = prefixes[i];
-      if (!hexRe.test(p)) return 'Invalid hex: ' + p;
-      if (p.length % 2 !== 0) return 'Odd-length prefix: ' + p;
+      if (!hexRe.test(p)) return tr('Invalid hex: {prefix}', { prefix: p });
+      if (p.length % 2 !== 0) return tr('Odd-length prefix: {prefix}', { prefix: p });
       var bl = p.length / 2;
-      if (bl > 3) return 'Prefix too long (max 3 bytes): ' + p;
+      if (bl > 3) return tr('Prefix too long (max 3 bytes): {prefix}', { prefix: p });
       if (byteLen === -1) byteLen = bl;
-      else if (bl !== byteLen) return 'Mixed prefix lengths not allowed.';
+      else if (bl !== byteLen) return tr('Mixed prefix lengths not allowed.');
     }
     return null;
   }
@@ -81,15 +83,15 @@
       history.replaceState(null, '', base + '?prefixes=' + prefixes.join(','));
     }
 
-    resultsDiv.innerHTML = '<p>Loading...</p>';
+    resultsDiv.innerHTML = '<p>' + tr('Loading...') + '</p>';
     fetch('/api/paths/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prefixes: prefixes })
     })
       .then(function (r) {
-        if (r.status === 503) return r.json().then(function (d) { throw new Error('Service warming up, retry in a few seconds.'); });
-        if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || 'Request failed'); });
+        if (r.status === 503) return r.json().then(function (d) { throw new Error(tr('Service warming up, retry in a few seconds.')); });
+        if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || tr('Request failed')); });
         return r.json();
       })
       .then(function (data) {
@@ -104,12 +106,12 @@
 
   function renderResults(data, div) {
     if (!data.candidates || data.candidates.length === 0) {
-      div.innerHTML = '<p class="no-results">No candidates found. The prefixes may not match any known path-eligible nodes.</p>';
+      div.innerHTML = '<p class="no-results">' + tr('No candidates found. The prefixes may not match any known path-eligible nodes.') + '</p>';
       return;
     }
 
     var html = '<table class="path-inspector-table"><thead><tr>' +
-      '<th>#</th><th>Score</th><th>Path</th><th>Action</th>' +
+      '<th>#</th><th>' + tr('Score') + '</th><th>' + tr('Path') + '</th><th>' + tr('Action') + '</th>' +
       '</tr></thead><tbody>';
 
     for (var i = 0; i < data.candidates.length; i++) {
@@ -119,17 +121,17 @@
       html += '<td>' + (i + 1) + '</td>';
       html += '<td class="' + (c.speculative ? 'speculative-warning' : '') + '">' +
         c.score.toFixed(3) +
-        (c.speculative ? ' <span class="speculative-badge status-warn" title="Low evidence; may be wrong"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>' : '') +
+        (c.speculative ? ' <span class="speculative-badge status-warn" title="' + tr('Low evidence; may be wrong') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>' : '') +
         '</td>';
       html += '<td>' + escapeHtml(c.names.join(' → ')) + '</td>';
-      html += '<td><button class="btn btn-sm" data-idx="' + i + '">Show on Map</button></td>';
+      html += '<td><button class="btn btn-sm" data-idx="' + i + '">' + tr('Show on Map') + '</button></td>';
       html += '</tr>';
 
       // Per-hop evidence (collapsed).
       html += '<tr class="evidence-row collapsed" data-evidence="' + i + '"><td colspan="4"><div class="evidence-detail">';
       for (var j = 0; j < c.evidence.perHop.length; j++) {
         var h = c.evidence.perHop[j];
-        html += '<div class="hop-evidence">Hop ' + (j + 1) + ': prefix=' + h.prefix +
+        html += '<div class="hop-evidence">' + tr('Hop {n}', { n: j + 1 }) + ': prefix=' + h.prefix +
           ', candidates=' + h.candidatesConsidered +
           ', edge=' + h.edgeWeight.toFixed(3);
         if (h.alternatives && h.alternatives.length > 0) {
@@ -146,9 +148,7 @@
     }
 
     html += '</tbody></table>';
-    html += '<div class="path-inspector-stats">Beam width: ' + data.stats.beamWidth +
-      ' | Expansions: ' + data.stats.expansionsRun +
-      ' | Elapsed: ' + data.stats.elapsedMs + 'ms</div>';
+    html += '<div class="path-inspector-stats">' + tr('Beam width: {beam} | Expansions: {expansions} | Elapsed: {elapsed}ms', { beam: data.stats.beamWidth, expansions: data.stats.expansionsRun, elapsed: data.stats.elapsedMs }) + '</div>';
 
     div.innerHTML = html;
 
