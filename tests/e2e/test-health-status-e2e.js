@@ -147,13 +147,26 @@ async function run() {
   const listNode = (n) => ({ public_key: n.pk, name: n.name, role: n.role, last_heard: n.lastHeard, last_seen: n.lastSeen || n.lastHeard });
   const nodeListUrl = /\/api\/nodes(?:\?.*)?$/;
 
-  await test('analytics network status counts each node by its role', async () => {
+  await test('analytics status and role counts follow the selected nodes (#2213)', async () => {
     const actx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     const p = await actx.newPage();
     const errs = [];
     p.on('pageerror', (e) => errs.push(e.message));
-    await p.route(nodeListUrl, (route) => route.fulfill({ json: { nodes: NODES.map(listNode), total: NODES.length, counts: {} } }));
+    await p.route(nodeListUrl, (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      let nodes = params.get('region') === 'SJC' ? NODES.slice(0, 3) : NODES;
+      if (params.get('area') === 'rooms') nodes = nodes.filter(n => n.role === 'room');
+      if (params.get('area') === 'empty') nodes = [];
+      return route.fulfill({ json: {
+        nodes: nodes.map(listNode), total: nodes.length, has_more: false,
+        counts: { repeater: 9000, companion: 8000, room: 7000, sensor: 6000, observer: 5000, unknown: 4000 },
+      } });
+    });
     await p.route(/\/api\/nodes\/bulk-health/, (route) => route.fulfill({ json: [] }));
+    await p.route('**/api/config/regions', (route) => route.fulfill({ json: { SJC: 'Test Region' } }));
+    await p.route('**/api/config/areas', (route) => route.fulfill({ json: [
+      { key: 'rooms', label: 'Rooms' }, { key: 'empty', label: 'Empty' },
+    ] }));
     await p.goto(`${BASE}/#/analytics?tab=nodes`, { waitUntil: 'domcontentloaded' });
     const cards = p.locator('.analytics-section', { hasText: 'Network Status' }).first().locator('.analytics-stat-card');
     await cards.first().waitFor();
@@ -161,6 +174,31 @@ async function run() {
     const got = [await count(0), await count(1), await count(2)];
     // active: rptr 5h; degraded: rptr 30h, rptr DB 30h; silent: room 80h, comp 30h, sensor never
     assert(JSON.stringify(got) === '[1,2,3]', `active/degraded/silent = ${JSON.stringify(got)}, want [1,2,3]`);
+    async function checkRoles(expected, total) {
+      await p.waitForFunction(want => {
+        const cards = document.querySelectorAll('#analyticsContent .analytics-stat-card');
+        return cards.length === 4 && Number(cards[3].firstElementChild.textContent) === want;
+      }, total);
+      const counts = await p.evaluate(() => {
+        const heading = [...document.querySelectorAll('#analyticsContent h3')].find(h => h.textContent.includes('Role Breakdown'));
+        return Object.fromEntries([...heading.nextElementSibling.querySelectorAll('.badge')].map(b => {
+          const [role, count] = b.textContent.trim().split(': ');
+          return [role, Number(count)];
+        }));
+      });
+      const want = { repeater: 0, companion: 0, room: 0, sensor: 0, observer: 0, unknown: 0, ...expected };
+      assert(Object.keys(counts).length === Object.keys(want).length &&
+        Object.entries(want).every(([role, count]) => counts[role] === count),
+      'filtered role counts: ' + JSON.stringify(counts) + ', expected ' + JSON.stringify(want));
+    }
+    await checkRoles({ repeater: 3, companion: 1, room: 1, sensor: 1 }, 6);
+    await p.evaluate(() => window.RegionFilter.setSelected(['SJC']));
+    await checkRoles({ repeater: 2, room: 1 }, 3);
+    for (const area of ['rooms', 'empty']) {
+      await p.locator('#analyticsAreaFilter .region-dropdown-trigger').click();
+      await p.locator(`#analyticsAreaFilter [data-area="${area}"]`).click();
+      await checkRoles(area === 'rooms' ? { room: 1 } : {}, area === 'rooms' ? 1 : 0);
+    }
     assert(errs.length === 0, 'page errors: ' + errs.join(' | '));
     await actx.close();
   });

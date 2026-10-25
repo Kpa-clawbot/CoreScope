@@ -7249,6 +7249,100 @@ console.log('\n=== node-reach.js: reachRetryDelayMs + api() 429 errors ===');
   });
 }
 
+// ===== Analytics Nodes: role counts use the filtered, paged node list (#2213) =====
+console.log('\n=== analytics.js: filtered role breakdown ===');
+{
+  const globalCounts = Object.freeze({ repeater: 9000, companion: 8000, room: 7000, sensor: 6000, observer: 5000, unknown: 4000 });
+  const zeroCounts = { repeater: 0, companion: 0, room: 0, sensor: 0, observer: 0, unknown: 0 };
+  const nodesFor = roles => roles.map((role, i) => ({ public_key: 'node-' + i, role }));
+
+  function nodesHarness() {
+    const ctx = makeSandbox();
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const selection = { region: 'SJC', area: '', nodes: [] };
+    const calls = [];
+    ctx.RegionFilter = { regionQueryString: () => selection.region ? '&region=' + selection.region : '' };
+    ctx.AreaFilter = { areaQueryString: () => selection.area ? '&area=' + selection.area : '' };
+    ctx.fetch = async url => {
+      calls.push(url);
+      const parsed = new URL(url, 'http://localhost');
+      assert.strictEqual(parsed.searchParams.get('region'), selection.region || null);
+      assert.strictEqual(parsed.searchParams.get('area'), selection.area || null);
+      let data;
+      if (parsed.pathname === '/api/nodes/bulk-health') data = [];
+      else {
+        assert.strictEqual(parsed.pathname, '/api/nodes');
+        const offset = Number(parsed.searchParams.get('offset'));
+        const limit = Number(parsed.searchParams.get('limit'));
+        const nodes = selection.nodes.slice(offset, offset + limit);
+        data = { nodes, total: nodes.length, counts: globalCounts, has_more: offset + limit < selection.nodes.length };
+      }
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => data };
+    };
+    // Expose the real renderer without copying its implementation or changing production exports.
+    const src = fs.readFileSync('public/analytics.js', 'utf8');
+    vm.runInContext(src.replace("  registerPage('analytics',", "  window.testNodesRenderer = renderNodesTab;\n  registerPage('analytics',"), ctx);
+    const el = { innerHTML: '' };
+    return { ctx, calls, selection, el, render: () => ctx.window.testNodesRenderer(el) };
+  }
+
+  function assertRoleCounts(html, expected, total) {
+    assert.ok(!html.includes('Failed to load'), html);
+    const breakdown = html.split('Role Breakdown</h3>')[1].split('</div>')[0];
+    const counts = Object.fromEntries([...breakdown.matchAll(/>([^<>]+): (\d+)<\/span>/g)]
+      .map(match => [match[1], Number(match[2])]));
+    assert.deepStrictEqual(counts, { ...zeroCounts, ...expected });
+    assert.strictEqual(Object.values(counts).reduce((sum, count) => sum + count, 0), total);
+    const cards = [...html.matchAll(/font-size:28px[^>]*>(\d+)<\/div>/g)].map(match => Number(match[1]));
+    assert.strictEqual(cards[3], total, 'role counts and Total Nodes must describe the same nodes');
+  }
+
+  test('role breakdown follows region and area changes without extra requests', async () => {
+    const h = nodesHarness();
+    const cases = [
+      { region: 'SJC', area: '', roles: ['repeater', 'repeater', 'companion'], counts: { repeater: 2, companion: 1 } },
+      { region: 'SJC', area: 'rooms', roles: ['room'], counts: { room: 1 } },
+      { region: 'SFO', area: '', roles: ['sensor', 'observer'], counts: { sensor: 1, observer: 1 } },
+      { region: '', area: '', roles: ['repeater', 'companion', 'room'], counts: { repeater: 1, companion: 1, room: 1 } },
+    ];
+    for (const entry of cases) {
+      Object.assign(h.selection, { region: entry.region, area: entry.area, nodes: nodesFor(entry.roles) });
+      const before = h.calls.length;
+      await h.render();
+      assertRoleCounts(h.el.innerHTML, entry.counts, entry.roles.length);
+      assert.strictEqual(h.calls.length - before, 2, 'only the node-list and bulk-health requests');
+    }
+    const response = await h.ctx.fetchAllNodes('&sortBy=lastSeen', { ttl: 90000 });
+    assert.strictEqual(response.counts, globalCounts, 'global API metadata remains available to other callers');
+  });
+
+  test('empty filtered results show zero roles despite nonzero global metadata', async () => {
+    const h = nodesHarness();
+    h.selection.area = 'empty';
+    await h.render();
+    assertRoleCounts(h.el.innerHTML, {}, 0);
+  });
+
+  test('missing and unfamiliar roles are counted as unknown', async () => {
+    const h = nodesHarness();
+    h.selection.nodes = nodesFor(['unknown', undefined, null, '', 'future-role', '__proto__', 'constructor', 'toString']);
+    await h.render();
+    assertRoleCounts(h.el.innerHTML, { unknown: 8 }, 8);
+  });
+
+  test('role breakdown includes every page returned by fetchAllNodes', async () => {
+    const h = nodesHarness();
+    h.selection.nodes = nodesFor([...Array(500).fill('repeater'), 'room']);
+    await h.render();
+    assertRoleCounts(h.el.innerHTML, { repeater: 500, room: 1 }, 501);
+    const offsets = h.calls.filter(url => url.startsWith('/api/nodes?'))
+      .map(url => Number(new URL(url, 'http://localhost').searchParams.get('offset')));
+    assert.deepStrictEqual(offsets, [0, 500]);
+    assert.strictEqual(h.calls.length, 3, 'two node pages and one bulk-health request');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
