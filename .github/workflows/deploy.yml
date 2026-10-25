@@ -169,9 +169,8 @@ jobs:
       - name: Enforce gofmt + go vet (issue #1859)
         run: |
           set -e
-          # gofmt: every tracked *.go file except the misnamed Dockerfile.go,
-          # which is a Dockerfile (FROM ...) that gofmt cannot parse.
-          unformatted=$(gofmt -l $(git ls-files '*.go' | grep -vi 'Dockerfile.go'))
+          # gofmt: every tracked *.go file.
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt required on these files:"
             echo "$unformatted"
