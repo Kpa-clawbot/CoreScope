@@ -2730,8 +2730,20 @@ async function run() {
       assert(detail.packet && detail.observations.length > 1, '#2231 requires the grouped-packet fixture');
       assert(detail.observations.every(obs => Date.parse(obs.timestamp) < Date.now() - 15 * 60000),
         'the selected grouped packet must be older than 15 minutes');
+      const filtered = allTimePage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/packets' && url.searchParams.get('hash') === hash;
+      });
       await allTimePage.fill('#fHash', hash);
-      await allTimePage.locator('#pktBody tr[data-hash="' + hash + '"][data-action="toggle-select"]').click();
+      const filteredResponse = await filtered;
+      assert(filteredResponse.ok(), 'the debounced hash-filter request must succeed');
+      await filteredResponse.finished();
+      await allTimePage.waitForFunction(hash => {
+        const rows = document.querySelectorAll('#pktBody tr[data-hash]');
+        return rows.length === 1 && rows[0].dataset.hash === hash;
+      }, hash);
+      // Row centers can contain navigable hop links; use the group expand control.
+      await allTimePage.locator('#pktBody tr[data-hash="' + hash + '"][data-action="toggle-select"] > .col-expand').click();
       await allTimePage.waitForSelector('#pktRight .detail-obs-row');
       const obsId = String(detail.observations[1].id);
       await allTimePage.locator('#pktRight .detail-obs-row[data-obs-id="' + obsId + '"]').click();
