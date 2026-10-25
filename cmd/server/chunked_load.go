@@ -492,7 +492,8 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		return s.packets[i].FirstSeen < s.packets[j].FirstSeen
 	})
 	s.buildPathHopIndex()
-	s.buildDistanceIndex()
+	// Distance stays lazy, as in Load(): its first request builds the index
+	// and publishes the ready gate. An eager build here would be repeated.
 	if s.hotStartupHours > 0 {
 		s.oldestLoaded = hotCutoffStr
 	} else if len(s.packets) > 0 {

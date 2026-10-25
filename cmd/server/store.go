@@ -4948,6 +4948,12 @@ func (s *PacketStore) DistanceIndexBuilding() bool {
 // the last build OR at most once per 5 minutes — whichever is more
 // restrictive. The first-ever build always runs.
 func (s *PacketStore) TriggerDistanceIndexBuild() {
+	// HTTP starts after the first chunk, but later initial chunks do not
+	// update this index. Keep requests on the 202 retry path until those
+	// chunks finish, without changing legacy Load() or manual stores.
+	if s.firstChunkSignaled.Load() && !s.LoadComplete() {
+		return
+	}
 	s.distLazyMu.Lock()
 	if s.distLazyBuilding {
 		s.distLazyMu.Unlock()
