@@ -1901,7 +1901,7 @@
             '<dt>Adverts</dt><dd>' + (n.advert_count != null ? n.advert_count : '—') + '</dd>' +
             renderHashPrefix(n) +
           '</dl>' +
-          '<p style="margin-top:14px"><a class="btn-primary node-detail-btn" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>' +
+          '<p class="node-quick-actions" style="margin:14px 0 6px"><a class="btn-primary node-detail-btn" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>' +
           renderNodeQuickActions(n);
         so.querySelector('.node-detail-btn').addEventListener('click', function (e) {
           if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
