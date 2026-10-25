@@ -337,9 +337,9 @@
   var BOARD_COLS = [
     { key: 'name', label: 'Observer (companion)', cls: 'rxb-name' },
     { key: 'score', label: 'score', cls: 'rxb-score',
-      title: 'Score telt je gedekte cellen, waarbij elke cel zwaarder weegt naarmate minder andere waarnemers ze bereikt hebben — grensverleggende dekking weegt meer dan drukke zones opnieuw afrijden.' },
+      title: 'Each ~150 m cell this observer heard something in counts 1 divided by the number of observers that heard something there: a cell nobody else reached counts 1, a cell shared with 3 others counts 0.25. New ground scores more than driving busy areas again.' },
     { key: 'cells', label: 'cells', cls: 'rxb-cells',
-      title: 'Aantal unieke ~150 m-cellen waar deze waarnemer iets hoorde.' },
+      title: 'Unique ~150 m cells where this observer heard something.' },
     { key: 'nodes', label: 'nodes', cls: 'rxb-nodes' },
     { key: 'receptions', label: 'pkts', cls: 'rxb-rec' }
   ];
