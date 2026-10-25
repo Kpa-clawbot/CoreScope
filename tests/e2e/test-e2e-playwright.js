@@ -2694,6 +2694,82 @@ async function run() {
     assert(url.includes('timeWindow=60'), `URL should still contain timeWindow=60, got: ${url}`);
   });
 
+  await test('#2231 All time survives selection, reload and fresh shared links', async () => {
+    const desktop = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const fresh = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const mobile = await browser.newContext({ viewport: { width: 375, height: 812 }, isMobile: true });
+    try {
+      const allTimePage = await desktop.newPage();
+      await allTimePage.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
+      await allTimePage.waitForSelector('#fTimeWindow');
+      assert(await allTimePage.inputValue('#fTimeWindow') === '15', 'new visitors must still default to 15 minutes');
+      const request = allTimePage.waitForRequest(req => {
+        const url = new URL(req.url());
+        return url.pathname === '/api/packets' && !url.searchParams.has('since');
+      });
+      await allTimePage.selectOption('#fTimeWindow', '0');
+      await request;
+      assert(new URLSearchParams(new URL(allTimePage.url()).hash.split('?')[1]).get('timeWindow') === '0',
+        'selecting All time must write timeWindow=0');
+      assert(await allTimePage.evaluate(() => localStorage.getItem('meshcore-time-window')) === '0',
+        'selecting All time must persist zero');
+      const sharedUrl = allTimePage.url();
+      await allTimePage.reload({ waitUntil: 'domcontentloaded' });
+      await allTimePage.waitForSelector('#fTimeWindow');
+      assert(await allTimePage.inputValue('#fTimeWindow') === '0', 'reload must retain All time');
+
+      const sharedPage = await fresh.newPage();
+      await sharedPage.goto(sharedUrl, { waitUntil: 'domcontentloaded' });
+      await sharedPage.waitForSelector('#fTimeWindow');
+      assert(await sharedPage.inputValue('#fTimeWindow') === '0', 'a fresh browser must restore shared All time');
+
+      // The #1486 fixture is deliberately older than the default window and
+      // carries multiple observations. Select it through the real grouped UI.
+      const hash = 'fae0c9e6d357a814';
+      const detail = await (await desktop.request.get(BASE + '/api/packets/' + hash)).json();
+      assert(detail.packet && detail.observations.length > 1, '#2231 requires the grouped-packet fixture');
+      assert(detail.observations.every(obs => Date.parse(obs.timestamp) < Date.now() - 15 * 60000),
+        'the selected grouped packet must be older than 15 minutes');
+      await allTimePage.fill('#fHash', hash);
+      await allTimePage.locator('#pktBody tr[data-hash="' + hash + '"][data-action="toggle-select"]').click();
+      await allTimePage.waitForSelector('#pktRight .detail-obs-row');
+      const obsId = String(detail.observations[1].id);
+      await allTimePage.locator('#pktRight .detail-obs-row[data-obs-id="' + obsId + '"]').click();
+      await allTimePage.waitForSelector('#pktRight .detail-obs-row.observation-current[data-obs-id="' + obsId + '"]');
+      const selectedUrl = allTimePage.url();
+      const selectedParams = new URLSearchParams(new URL(selectedUrl).hash.split('?')[1]);
+      assert(selectedParams.get('timeWindow') === '0', 'selecting an old group/observation must retain All time');
+      assert(selectedParams.get('obs') === obsId, 'the selected observation must remain in the shared URL');
+      await allTimePage.reload({ waitUntil: 'domcontentloaded' });
+      await allTimePage.waitForSelector('#pktRight .detail-obs-row.observation-current[data-obs-id="' + obsId + '"]');
+      assert(await allTimePage.inputValue('#fTimeWindow') === '0', 'selected group reload must retain All time');
+
+      await fresh.clearCookies();
+      await sharedPage.evaluate(() => localStorage.clear());
+      await sharedPage.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+      await sharedPage.goto(selectedUrl, { waitUntil: 'domcontentloaded' });
+      await sharedPage.reload({ waitUntil: 'domcontentloaded' });
+      await sharedPage.waitForSelector('#pktRight .detail-obs-row.observation-current[data-obs-id="' + obsId + '"]');
+      assert(await sharedPage.inputValue('#fTimeWindow') === '0', 'a fresh shared group link must retain All time');
+
+      const mobilePage = await mobile.newPage();
+      const mobileRequest = mobilePage.waitForRequest(req => new URL(req.url()).pathname === '/api/packets');
+      await mobilePage.goto(sharedUrl, { waitUntil: 'domcontentloaded' });
+      await mobilePage.waitForSelector('#fTimeWindow');
+      const mobileParams = new URL((await mobileRequest).url()).searchParams;
+      const mobileMinutes = (Date.now() - Date.parse(mobileParams.get('since'))) / 60000;
+      assert(await mobilePage.inputValue('#fTimeWindow') === '15', 'mobile must keep the safe 15-minute window');
+      assert(mobileMinutes >= 15 && mobileMinutes < 16 && mobileParams.get('limit') === '1000',
+        'mobile All time links must keep the request bounded');
+      assert(await mobilePage.locator('#fTimeWindow option[value="0"]').count() === 0,
+        'mobile must not offer All time');
+    } finally {
+      await desktop.close();
+      await fresh.close();
+      await mobile.close();
+    }
+  });
+
   // Test: hash filter updates URL and is restored (#682)
   await test('Packets hash filter updates URL and restores on reload', async () => {
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });

@@ -3231,9 +3231,10 @@ console.log('\n=== channels.js: encrypted channel without key shows lock message
 // ===== PACKETS.JS: savedTimeWindowMin default guard =====
 console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
 {
-  async function captureInitialPacketsRequest(storageValue, innerWidth) {
+  async function captureInitialPacketsRequest(storageValue, innerWidth, hash = '#/packets') {
     const ctx = makeSandbox();
     const apiCalls = [];
+    ctx.location.hash = hash;
     if (storageValue !== undefined) ctx.localStorage.setItem('meshcore-time-window', storageValue);
     ctx.window.localStorage = ctx.localStorage;
     ctx.window.innerWidth = innerWidth;
@@ -3272,7 +3273,7 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
     const firstPacketsCall = apiCalls.find(p => p.indexOf('/packets?') === 0);
     assert.ok(firstPacketsCall, 'packets API should be called during initial packets page load');
     const params = new URLSearchParams((firstPacketsCall.split('?')[1] || ''));
-    return { firstPacketsCall, params };
+    return { firstPacketsCall, params, storageValue: ctx.localStorage.getItem('meshcore-time-window') };
   }
 
   test('savedTimeWindowMin defaults to 15 when localStorage returns null', async () => {
@@ -3283,12 +3284,69 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
     assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
   });
 
-  test('savedTimeWindowMin defaults to 15 when localStorage returns "0"', async () => {
+  test('desktop preserves saved All time on the first request after reload (#2231)', async () => {
     const r = await captureInitialPacketsRequest('0', 1366);
-    const since = r.params.get('since');
-    assert.ok(since, 'initial packets request should include since parameter');
-    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
-    assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
+    assert.strictEqual(r.params.get('since'), null, 'All time must not apply a time cutoff');
+    assert.strictEqual(r.storageValue, '0');
+  });
+
+  test('desktop shared All time overrides storage and survives reload (#2231)', async () => {
+    for (const saved of [undefined, '60']) {
+      const shared = await captureInitialPacketsRequest(saved, 1366, '#/packets?timeWindow=0');
+      assert.strictEqual(shared.params.get('since'), null, 'a shared All time link must omit the cutoff');
+      assert.strictEqual(shared.storageValue, '0');
+      const reloaded = await captureInitialPacketsRequest(shared.storageValue, 1366);
+      assert.strictEqual(reloaded.params.get('since'), null, 'stored All time must survive a bare-page reload');
+    }
+  });
+
+  test('empty and non-finite storage keep the 15-minute default (#2231)', async () => {
+    for (const saved of ['', '  ', 'Infinity']) {
+      const r = await captureInitialPacketsRequest(saved, 1366);
+      const deltaMin = (Date.now() - Date.parse(r.params.get('since'))) / 60000;
+      assert.ok(deltaMin >= 15 && deltaMin < 16, `invalid storage ${JSON.stringify(saved)} must use 15 minutes`);
+    }
+  });
+
+  test('missing and malformed URL windows preserve the saved/default window (#2231)', async () => {
+    for (const saved of [undefined, '60']) {
+      for (const value of [undefined, '', '  ', 'abc', '-5', 'Infinity']) {
+        const hash = '#/packets' + (value === undefined ? '' : '?timeWindow=' + encodeURIComponent(value));
+        const r = await captureInitialPacketsRequest(saved, 1366, hash);
+        const expected = saved === undefined ? 15 : 60;
+        const deltaMin = (Date.now() - Date.parse(r.params.get('since'))) / 60000;
+        assert.ok(deltaMin >= expected && deltaMin < expected + 1,
+          `invalid/missing URL ${JSON.stringify(value)} must preserve ${expected} minutes`);
+      }
+    }
+  });
+
+  test('mobile shared windows retain the existing safety guard (#2231)', async () => {
+    for (const width of [375, 1024]) {
+      for (const value of ['0', '1440']) {
+        const r = await captureInitialPacketsRequest('60', width, '#/packets?timeWindow=' + value);
+        const deltaMin = (Date.now() - Date.parse(r.params.get('since'))) / 60000;
+        assert.ok(deltaMin >= 15 && deltaMin < 16, `mobile shared ${value} must use 15 minutes`);
+        assert.strictEqual(r.storageValue, '15');
+        assert.strictEqual(r.params.get('limit'), '1000');
+      }
+    }
+  });
+
+  test('mobile keeps a supported 180-minute shared window (#2231)', async () => {
+    const r = await captureInitialPacketsRequest(undefined, 375, '#/packets?timeWindow=180');
+    const deltaMin = (Date.now() - Date.parse(r.params.get('since'))) / 60000;
+    assert.ok(deltaMin >= 180 && deltaMin < 181);
+    assert.strictEqual(r.storageValue, '180');
+  });
+
+  test('a pinned older grouped packet still bypasses the mobile cutoff (#2231)', async () => {
+    const r = await captureInitialPacketsRequest(undefined, 375,
+      '#/packets?timeWindow=0&hash=deadbeef');
+    assert.strictEqual(r.params.get('hash'), 'deadbeef');
+    assert.strictEqual(r.params.get('groupByHash'), 'true');
+    assert.strictEqual(r.params.get('since'), null, 'explicit packet selection must ignore the time cutoff');
+    assert.strictEqual(r.params.get('limit'), '1000');
   });
 
   test('savedTimeWindowMin preserves valid value (60)', async () => {
@@ -5460,8 +5518,8 @@ console.log('\n=== packets.js: buildPacketsQuery ===');
     test('buildPacketsQuery: timeWindow + region', () => {
       assert.strictEqual(buildPacketsQuery(30, 'US-SFO,US-LAX'), '?timeWindow=30&region=US-SFO%2CUS-LAX');
     });
-    test('buildPacketsQuery: timeWindow=0 treated as default', () => {
-      assert.strictEqual(buildPacketsQuery(0, ''), '');
+    test('buildPacketsQuery: All time is explicit in shared links (#2231)', () => {
+      assert.strictEqual(buildPacketsQuery(0, ''), '?timeWindow=0');
     });
   } else {
     console.log('  ⚠️ buildPacketsQuery not exposed — skipping');
