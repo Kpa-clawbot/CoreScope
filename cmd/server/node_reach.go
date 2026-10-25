@@ -195,12 +195,11 @@ func newResolver(pm *prefixMap) func(string) string {
 //
 // Both columns are optional: they are added by migration and an older database
 // simply lacks them, so each is gated on the schema flag the handle probed at
-// open time. Every return value is best-effort — a missing row, a missing
-// column or a scan error yields empty strings, because a reach report must
-// still render for a node we know nothing else about.
-func (s *Server) reachNodeScopes(ctx context.Context, pubkey string) (string, string, string) {
+// open time. Missing rows or optional columns yield empty strings; query and
+// scan failures must abort the build rather than cache missing scope data.
+func (s *Server) reachNodeScopes(ctx context.Context, pubkey string) (string, string, string, error) {
 	if s.db == nil || s.db.conn == nil {
-		return "", "", ""
+		return "", "", "", nil
 	}
 	cols := make([]string, 0, 3)
 	if s.db.hasDefaultScope {
@@ -210,7 +209,7 @@ func (s *Server) reachNodeScopes(ctx context.Context, pubkey string) (string, st
 		cols = append(cols, "configured_scope", "configured_scope_at")
 	}
 	if len(cols) == 0 {
-		return "", "", ""
+		return "", "", "", nil
 	}
 	vals := make([]sql.NullString, len(cols))
 	args := make([]interface{}, len(cols))
@@ -220,7 +219,10 @@ func (s *Server) reachNodeScopes(ctx context.Context, pubkey string) (string, st
 	row := s.db.conn.QueryRowContext(ctx,
 		"SELECT "+strings.Join(cols, ", ")+" FROM nodes WHERE public_key = ?", pubkey)
 	if err := row.Scan(args...); err != nil {
-		return "", "", ""
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", "", nil
+		}
+		return "", "", "", err
 	}
 	out := map[string]string{}
 	for i, c := range cols {
@@ -228,7 +230,7 @@ func (s *Server) reachNodeScopes(ctx context.Context, pubkey string) (string, st
 			out[c] = vals[i].String
 		}
 	}
-	return out["default_scope"], out["configured_scope"], out["configured_scope_at"]
+	return out["default_scope"], out["configured_scope"], out["configured_scope_at"], nil
 }
 
 type NodeReachInfo struct {
@@ -583,7 +585,10 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 
 	// #1865: scopes for the report header. Single-row lookup rather than widening
 	// buildNodeInfoMap's bulk SELECT, which every other consumer would pay for.
-	defScope, confScope, confAt := s.reachNodeScopes(ctx, pubkey)
+	defScope, confScope, confAt, err := s.reachNodeScopes(ctx, pubkey)
+	if err != nil {
+		return NodeReachResponse{}, false, err
+	}
 
 	// assemble links
 	links := make([]NodeReachLink, 0, len(d.we)+len(d.they))
@@ -647,6 +652,9 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 	sort.Strings(toks)
 
 	selfLat, selfLon := gpsPtrs(self)
+	if err := ctx.Err(); err != nil {
+		return NodeReachResponse{}, false, err
+	}
 	return NodeReachResponse{
 		Node: NodeReachInfo{Pubkey: pubkey, Name: self.Name, Role: self.Role,
 			Lat: selfLat, Lon: selfLon, FirstSeen: firstSeen,
@@ -722,11 +730,16 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 	for rows.Next() {
 		var pk string
 		var neigh int
-		if rows.Scan(&pk, &neigh) != nil {
-			continue
+		if err := rows.Scan(&pk, &neigh); err != nil {
+			log.Printf("[reach] degree snapshot scan failed: %v (serving stale)", err)
+			return stale
 		}
 		deg[strings.ToLower(pk)] = neigh
 		sortedDesc = append(sortedDesc, neigh)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("[reach] degree snapshot iteration failed: %v (serving stale)", err)
+		return stale
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(sortedDesc)))
 	snap := &degreeSnapshot{at: time.Now(), total: len(deg), deg: deg, sortedDesc: sortedDesc}
