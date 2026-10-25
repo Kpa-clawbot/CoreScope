@@ -2612,7 +2612,7 @@
       // Both endpoints carry certain activity; use the newest without changing
       // the cached node. Shared-prefix relay traffic alone remains uncertain.
       const activityNode = Object.assign({}, n, { _lastHeard: stats.lastHeard });
-      const heardMs = getEffectiveHeardMs(activityNode);
+      const heardMs = window.getEffectiveHeardMs(activityNode);
       const lastActivity = formatLiveTimestampHtml(heardMs);
       const health = getHealthStatus(n.role, heardMs);
       const uncertain = getNodeStatus(activityNode) === 'uncertain';
