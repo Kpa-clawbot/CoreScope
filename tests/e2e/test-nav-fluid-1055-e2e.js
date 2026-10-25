@@ -70,6 +70,7 @@ async function main() {
   let passes = 0;
   const context = await browser.newContext({ hasTouch: true });
   let configGate = Promise.resolve();
+  let authGate = Promise.resolve({ status: 401, json: {} });
   await context.route('**/api/config/client', async route => {
     const response = await route.fetch();
     const config = await response.json();
@@ -77,7 +78,11 @@ async function main() {
     config.userManagement = { enabled: true };
     await route.fulfill({ json: config });
   });
-  await context.route('**/api/auth/me', route => route.fulfill({ status: 401, json: {} }));
+  await context.route('**/api/auth/me', async route => {
+    const response = await authGate;
+    if (response === 'offline') await route.abort('failed');
+    else await route.fulfill(response);
+  });
   await context.route('**/api/stats', async route => {
     const response = await route.fetch();
     const stats = await response.json();
@@ -180,7 +185,9 @@ async function main() {
   // Account configuration can arrive after the first fit, without a resize
   // or route change. Exercise the real auth renderer, then change its label.
   let releaseConfig;
+  let releaseAuth;
   configGate = new Promise(resolve => { releaseConfig = resolve; });
+  authGate = new Promise(resolve => { releaseAuth = resolve; });
   await page.close();
   page = await context.newPage();
   page.setDefaultTimeout(15000);
@@ -191,7 +198,7 @@ async function main() {
   await page.waitForFunction(() => document.getElementById('navStats').textContent.includes('30000'));
   assert.equal(await page.locator('#accountToggle').count(), 0, 'account control must arrive after initial navigation');
   releaseConfig();
-  await page.evaluate(() => window.CSAuth.ready());
+  await page.waitForSelector('#accountToggle');
 
   async function checkFit(tag) {
     try {
@@ -214,9 +221,15 @@ async function main() {
       console.log(`  ❌ ${tag}: ${err.message}`);
     }
   }
-  await checkFit('late signed-out account insertion');
-  await page.evaluate(() => window.CSAuth.setUser({ displayName: 'Long account name', role: 'member' }));
-  await checkFit('signed-in account label');
+  await checkFit('late account insertion while authentication is pending');
+  assert.equal(await page.locator('.nav-account-label').textContent(), 'Log in');
+  releaseAuth('offline');
+  await page.evaluate(() => window.CSAuth.ready());
+  await checkFit('account control after authentication network failure');
+  assert.equal(await page.locator('.nav-account-label').textContent(), 'Log in');
+  authGate = Promise.resolve({ status: 200, json: { displayName: 'Long account name', role: 'member' } });
+  await page.evaluate(() => window.CSAuth.refreshMe());
+  await checkFit('successful authentication retry updates the account label');
   assert.equal(await page.locator('.nav-account-label').textContent(), 'Long account name');
 
   const resizeWidths = [769, 1280, 1024, 1920, 1101, 2560, 1250];
@@ -248,7 +261,7 @@ async function main() {
 
   await browser.close();
 
-  const total = ROUTES.length * VIEWPORTS.length + resizeWidths.length + 6;
+  const total = ROUTES.length * VIEWPORTS.length + resizeWidths.length + 7;
   console.log(`\ntest-nav-fluid-1055-e2e.js: ${failures === 0 ? 'OK' : 'FAIL'} — ${passes}/${total} passed`);
   process.exit(failures === 0 ? 0 : 1);
 }

@@ -128,6 +128,26 @@ test('login state is loaded from /api/auth/me and announced', async () => {
   assert(env.events.some((e) => e.type === 'cs-auth-changed'));
 });
 
+test('initial account control announces layout before session lookup completes without changing the user', async () => {
+  let release;
+  const session = new Promise(resolve => { release = resolve; });
+  const env = makeEnv(() => ({ status: 200, body: session }));
+  // Bootstrap is queued on MeshConfigReady; the session response stays pending.
+  await Promise.resolve();
+  try {
+    assert(env.els.accountWrap.innerHTML.includes('href="#/account/login"'));
+    assert.strictEqual(env.events.filter(e => e.type === 'cs-auth-control-added').length, 1);
+    assert.strictEqual(env.events.filter(e => e.type === 'cs-auth-changed').length, 0);
+    assert.strictEqual(env.win.CS_USER, undefined);
+  } finally {
+    release(ME);
+    await env.win.CSAuth.ready();
+  }
+  assert.strictEqual(env.events.filter(e => e.type === 'cs-auth-control-added').length, 1);
+  assert.strictEqual(env.events.filter(e => e.type === 'cs-auth-changed').length, 1);
+  assert.strictEqual(env.win.CS_USER, ME);
+});
+
 test('CSRF header only on non-GET requests', async () => {
   const env = makeEnv((u) => u === '/api/auth/me' ? { status: 200, body: ME } : { status: 200, body: {} });
   await env.win.CSAuth.ready();
