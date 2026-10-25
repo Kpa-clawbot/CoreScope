@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -229,5 +231,110 @@ func TestResolveUsersBackup(t *testing.T) {
 	u.Backup = &UsersBackupConfig{Keep: 0}
 	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup.keep != 7 {
 		t.Fatalf("keep 0 = %d; want 7", set.backup.keep)
+	}
+}
+
+func validObserverUM() *UserManagementConfig {
+	u := validUM()
+	u.ObserverLogins = &ObserverLoginsConfig{
+		Enabled:       true,
+		HookSecret:    "config-secret",
+		EncryptionKey: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)),
+		Broker:        ObserverBrokerConfig{Host: "mqtt.example.org"},
+	}
+	return u
+}
+
+func TestResolveObserverLogins_OffByDefault(t *testing.T) {
+	set, err := resolveUserManagement(validUM(), "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.observerLogins.enabled {
+		t.Fatal("observerLogins enabled without a block")
+	}
+}
+
+func TestResolveObserverLogins_EnvOverrides(t *testing.T) {
+	envKey := bytes.Repeat([]byte{9}, 32)
+	env := map[string]string{
+		"CORESCOPE_OBSERVER_HOOK_SECRET": "s3cret",
+		"CORESCOPE_OBSERVER_KEY":         base64.StdEncoding.EncodeToString(envKey),
+	}
+	set, err := resolveUserManagement(validObserverUM(), "meshcore.db", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := set.observerLogins
+	if !o.enabled || o.hookSecret != "s3cret" || !bytes.Equal(o.key, envKey) {
+		t.Fatalf("env not applied: %+v", o)
+	}
+}
+
+func TestResolveObserverLogins_ConfigValues(t *testing.T) {
+	set, err := resolveUserManagement(validObserverUM(), "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := set.observerLogins
+	if o.hookSecret != "config-secret" || !bytes.Equal(o.key, bytes.Repeat([]byte{7}, 32)) || o.host != "mqtt.example.org" {
+		t.Fatalf("config not applied: %+v", o)
+	}
+}
+
+func TestResolveObserverLogins_RefusesMissingKeyOrSecret(t *testing.T) {
+	cases := map[string]func(c *ObserverLoginsConfig){
+		"observerLogins.encryptionKey": func(c *ObserverLoginsConfig) { c.EncryptionKey = "" },
+		"observerLogins.hookSecret":    func(c *ObserverLoginsConfig) { c.HookSecret = "" },
+	}
+	for want, mut := range cases {
+		u := validObserverUM()
+		mut(u.ObserverLogins)
+		if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v", want, err)
+		}
+	}
+	for name, key := range map[string]string{
+		"16 bytes":   base64.StdEncoding.EncodeToString(make([]byte, 16)),
+		"not base64": "!!!not base64!!!",
+	} {
+		u := validObserverUM()
+		u.ObserverLogins.EncryptionKey = key
+		if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), "observerLogins.encryptionKey") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
+
+func TestResolveObserverLogins_Defaults(t *testing.T) {
+	set, err := resolveUserManagement(validObserverUM(), "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := set.observerLogins; o.port != 1883 || o.transport != "tcp" || o.tls {
+		t.Fatalf("defaults: port=%d transport=%q tls=%v", o.port, o.transport, o.tls)
+	}
+	u := validObserverUM()
+	u.ObserverLogins.Broker = ObserverBrokerConfig{Port: 8883, Transport: "websockets", TLS: true, Host: "h"}
+	set, err = resolveUserManagement(u, "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := set.observerLogins; o.port != 8883 || o.transport != "websockets" || !o.tls {
+		t.Fatalf("explicit values lost: %+v", o)
+	}
+	u = validObserverUM()
+	u.ObserverLogins.Broker.Host = ""
+	if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), "observerLogins.broker.host") {
+		t.Fatalf("empty host: err = %v", err)
+	}
+}
+
+func TestResolveObserverLogins_DisabledSkipsValidation(t *testing.T) {
+	u := validUM()
+	u.ObserverLogins = &ObserverLoginsConfig{Enabled: false}
+	set, err := resolveUserManagement(u, "meshcore.db", noEnv)
+	if err != nil || set.observerLogins.enabled {
+		t.Fatalf("err=%v enabled=%v", err, set.observerLogins.enabled)
 	}
 }
