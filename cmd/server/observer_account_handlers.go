@@ -172,6 +172,7 @@ func (s *Server) handleObserverLoginCreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	a.obsIdx.setLogin(l)
+	a.enableOwnObserverMails(u.ID)
 	a.auditAsync(idPtr(u.ID), "observer-login.create", idPtr(u.ID), map[string]string{"username": username})
 	if !a.sendObserverCredentials(r.Context(), w, u, username, password) {
 		return
@@ -269,4 +270,16 @@ func (a *authService) sendObserverCredentials(ctx context.Context, w http.Respon
 		return false
 	}
 	return true
+}
+
+// enableOwnObserverMails adds observer.offline.own to the user's notification
+// events. A failure is logged only: the login exists and its mail goes out.
+func (a *authService) enableOwnObserverMails(userID int64) {
+	prefs, err := a.st.NotifyPrefsFor(userID)
+	if err == nil && !prefs.Has(users.NotifyObserverOfflineOwn) {
+		_, err = a.st.SetNotifyPrefs(userID, prefs.Enabled, append(prefs.Events, users.NotifyObserverOfflineOwn))
+	}
+	if err != nil {
+		log.Printf("[observer-logins] enable owner mails for user #%d: %v", userID, err)
+	}
 }

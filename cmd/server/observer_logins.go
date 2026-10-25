@@ -318,3 +318,17 @@ func (ix *observerLoginIndex) unbind(pk string) {
 		delete(ix.owners, pk)
 	}
 }
+
+// ownersSnapshot copies the owner of every bound pubkey (uppercase key);
+// orphaned bindings are left out.
+func (ix *observerLoginIndex) ownersSnapshot() map[string]int64 {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	out := make(map[string]int64, len(ix.owners))
+	for pk, uid := range ix.owners {
+		if uid != nil {
+			out[pk] = *uid
+		}
+	}
+	return out
+}

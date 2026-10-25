@@ -332,3 +332,12 @@ func TestExportHasObserverLoginWithoutPassword(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateLoginEnablesOwnEvent(t *testing.T) {
+	f := newOAFixture(t)
+	expectStatus(t, f.do("POST", oaPath, nil, as(f.c)), 201)
+	p, err := f.st.NotifyPrefsFor(f.c.me.ID)
+	if err != nil || !p.Has(users.NotifyObserverOfflineOwn) || !p.Has(users.NotifyNodeOffline) {
+		t.Fatalf("prefs after create = %+v, %v", p, err)
+	}
+}

@@ -456,3 +456,16 @@ func TestSetOwnerBypassesCap(t *testing.T) {
 		t.Fatalf("auto-bind below cap: %q calls %v", res, b.calls)
 	}
 }
+
+func TestOwnersSnapshotOmitsOrphans(t *testing.T) {
+	uid := int64(7)
+	ix := &observerLoginIndex{owners: map[string]*int64{"AA": &uid, "BB": nil}}
+	got := ix.ownersSnapshot()
+	if len(got) != 1 || got["AA"] != 7 {
+		t.Fatalf("snapshot = %v", got)
+	}
+	got["AA"] = 9
+	if *ix.owners["AA"] != 7 {
+		t.Fatal("snapshot aliases the index")
+	}
+}
