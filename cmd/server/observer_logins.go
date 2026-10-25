@@ -26,6 +26,10 @@ const (
 	mqttUsernamePrefix = "obs_"
 	mqttUsernameChars  = "abcdefghijklmnopqrstuvwxyz0123456789"
 	mqttPasswordChars  = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+	// maxAutoBindsPerUser caps the pubkeys a user can claim by publishing;
+	// admin assignment is not capped.
+	maxAutoBindsPerUser = 20
 )
 
 // randomString draws n characters from alphabet with crypto/rand, rejecting
@@ -69,12 +73,14 @@ type indexedLogin struct {
 }
 
 // observerLoginIndex answers the broker hooks from memory. owners holds every
-// bound pubkey; a nil owner means the binding is orphaned.
+// bound pubkey; a nil owner means the binding is orphaned. owned counts the
+// pubkeys each user owns in owners.
 type observerLoginIndex struct {
 	mu         sync.RWMutex
 	byUsername map[string]indexedLogin
 	byUser     map[int64]string
 	owners     map[string]*int64
+	owned      map[int64]int
 }
 
 // newObserverLoginIndex loads every login and binding from st once.
@@ -91,6 +97,7 @@ func newObserverLoginIndex(st *users.Store) (*observerLoginIndex, error) {
 		byUsername: make(map[string]indexedLogin, len(logins)),
 		byUser:     make(map[int64]string, len(logins)),
 		owners:     make(map[string]*int64, len(bindings)),
+		owned:      make(map[int64]int, len(logins)),
 	}
 	for _, l := range logins {
 		ix.setLogin(l)
@@ -131,7 +138,26 @@ func (ix *observerLoginIndex) revoke(userID int64) {
 func (ix *observerLoginIndex) setOwner(pk string, uid *int64) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
+	ix.setOwnerLocked(pk, uid)
+}
+
+// setOwnerLocked moves pk to uid and keeps owned in step. Caller holds mu.
+func (ix *observerLoginIndex) setOwnerLocked(pk string, uid *int64) {
+	if old, ok := ix.owners[pk]; ok && old != nil {
+		if ix.owned[*old]--; ix.owned[*old] <= 0 {
+			delete(ix.owned, *old)
+		}
+	}
 	ix.owners[pk] = uid
+	if uid != nil {
+		ix.owned[*uid]++
+	}
+}
+
+func (ix *observerLoginIndex) ownedCount(uid int64) int {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return ix.owned[uid]
 }
 
 func (ix *observerLoginIndex) authenticate(username, password string) hookResult {
@@ -202,8 +228,13 @@ func (ix *observerLoginIndex) authorizePublish(username, topic string, bind func
 	}
 	ix.mu.RLock()
 	owner, bound := ix.owners[pk]
+	atCap := ix.owned[l.userID] >= maxAutoBindsPerUser
 	ix.mu.RUnlock()
 	if !bound {
+		if atCap {
+			log.Printf("[observer-logins] publish denied: user=%s observer=%s: auto-bind cap reached", username, pk[:8])
+			return hookDeny, pk, false
+		}
 		var err error
 		owner, created, err = bind(pk, l.userID)
 		if err != nil {
@@ -212,7 +243,7 @@ func (ix *observerLoginIndex) authorizePublish(username, topic string, bind func
 		}
 		ix.mu.Lock()
 		if _, raced := ix.owners[pk]; !raced {
-			ix.owners[pk] = owner
+			ix.setOwnerLocked(pk, owner)
 		}
 		ix.mu.Unlock()
 	}

@@ -29,7 +29,7 @@ func olTopic(pk string) string { return "meshcore/BRU/" + pk + "/packets" }
 // olIndex builds an index without a store: logins for users 1 and 2, user 3
 // revoked.
 func olIndex() *observerLoginIndex {
-	ix := &observerLoginIndex{byUsername: map[string]indexedLogin{}, byUser: map[int64]string{}, owners: map[string]*int64{}}
+	ix := &observerLoginIndex{byUsername: map[string]indexedLogin{}, byUser: map[int64]string{}, owners: map[string]*int64{}, owned: map[int64]int{}}
 	ix.setLogin(users.MQTTLogin{UserID: 1, Username: "obs_alice0000000", PasswordHash: olHash("pw-alice")})
 	ix.setLogin(users.MQTTLogin{UserID: 2, Username: "obs_bob000000000", PasswordHash: olHash("pw-bob")})
 	now := time.Now()
@@ -350,7 +350,7 @@ func TestNewObserverLoginIndexLoads(t *testing.T) {
 
 // olBenchIndex: 500 logins, 2000 observers bound four per login.
 func olBenchIndex() (*observerLoginIndex, []string, []string) {
-	ix := &observerLoginIndex{byUsername: map[string]indexedLogin{}, byUser: map[int64]string{}, owners: map[string]*int64{}}
+	ix := &observerLoginIndex{byUsername: map[string]indexedLogin{}, byUser: map[int64]string{}, owners: map[string]*int64{}, owned: map[int64]int{}}
 	names := make([]string, 500)
 	for i := range names {
 		names[i] = fmt.Sprintf("obs_bench%07d", i)
@@ -389,5 +389,70 @@ func TestAuthorizeFastEnough(t *testing.T) {
 	}
 	if per := time.Since(start) / n; per >= 50*time.Microsecond {
 		t.Fatalf("authorizePublish %v/op, want < 50µs", per)
+	}
+}
+
+func olKey(i int) string { return fmt.Sprintf("%064X", 0xC0DE0000+i) }
+
+func TestAuthorize_AutoBindCap(t *testing.T) {
+	ix := olIndex()
+	b := &bindRecorder{owner: i64(1)}
+	for i := 0; i < maxAutoBindsPerUser; i++ {
+		if res, _, created := ix.authorizePublish("obs_alice0000000", olTopic(olKey(i)), b.fn); res != hookAllow || !created {
+			t.Fatalf("bind %d: %q %v", i, res, created)
+		}
+	}
+	if len(b.calls) != maxAutoBindsPerUser {
+		t.Fatalf("bind calls %d, want %d", len(b.calls), maxAutoBindsPerUser)
+	}
+	b.calls = nil
+	if res, pk, _ := ix.authorizePublish("obs_alice0000000", olTopic(olKey(maxAutoBindsPerUser)), b.fn); res != hookDeny || pk != olKey(maxAutoBindsPerUser) {
+		t.Fatalf("bind past cap: %q %q", res, pk)
+	}
+	if len(b.calls) != 0 {
+		t.Fatalf("bind called past cap: %v", b.calls)
+	}
+	if res, _, _ := ix.authorizePublish("obs_alice0000000", olTopic(olKey(0)), noBind(t)); res != hookAllow {
+		t.Fatalf("owned key at cap: %q", res)
+	}
+	// Another user is not affected by alice's count.
+	b2 := &bindRecorder{owner: i64(2)}
+	if res, _, _ := ix.authorizePublish("obs_bob000000000", olTopic(olKey(maxAutoBindsPerUser)), b2.fn); res != hookAllow {
+		t.Fatalf("bob: %q", res)
+	}
+}
+
+func TestSetOwnerBypassesCap(t *testing.T) {
+	ix := olIndex()
+	for i := 0; i < maxAutoBindsPerUser; i++ {
+		ix.setOwner(olKey(i), i64(1))
+	}
+	// Admin assignment past the cap is accepted and counted.
+	ix.setOwner(olPK, i64(1))
+	if res, _, _ := ix.authorizePublish("obs_alice0000000", olTopic(olPK), noBind(t)); res != hookAllow {
+		t.Fatalf("admin-assigned key past cap: %q", res)
+	}
+	if got := ix.ownedCount(1); got != maxAutoBindsPerUser+1 {
+		t.Fatalf("count %d, want %d", got, maxAutoBindsPerUser+1)
+	}
+	// Reassign two keys to bob and orphan one: alice drops to cap-2.
+	ix.setOwner(olPK, i64(2))
+	ix.setOwner(olKey(0), i64(2))
+	ix.setOwner(olKey(1), nil)
+	if got := ix.ownedCount(1); got != maxAutoBindsPerUser-2 {
+		t.Fatalf("alice count %d, want %d", got, maxAutoBindsPerUser-2)
+	}
+	if got := ix.ownedCount(2); got != 2 {
+		t.Fatalf("bob count %d, want 2", got)
+	}
+	// Re-setting the same owner does not double count.
+	ix.setOwner(olPK, i64(2))
+	if got := ix.ownedCount(2); got != 2 {
+		t.Fatalf("bob count after repeat %d, want 2", got)
+	}
+	// Below the cap again: alice may auto-bind.
+	b := &bindRecorder{owner: i64(1)}
+	if res, _, _ := ix.authorizePublish("obs_alice0000000", olTopic(olPK2), b.fn); res != hookAllow || len(b.calls) != 1 {
+		t.Fatalf("auto-bind below cap: %q calls %v", res, b.calls)
 	}
 }
