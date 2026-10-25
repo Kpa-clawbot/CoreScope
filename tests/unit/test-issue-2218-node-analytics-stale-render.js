@@ -34,7 +34,9 @@ function load() {
   const calls = [];
   const nav = { gen: 0 };
   const hop = { loads: 0 };
-  const mkEl = () => ({ style: {}, textContent: '', innerHTML: '' });
+  const mkEl = () => ({ style: {}, textContent: '', innerHTML: '',
+    insertAdjacentText(position, text) { this.textContent += text; },
+  });
   const ctx = {
     console, Math, JSON, Date, Number, String, Array, Object, Promise, isNaN, setTimeout,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
@@ -208,6 +210,30 @@ function loadRouter() {
     t.call('/nodes/')[0].reject(new Error('server down'));
     await flush();
     assert(t.app.innerHTML.includes('Failed to load analytics: server down'), 'the current rejection renders');
+  }
+
+  console.log('Node Analytics: battery badge separates icons from data (#2232)');
+  for (const [status, mv, label, color] of [
+    ['ok', 4100, 'OK', 'var(--success)'],
+    ['low', 3200, 'Low', 'var(--warning)'],
+    ['critical', 2900, 'Critical', 'var(--danger)'],
+    ['critical', 0, 'Critical', 'var(--danger)'],
+    ['unknown', null, 'No data', 'var(--text-muted)'],
+    ['constructor', null, 'No data', 'var(--text-muted)'],
+    ['ok', '<img src=x onerror=alert(1)>', 'OK', 'var(--success)'],
+  ]) {
+    const t = load();
+    t.page.init(t.app, PK + '/analytics');
+    t.call('/nodes/')[0].resolve(analyticsData(7));
+    await flush();
+    t.call('/nodes/' + PK + '/battery')[0].resolve({ status, latest_mv: mv, samples: [] });
+    await flush();
+    const badge = t.els.batteryStatusBadge;
+    assert(badge.innerHTML.includes(label), status + ': trusted badge label is rendered');
+    assert(!badge.textContent.includes('<svg'), status + ': SVG source is not displayed as text');
+    assert(!badge.innerHTML.includes('<img'), status + ': voltage never enters HTML');
+    assert(badge.textContent === (mv == null ? '' : ' · ' + mv + ' mV'), status + ': voltage is appended as text, including zero');
+    assert(badge.style.color === color, status + ': badge uses its theme color');
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
