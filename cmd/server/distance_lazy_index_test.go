@@ -221,6 +221,57 @@ func TestDistanceRequestDuringChunkedLoadWaitsForLaterPackets(t *testing.T) {
 	}
 }
 
+func TestDistanceAfterCompletedHotWindowRemainsAvailable(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		done, failed bool
+	}{
+		{"background pending", false, false},
+		{"background failed", false, true},
+		{"background failed and terminal", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupTestDB(t)
+			defer db.Close()
+			seedTestData(t, db)
+			mustExecDB(t, db, `UPDATE observations SET path_json = '["aa","11"]' WHERE id = 1`)
+			store := NewPacketStore(db, &PacketStoreConfig{HotStartupHours: 2, RetentionHours: 168})
+			if err := store.LoadChunked(1); err != nil {
+				t.Fatal(err)
+			}
+			if !store.LoadComplete() {
+				t.Fatal("fixture must have a complete initial hot window")
+			}
+			// These background-fill states must not invalidate the loaded hot window.
+			store.backgroundLoadFailed.Store(tc.failed)
+			store.backgroundLoadDone.Store(tc.done)
+			srv := &Server{store: store}
+			request := func() *httptest.ResponseRecorder {
+				w := httptest.NewRecorder()
+				srv.handleAnalyticsDistance(w, httptest.NewRequest(http.MethodGet, "/api/analytics/distance", nil))
+				return w
+			}
+			if w := request(); w.Code != http.StatusAccepted {
+				t.Fatalf("first distance request for a complete hot window = %d, want 202", w.Code)
+			}
+			waitForTest(t, "hot-window distance build", store.DistanceIndexBuilt)
+			w := request()
+			if w.Code != http.StatusOK {
+				t.Fatalf("distance response for a complete hot window = %d, want 200", w.Code)
+			}
+			var body struct {
+				TopPaths []DistancePath `json:"topPaths"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body.TopPaths) == 0 {
+				t.Fatal("distance response must retain the loaded hot-window data")
+			}
+		})
+	}
+}
+
 // TestDistanceFirstRequestReturns202: first /api/analytics/distance call
 // must trigger async build and return 202 + Retry-After. The handler must
 // NOT block for the full build.

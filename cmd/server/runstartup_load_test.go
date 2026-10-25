@@ -18,7 +18,10 @@ package main
 //     before loadBackgroundChunks executes (so oldestLoaded is set)
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -261,6 +264,32 @@ func TestRunStartupLoad_LoadChunkedError_MidLoad(t *testing.T) {
 	}
 	if !strings.Contains(store.BackgroundLoadError(), "LoadChunked failed") {
 		t.Fatalf("BackgroundLoadError must mention LoadChunked failure; got %q", store.BackgroundLoadError())
+	}
+	if !store.firstChunkSignaled.Load() || store.LoadComplete() || store.LoadProgress() != 50 {
+		t.Fatal("fixture must fail after serving readiness for the first chunk")
+	}
+	srv := &Server{store: store}
+	for i := 0; i < 2; i++ {
+		w := httptest.NewRecorder()
+		srv.handleAnalyticsDistance(w, httptest.NewRequest(http.MethodGet, "/api/analytics/distance", nil))
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("distance request after terminal initial-load failure = %d, want 500; body=%s", w.Code, w.Body.String())
+		}
+		if w.Header().Get("Retry-After") != "" {
+			t.Fatal("terminal initial-load failure must not ask the client to keep retrying")
+		}
+		var body struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Error != "Distance analytics unavailable: initial packet load failed" {
+			t.Fatalf("unexpected terminal distance error: %q", body.Error)
+		}
+		if strings.Contains(w.Body.String(), loadErr.Error()) || strings.Contains(w.Body.String(), store.BackgroundLoadError()) {
+			t.Fatal("distance error must not expose internal database failure details")
+		}
 	}
 }
 
