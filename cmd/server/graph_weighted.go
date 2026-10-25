@@ -17,6 +17,16 @@ import (
 	"strings"
 )
 
+type weightedNeighbor struct {
+	node int
+	dist float64
+}
+
+type weightedGraph struct {
+	nodes []string
+	adj   [][]weightedNeighbor
+}
+
 // weightedDistanceAdjacency builds the symmetric distance adjacency from a
 // weighted edge list: cost = 1/weight (lower distance = stronger affinity),
 // keeping the cheapest edge per pair. Self-loops and edges with a non-finite
@@ -25,7 +35,7 @@ import (
 // for NaN, so NaN must be rejected explicitly; otherwise 1/NaN = NaN would
 // poison every reach computation downstream (#1762 review). Keys are the
 // lowercased pubkey form.
-func weightedDistanceAdjacency(edges []BridgeEdge) map[string]map[string]float64 {
+func weightedDistanceAdjacency(edges []BridgeEdge) weightedGraph {
 	adj := make(map[string]map[string]float64)
 	addOrMerge := func(a, b string, dist float64) {
 		m, ok := adj[a]
@@ -51,34 +61,88 @@ func weightedDistanceAdjacency(edges []BridgeEdge) map[string]map[string]float64
 		addOrMerge(a, b, dist)
 		addOrMerge(b, a, dist)
 	}
-	return adj
+	// Convert pubkeys once, outside the all-sources shortest-path loops.
+	// Keep the normalization and cheapest-duplicate rules above shared.
+	graph := weightedGraph{nodes: make([]string, 0, len(adj)), adj: make([][]weightedNeighbor, len(adj))}
+	index := make(map[string]int, len(adj))
+	for node := range adj {
+		index[node] = len(graph.nodes)
+		graph.nodes = append(graph.nodes, node)
+	}
+	for i, node := range graph.nodes {
+		graph.adj[i] = make([]weightedNeighbor, 0, len(adj[node]))
+		for next, distance := range adj[node] {
+			graph.adj[i] = append(graph.adj[i], weightedNeighbor{node: index[next], dist: distance})
+		}
+	}
+	return graph
 }
 
-// dijkstraFrom returns the shortest-path distance from src to every reachable
-// node over the distance adjacency (unreachable nodes are absent). Reuses the
-// bridgePQ min-heap. Used by the Coverage axis; the Bridge axis runs its own
-// Brandes-coupled SSSP that additionally tracks predecessors and path counts.
-func dijkstraFrom(adj map[string]map[string]float64, src string) map[string]float64 {
-	dist := map[string]float64{src: 0}
-	pq := &bridgePQ{}
-	heap.Init(pq)
-	heap.Push(pq, bridgePQItem{node: src, dist: 0})
+// distanceWorkspace reuses per-source state. Reset only reached vertices so
+// disconnected graphs do not pay an all-vertices scan for every small component.
+type distanceWorkspace struct {
+	dist    []float64
+	visited []bool
+	reached []int
+	queue   bridgePQ
+	items   []bridgePQItem
+}
 
-	visited := make(map[string]bool)
-	for pq.Len() > 0 {
-		top := heap.Pop(pq).(bridgePQItem)
+func newDistanceWorkspace(size int) *distanceWorkspace {
+	w := &distanceWorkspace{
+		dist: make([]float64, size), visited: make([]bool, size),
+		reached: make([]int, 0, size), queue: make(bridgePQ, 0, size),
+		items: make([]bridgePQItem, size),
+	}
+	for i := range w.dist {
+		w.dist[i] = math.Inf(1)
+		w.items[i] = bridgePQItem{node: i, index: -1}
+	}
+	return w
+}
+
+func (w *distanceWorkspace) reset(src int) {
+	for _, node := range w.reached {
+		w.dist[node] = math.Inf(1)
+		w.visited[node] = false
+	}
+	w.reached = w.reached[:0]
+	w.queue = w.queue[:0]
+	w.improve(src, 0)
+}
+
+// One item per vertex avoids boxing a new heap value on every relaxation.
+// Decrease-key keeps the standard-library heap bounded to at most V entries.
+func (w *distanceWorkspace) improve(node int, distance float64) {
+	if math.IsInf(w.dist[node], 1) {
+		w.reached = append(w.reached, node)
+	}
+	w.dist[node] = distance
+	item := &w.items[node]
+	item.dist = distance
+	if item.index < 0 {
+		heap.Push(&w.queue, item)
+	} else {
+		heap.Fix(&w.queue, item.index)
+	}
+}
+
+// dijkstraFrom fills distances and reached vertices in the reusable workspace.
+// Bridge uses the same graph/workspace with Brandes predecessor/path-count logic.
+func dijkstraFrom(adj [][]weightedNeighbor, src int, work *distanceWorkspace) {
+	work.reset(src)
+	for work.queue.Len() > 0 {
+		top := heap.Pop(&work.queue).(*bridgePQItem)
 		v := top.node
-		if visited[v] {
+		if work.visited[v] {
 			continue
 		}
-		visited[v] = true
-		for w, edgeDist := range adj[v] {
-			alt := top.dist + edgeDist
-			if cur, ok := dist[w]; !ok || alt < cur {
-				dist[w] = alt
-				heap.Push(pq, bridgePQItem{node: w, dist: alt})
+		work.visited[v] = true
+		for _, edge := range adj[v] {
+			alt := top.dist + edge.dist
+			if alt < work.dist[edge.node] {
+				work.improve(edge.node, alt)
 			}
 		}
 	}
-	return dist
 }
