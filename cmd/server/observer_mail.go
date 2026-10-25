@@ -37,7 +37,7 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 		"username = \"" + username + "\"\n" +
 		"password = \"" + password + "\""
 	firmware := "set mqtt1.preset custom\n" +
-		"set mqtt1.server " + o.host + "\n" +
+		"set mqtt1.server " + firmwareServer(o) + "\n" +
 		"set mqtt1.port " + port + "\n" +
 		"set mqtt1.username " + username + "\n" +
 		"set mqtt1.password " + password + "\n" +
@@ -57,4 +57,19 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 		pre:         []string{meshcoretomqtt, firmware, plain},
 		actionLabel: "Your account", actionURL: a.set.baseURL.String() + "/#/account?section=observers",
 	})
+}
+
+// firmwareServer is the mqtt1.server value for the Dutch-MeshCore firmware.
+// For a bare host the firmware picks the scheme from the port alone (8883
+// mqtts, 443 wss, anything else mqtt), so the scheme is always given. The
+// firmware then appends mqtt1.port itself.
+func firmwareServer(o observerLoginSettings) string {
+	scheme := "mqtt"
+	if o.transport == "websockets" {
+		scheme = "ws"
+	}
+	if o.tls {
+		scheme += "s"
+	}
+	return scheme + "://" + o.host
 }
