@@ -1102,7 +1102,7 @@
             }).join(' → ');
             return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
               <div>${chain}</div>
-              <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${renderNodeTimestampHtml(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">Analyze →</a></div>
+              <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${renderNodeTimestampHtml(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">View example packet →</a></div>
             </div>`;
           }).join('');
         }
@@ -2060,7 +2060,7 @@
           }).join(' → ');
           return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
             <div>${chain}</div>
-            <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${renderNodeTimestampHtml(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">Analyze →</a></div>
+            <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${renderNodeTimestampHtml(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">View example packet →</a></div>
           </div>`;
         }).join('');
       }
