@@ -910,6 +910,7 @@
       var layout = panel.closest('.split-layout');
       if (layout) layout.classList.add('detail-collapsed');
       selectedId = null;
+      if (window.setRouteTitle) window.setRouteTitle('packets');
       renderTableRows();
     }
   }
@@ -3488,6 +3489,7 @@
   let selectedObservationId = null;
 
   async function selectPacket(id, hash, prefetchedData, obsRowId) {
+    if (window.setRouteTitle) window.setRouteTitle('packets', String(hash || id));
     selectedId = id;
     selectedObservationId = obsRowId || null;
     const obsParam = selectedObservationId ? `?obs=${selectedObservationId}` : '';
@@ -3530,6 +3532,7 @@
           selectedId = null;
           selectedObservationId = null;
           history.replaceState(null, '', '#/packets');
+          if (window.setRouteTitle) window.setRouteTitle('packets');
           renderTableRows();
         }
       });
@@ -3545,9 +3548,11 @@
         document.body.appendChild(sheet);
         sheet.querySelector('#mobileSheetClose').addEventListener('click', () => {
           sheet.classList.remove('open');
+          if (window.setRouteTitle) window.setRouteTitle('packets');
         });
         sheet.querySelector('.mobile-sheet-handle').addEventListener('click', () => {
           sheet.classList.remove('open');
+          if (window.setRouteTitle) window.setRouteTitle('packets');
         });
       }
       panel = sheet.querySelector('.mobile-sheet-content');

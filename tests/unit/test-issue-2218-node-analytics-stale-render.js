@@ -121,6 +121,17 @@ function loadRouter() {
       r.go(hash);
       assert(r.ctx.document.title === title, hash + ': ' + title);
     }
+    assert(typeof r.ctx.setSiteTitle === 'function' && typeof r.ctx.setRouteTitle === 'function',
+      'branding and detail updates have shared title helpers');
+    if (r.ctx.setSiteTitle && r.ctx.setRouteTitle) {
+      r.go('#/nodes');
+      r.ctx.setSiteTitle('Example Mesh');
+      assert(r.ctx.document.title === 'Nodes | Example Mesh', 'late branding preserves the current page');
+      r.ctx.setRouteTitle('packets', 'late-packet');
+      assert(r.ctx.document.title === 'Nodes | Example Mesh', 'a detail callback from another page cannot replace the title');
+      r.ctx.setSiteTitle('  ');
+      assert(r.ctx.document.title === 'Nodes | CoreScope', 'blank branding falls back without accumulating suffixes');
+    }
   }
   console.log('Router: viewGeneration()');
   {

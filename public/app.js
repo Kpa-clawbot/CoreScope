@@ -1165,6 +1165,41 @@ registerPage('tools-landing', {
 
 let currentPage = null;
 
+// Keep branding separate so route changes and late theme loads cannot
+// overwrite one another or accumulate title suffixes (#2259).
+let _siteTitle = document.title || 'CoreScope';
+let _pageTitle = '';
+function setPageTitle(title) {
+  _pageTitle = title;
+  document.title = title ? title + ' | ' + _siteTitle : _siteTitle;
+}
+function setSiteTitle(title) {
+  _siteTitle = String(title || '').trim() || 'CoreScope';
+  setPageTitle(_pageTitle);
+}
+function routeTitle(page, param) {
+  const id = param ? param.split('/')[0].slice(0, 12) : '';
+  if (id && ['nodes', 'node-analytics', 'node-reach'].includes(page)) {
+    return 'Node ' + id + (page === 'node-reach' ? ' | Reach' : page === 'node-analytics' ? ' | Analytics' : '');
+  }
+  if (id && (page === 'packets' || page === 'packet-detail')) return 'Packet ' + id;
+  if (page === 'observer-detail') return 'Observer ' + id;
+  const names = {
+    home: '', packets: 'Packets', nodes: 'Nodes', map: 'Map', live: 'Live',
+    channels: 'Channels', observers: 'Observers', analytics: 'Analytics',
+    'scope-audit': 'Scope Audit', perf: 'Performance', 'audio-lab': 'Audio Lab',
+    'tools-landing': 'Tools', traces: 'Packet Trace', 'path-inspector': 'Path Inspector',
+    account: 'Account', admin: 'Admin', compare: 'Observer Comparison', 'rx-coverage': 'RX Coverage',
+  };
+  return Object.prototype.hasOwnProperty.call(names, page) ? names[page] : 'Not Found';
+}
+function setRouteTitle(page, param) {
+  // Ignore a detail callback from a page the user already left.
+  if (currentPage === page || (page === 'packets' && currentPage === 'packet-detail')) {
+    setPageTitle(routeTitle(page, param));
+  }
+}
+
 // Bumped on every page init, so async page work can tell its visit is over:
 // capture viewGeneration() at init and drop the result when it has moved on
 // (#2218, #2230, #2200). A route change to another node of the same page
@@ -1275,6 +1310,7 @@ function navigate() {
     pages[currentPage].destroy();
   }
   currentPage = basePage;
+  setRouteTitle(basePage, routeParam);
 
   // #1572 — defensive: ensure body.live-fullscreen is cleared whenever
   // we navigate to a non-live route. Live page's destroy() also clears

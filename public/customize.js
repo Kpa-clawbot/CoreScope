@@ -29,6 +29,8 @@
     }
   }
   function _v1SetBrandAlt(alt) {
+    if (window.setSiteTitle) window.setSiteTitle(alt);
+    else document.title = alt || 'CoreScope';
     var node = document.querySelector('.nav-brand .brand-logo');
     if (!node) return;
     if (node.tagName.toLowerCase() === 'img') node.setAttribute('alt', alt);
@@ -1106,7 +1108,6 @@
           _v1SetBrandAlt(inp.value);
           var brandEl = document.querySelector('.brand-text');
           if (brandEl) brandEl.textContent = inp.value;
-          document.title = inp.value;
         }
         if (inp.dataset.key === 'branding.logoUrl') {
           // Swap the navbar logo: empty → restore inline default; URL → <img>.
@@ -1555,7 +1556,6 @@
             _v1SetBrandAlt(userTheme.branding.siteName);
             const brandEl = document.querySelector('.brand-text');
             if (brandEl) brandEl.textContent = userTheme.branding.siteName;
-            document.title = userTheme.branding.siteName;
           }
           if (userTheme.branding.logoUrl) {
             _v1SetBrandLogoUrl(userTheme.branding.logoUrl);
