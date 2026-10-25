@@ -64,6 +64,7 @@ async function run() {
     localStorage.setItem('meshcore-user-level', 'experienced');
     localStorage.setItem('meshcore-my-nodes', JSON.stringify(nodes.map((n) => ({ pubkey: n.pk, name: n.name, addedAt: 0 }))));
     localStorage.setItem('meshcore-favorites', JSON.stringify(nodes.map((n) => n.pk)));
+    window.addEventListener('theme-refresh', () => { window.__themeReady = true; }, { once: true });
   }, NODES);
   const page = await ctx.newPage();
   page.setDefaultTimeout(15000);
@@ -81,6 +82,8 @@ async function run() {
   console.log(`\nRunning role-aware health status E2E tests against ${BASE}\n`);
 
   await page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  // The initial theme refresh rebuilds Home, clearing any selected health card.
+  await page.waitForFunction(() => window.__themeReady === true);
   await page.waitForSelector('#myNodesGrid .my-node-card');
 
   await test('every mocked node was fetched from /api/nodes/<pk>/health', async () => {
