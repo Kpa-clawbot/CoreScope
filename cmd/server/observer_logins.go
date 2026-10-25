@@ -70,7 +70,12 @@ type indexedLogin struct {
 	userID  int64
 	hash    [32]byte
 	revoked bool
+	// disabled follows the account status; it is separate from revoked so
+	// enabling an account does not undo a revocation.
+	disabled bool
 }
+
+func (l indexedLogin) denied() bool { return l.revoked || l.disabled }
 
 // observerLoginIndex answers the broker hooks from memory. owners holds every
 // bound pubkey; a nil owner means the binding is orphaned. owned counts the
@@ -99,8 +104,19 @@ func newObserverLoginIndex(st *users.Store) (*observerLoginIndex, error) {
 		owners:     make(map[string]*int64, len(bindings)),
 		owned:      make(map[int64]int, len(logins)),
 	}
+	ids := make([]int64, 0, len(logins))
 	for _, l := range logins {
 		ix.setLogin(l)
+		ids = append(ids, l.UserID)
+	}
+	accounts, err := st.UsersByID(ids)
+	if err != nil {
+		return nil, err
+	}
+	for id, u := range accounts {
+		if u.Status == users.StatusDisabled {
+			ix.setDisabled(id, true)
+		}
 	}
 	for _, b := range bindings {
 		ix.setOwner(b.Pubkey, b.UserID)
@@ -115,11 +131,42 @@ func (ix *observerLoginIndex) setLogin(l users.MQTTLogin) {
 	hex.Decode(h[:], []byte(l.PasswordHash))
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
+	disabled := false
 	if old, ok := ix.byUser[l.UserID]; ok {
+		disabled = ix.byUsername[old].disabled
 		delete(ix.byUsername, old)
 	}
 	ix.byUser[l.UserID] = l.Username
-	ix.byUsername[l.Username] = indexedLogin{userID: l.UserID, hash: h, revoked: l.RevokedAt != nil}
+	ix.byUsername[l.Username] = indexedLogin{userID: l.UserID, hash: h, revoked: l.RevokedAt != nil, disabled: disabled}
+}
+
+// setDisabled follows the account status of userID's login.
+func (ix *observerLoginIndex) setDisabled(userID int64, disabled bool) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	name, ok := ix.byUser[userID]
+	if !ok {
+		return
+	}
+	l := ix.byUsername[name]
+	l.disabled = disabled
+	ix.byUsername[name] = l
+}
+
+// removeUser follows an account deletion: the login goes, and every pubkey
+// the user owned stays in owners as an orphan so nobody can auto-claim it.
+func (ix *observerLoginIndex) removeUser(userID int64) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if name, ok := ix.byUser[userID]; ok {
+		delete(ix.byUsername, name)
+		delete(ix.byUser, userID)
+	}
+	for pk, o := range ix.owners {
+		if o != nil && *o == userID {
+			ix.setOwnerLocked(pk, nil)
+		}
+	}
 }
 
 func (ix *observerLoginIndex) revoke(userID int64) {
@@ -175,7 +222,7 @@ func (ix *observerLoginIndex) authenticate(username, password string) hookResult
 	if !ok {
 		return hookIgnore
 	}
-	if l.revoked {
+	if l.denied() {
 		return hookDeny
 	}
 	h := sha256.Sum256([]byte(password))
@@ -227,7 +274,7 @@ func (ix *observerLoginIndex) authorizePublish(username, topic string, bind func
 	if !ok {
 		return hookIgnore, "", false
 	}
-	if l.revoked {
+	if l.denied() {
 		return hookDeny, "", false
 	}
 	pk, ok := parsePublishTopic(topic)
@@ -260,4 +307,14 @@ func (ix *observerLoginIndex) authorizePublish(username, topic string, bind func
 		return hookDeny, pk, false
 	}
 	return hookAllow, pk, created
+}
+
+// unbind forgets pk so the next publisher can claim it.
+func (ix *observerLoginIndex) unbind(pk string) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if _, ok := ix.owners[pk]; ok {
+		ix.setOwnerLocked(pk, nil)
+		delete(ix.owners, pk)
+	}
 }

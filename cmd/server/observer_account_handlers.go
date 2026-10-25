@@ -156,20 +156,11 @@ func (s *Server) handleObserverLoginCreate(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	username, password, err := generateMQTTCredentials()
-	if err != nil {
-		log.Printf("[observer-logins] generate credentials: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal error")
+	l, password, ok := a.newMQTTLogin(w, u.ID)
+	if !ok {
 		return
 	}
-	enc, err := a.sealbox.Seal(password)
-	if err != nil {
-		log.Printf("[observer-logins] seal password: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	sum := sha256.Sum256([]byte(password))
-	l := users.MQTTLogin{UserID: u.ID, Username: username, PasswordHash: hex.EncodeToString(sum[:]), PasswordEnc: enc, CreatedAt: a.now()}
+	username := l.Username
 	switch err := a.st.CreateMQTTLogin(l); {
 	case err == nil:
 	case errors.Is(err, users.ErrMQTTLoginExists):
@@ -229,6 +220,26 @@ func (s *Server) handleObserverLoginResend(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, sentResponse{Sent: true})
+}
+
+// newMQTTLogin generates fresh credentials for userID. It answers 500 itself
+// and returns false on failure. The password is returned in the clear for the
+// mail only; the login holds its hash and sealed form.
+func (a *authService) newMQTTLogin(w http.ResponseWriter, userID int64) (users.MQTTLogin, string, bool) {
+	username, password, err := generateMQTTCredentials()
+	if err != nil {
+		log.Printf("[observer-logins] generate credentials: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return users.MQTTLogin{}, "", false
+	}
+	enc, err := a.sealbox.Seal(password)
+	if err != nil {
+		log.Printf("[observer-logins] seal password: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return users.MQTTLogin{}, "", false
+	}
+	sum := sha256.Sum256([]byte(password))
+	return users.MQTTLogin{UserID: userID, Username: username, PasswordHash: hex.EncodeToString(sum[:]), PasswordEnc: enc, CreatedAt: a.now()}, password, true
 }
 
 // credentialsMailsSince counts the user's credentials mails sent after

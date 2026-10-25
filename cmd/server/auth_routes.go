@@ -66,6 +66,10 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 		r.HandleFunc("/api/account/observer-login", s.withUser(s.handleObserverLoginGet)).Methods("GET")
 		r.HandleFunc("/api/account/observer-login", s.withUser(s.handleObserverLoginCreate)).Methods("POST")
 		r.HandleFunc("/api/account/observer-login/resend", s.withUser(s.handleObserverLoginResend)).Methods("POST")
+		r.HandleFunc("/api/admin/observer-logins", s.withAdmin(s.handleAdminObserverLogins)).Methods("GET")
+		r.HandleFunc("/api/admin/observer-logins/{id}/revoke", s.withAdmin(s.handleAdminObserverLoginRevoke)).Methods("POST")
+		r.HandleFunc("/api/admin/observer-logins/{id}/reissue", s.withAdmin(s.handleAdminObserverLoginReissue)).Methods("POST")
+		r.HandleFunc("/api/admin/observer-bindings/{pubkey}", s.withAdmin(s.handleAdminObserverBinding)).Methods("PUT")
 	}
 	if s.auth.notify != nil {
 		s.registerNotifyRoutes(r)
