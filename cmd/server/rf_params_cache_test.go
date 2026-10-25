@@ -275,7 +275,8 @@ func TestRfParamsRoute(t *testing.T) {
 
 	// Disabled: well-formed and empty.
 	resp := get()
-	if resp.Enabled || resp.FetchedAt != nil || resp.Nodes == nil || resp.Presets == nil {
+	if resp.Enabled || resp.FetchedAt != nil || resp.Nodes == nil || len(resp.Nodes) != 0 || resp.Presets == nil ||
+		resp.Deviations == nil || len(resp.Deviations) != 0 {
 		t.Errorf("disabled response = %+v", resp)
 	}
 
