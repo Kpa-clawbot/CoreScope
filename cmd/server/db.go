@@ -574,7 +574,8 @@ type PacketQuery struct {
 	Since              string
 	Until              string
 	Region             string
-	Area               string // area key; filters by transmitting node's GPS position
+	Area               string          // area key; filters by transmitting node's GPS position
+	areaNodes          map[string]bool // resolved by the store's shared area cache before SQL fallback
 	Node               string
 	Channel            string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
 	Order              string // ASC or DESC
@@ -904,6 +905,26 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 			where = append(where, fmt.Sprintf("EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata = %s)", db.parameter(len(args)+1)))
 		}
 		args = append(args, q.Region)
+	}
+	if len(q.areaNodes) > 0 {
+		// Match the memory filter's decoded-key precedence, including legacy
+		// public_key rows that from_pubkey does not cover. Keep this in the
+		// shared WHERE so both COUNT and pagination use the same membership.
+		originator := db.nativeSQL(
+			`CASE WHEN json_valid(t.decoded_json) THEN COALESCE(
+				CASE WHEN json_type(t.decoded_json, '$.public_key') = 'text'
+					THEN NULLIF(json_extract(t.decoded_json, '$.public_key'), '') END,
+				CASE WHEN json_type(t.decoded_json, '$.pubKey') = 'text'
+					THEN NULLIF(json_extract(t.decoded_json, '$.pubKey'), '') END) END`,
+			`CASE WHEN t.decoded_json IS JSON OBJECT THEN COALESCE(
+				CASE WHEN json_typeof(t.decoded_json::json -> 'public_key') = 'string'
+					THEN NULLIF(t.decoded_json::json ->> 'public_key', '') END,
+				CASE WHEN json_typeof(t.decoded_json::json -> 'pubKey') = 'string'
+					THEN NULLIF(t.decoded_json::json ->> 'pubKey', '') END) END`)
+		where = append(where, originator+" IN ("+db.sqlPlaceholders(len(q.areaNodes), len(args)+1)+")")
+		for pk := range q.areaNodes {
+			args = append(args, pk)
+		}
 	}
 	return where, args
 }

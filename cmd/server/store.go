@@ -1697,6 +1697,9 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 		needsSQL := (limited && q.Since == "") || (q.Since != "" && q.Since < oldest) ||
 			(q.Until != "" && q.Until < oldest)
 		if needsSQL {
+			if q.Area != "" {
+				q.areaNodes = s.resolveAreaNodes(q.Area)
+			}
 			if result, err := s.db.QueryPackets(q); err == nil {
 				return result
 			} else {
@@ -1785,6 +1788,9 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 		needsSQL := (limited && q.Since == "") || (q.Since != "" && q.Since < oldest) ||
 			(q.Until != "" && q.Until < oldest)
 		if needsSQL {
+			if q.Area != "" {
+				q.areaNodes = s.resolveAreaNodes(q.Area)
+			}
 			if result, err := s.db.QueryGroupedPackets(q); err == nil {
 				return result
 			} else {
