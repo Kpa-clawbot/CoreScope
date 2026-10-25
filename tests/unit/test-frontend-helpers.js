@@ -118,6 +118,50 @@ function realPathHashSize() {
 }
 
 // ===== APP.JS TESTS =====
+console.log('\n=== app.js: column resize handle positioning (#2217) ===');
+{
+  function resizeFixture(positions, saved) {
+    const ctx = makeSandbox();
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const ths = positions.map(position => ({
+      style: { position: '' }, dataset: {}, scrollWidth: 80,
+      computedPosition: position, children: [],
+      appendChild(handle) { this.children.push(handle); },
+    }));
+    const table = {
+      style: {}, dataset: {}, parentElement: { clientWidth: 400 },
+      querySelector: sel => sel === 'thead' ? { querySelectorAll: () => ths } : null,
+      querySelectorAll: () => ths,
+    };
+    ctx.document.querySelector = () => table;
+    ctx.document.createElement = () => ({ addEventListener: () => {} });
+    ctx.getComputedStyle = th => ({ position: th.style.position || th.computedPosition });
+    if (saved) ctx.localStorage.setItem('column-widths', JSON.stringify(ths.map(() => 100 / ths.length)));
+    return { ctx, table, ths };
+  }
+
+  for (const saved of [false, true]) {
+    test('static headers anchor handles with ' + (saved ? 'saved' : 'measured') + ' widths', () => {
+      const { ctx, ths } = resizeFixture(['static', 'static', 'static'], saved);
+      ctx.makeColumnsResizable('#table', 'column-widths');
+      assert.strictEqual(ths[0].style.position, 'relative', 'first handle needs its own header as containing block');
+      assert.strictEqual(ths[1].style.position, 'relative', 'each handle needs its own containing block');
+      assert.strictEqual(ths[2].style.position, '', 'last header has no handle and needs no change');
+      ctx.makeColumnsResizable('#table', 'column-widths');
+      assert.deepStrictEqual(ths.map(th => th.children.length), [1, 1, 0], 'repeated setup must not duplicate handles');
+    });
+
+    test('already positioned headers are preserved with ' + (saved ? 'saved' : 'measured') + ' widths', () => {
+      const { ctx, ths } = resizeFixture(['sticky', 'relative', 'absolute', 'fixed', 'static'], saved);
+      ctx.makeColumnsResizable('#table', 'column-widths');
+      assert.deepStrictEqual(ths.map(th => th.style.position), ['', '', '', '', ''],
+        'computed CSS positioning must not be overridden by an inline style');
+      assert.deepStrictEqual(ths.map(th => th.children.length), [1, 1, 1, 1, 0]);
+    });
+  }
+}
+
 console.log('\n=== app.js: timeAgo ===');
 {
   const ctx = makeSandbox();
