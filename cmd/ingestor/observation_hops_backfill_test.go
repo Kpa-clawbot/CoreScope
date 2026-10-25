@@ -225,7 +225,11 @@ func TestLoadConfig_RejectsNegativeHopIndexDays(t *testing.T) {
 // the window.
 func TestHopIndex_OffRemovesEverything_OnRebuilds(t *testing.T) {
 	fastHopBackfill(t, 3600)
-	now := time.Now().Unix()
+	fixed := time.Now().Truncate(time.Second)
+	previousClock := hopNow
+	t.Cleanup(func() { hopNow = previousClock })
+	hopNow = func() time.Time { return fixed }
+	now := fixed.Unix()
 	s := legacyStore(t, 14, ob{`["AA","BB"]`, now - 2*day})
 	restart(t, s, 14)
 	checkHopIndex(t, s)
@@ -246,7 +250,9 @@ func TestHopIndex_OffRemovesEverything_OnRebuilds(t *testing.T) {
 	insertObs(t, s, ob{`["EE"]`, now - 3*day})
 	restart(t, s, 14)
 	checkHopIndex(t, s)
-	assertNear(t, "coverage after re-enable", hopCoverage(s), now-14*day)
+	if got, want := hopCoverage(s), now-14*day; got != want {
+		t.Fatalf("coverage after re-enable = %d, want %d", got, want)
+	}
 	if hopRows(s) != 3 { // AA, BB, EE
 		t.Fatalf("re-enabled: %d hop rows, want 3", hopRows(s))
 	}
@@ -364,7 +370,11 @@ func TestBackfillObservationHops_SkipsHugeEmptyGaps(t *testing.T) {
 
 func TestTrimObservationHops_SlidesWindowAndDeletesByKey(t *testing.T) {
 	fastHopBackfill(t, 3600)
-	now := time.Now().Unix()
+	fixed := time.Now().Truncate(time.Second)
+	previousClock := hopNow
+	t.Cleanup(func() { hopNow = previousClock })
+	hopNow = func() time.Time { return fixed }
+	now := fixed.Unix()
 	s := legacyStore(t, 14,
 		ob{`["AA","BB"]`, now - 12*day}, // stays
 		ob{`["CC"]`, now - 15*day},      // falls out
@@ -385,7 +395,9 @@ func TestTrimObservationHops_SlidesWindowAndDeletesByKey(t *testing.T) {
 	if n != 4 || hopRows(s) != 2 {
 		t.Fatalf("trim deleted %d, left %d; want 4 deleted, 2 left", n, hopRows(s))
 	}
-	assertNear(t, "coverage", hopCoverage(s), now-14*day)
+	if got, want := hopCoverage(s), now-14*day; got != want {
+		t.Fatalf("coverage = %d, want %d", got, want)
+	}
 	checkHopIndex(t, s)
 	if n, _ := s.TrimObservationHops(); n != 0 {
 		t.Fatalf("second trim deleted %d, want 0 (nothing newly out of window)", n)
@@ -423,7 +435,11 @@ func TestHopIndex_StoresHopsUpperCase(t *testing.T) {
 // the next chunk would lower the mark again over the deleted rows.
 func TestTrimWaitsForRunningBackfill(t *testing.T) {
 	fastHopBackfill(t, 3600)
-	now := time.Now().Unix()
+	fixed := time.Now().Truncate(time.Second)
+	previousClock := hopNow
+	t.Cleanup(func() { hopNow = previousClock })
+	hopNow = func() time.Time { return fixed }
+	now := fixed.Unix()
 	var obs []ob
 	for d := int64(1); d <= 9; d++ {
 		obs = append(obs, ob{fmt.Sprintf(`["H%d"]`, d), now - d*day})
@@ -461,7 +477,9 @@ func TestTrimWaitsForRunningBackfill(t *testing.T) {
 		t.Fatal("trim never finished after the backfill")
 	}
 	checkHopIndex(t, s)
-	assertNear(t, "coverage", hopCoverage(s), now-3*day)
+	if got, want := hopCoverage(s), now-3*day; got != want {
+		t.Fatalf("coverage = %d, want %d", got, want)
+	}
 }
 
 // Scheduling the backfill inside OpenStore keeps live ingest dark for its whole
