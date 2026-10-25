@@ -59,6 +59,11 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	if s.auth.set.proposals.enabled {
 		s.registerProposalRoutes(r)
 	}
+	// Broker hooks: no session, only the shared secret header.
+	if s.auth.set.observerLogins.enabled {
+		r.HandleFunc("/api/mqtt-hook/emqx/authn", s.handleEMQXAuthn).Methods("POST")
+		r.HandleFunc("/api/mqtt-hook/emqx/authz", s.handleEMQXAuthz).Methods("POST")
+	}
 	if s.auth.notify != nil {
 		s.registerNotifyRoutes(r)
 	}

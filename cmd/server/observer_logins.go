@@ -160,6 +160,14 @@ func (ix *observerLoginIndex) ownedCount(uid int64) int {
 	return ix.owned[uid]
 }
 
+// userIDFor returns the owner of username's login.
+func (ix *observerLoginIndex) userIDFor(username string) (int64, bool) {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	l, ok := ix.byUsername[username]
+	return l.userID, ok
+}
+
 func (ix *observerLoginIndex) authenticate(username, password string) hookResult {
 	ix.mu.RLock()
 	l, ok := ix.byUsername[username]
