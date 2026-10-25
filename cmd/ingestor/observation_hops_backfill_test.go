@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -446,15 +447,23 @@ func TestTrimWaitsForRunningBackfill(t *testing.T) {
 	}
 	s := legacyStore(t, 10, obs...)
 	trimDone := make(chan error, 1)
+	var trimWorker sync.WaitGroup
 	fired := false
 	t.Cleanup(func() { hopBackfillAfterChunk = nil })
+	// Cleanup is LIFO: join before resetting the hook, store, or clock.
+	t.Cleanup(trimWorker.Wait)
 	hopBackfillAfterChunk = func() {
 		if fired || hopCoverage(s) > now-5*day {
 			return
 		}
 		fired = true
 		s.hopIndexDays = 3
-		go func() { _, err := s.TrimObservationHops(); trimDone <- err }()
+		trimWorker.Add(1)
+		go func() {
+			defer trimWorker.Done()
+			_, err := s.TrimObservationHops()
+			trimDone <- err
+		}()
 		select {
 		case <-trimDone:
 			t.Error("trim ran while the backfill was between chunks")
