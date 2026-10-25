@@ -286,6 +286,9 @@ func resolveObserverLogins(c *ObserverLoginsConfig, getenv func(string) string) 
 	if o.hookSecret == "" {
 		return observerLoginSettings{}, errors.New("userManagement.observerLogins.hookSecret is required (or CORESCOPE_OBSERVER_HOOK_SECRET)")
 	}
+	if len(o.hookSecret) < 16 {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.hookSecret must be at least 16 characters")
+	}
 	rawKey := envOrValue(getenv, "CORESCOPE_OBSERVER_KEY", c.EncryptionKey)
 	if rawKey == "" {
 		return observerLoginSettings{}, errors.New("userManagement.observerLogins.encryptionKey is required (or CORESCOPE_OBSERVER_KEY)")
@@ -303,6 +306,9 @@ func resolveObserverLogins(c *ObserverLoginsConfig, getenv func(string) string) 
 	o.transport = strings.TrimSpace(c.Broker.Transport)
 	if o.transport == "" {
 		o.transport = defaultObserverBrokerTransport
+	}
+	if o.transport != "tcp" && o.transport != "websockets" {
+		return observerLoginSettings{}, fmt.Errorf("userManagement.observerLogins.broker.transport %q is not supported (use \"tcp\" or \"websockets\")", o.transport)
 	}
 	return o, nil
 }

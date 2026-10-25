@@ -46,7 +46,7 @@ Only EMQX 5 is covered here. The setup below was tested on EMQX 5.8.6.
 
 | Key | Meaning |
 |---|---|
-| `hookSecret` | Shared secret the broker sends in the `X-CoreScope-Hook-Secret` header. Required. `CORESCOPE_OBSERVER_HOOK_SECRET` wins over it. Generate one with `openssl rand -hex 32`. |
+| `hookSecret` | Shared secret the broker sends in the `X-CoreScope-Hook-Secret` header. Required, at least 16 characters. `CORESCOPE_OBSERVER_HOOK_SECRET` wins over it. Generate one with `openssl rand -hex 32`. |
 | `encryptionKey` | AES-256-GCM key for the stored passwords: standard base64 of exactly 32 bytes (`openssl rand -base64 32`). Required. `CORESCOPE_OBSERVER_KEY` wins over it. Passwords are stored encrypted, not hashed, so they can be mailed again; the key is not in `users.db`, so a copied `users.db` alone does not reveal them. Without the original key the stored passwords cannot be decrypted, so re-sending fails: reissue the login instead. Key rotation is not supported. |
 | `broker.host` | Host observers connect to, as written in the credentials mail. Required. |
 | `broker.port` | Default 1883. |
@@ -66,8 +66,8 @@ when the login index could not be loaded. Let the broker reach them over your in
 They are not for browsers: if CoreScope is public, you can also block `/api/mqtt-hook/` at the
 reverse proxy for everything except the broker.
 
-The credentials mail holds the login in three forms: a meshcoretomqtt `[[broker]]` block, the
-Dutch-MeshCore observer firmware commands, and the plain values. For the firmware the server
+The credentials mail holds the login in four forms: a meshcoretomqtt `[[broker]]` block, the
+Dutch-MeshCore observer firmware commands, a Home Assistant meshcore-ha block, and the plain values. For the firmware the server
 line always carries a scheme (`set mqtt1.server mqtts://mqtt.example.org`), because a bare host
 makes the firmware choose the scheme from the port alone (8883 TLS, 443 secure websockets,
 anything else plain MQTT).

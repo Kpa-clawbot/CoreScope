@@ -309,6 +309,13 @@ func (ix *observerLoginIndex) authorizePublish(username, topic string, bind func
 	return hookAllow, pk, created
 }
 
+// ownerOf returns pk's current owner, nil when unbound or orphaned.
+func (ix *observerLoginIndex) ownerOf(pk string) *int64 {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	return ix.owners[pk]
+}
+
 // unbind forgets pk so the next publisher can claim it.
 func (ix *observerLoginIndex) unbind(pk string) {
 	ix.mu.Lock()

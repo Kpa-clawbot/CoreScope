@@ -341,3 +341,23 @@ func TestCreateLoginEnablesOwnEvent(t *testing.T) {
 		t.Fatalf("prefs after create = %+v, %v", p, err)
 	}
 }
+
+func TestObserverLogin_CreateAndResendAuditRows(t *testing.T) {
+	f := newOAFixture(t)
+	expectStatus(t, f.do("POST", oaPath, nil, as(f.c)), 201)
+	expectStatus(t, f.do("POST", oaPath+"/resend", nil, as(f.c)), 200)
+	f.srv.auth.waitAudits()
+	entries, err := f.st.AuditAllFor(f.c.me.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, e := range entries {
+		seen[e.Action] = true
+	}
+	for _, want := range []string{"observer.login.create", "observer.login.resend"} {
+		if !seen[want] {
+			t.Fatalf("no %s audit row; have %v", want, seen)
+		}
+	}
+}

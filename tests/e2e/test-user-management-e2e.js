@@ -10,7 +10,7 @@
  *   # config.json for the on-server (in $CFGDIR): port 13582, userManagement {enabled: true,
  *   #   dbPath "users.db", adminEmails ["admin@e2e.test"], publicBaseUrl "http://localhost:13582",
  *   #   mail {provider "fake", fromEmail "noreply@e2e.test"}, channelProposals {enabled: true}, notifications {enabled: true},
- *   #   observerLogins {enabled: true, hookSecret "e2e-hook-secret", encryptionKey "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+ *   #   observerLogins {enabled: true, hookSecret "e2e-hook-secret-0123", encryptionKey "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
  *   #   broker {host "mqtt.e2e.test"}}}
  *   corescope-server -port 13581 -db "$TMP/off.db" -public public &
  *   (cd "$CFGDIR" && corescope-server-e2e -config-dir . -port 13582 -db "$TMP/on.db" -public <repo>/public) &
@@ -535,7 +535,7 @@ async function until(fn, label) {
     obs.pubkey = o.id.toUpperCase();
     obs.name = o.name;
     const r = await owner.request.post(BASE + '/api/mqtt-hook/emqx/authz', {
-      headers: { 'X-CoreScope-Hook-Secret': 'e2e-hook-secret' },
+      headers: { 'X-CoreScope-Hook-Secret': 'e2e-hook-secret-0123' },
       data: { username: obs.username, topic: 'meshcore/TST/' + obs.pubkey + '/status', action: 'publish' },
     });
     assert(r.ok() && (await r.json()).result === 'allow', 'authz did not allow the publish');

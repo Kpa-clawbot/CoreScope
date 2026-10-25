@@ -536,7 +536,7 @@ jobs:
               "notifications": { "enabled": true },
               "observerLogins": {
                 "enabled": true,
-                "hookSecret": "e2e-hook-secret",
+                "hookSecret": "e2e-hook-secret-0123",
                 "encryptionKey": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
                 "broker": { "host": "mqtt.e2e.test" }
               }

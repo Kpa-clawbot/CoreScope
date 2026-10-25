@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -205,7 +206,7 @@ func TestObserverAdmin_AuditRowsWithoutPassword(t *testing.T) {
 	for _, e := range entries {
 		seen[e.Action] = true
 	}
-	for _, want := range []string{"observer_login.revoke", "observer_login.reissue", "observer_binding.set"} {
+	for _, want := range []string{"observer.login.revoke", "observer.login.reissue", "observer.binding.set"} {
 		if !seen[want] {
 			t.Fatalf("no %s audit row; have %v", want, seen)
 		}
@@ -311,5 +312,52 @@ func TestIndexReissueKeepsDisabled(t *testing.T) {
 	f.idx.setLogin(users.MQTTLogin{UserID: a, Username: "obs_new000000000", PasswordHash: olHash("pw-n")})
 	if f.idx.authenticate("obs_new000000000", "pw-n") != hookDeny {
 		t.Fatal("reissue cleared the disabled flag")
+	}
+}
+
+func TestObserverAudit_ActionNamesPassFilter(t *testing.T) {
+	for _, a := range []string{"observer.login.create", "observer.login.resend", "observer.login.revoke",
+		"observer.login.reissue", "observer.binding.set", "observer.*", "observer.login.*"} {
+		flt, err := parseAuditFilter(url.Values{"action": {a}})
+		if err != nil || len(flt.Actions) != 1 || flt.Actions[0] != a {
+			t.Errorf("%s: filter = %+v, err = %v", a, flt, err)
+		}
+	}
+}
+
+func TestObserverAudit_BindingSetNamesPreviousOwner(t *testing.T) {
+	f := newOadmFixture(t)
+	a := f.addLogin(t, "a@example.org", "obs_aaaaaaaaaaaa", "pw-a")
+	b := f.addLogin(t, "b@example.org", "obs_bbbbbbbbbbbb", "pw-b")
+	if f.authz(t, "obs_aaaaaaaaaaaa", hkTopic(hkPK), "publish") != hookAllow {
+		t.Fatal("A should bind first")
+	}
+	path := "/api/admin/observer-bindings/" + hkPK
+	expectStatus(t, f.do("PUT", path, observerBindingRequest{UserID: &b}, as(f.admin)), 200)
+	expectStatus(t, f.do("PUT", path, observerBindingRequest{}, as(f.admin)), 200)
+	expectStatus(t, f.do("PUT", "/api/admin/observer-bindings/"+oadmPK2, observerBindingRequest{UserID: &a}, as(f.admin)), 200)
+	entries, err := f.st.AuditAllFor(f.admin.me.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range entries {
+		if e.Action == "observer.binding.set" {
+			got = append(got, e.Detail["pubkey"][:4]+" prev="+e.Detail["previousUserId"])
+		}
+	}
+	pk, pk2 := strings.ToUpper(hkPK)[:4], strings.ToUpper(oadmPK2)[:4]
+	want := map[string]bool{
+		fmt.Sprintf("%s prev=%d", pk, a): true,
+		fmt.Sprintf("%s prev=%d", pk, b): true,
+		pk2 + " prev=none":               true,
+	}
+	if len(got) != 3 {
+		t.Fatalf("rows = %v", got)
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Fatalf("unexpected row %q in %v", g, got)
+		}
 	}
 }

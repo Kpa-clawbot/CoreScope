@@ -173,7 +173,7 @@ func (s *Server) handleObserverLoginCreate(w http.ResponseWriter, r *http.Reques
 	}
 	a.obsIdx.setLogin(l)
 	a.enableOwnObserverMails(u.ID)
-	a.auditAsync(idPtr(u.ID), "observer-login.create", idPtr(u.ID), map[string]string{"username": username})
+	a.auditAsync(idPtr(u.ID), "observer.login.create", idPtr(u.ID), map[string]string{"username": username})
 	if !a.sendObserverCredentials(r.Context(), w, u, username, password) {
 		return
 	}
@@ -216,7 +216,7 @@ func (s *Server) handleObserverLoginResend(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	a.auditAsync(idPtr(u.ID), "observer-login.resend", idPtr(u.ID), nil)
+	a.auditAsync(idPtr(u.ID), "observer.login.resend", idPtr(u.ID), nil)
 	if !a.sendObserverCredentials(r.Context(), w, u, l.Username, password) {
 		return
 	}

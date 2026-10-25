@@ -109,7 +109,7 @@ func (s *Server) handleAdminObserverLoginRevoke(w http.ResponseWriter, r *http.R
 		return
 	}
 	a.obsIdx.revoke(uid)
-	a.audit(idPtr(actor.ID), "observer_login.revoke", idPtr(uid), nil)
+	a.audit(idPtr(actor.ID), "observer.login.revoke", idPtr(uid), nil)
 	writeJSON(w, okResponse{OK: true})
 }
 
@@ -139,7 +139,7 @@ func (s *Server) handleAdminObserverLoginReissue(w http.ResponseWriter, r *http.
 		return
 	}
 	a.obsIdx.setLogin(l)
-	a.audit(idPtr(actor.ID), "observer_login.reissue", idPtr(t.ID), map[string]string{"username": l.Username})
+	a.audit(idPtr(actor.ID), "observer.login.reissue", idPtr(t.ID), map[string]string{"username": l.Username})
 	if !a.sendObserverCredentials(r.Context(), w, t, l.Username, password) {
 		return
 	}
@@ -168,6 +168,10 @@ func (s *Server) handleAdminObserverBinding(w http.ResponseWriter, r *http.Reque
 		}
 		detail["userId"] = strconv.FormatInt(*req.UserID, 10)
 	}
+	detail["previousUserId"] = "none"
+	if prev := a.obsIdx.ownerOf(pk); prev != nil {
+		detail["previousUserId"] = strconv.FormatInt(*prev, 10)
+	}
 	if err := a.st.SetObserverOwner(pk, req.UserID); err != nil {
 		adminObserverFail(w, "set binding", err)
 		return
@@ -177,7 +181,7 @@ func (s *Server) handleAdminObserverBinding(w http.ResponseWriter, r *http.Reque
 	} else {
 		a.obsIdx.setOwner(pk, req.UserID)
 	}
-	a.audit(idPtr(actor.ID), "observer_binding.set", req.UserID, detail)
+	a.audit(idPtr(actor.ID), "observer.binding.set", req.UserID, detail)
 	writeJSON(w, okResponse{OK: true})
 }
 
