@@ -11,7 +11,7 @@ import (
 // credentials mail.
 const observerCredentialsPurpose = "observer-credentials"
 
-// observerCredentialsMail carries the login in three formats. It is the only
+// observerCredentialsMail carries the login in four formats. It is the only
 // place the password leaves the server, and it is never logged: mail_log
 // keeps only the purpose and the provider message id.
 func (a *authService) observerCredentialsMail(u *users.User, username, password string) mailer.Message {
@@ -42,6 +42,20 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 		"set mqtt1.username " + username + "\n" +
 		"set mqtt1.password " + password + "\n" +
 		"set mqtt.iata <your IATA code>"
+	tlsSwitch := "off"
+	if o.tls {
+		tlsSwitch = "on"
+	}
+	homeAssistant := "Home Assistant (meshcore-ha): Settings > Devices & services > MeshCore > Configure > Manage MQTT Brokers > add a broker\n" +
+		"Enabled: on\n" +
+		"Server: " + o.host + "\n" +
+		"Port: " + port + "\n" +
+		"Transport: " + o.transport + "\n" +
+		"Use TLS: " + tlsSwitch + "\n" +
+		"Use MeshCore Auth Token: off\n" +
+		"Username: " + username + "\n" +
+		"Password: " + password + "\n" +
+		"Broker IATA Code: <your IATA code>"
 	plain := "Host: " + o.host + "\n" +
 		"Port: " + port + "\n" +
 		"TLS: " + tlsWord + "\n" +
@@ -51,10 +65,10 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 		subject:  "Your observer MQTT login",
 		greeting: "Hello " + u.DisplayName + ",",
 		paragraphs: []string{
-			"Below is your personal MQTT login for " + a.set.baseURL.Host + ", in three formats: the meshcoretomqtt config, the Dutch-MeshCore observer firmware commands, and the plain values.",
+			"Below is your personal MQTT login for " + a.set.baseURL.Host + ", in four formats: the meshcoretomqtt config, the Dutch-MeshCore observer firmware commands, the Home Assistant (meshcore-ha) form fields, and the plain values.",
 			"One login serves all your observers. Each observer is linked to you the first time it publishes with this login. If you lose this mail, ask a new copy from your account page.",
 		},
-		pre:         []string{meshcoretomqtt, firmware, plain},
+		pre:         []string{meshcoretomqtt, firmware, homeAssistant, plain},
 		actionLabel: "Your account", actionURL: a.set.baseURL.String() + "/#/account?section=observers",
 	})
 }

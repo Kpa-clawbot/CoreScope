@@ -76,3 +76,33 @@ func TestFirmwareServerScheme(t *testing.T) {
 		}
 	}
 }
+
+// meshcore-ha takes a bare host in "Server" (paho client.connect(server, port),
+// mqtt_uploader.py:390) and offers transport tcp or websockets
+// (config_flow.py:1200), so the block carries those values as they are.
+func TestObserverCredentialsMailHomeAssistantBlock(t *testing.T) {
+	a, _ := newTestAuthService(t)
+	a.set.observerLogins = observerLoginSettings{host: "mqtt.example.org", port: 8884, transport: "websockets", tls: true}
+	m := a.observerCredentialsMail(&users.User{Email: "a@example.org", DisplayName: "A"}, "obs_abc", "p<w>")
+	for _, w := range []string{
+		"Manage MQTT Brokers",
+		"Enabled: on\nServer: mqtt.example.org\nPort: 8884\nTransport: websockets\nUse TLS: on\nUse MeshCore Auth Token: off\nUsername: obs_abc\nPassword: p<w>\nBroker IATA Code: <your IATA code>",
+	} {
+		if !strings.Contains(m.Text, w) {
+			t.Fatalf("text lacks %q:\n%s", w, m.Text)
+		}
+	}
+	if !strings.Contains(m.HTML, "Broker IATA Code: &lt;your IATA code&gt;") || strings.Contains(m.HTML, "p<w>") {
+		t.Fatal("html does not escape the Home Assistant block")
+	}
+	i1, i2, i3, i4 := strings.Index(m.Text, "[[broker]]"), strings.Index(m.Text, "set mqtt1.preset"), strings.Index(m.Text, "Manage MQTT Brokers"), strings.Index(m.Text, "Host: ")
+	if !(i1 < i2 && i2 < i3 && i3 < i4) {
+		t.Fatalf("block order %d %d %d %d", i1, i2, i3, i4)
+	}
+
+	a.set.observerLogins = observerLoginSettings{host: "mqtt.example.org", port: 1883, transport: "tcp", tls: false}
+	m = a.observerCredentialsMail(&users.User{Email: "a@example.org", DisplayName: "A"}, "obs_abc", "pw")
+	if !strings.Contains(m.Text, "Transport: tcp\nUse TLS: off\n") {
+		t.Fatalf("tcp/off variant missing:\n%s", m.Text)
+	}
+}
