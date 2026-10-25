@@ -2507,17 +2507,19 @@
       const byObservers = [...enriched].sort((a, b) => (b.health.observers?.length || 0) - (a.health.observers?.length || 0));
       const byRecent = [...enriched].filter(n => n.health.stats.lastHeard).sort((a, b) => new Date(b.health.stats.lastHeard) - new Date(a.health.stats.lastHeard));
 
-      // Compute network status client-side from loaded nodes using shared getHealthStatus()
+      // Status and roles describe the same filtered nodes; API counts are global.
+      const roleCounts = Object.fromEntries(Object.keys(ROLE_COLORS).map(role => [role, 0]));
       const now = Date.now();
       let active = 0, degraded = 0, silent = 0;
       nodes.forEach(function(n) {
+        const role = Object.prototype.hasOwnProperty.call(roleCounts, n.role) ? n.role : 'unknown';
+        roleCounts[role]++;
         const s = getHealthStatus(n.role, n.last_heard || n.last_seen, now);
         if (s === 'healthy') active++;
         else if (s === 'degraded') degraded++;
         else silent++;
       });
       const totalNodes = nodesResp.total || nodes.length;
-      const roleCounts = nodesResp.counts || {};
 
       function nodeLink(n) {
         return `<a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">${esc(n.name || n.public_key.slice(0, 12))}</a>`;
