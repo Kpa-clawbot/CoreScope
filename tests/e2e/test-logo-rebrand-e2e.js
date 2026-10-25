@@ -210,7 +210,7 @@ async function main() {
         }));
       } catch (_) {}
     });
-    await page.goto(BASE + '/#/', { waitUntil: 'networkidle' });
+    await page.goto(BASE + '/#/packets', { waitUntil: 'networkidle' });
     // PR #1137: default brand is inline <svg>; the override path swaps it
     // for an <img>. Wait for either tag to be present (boot-time render).
     await page.waitForSelector('.nav-brand .brand-logo', { timeout: 8000 });
@@ -242,8 +242,8 @@ async function main() {
     if (!overrideState.src || !/override=1/.test(overrideState.src)) {
       fail(`customizer logoUrl override did not propagate to navbar img (src=${overrideState.src} hasV2=${overrideState.hasV2} ovStored=${overrideState.ovStored})`);
     }
-    if (overrideState.title !== 'OverrideSite') {
-      fail(`customizer siteName override did not update document.title (got: ${overrideState.title})`);
+    if (overrideState.title !== 'Packets | OverrideSite') {
+      fail(`customizer siteName override did not preserve the current view in document.title (got: ${overrideState.title})`);
     }
     console.log('  ✅ customizer branding.siteName + branding.logoUrl overrides still apply post-rebrand');
     passed++;
