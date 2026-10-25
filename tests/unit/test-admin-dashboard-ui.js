@@ -611,20 +611,34 @@ test('login rows escape every field; a revoked login offers Reissue only', () =>
   assert(r.indexOf('data-act="revoke"') === -1 && r.indexOf('data-act="reissue"') !== -1 && r.indexOf('um-status-disabled">revoked') !== -1, r);
 });
 
-test('observer rows: owner status, escaped names, a select only for a 64-hex key, orphaned stays selected', () => {
+test('observer rows: owner status, escaped names, a Reassign button (no select) only for a 64-hex key', () => {
   const t = obsT();
-  const logins = [LOGIN()];
-  const by = { 7: logins[0] };
-  const bound = t.observerRowHtml({ pubkey: PKB, name: XSS, lastSeen: null, bound: true, userId: 7 }, by, logins);
+  const by = { 7: LOGIN() };
+  const bound = t.observerRowHtml({ pubkey: PKB, name: XSS, lastSeen: null, bound: true, userId: 7 }, by);
   assert(bound.indexOf('<img') === -1, bound);
-  assert(bound.indexOf('<option value="7" selected>Ann (obs_abc123def456)</option>') !== -1, bound);
-  const open = t.observerRowHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: false, userId: null }, by, logins);
-  assert(open.indexOf('um-status-pending">not migrated') !== -1 && open.indexOf('<option value="" selected>not bound</option>') !== -1, open);
-  const orphan = t.observerRowHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: true, userId: null }, by, logins);
-  assert(orphan.indexOf('<option value="orphaned" disabled selected>orphaned</option>') !== -1, orphan);
-  const odd = t.observerRowHtml({ pubkey: 'NOT-A-KEY', name: 'x', lastSeen: null, bound: false, userId: null }, by, logins);
-  assert(odd.indexOf('<select') === -1, 'select for a key the PUT would refuse');
+  assert(bound.indexOf('<td>Ann</td>') !== -1, bound);
+  assert(bound.indexOf('data-reassign="' + PKB + '"') !== -1 && bound.indexOf('aria-label="Reassign &lt;img') !== -1, bound);
+  assert(bound.indexOf('<select') === -1 && bound.indexOf('<option') === -1, 'options repeated per row');
+  const open = t.observerRowHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: false, userId: null }, by);
+  assert(open.indexOf('um-status-pending">not migrated') !== -1, open);
+  const orphan = t.observerRowHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: true, userId: null }, by);
+  assert(orphan.indexOf('um-status-disabled">orphaned') !== -1, orphan);
+  const odd = t.observerRowHtml({ pubkey: 'NOT-A-KEY', name: 'x', lastSeen: null, bound: false, userId: null }, by);
+  assert(odd.indexOf('data-reassign') === -1, 'Reassign for a key the PUT would refuse');
   assert.strictEqual(t.summaryText([{ bound: false }, { bound: true }, { bound: false }]), '2 of 3 observers not migrated (no personal login yet).');
+});
+
+test('owner options are built once from the logins; the editing row gets the select, orphaned adds its own entry', () => {
+  const t = obsT();
+  const opts = t.ownerOptionsHtml([LOGIN(), LOGIN({ userId: 8, displayName: XSS, username: 'obs_b' })]);
+  assert(opts.indexOf('<option value="">not bound</option><option value="7">Ann (obs_abc123def456)</option>') === 0, opts);
+  assert(opts.indexOf('<img') === -1, opts);
+  const edit = t.observerCellsHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: true, userId: null }, {}, true, opts);
+  assert(edit.indexOf('<select data-pubkey="' + PKB + '" aria-label="Owner of Shed"><option value="orphaned" disabled>orphaned</option>') !== -1, edit);
+  assert(edit.indexOf('data-cancel="' + PKB + '"') !== -1, edit);
+  assert.strictEqual(t.ownerValue({ bound: false, userId: null }), '');
+  assert.strictEqual(t.ownerValue({ bound: true, userId: null }), 'orphaned');
+  assert.strictEqual(t.ownerValue({ bound: true, userId: 7 }), '7');
 });
 
 test('mount makes one logins and one observers request and renders both tables', async () => {
@@ -636,17 +650,19 @@ test('mount makes one logins and one observers request and renders both tables',
   assert.strictEqual(env.els.obsAdminSummary.textContent, '1 of 2 observers not migrated (no personal login yet).');
 });
 
-test('Revoke asks inline first; Cancel sends nothing; confirming posts, says so and reloads', async () => {
+test('Revoke asks inline first and touches only the logins table; Cancel sends nothing; confirming posts and reloads', async () => {
   const env = obsEnv(OBS_ROUTES([LOGIN()], [], []));
   await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
   const t = env.ctx.CSAdminObserverLogins._test;
-  t.onClick(clickAct('revoke', 7));
+  env.els.obsAdminObservers.innerHTML = 'UNTOUCHED';
+  t.onLoginClick(clickAct('revoke', 7));
   assert(env.els.obsAdminLogins.innerHTML.indexOf('data-act="revoke-confirm"') !== -1, 'no inline confirm');
-  t.onClick(clickAct('cancel', 7));
+  t.onLoginClick(clickAct('cancel', 7));
   assert(env.els.obsAdminLogins.innerHTML.indexOf('revoke-confirm') === -1, 'confirm not cleared');
+  assert.strictEqual(env.els.obsAdminObservers.innerHTML, 'UNTOUCHED', 'confirm/cancel rebuilt the observers table');
   assert.strictEqual(env.calls.filter((c) => /revoke/.test(c)).length, 0, 'POST before confirming');
-  t.onClick(clickAct('revoke', 7));
-  await t.onClick(clickAct('revoke-confirm', 7));
+  t.onLoginClick(clickAct('revoke', 7));
+  await t.onLoginClick(clickAct('revoke-confirm', 7));
   assert(env.calls.indexOf('/api/admin/observer-logins/7/revoke') !== -1, env.calls.join());
   assert.strictEqual(env.els.obsAdminMsg.textContent, 'obs_abc123def456: revoked');
   assert.strictEqual(env.calls.filter((c) => c === '/api/admin/observer-logins').length, 2, 'not reloaded');
@@ -657,24 +673,74 @@ test('Reissue posts after its confirm; a refused action shows the server error',
     : OBS_ROUTES([LOGIN()], [], [])(p)));
   await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
   const t = env.ctx.CSAdminObserverLogins._test;
-  t.onClick(clickAct('reissue', 7));
-  await t.onClick(clickAct('reissue-confirm', 7));
+  t.onLoginClick(clickAct('reissue', 7));
+  await t.onLoginClick(clickAct('reissue-confirm', 7));
   assert(env.calls.indexOf('/api/admin/observer-logins/7/reissue') !== -1);
   assert.strictEqual(env.els.obsAdminMsg.textContent, 'could not send the mail, try again later');
   assert.strictEqual(env.els.obsAdminMsg.ok, false);
 });
 
-test('the owner select PUTs the user id, or null to unbind', async () => {
-  const env = obsEnv(OBS_ROUTES([LOGIN()], [], [{ id: PKB, name: 'Shed' }]));
+const rowKey = (pk) => 'obsAdminObservers tr[data-pubkey="' + pk + '"]';
+const clickRow = (attr, pk) => ({ target: { closest: () => ({ getAttribute: (a) => (a === attr ? pk : null) }) } });
+
+test('Reassign swaps the shared select into that row only; another Reassign or Cancel restores the button', async () => {
+  const env = obsEnv(OBS_ROUTES([LOGIN()], [{ pubkey: PKA.toUpperCase(), userId: 7 }], [{ id: PKA, name: 'Roof' }, { id: PKB, name: 'Shed' }]));
   await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
   const t = env.ctx.CSAdminObserverLogins._test;
-  const sel = (v) => ({ target: { value: v, getAttribute: () => PKB } });
-  await t.onChange(sel('7'));
-  await t.onChange(sel(''));
+  const A = PKA.toUpperCase();
+  env.els.obsAdminObservers.innerHTML = 'UNTOUCHED';
+  t.onObserverClick(clickRow('data-reassign', A));
+  const trA = env.els[rowKey(A)];
+  assert(trA.innerHTML.indexOf('<select data-pubkey="' + A + '"') !== -1, trA.innerHTML);
+  assert.strictEqual(env.els[rowKey(A) + ' select'].value, '7', 'current owner not selected');
+  t.onObserverClick(clickRow('data-reassign', PKB));
+  assert(trA.innerHTML.indexOf('<select') === -1 && trA.innerHTML.indexOf('data-reassign') !== -1, 'previous row kept its select');
+  assert(env.els[rowKey(PKB)].innerHTML.indexOf('<select') !== -1);
+  t.onObserverClick(clickRow('data-cancel', PKB));
+  assert(env.els[rowKey(PKB)].innerHTML.indexOf('<select') === -1, 'Cancel left the select');
+  t.onObserverClick(clickRow('data-reassign', A));
+  t.onObserverKey({ key: 'Escape' });
+  assert(trA.innerHTML.indexOf('<select') === -1, 'Escape left the select');
+  assert.strictEqual(env.els.obsAdminObservers.innerHTML, 'UNTOUCHED', 'the whole table was rebuilt');
+  assert.strictEqual(env.calls.length, 2, 'Reassign made a request');
+});
+
+test('a saved owner PUTs the user id or null and updates only that row and the summary; the select is disabled meanwhile', async () => {
+  const env = obsEnv(OBS_ROUTES([LOGIN()], [], [{ id: PKB, name: 'Shed' }, { id: PKC, name: 'Mast' }]));
+  await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
+  const t = env.ctx.CSAdminObserverLogins._test;
+  env.els.obsAdminObservers.innerHTML = 'UNTOUCHED';
+  t.onObserverClick(clickRow('data-reassign', PKB));
+  const sel = { value: '7', disabled: false, getAttribute: () => PKB };
+  const p = t.onChange({ target: sel });
+  assert.strictEqual(sel.disabled, true, 'select enabled while saving');
+  await p;
+  assert.strictEqual(sel.disabled, false);
+  const tr = env.els[rowKey(PKB)];
+  assert(tr.innerHTML.indexOf('<td>Ann</td>') !== -1 && tr.innerHTML.indexOf('<select') === -1, tr.innerHTML);
+  assert.strictEqual(env.els.obsAdminSummary.textContent, '1 of 2 observers not migrated (no personal login yet).');
+  assert.strictEqual(env.els.obsAdminObservers.innerHTML, 'UNTOUCHED', 'the whole table was rebuilt');
+  assert.strictEqual(env.calls.filter((c) => c === '/api/observers').length, 1, 'reloaded after a reassign');
+  await t.onChange({ target: { value: '', disabled: false, getAttribute: () => PKB } });
   const puts = env.calls.map((c, i) => [c, env.bodies[i]]).filter((x) => x[0].indexOf('/api/admin/observer-bindings/') === 0);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(puts)),
     [['/api/admin/observer-bindings/' + PKB, { userId: 7 }], ['/api/admin/observer-bindings/' + PKB, { userId: null }]]);
   assert.strictEqual(env.els.obsAdminMsg.textContent, PKB.slice(0, 12) + '…: unbound');
+  assert(tr.innerHTML.indexOf('not migrated') !== -1, tr.innerHTML);
+});
+
+test('a refused owner change shows the error and puts the saved value back', async () => {
+  const env = obsEnv((p) => (p.indexOf('/api/admin/observer-bindings/') === 0 ? { ok: false, status: 404, data: { error: 'user not found' } }
+    : OBS_ROUTES([LOGIN()], [], [{ id: PKB, name: 'Shed' }])(p)));
+  await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
+  const t = env.ctx.CSAdminObserverLogins._test;
+  t.onObserverClick(clickRow('data-reassign', PKB));
+  const sel = { value: '7', disabled: false, getAttribute: () => PKB };
+  await t.onChange({ target: sel });
+  assert.strictEqual(env.els.obsAdminMsg.textContent, 'user not found');
+  assert.strictEqual(sel.value, '', 'unsaved choice still selected');
+  assert.strictEqual(sel.disabled, false);
+  assert.strictEqual(t.state.byKey[PKB].bound, false);
 });
 
 test('unmount drops a load that answers later', async () => {

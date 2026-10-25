@@ -563,12 +563,31 @@ async function until(fn, label) {
     assert(t.indexOf('E2E Observer') !== -1 && t.indexOf(OBS_EMAIL) !== -1, t);
     const orow = admin.locator('#obsAdminObservers tr[data-pubkey="' + obs.pubkey + '"]');
     await orow.waitFor();
-    assert((await orow.locator('select').inputValue()) !== '', 'bound observer has no owner selected');
+    assert((await orow.locator('td').nth(2).textContent()) === 'E2E Observer', 'bound observer does not show its owner');
+    assert(await orow.locator('select').count() === 0, 'a select rendered before Reassign');
     assert((await admin.textContent('#obsAdminObservers')).indexOf('not migrated') !== -1, 'unbound observers not marked');
     await noPasswordShown(admin, obs.password);
     await admin.mouse.move(0, 0);
     await admin.waitForTimeout(1500);
     await axeClean(admin, '#app');
+  });
+
+  await step('observer logins: Reassign unbinds the observer and binds it back, row by row', async () => {
+    const orow = '#obsAdminObservers tr[data-pubkey="' + obs.pubkey + '"]';
+    await admin.click(orow + ' button[data-reassign]');
+    await admin.waitForSelector(orow + ' select:focus');
+    await axeClean(admin, orow);
+    await admin.selectOption(orow + ' select', '');
+    await admin.waitForSelector(orow + ' .um-status-pending');
+    assert((await admin.textContent('#obsAdminMsg')).indexOf('unbound') !== -1, 'no unbound message');
+    let api = await (await admin.request.get(BASE + '/api/admin/observer-logins')).json();
+    assert(!api.bindings.some((b) => b.pubkey === obs.pubkey), 'binding still present after unbinding');
+    const uid = api.logins.find((l) => l.username === obs.username).userId;
+    await admin.click(orow + ' button[data-reassign]');
+    await admin.selectOption(orow + ' select', String(uid));
+    await until(async () => (await admin.textContent(orow + ' td:nth-child(3)')) === 'E2E Observer', 'owner back on the row');
+    api = await (await admin.request.get(BASE + '/api/admin/observer-logins')).json();
+    assert(api.bindings.some((b) => b.pubkey === obs.pubkey && b.userId === uid && b.boundBy === 'admin'), JSON.stringify(api.bindings));
   });
 
   await step('observer logins: revoke asks inline, then the account page says revoked', async () => {
