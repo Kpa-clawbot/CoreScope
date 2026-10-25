@@ -910,23 +910,44 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 		// Match the memory filter's decoded-key precedence, including legacy
 		// public_key rows that from_pubkey does not cover. Keep this in the
 		// shared WHERE so both COUNT and pagination use the same membership.
-		originator := db.nativeSQL(
-			`CASE WHEN json_valid(t.decoded_json) THEN COALESCE(
-				CASE WHEN json_type(t.decoded_json, '$.public_key') = 'text'
-					THEN NULLIF(json_extract(t.decoded_json, '$.public_key'), '') END,
-				CASE WHEN json_type(t.decoded_json, '$.pubKey') = 'text'
-					THEN NULLIF(json_extract(t.decoded_json, '$.pubKey'), '') END) END`,
-			`CASE WHEN t.decoded_json IS JSON OBJECT THEN COALESCE(
-				CASE WHEN json_typeof(t.decoded_json::json -> 'public_key') = 'string'
-					THEN NULLIF(t.decoded_json::json ->> 'public_key', '') END,
-				CASE WHEN json_typeof(t.decoded_json::json -> 'pubKey') = 'string'
-					THEN NULLIF(t.decoded_json::json ->> 'pubKey', '') END) END`)
+		originator := db.areaOriginatorSQL()
 		where = append(where, originator+" IN ("+db.sqlPlaceholders(len(q.areaNodes), len(args)+1)+")")
 		for pk := range q.areaNodes {
+			if db.Backend() == dbconfig.Postgres {
+				pk = strings.ReplaceAll(strings.ReplaceAll(pk, `\`, `\\`), "\x00", `\0`)
+			}
 			args = append(args, pk)
 		}
 	}
 	return where, args
+}
+
+// areaOriginatorSQL keeps the decoded-key semantics of the memory filter.
+// SQLite's path lookup truncates NUL-bearing keys, so enumerate exact keys and
+// inspect the LAST occurrence before checking its type (matching Go's decoder).
+// PostgreSQL cannot extract even an unrelated field when JSON contains NUL.
+// Encode backslashes as doubled backslashes and NUL as \0, injectively, matching
+// the bound-key transform above. Consume literal backslash escapes first so
+// literal \\u0000 stays distinct. Lone surrogates become Go's replacement rune.
+func (db *DB) areaOriginatorSQL() string {
+	return db.nativeSQL(
+		`CASE WHEN json_valid(t.decoded_json) THEN COALESCE(
+			(SELECT CASE WHEN type = 'text' THEN NULLIF(value, '') END
+				FROM json_each(t.decoded_json) WHERE key = 'public_key' ORDER BY rowid DESC LIMIT 1),
+			(SELECT CASE WHEN type = 'text' THEN NULLIF(value, '') END
+				FROM json_each(t.decoded_json) WHERE key = 'pubKey' ORDER BY rowid DESC LIMIT 1)) END`,
+		`CASE WHEN t.decoded_json IS JSON OBJECT THEN (
+			SELECT COALESCE(
+				CASE WHEN json_typeof(d.public_key) = 'string' THEN NULLIF(d.public_key #>> '{}', '') END,
+				CASE WHEN json_typeof(d."pubKey") = 'string' THEN NULLIF(d."pubKey" #>> '{}', '') END)
+			FROM json_to_record((CASE WHEN strpos(t.decoded_json, chr(92)) = 0 THEN t.decoded_json ELSE
+				regexp_replace(
+					regexp_replace(
+						replace(regexp_replace(t.decoded_json, $re$\\\\|\\u005[cC]$re$, $r$\\u005c\\u005c$r$, 'g'),
+							$s$\u0000$s$, $s$\u005c0$s$),
+						$re$\\u[dD][89aAbB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})$re$, $r$\\ufffd$r$, 'g'),
+					$re$(?<!\\u[dD][89aAbB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}$re$, $r$\\ufffd$r$, 'g')
+				END)::json) AS d(public_key json, "pubKey" json)) END`)
 }
 
 func (db *DB) resolveNodePubkey(nodeIDOrName string) string {
