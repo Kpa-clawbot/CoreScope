@@ -75,8 +75,9 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 
 // firmwareServer is the mqtt1.server value for the Dutch-MeshCore firmware.
 // For a bare host the firmware picks the scheme from the port alone (8883
-// mqtts, 443 wss, anything else mqtt), so the scheme is always given. The
-// firmware then appends mqtt1.port itself.
+// mqtts, 443 wss, anything else mqtt) and appends mqtt1.port itself. Firmware
+// before the merge 32dd8ad (2026-10-19) does not accept a scheme in the
+// server, so the host stays bare unless the port would pick the wrong scheme.
 func firmwareServer(o observerLoginSettings) string {
 	scheme := "mqtt"
 	if o.transport == "websockets" {
@@ -84,6 +85,16 @@ func firmwareServer(o observerLoginSettings) string {
 	}
 	if o.tls {
 		scheme += "s"
+	}
+	inferred := "mqtt"
+	switch o.port {
+	case 8883:
+		inferred = "mqtts"
+	case 443:
+		inferred = "wss"
+	}
+	if scheme == inferred {
+		return o.host
 	}
 	return scheme + "://" + o.host
 }

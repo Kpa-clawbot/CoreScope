@@ -59,20 +59,29 @@ password = "p<w>"`
 // The firmware infers the scheme of a bare host from the port alone (8883
 // mqtts, 443 wss, else mqtt: MQTTBridge.cpp setupSlot), so the mail always
 // names the scheme the configured transport and TLS need.
+// Firmware before the Dutch-MeshCore merge 32dd8ad (2026-10-19) does not parse a
+// scheme in mqtt1.server and builds "<proto>://<host>:<port>" with proto taken
+// from the port alone (8883 mqtts, 443 wss, else mqtt). A bare host works on
+// both; the scheme is only written when the port would infer the wrong one.
 func TestFirmwareServerScheme(t *testing.T) {
 	for _, c := range []struct {
+		port      int
 		transport string
 		tls       bool
 		want      string
 	}{
-		{"tcp", false, "mqtt://mqtt.example.org"},
-		{"tcp", true, "mqtts://mqtt.example.org"},
-		{"websockets", false, "ws://mqtt.example.org"},
-		{"websockets", true, "wss://mqtt.example.org"},
+		{1883, "tcp", false, "mqtt.example.org"},
+		{8883, "tcp", true, "mqtt.example.org"},
+		{443, "websockets", true, "mqtt.example.org"},
+		{8884, "tcp", false, "mqtt.example.org"},
+		{8884, "tcp", true, "mqtts://mqtt.example.org"},
+		{8884, "websockets", false, "ws://mqtt.example.org"},
+		{8884, "websockets", true, "wss://mqtt.example.org"},
+		{8883, "tcp", false, "mqtt://mqtt.example.org"},
 	} {
-		o := observerLoginSettings{host: "mqtt.example.org", port: 8884, transport: c.transport, tls: c.tls}
+		o := observerLoginSettings{host: "mqtt.example.org", port: c.port, transport: c.transport, tls: c.tls}
 		if got := firmwareServer(o); got != c.want {
-			t.Errorf("%s tls=%v: got %q, want %q", c.transport, c.tls, got, c.want)
+			t.Errorf("port %d %s tls=%v: got %q, want %q", c.port, c.transport, c.tls, got, c.want)
 		}
 	}
 }

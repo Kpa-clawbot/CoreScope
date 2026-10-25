@@ -68,9 +68,11 @@ reverse proxy for everything except the broker.
 
 The credentials mail holds the login in four forms: a meshcoretomqtt `[[broker]]` block, the
 Dutch-MeshCore observer firmware commands, a Home Assistant meshcore-ha block, and the plain values. For the firmware the server
-line always carries a scheme (`set mqtt1.server mqtts://mqtt.example.org`), because a bare host
-makes the firmware choose the scheme from the port alone (8883 TLS, 443 secure websockets,
-anything else plain MQTT).
+line is the bare host (`set mqtt1.server mqtt.example.org`): the firmware chooses the scheme
+from the port alone (8883 TLS, 443 secure websockets, anything else plain MQTT), and firmware
+before 2026-10-19 does not accept a scheme in the server. Only when the port would pick the
+wrong scheme (for example TLS on 8884) does the mail write one (`mqtts://mqtt.example.org`),
+which needs firmware from 2026-10-19 or later.
 
 Websockets: meshcoretomqtt connects with websocket path `/`, EMQX listens on `/mqtt` by
 default. Match the listener path to your uploaders, or use `tcp`.
