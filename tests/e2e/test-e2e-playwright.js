@@ -2755,6 +2755,7 @@ async function run() {
       const mobilePage = await mobile.newPage();
       const mobileRequest = mobilePage.waitForRequest(req => new URL(req.url()).pathname === '/api/packets');
       await mobilePage.goto(sharedUrl, { waitUntil: 'domcontentloaded' });
+      await mobilePage.locator('.filter-toggle-btn-mirror').click();
       await mobilePage.waitForSelector('#fTimeWindow');
       const mobileParams = new URL((await mobileRequest).url()).searchParams;
       const mobileMinutes = (Date.now() - Date.parse(mobileParams.get('since'))) / 60000;
