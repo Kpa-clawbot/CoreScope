@@ -1559,6 +1559,7 @@
                 payload_type: p.payload_type,
                 raw_hex: p.raw_hex,
                 decoded_json: p.decoded_json,
+                radio: p.radio, // #1869: the filter's radio/sf fields read it
               };
               packets.unshift(newGroup);
               if (h) hashIndex.set(h, newGroup);
@@ -3584,9 +3585,18 @@
     }
   }
 
+  // #1869: escaped text of an observation's radio setting. rf-params.js
+  // formats it; should that script fail to load, the raw string is shown
+  // (escaped) instead of the detail panel throwing.
+  function radioSettingHtml(radio) {
+    return window.RfParams ? window.RfParams.radioText(radio) : escapeHtml(radio || '');
+  }
+
   async function renderDetail(panel, data, chosenObsId) {
     const pkt = data.packet;
     const observations = data.observations || [];
+    // #1869: the Radio column only earns its width when the server reports one.
+    const obsHaveRadio = observations.some(o => o.radio);
 
     // Per-observation rendering (issue #849):
     // When opened from a packet row (no specific observer), default to first observation.
@@ -3830,6 +3840,7 @@
         <dt>Path</dt><dd>${displayHopCount > 0 ? `<span class="badge badge-info">${displayHopCount} hop${displayHopCount !== 1 ? 's' : ''}</span> ` + '<span class="detail-path-hops">' + renderPath(pathHops, effectivePkt.observer_id, { entries: pathEntries }) + '</span>' : '— (direct)'}</dd>
         <dt>Timestamp</dt><dd>${renderTimestampCell(effectivePkt.timestamp)}</dd>
         <dt>Observer</dt><dd>${escapeHtml(obsNameOnly(effectivePkt.observer_id))}${obsIataBadge(effectivePkt)}</dd>
+        ${effectivePkt.radio ? `<dt>Radio</dt><dd data-testid="detail-radio" title="Radio setting the observer was on when it heard this packet">${radioSettingHtml(effectivePkt.radio)}</dd>` : ''}
         ${locationHtml ? `<dt>Location</dt><dd>${locationHtml}</dd>` : ''}
         <dt>SNR / RSSI</dt><dd>${snr != null ? snr + ' dB' : '—'} / ${rssi != null ? rssi + ' dBm' : '—'}</dd>
         <dt>Route Type</dt><dd>${routeTypeName(pkt.route_type)}</dd>
@@ -3864,6 +3875,7 @@
             <th style="padding:4px 6px;text-align:left">Hops</th>
             <th style="padding:4px 6px;text-align:left">SNR</th>
             <th style="padding:4px 6px;text-align:left">RSSI</th>
+            ${obsHaveRadio ? '<th style="padding:4px 6px;text-align:left">Radio</th>' : ''}
             <th style="padding:4px 6px;text-align:left">Time</th>
           </tr></thead>
           <tbody>${observations.map(o => {
@@ -3874,6 +3886,7 @@
               <td style="padding:4px 6px">${oPath.length}</td>
               <td style="padding:4px 6px">${o.snr != null ? o.snr + ' dB' : '—'}</td>
               <td style="padding:4px 6px">${o.rssi != null ? o.rssi + ' dBm' : '—'}</td>
+              ${obsHaveRadio ? `<td style="padding:4px 6px">${o.radio ? radioSettingHtml(o.radio) : '—'}</td>` : ''}
               <td style="padding:4px 6px">${renderTimestampCell(o.timestamp)}</td>
             </tr>`;
           }).join('')}</tbody>

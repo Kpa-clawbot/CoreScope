@@ -2097,8 +2097,11 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	oldest := s.oldestLoaded
 	s.mu.RUnlock()
 	if oldest != "" {
-		needsSQL := (q.Since != "" && q.Since < oldest) ||
-			(q.Until != "" && q.Until < oldest)
+		// The radio filter (#1869) exists only in memory; the SQL path would
+		// return the window unfiltered, so a radio query stays on what the
+		// store holds.
+		needsSQL := ((q.Since != "" && q.Since < oldest) ||
+			(q.Until != "" && q.Until < oldest)) && q.Radio == ""
 		if needsSQL {
 			if result, err := s.db.QueryPackets(q); err == nil {
 				return result
@@ -2184,8 +2187,11 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	oldest := s.oldestLoaded
 	s.mu.RUnlock()
 	if oldest != "" {
-		needsSQL := (q.Since != "" && q.Since < oldest) ||
-			(q.Until != "" && q.Until < oldest)
+		// The radio filter (#1869) exists only in memory; the SQL path would
+		// return the window unfiltered, so a radio query stays on what the
+		// store holds.
+		needsSQL := ((q.Since != "" && q.Since < oldest) ||
+			(q.Until != "" && q.Until < oldest)) && q.Radio == ""
 		if needsSQL {
 			if result, err := s.db.QueryGroupedPackets(q); err == nil {
 				return result
@@ -2201,7 +2207,7 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	}
 
 	// Cache key covers all filter dimensions. Empty key = no filters.
-	cacheKey := q.Since + "|" + q.Until + "|" + q.Region + "|" + q.Area + "|" + q.Node + "|" + q.Hash + "|" + q.Observer + "|" + q.Channel
+	cacheKey := q.Since + "|" + q.Until + "|" + q.Region + "|" + q.Area + "|" + q.Node + "|" + q.Hash + "|" + q.Observer + "|" + q.Channel + "|" + q.Radio
 	if q.Type != nil {
 		cacheKey += fmt.Sprintf("|t%d", *q.Type)
 	}
@@ -2278,6 +2284,7 @@ type groupedRow struct {
 	payloadType, routeType                 *int
 	snr, rssi                              *float64
 	scopeName                              *string
+	radio                                  string      // header observation's setting (#1869)
 	observations                           []*StoreObs // slice header only, see snapshotGroupedRow
 }
 
@@ -2324,6 +2331,7 @@ func snapshotGroupedRow(tx *StoreTx) groupedRow {
 		snr:              tx.SNR,
 		rssi:             tx.RSSI,
 		scopeName:        tx.ScopeName,
+		radio:            txRadio(tx),
 		observations:     tx.Observations,
 	}
 }
@@ -2357,6 +2365,7 @@ func groupedRowsToPage(rows []groupedRow, total int) *PacketResult {
 			"snr":               floatPtrOrNil(r.snr),
 			"rssi":              floatPtrOrNil(r.rssi),
 			"scope_name":        strPtrOrNil(r.scopeName),
+			"radio":             strOrNil(r.radio),
 		}
 		// resolved_path omitted for grouped view (cold path, not worth SQL round-trip)
 		packets[i] = m
@@ -3350,6 +3359,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				"direction":         strOrNil(obs.Direction),
 				"observation_count": tx.ObservationCount,
 				"scope_name":        strPtrOrNil(tx.ScopeName),
+				"radio":             strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 			}
 			// Use decode-window resolved path for broadcast (never from struct)
 			if broadcastRP != nil {
@@ -3615,6 +3625,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			"direction":         strOrNil(obs.Direction),
 			"observation_count": tx.ObservationCount,
 			"scope_name":        strPtrOrNil(tx.ScopeName),
+			"radio":             strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 		}
 		// Use decode-window resolved path for broadcast
 		if obsRPMap != nil {
@@ -3756,7 +3767,7 @@ func (s *PacketStore) resolvePacketFilterSets(q PacketQuery) packetFilterSets {
 // f holds q's filters resolved by resolvePacketFilterSets. Caller holds s.mu.
 func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreTx {
 	// Fast path: single-key index lookups
-	if q.Hash != "" && q.Type == nil && q.Route == nil && q.Observer == "" &&
+	if q.Hash != "" && q.Type == nil && q.Route == nil && q.Observer == "" && q.Radio == "" &&
 		q.Region == "" && q.Area == "" && q.Node == "" && q.Channel == "" && q.Since == "" && q.Until == "" {
 		h := strings.ToLower(q.Hash)
 		tx := s.byHash[h]
@@ -3765,7 +3776,7 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 		}
 		return []*StoreTx{tx}
 	}
-	if q.Observer != "" && q.Type == nil && q.Route == nil &&
+	if q.Observer != "" && q.Type == nil && q.Route == nil && q.Radio == "" &&
 		q.Region == "" && q.Area == "" && q.Node == "" && q.Channel == "" && q.Hash == "" && q.Since == "" && q.Until == "" {
 		return s.transmissionsForObserver(q.Observer, nil)
 	}
@@ -3803,6 +3814,9 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 		}
 	}
 
+	// One snapshot for the whole scan (#1869).
+	radioSnap := radioHistory.Load()
+
 	regionObservers := f.regionObs
 	if q.Region != "" && len(regionObservers) == 0 {
 		return nil
@@ -3824,7 +3838,7 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 	// filter is active and an index exists.
 	source := s.packets
 	if hasNode && !hasType && !hasRoute && q.Observer == "" &&
-		filterHash == "" && !hasSince && !hasUntil && q.Region == "" && q.Area == "" && filterChannel == "" {
+		filterHash == "" && !hasSince && !hasUntil && q.Region == "" && q.Area == "" && filterChannel == "" && q.Radio == "" {
 		if indexed, ok := s.byNode[f.nodePK]; ok {
 			return indexed
 		}
@@ -3896,6 +3910,9 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 			if !packetMatchesChannel(tx, filterChannel) {
 				return false
 			}
+		}
+		if q.Radio != "" && !txMatchesRadio(radioSnap, tx, q.Radio, observerSet) {
+			return false
 		}
 		return true
 	})
@@ -4283,6 +4300,7 @@ func enrichObsFields(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 		"rssi":          floatPtrOrNil(obs.RSSI),
 		"score":         intPtrOrNil(obs.Score),
 		"path_json":     strOrNil(obs.PathJSON),
+		"radio":         strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 	}
 
 	if tx != nil {
@@ -4321,6 +4339,7 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 		"path_json":         strOrNil(tx.PathJSON),
 		"direction":         strOrNil(tx.Direction),
 		"scope_name":        strPtrOrNil(tx.ScopeName),
+		"radio":             strOrNil(txRadio(tx)),
 	}
 	// Include parsed path array to match Node.js output shape
 	if hops := txGetParsedPath(tx); len(hops) > 0 {
@@ -4342,6 +4361,7 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 				"path_json":     strOrNil(o.PathJSON),
 				"timestamp":     strOrNil(o.Timestamp),
 				"direction":     strOrNil(o.Direction),
+				"radio":         strOrNil(observationRadio(o.ID, o.ObserverID, o.Timestamp)),
 			}
 			obs = append(obs, om)
 		}

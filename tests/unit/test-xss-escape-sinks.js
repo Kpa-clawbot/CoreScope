@@ -501,6 +501,35 @@ function renderObsDetail(obs) {
   );
 }
 
+// #1869: RfParams.radioText renders the observer-published radio string in
+// the packet detail and the observations table.
+test('RfParams.radioText escapes every part of an observer radio string', () => {
+  const window = {};
+  new Function('window', fs.readFileSync('public/rf-params.js', 'utf8'))(window);
+  const evil = TAG_PAYLOAD + ATTR_PAYLOAD;
+  for (const radio of [evil, evil + ',62.5,8,8', '869.618,' + evil + ',8,8', '869.618,62.5,' + evil + ',8', '869.618,62.5,8,' + evil]) {
+    assertNoXss(window.RfParams.radioText(radio), 'radioText ' + JSON.stringify(radio));
+  }
+});
+
+// #1869: the radio history table renders observer-published strings too.
+test('OBS-1 radio history: radio, radio_id and timestamps are escaped', () => {
+  const src = fs.readFileSync('public/observer-detail.js', 'utf8');
+  const m = src.match(/window\.ObserverDetailRadioHistory = \{[\s\S]*?\n\};/);
+  if (!m) throw new Error('ObserverDetailRadioHistory not found');
+  // Through the real formatter, as on the page.
+  const window = {};
+  new Function('window', fs.readFileSync('public/rf-params.js', 'utf8'))(window);
+  new Function('window', 'escapeHtml', m[0])(window, escapeHtml);
+  const evil = TAG_PAYLOAD + ATTR_PAYLOAD;
+  const html = window.ObserverDetailRadioHistory.render([
+    { radio: evil, radio_id: evil, first_seen: evil, last_seen: evil },
+    { radio: '869.618,' + evil + ',8,8', radio_id: '', first_seen: '2026-10-25T09:00:00Z', last_seen: '2026-10-25T10:00:00Z' },
+  ]);
+  if (!html) throw new Error('radio history not rendered');
+  assertNoXss(html, 'OBS-1 radio history');
+});
+
 test('OBS-1 expanded: obs.iata payload is escaped', () => {
   const html = renderObsDetail({ id: 'obs-1', iata: TAG_PAYLOAD + ATTR_PAYLOAD });
   assertNoXss(html, 'OBS-1 obs.iata');

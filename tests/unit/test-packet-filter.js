@@ -334,5 +334,35 @@ test('#1800: path_prefixes alias resolves like path', () => {
   assert(PF.compile('path_prefixes contains "a3"').filter(prefixPkt));
 });
 
+// #1869: radio setting the observation was heard on, and its parts.
+const euPkt = { ...pkt, radio: '869.618,62.5,8,8' };
+const czPkt = { ...pkt, radio: '869.432,62.5,7,5' };
+test('#1869: sf == 8 matches the EU narrow setting', () => {
+  assert(PF.compile('sf == 8').filter(euPkt));
+  assert(!PF.compile('sf == 8').filter(czPkt));
+});
+test('#1869: radio fields without a radio match nothing', () => {
+  assert(!PF.compile('sf == 8').filter({ ...pkt, radio: undefined }));
+  assert(!PF.compile('sf > 0').filter({ ...pkt, radio: 'SX1262' }));
+});
+test('#1869: radio == compares the canonical string', () => {
+  assert(PF.compile('radio == "869.618,62.5,8,8"').filter(euPkt));
+  assert(!PF.compile('radio == "869.618,62.5,8,8"').filter(czPkt));
+});
+test('#1869: freq, bw and cr', () => {
+  const c = PF.compile('freq > 869.5 && bw == 62.5 && cr == 8');
+  assert(!c.error, c.error);
+  assert(c.filter(euPkt));
+  assert(!c.filter(czPkt));
+});
+test('#1869: an empty or non-decimal part is no value, not 0', () => {
+  assert(!PF.compile('bw == 0').filter({ ...pkt, radio: '869.618,,8,8' }));
+  assert(!PF.compile('sf == 8').filter({ ...pkt, radio: '869.618,62.5,0x8,8' }));
+});
+test('#1869: radio fields are listed in FIELDS', () => {
+  const names = PF.FIELDS.map(f => f.name);
+  ['radio', 'freq', 'bw', 'sf', 'cr'].forEach(f => assert(names.indexOf(f) !== -1, f + ' missing from FIELDS'));
+});
+
 console.log(`\n=== Results: ${pass} passed, ${fail} failed ===`);
 process.exit(fail > 0 ? 1 : 0);

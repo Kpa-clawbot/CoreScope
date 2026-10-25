@@ -388,6 +388,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
+	r.HandleFunc("/api/radios", s.handleRadios).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
 	r.HandleFunc("/api/paths/inspect", s.handlePathInspect).Methods("POST")
 	r.HandleFunc("/api/iata-coords", s.handleIATACoords).Methods("GET")
@@ -1181,6 +1182,7 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		Node:               r.URL.Query().Get("node"),
 		Channel:            r.URL.Query().Get("channel"),
 		Area:               r.URL.Query().Get("area"),
+		Radio:              canonicalRadio(r.URL.Query().Get("radio")),
 		Order:              "DESC",
 		ExpandObservations: r.URL.Query().Get("expand") == "observations",
 	}
@@ -3167,6 +3169,7 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 			CanRelay:        obs.CanRelay,
 		}
 		applyObserverNaiveClock(&resp, obs, time.Now().UTC())
+		resp.RadioHistory = observerRadioStints(obs.ID)
 		return resp
 	}())
 }
