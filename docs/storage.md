@@ -84,6 +84,37 @@ Container state must stay at `/app/data` or a persistent subdirectory, selected 
 
 Before the first upgrade from an older deployment, stop that old stack using its actual Compose project/service and checkout, before replacing configuration files. Preserve its checkout/Compose files, image identity, private `.env`, config/theme and a quiescent copy of the complete data directory including WAL/SHM siblings. Do not use a raw copy of a live SQLite main file as a backup.
 
+### Automatic staging deployment
+
+The optional GitHub Actions staging job (`ENABLE_STAGING_DEPLOY=true`) supports
+only a **ready, recorded SQLite installation** using its staging base Compose
+file. Before stopping or removing the application, it reads the candidate's
+selection and verifies that any existing staging container has the same ready
+SQLite selection generation. PostgreSQL, an unreadable/stopped existing
+container, mismatched selections, pending conversions, and unknown or unrecorded
+state refuse deployment and leave the existing application intact. The job does
+not infer SQLite from a missing selection. First setup and legacy unrecorded
+adoption remain manual, using the normal base Compose startup and its guarded
+packaged setup; preserve existing files and resolve any reported errors first.
+
+For PostgreSQL staging, keep automatic staging deployment disabled. After taking
+the backups described below, with the reviewed image tagged `corescope-go:latest`
+and the original private environment and persistent directories retained, update
+with **both** staging files and the original project:
+
+```sh
+docker compose -f docker-compose.staging.yml -f docker-compose.staging.postgres.yml \
+  -p corescope-staging stop staging-go
+docker compose -f docker-compose.staging.yml -f docker-compose.staging.postgres.yml \
+  -p corescope-staging up -d staging-go
+```
+
+Retain a different original staging base file if one was explicitly selected.
+Do not skip the bootstrap dependency or use the production `manage.sh update`
+command for this staging project. Verify `/api/healthz` and packet ingestion
+afterward. A refused automatic job is not permission to delete or rewrite the
+selection; inspect and resolve the reported state before a manual update.
+
 ## Explicit offline backend change
 
 Plan a maintenance window and measure disk headroom on a representative copy. Keep source data, recovery snapshots and the new target together until validation is complete. Data/index/WAL and process memory costs differ between engines; one synthetic benchmark does not size every installation.

@@ -1530,6 +1530,33 @@ jobs:
 
       - name: Deploy staging
         run: |
+          set -euo pipefail
+          # This job owns only the SQLite base model. Read selection metadata
+          # without starting the application or its database dependencies.
+          sqlite_selection() {
+            local state backend
+            state=$("$@" field state) || return 1
+            [ "$state" = ready ] || return 1
+            backend=$("$@" field backend) || return 1
+            [ "$backend" = sqlite ] || return 1
+            "$@" field generation
+          }
+          refuse_deploy() {
+            echo "::error::Automatic staging deployment requires a ready, matching SQLite selection. Existing application retained. Use the manual storage update procedure in docs/storage.md for PostgreSQL, first setup or unverified state." >&2
+            exit 1
+          }
+          selection=$(sqlite_selection docker compose -f "$STAGING_COMPOSE_FILE" -p corescope-staging \
+            run --rm --no-deps --entrypoint /app/storage.sh staging-go) || refuse_deploy
+          [ -n "$selection" ] || refuse_deploy
+          existing=$(docker ps -a --filter 'name=^/corescope-staging-go$' --format '{{.Names}}') || refuse_deploy
+          if [ -n "$existing" ]; then
+            [ "$existing" = "$STAGING_CONTAINER" ] || refuse_deploy
+            # Inspect the existing container too: its override may select a
+            # different state mount from the base model about to replace it.
+            active_selection=$(sqlite_selection docker exec "$STAGING_CONTAINER" /app/storage.sh) || refuse_deploy
+            [ "$active_selection" = "$selection" ] || refuse_deploy
+          fi
+
           # Force-remove the staging container regardless of how it was created
           # (compose-managed OR manually created via docker run)
           docker stop corescope-staging-go 2>/dev/null || true
