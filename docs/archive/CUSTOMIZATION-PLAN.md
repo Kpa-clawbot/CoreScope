@@ -1,5 +1,9 @@
 # CUSTOMIZATION-PLAN.md — White-Label / Multi-Instance Theming
 
+> **Archived plan.** Historical planning material; proposals, status claims, and
+> instructions below may be outdated or unimplemented. For current guidance, see
+> the [README](../../README.md) and [deployment guide](../../DEPLOY.md).
+
 ## Status: Phase 1 Complete (v2.6.0+)
 
 ### What's Built
