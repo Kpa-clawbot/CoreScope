@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -100,6 +101,7 @@ func TestCertainEvidenceAcrossLoadPaths(t *testing.T) {
 		{"direct representative then flood", "1600", "15414f2a", `["4F2A"]`, true},
 		{"narrow representative then wider flood", "1500", "15414f2a", `["4F2A"]`, true},
 		{"missing observation header", "1540", "", `["4F2A"]`, false},
+		{"legacy schema without observation headers", "1540", "15414f2a", `["4F2A"]`, false},
 		{"unreadable observation header", "1540", "not-hex", `["4F2A"]`, false},
 		{"resolved node absent from path", "1540", "154140aa", `["40AA"]`, false},
 	}
@@ -116,6 +118,9 @@ func TestCertainEvidenceAcrossLoadPaths(t *testing.T) {
 						}
 					}
 					ceSetFrames(t, w, at, first, raw, c.path, resolved)
+					if c.name == "legacy schema without observation headers" {
+						db.hasObsRawHex = false
+					}
 					s := NewPacketStore(db, &PacketStoreConfig{})
 					s.useResolvedPathIndex = true
 					s.initResolvedPathIndex()
@@ -248,5 +253,162 @@ func TestCertainAnalyticsRejectsBroadAttribution(t *testing.T) {
 				t.Errorf("adaptive activity counts %d certain packets; want 1", total)
 			}
 		})
+	}
+}
+
+func TestCertainEvidenceSurvivesObservationDedup(t *testing.T) {
+	for _, mode := range []string{"Load", "loadChunk", "LoadChunked", "live", "late"} {
+		for _, floodFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/floodFirst=%t", mode, floodFirst), func(t *testing.T) {
+				db, w, at := lpFixture(t, true, true)
+				first, next := "16414f2a00", "15414f2a00"
+				if floodFirst {
+					first, next = next, first
+				}
+				ceSetFrames(t, w, at, first, next, `["4F2A"]`, true)
+				if _, err := w.Exec(`UPDATE observations SET observer_id='same-observer',path_json='["4F2A"]',resolved_path=?`, `["`+lpRelay+`"]`); err != nil {
+					t.Fatal(err)
+				}
+				// Load sorts newest first; make the first frame sort first.
+				if _, err := w.Exec(`UPDATE observations SET timestamp=? WHERE id=1`, time.Now().UTC().Format(time.RFC3339)); err != nil {
+					t.Fatal(err)
+				}
+				s := NewPacketStore(db, &PacketStoreConfig{})
+				var err error
+				switch mode {
+				case "Load":
+					err = s.Load()
+				case "loadChunk":
+					err = s.loadChunk(time.Now().Add(-time.Hour), time.Now())
+				case "LoadChunked":
+					err = s.LoadChunked(1)
+				case "live":
+					s.IngestNewFromDB(0, 100)
+				case "late":
+					if _, err := w.Exec(`DELETE FROM observations WHERE id=2`); err != nil {
+						t.Fatal(err)
+					}
+					if err = s.Load(); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := w.Exec(`INSERT INTO observations(id,transmission_id,observer_id,path_json,timestamp,raw_hex)
+						VALUES(2,1,'same-observer','["4F2A"]',?,?)`, at, next); err != nil {
+						t.Fatal(err)
+					}
+					s.IngestNewObservations(1, 100)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				tx := s.byTxID[1]
+				if tx == nil || len(tx.Observations) != 1 {
+					t.Fatal("same observer/path must still occupy one observation")
+				}
+				heard, _ := s.LastHeardMap([]string{lpRelay})
+				_, pm := s.getCachedNodesAndPM()
+				if heard[lpRelay].IsZero() || !certainFor(tx, lpRelay, pm) {
+					t.Fatal("dedup discarded the genuine flood observation")
+				}
+			})
+		}
+	}
+}
+
+func TestObservedRelayEvidenceValidation(t *testing.T) {
+	for _, c := range []struct {
+		name, raw, path string
+		want            uint8
+	}{
+		{"flood", "15414f2a00", `["4f2A"]`, 4},
+		{"transport flood", "1400000000814f2a5500", `["4F2A55"]`, 6},
+		{"direct", "16414f2a00", `["4F2A"]`, 0},
+		{"transport direct", "1700000000414f2a00", `["4F2A"]`, 0},
+		{"TRACE header", "25414f2a00", `["4F2A"]`, 0},
+		{"missing", "", `["4F2A"]`, 0},
+		{"zero hop", "154000", `["4F2A"]`, 0},
+		{"truncated", "15414f", `["4F2A"]`, 0},
+		{"nonhex hop", "15414fzz00", `["4FZZ"]`, 0},
+		{"reserved width", "15c14f2a5566", `["4F2A5566"]`, 0},
+		{"mismatched path", "15414f2a00", `["4F8B"]`, 0},
+		{"extra path entry", "15414f2a00", `["4F2A","4F8B"]`, 0},
+		{"oversized path", "1596" + strings.Repeat("4f2a55", 22), `[` + strings.TrimSuffix(strings.Repeat(`"4F2A55",`, 22), ",") + `]`, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := observedRelayHopHexLen(c.raw, c.path); got != c.want {
+				t.Errorf("evidence width = %d; want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestCertainObservedRelayRespectsSignatureAndCurrentPrefixes(t *testing.T) {
+	pm := chPM()
+	tx := chTx(1, 1, 4, 2, time.Now())
+	chObservation(tx, chC)
+	if !certainFor(tx, chC, pm) {
+		t.Fatal("control: actual unique flood relay must be certain")
+	}
+	pm.retired = map[string]struct{}{chC[:4]: {}}
+	if certainFor(tx, chC, pm) {
+		t.Fatal("new retired namesake must make the retained evidence uncertain")
+	}
+	pm = chPM()
+	pm.m[chC[:4]] = append(pm.m[chC[:4]], nodeInfo{PublicKey: chC[:4] + strings.Repeat("a", 60), Role: "repeater"})
+	if certainFor(tx, chC, pm) {
+		t.Fatal("new active namesake must make the retained evidence uncertain")
+	}
+	for _, valid := range []bool{false, true} {
+		tx := chTx(2, 1, 4, 2, time.Now())
+		tx.DecodedJSON = fmt.Sprintf(`{"pubKey":%q,"signatureValid":%t}`, chA, valid)
+		s := chStore()
+		chIndexResolved(s, tx, []string{chC}, map[string]bool{}, chPM())
+		if got := certainFor(tx, chC, chPM()); got != valid {
+			t.Errorf("relay certainty=%v with signatureValid=%v", got, valid)
+		}
+		if got := s.certainHeard[chC] != ""; got != valid {
+			t.Errorf("relay last-heard=%v with signatureValid=%v", got, valid)
+		}
+	}
+}
+
+func TestCertainEvidenceConcurrentLateDedup(t *testing.T) {
+	db, w, at := lpFixture(t, true, true)
+	if _, err := w.Exec(`UPDATE observations SET observer_id='same-observer',raw_hex='16414f2a00'`); err != nil {
+		t.Fatal(err)
+	}
+	s := NewPacketStore(db, &PacketStoreConfig{})
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	// Use the cached prefix map as the learner does, without a fixture-only
+	// analytics schema query in each iteration.
+	_, pm := s.getCachedNodesAndPM()
+	if _, err := w.Exec(`INSERT INTO observations(id,transmission_id,observer_id,path_json,timestamp,raw_hex)
+		VALUES(2,1,'same-observer','["4F2A"]',?,'15414f2a00')`, at); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 100; j++ {
+				s.mu.RLock()
+				certainFor(s.byTxID[1], lpRelay, pm)
+				s.mu.RUnlock()
+				s.CertainActivity([]string{lpRelay}, time.Now())
+				s.LastHeardMap([]string{lpRelay})
+			}
+		}()
+	}
+	close(start)
+	for i := 0; i < 20; i++ {
+		s.IngestNewObservations(1, 100)
+	}
+	wg.Wait()
+	if !certainFor(s.byTxID[1], lpRelay, pm) || len(s.byTxID[1].Observations) != 1 {
+		t.Fatal("late evidence was lost or stored as a duplicate observation")
 	}
 }
