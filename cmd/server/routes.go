@@ -3090,6 +3090,7 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 		observerIDs[i] = o.ID
 	}
 	nodeLocations := s.db.GetNodeLocationsByKeys(observerIDs)
+	neighborSummaries := s.db.GetObserverNeighborSummaries()
 
 	result := make([]ObserverResp, 0, len(observers))
 	nowTime := time.Now().UTC()
@@ -3122,6 +3123,10 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 			PacketsLastHour: plh,
 			Lat:             lat, Lon: lon, NodeRole: nodeRole,
 			CanRelay: o.CanRelay,
+		}
+		if ns, ok := neighborSummaries[o.ID]; ok {
+			at, count := ns.receivedAt, ns.count
+			resp.NeighborsReportAt, resp.NeighborsCount = &at, &count
 		}
 		applyObserverNaiveClock(&resp, o, nowTime)
 		result = append(result, resp)
@@ -3167,6 +3172,10 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 			LastPacketAt:    obs.LastPacketAt,
 			PacketsLastHour: plh,
 			CanRelay:        obs.CanRelay,
+		}
+		if rep, err := s.db.GetObserverNeighborReport(obs.ID); err == nil && rep != nil {
+			at, count := rep.ReceivedAt, rep.NeighborCount
+			resp.NeighborsReportAt, resp.NeighborsCount, resp.NeighborReport = &at, &count, rep
 		}
 		applyObserverNaiveClock(&resp, obs, time.Now().UTC())
 		resp.RadioHistory = observerRadioStints(obs.ID)
