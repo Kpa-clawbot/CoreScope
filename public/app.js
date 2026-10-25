@@ -1641,6 +1641,7 @@ window.addEventListener('DOMContentLoaded', () => {
       rafId = requestAnimationFrame(applyNavPriority);
     }
     window.addEventListener('resize', scheduleNavPriority);
+    window.addEventListener('cs-auth-control-added', scheduleNavPriority);
     window.addEventListener('cs-auth-changed', scheduleNavPriority);
     // Re-apply on route change too: the active link gets bigger padding
     // (background pill), so which links fit can shift between pages.
