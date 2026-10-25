@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -359,5 +360,22 @@ func TestObserverAudit_BindingSetNamesPreviousOwner(t *testing.T) {
 		if !want[g] {
 			t.Fatalf("unexpected row %q in %v", g, got)
 		}
+	}
+}
+
+// A reissue whose mail fails has already replaced the credentials, so the
+// 503 must say so and point at the user's own resend, not invite a retry
+// that would reissue again.
+func TestObserverAdmin_ReissueMailFailureSaysReissued(t *testing.T) {
+	f := newOadmFixture(t)
+	uid := f.addLogin(t, "a@example.org", "obs_aaaaaaaaaaaa", "pw-a")
+	f.fake.SetSendErr(errors.New("brevo down"))
+	w := f.do("POST", f.reissuePath(uid), nil, as(f.admin))
+	expectStatus(t, w, 503)
+	if !strings.Contains(w.Body.String(), "reissued") || !strings.Contains(w.Body.String(), "account page") {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+	if l, err := f.st.MQTTLoginForUser(uid); err != nil || l.Username == "obs_aaaaaaaaaaaa" {
+		t.Fatalf("login = %+v, %v; want the reissued username", l, err)
 	}
 }

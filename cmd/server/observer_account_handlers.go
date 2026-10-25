@@ -174,7 +174,7 @@ func (s *Server) handleObserverLoginCreate(w http.ResponseWriter, r *http.Reques
 	a.obsIdx.setLogin(l)
 	a.enableOwnObserverMails(u.ID)
 	a.auditAsync(idPtr(u.ID), "observer.login.create", idPtr(u.ID), map[string]string{"username": username})
-	if !a.sendObserverCredentials(r.Context(), w, u, username, password) {
+	if !a.sendObserverCredentials(r.Context(), w, u, username, password, "the login was created, but the mail could not be sent; ask for it again later") {
 		return
 	}
 	writeJSONStatus(w, http.StatusCreated, sentResponse{Sent: true})
@@ -217,7 +217,7 @@ func (s *Server) handleObserverLoginResend(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	a.auditAsync(idPtr(u.ID), "observer.login.resend", idPtr(u.ID), nil)
-	if !a.sendObserverCredentials(r.Context(), w, u, l.Username, password) {
+	if !a.sendObserverCredentials(r.Context(), w, u, l.Username, password, "could not send the mail, try again later") {
 		return
 	}
 	writeJSON(w, sentResponse{Sent: true})
@@ -260,13 +260,14 @@ func (a *authService) credentialsMailsSince(uid int64, since time.Time) (int, er
 	return n, nil
 }
 
-// sendObserverCredentials mails the credentials and answers 503 itself when
-// the mail fails (sendMail logs the error without the message body).
-func (a *authService) sendObserverCredentials(ctx context.Context, w http.ResponseWriter, u *users.User, username, password string) bool {
+// sendObserverCredentials mails the credentials and answers 503 with failMsg
+// itself when the mail fails (sendMail logs the error without the message
+// body).
+func (a *authService) sendObserverCredentials(ctx context.Context, w http.ResponseWriter, u *users.User, username, password, failMsg string) bool {
 	ctx, cancel := context.WithTimeout(ctx, observerMailTimeout)
 	defer cancel()
 	if err := a.sendMail(ctx, u, observerCredentialsPurpose, a.observerCredentialsMail(u, username, password)); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "could not send the mail, try again later")
+		writeError(w, http.StatusServiceUnavailable, failMsg)
 		return false
 	}
 	return true

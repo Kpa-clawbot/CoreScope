@@ -140,7 +140,8 @@ func (s *Server) handleAdminObserverLoginReissue(w http.ResponseWriter, r *http.
 	}
 	a.obsIdx.setLogin(l)
 	a.audit(idPtr(actor.ID), "observer.login.reissue", idPtr(t.ID), map[string]string{"username": l.Username})
-	if !a.sendObserverCredentials(r.Context(), w, t, l.Username, password) {
+	if !a.sendObserverCredentials(r.Context(), w, t, l.Username, password,
+		"the login was reissued and the old one no longer works, but the mail could not be sent; the user can ask for it again from their account page") {
 		return
 	}
 	writeJSON(w, sentResponse{Sent: true})

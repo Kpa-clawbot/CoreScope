@@ -223,3 +223,28 @@ func TestSetObserverOwner_ReassignAndUnbind(t *testing.T) {
 		t.Fatalf("bad key = %v", err)
 	}
 }
+
+// Two first requests for the same user at once: one wins, the other gets
+// ErrMQTTLoginExists (the handler's 409), never a plain constraint error.
+func TestMQTTLogin_ConcurrentCreateSameUser(t *testing.T) {
+	st, _ := newTestStore(t)
+	a := mustCreate(t, st, "a@example.org", "A")
+	const n = 8
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func(i int) { errs <- st.CreateMQTTLogin(mkLogin(a.ID, "obs-c"+string(rune('a'+i)))) }(i)
+	}
+	ok := 0
+	for i := 0; i < n; i++ {
+		switch err := <-errs; {
+		case err == nil:
+			ok++
+		case errors.Is(err, ErrMQTTLoginExists):
+		default:
+			t.Errorf("create = %v; want nil or ErrMQTTLoginExists", err)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("%d creates succeeded; want 1", ok)
+	}
+}
