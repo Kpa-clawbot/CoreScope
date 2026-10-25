@@ -98,9 +98,13 @@ test('hostile identifiers remain one encoded node parameter', () => {
     assert.ok(!link.markup.includes('<value>'), 'identifier escaped into markup');
   }
 });
+
 (async () => {
+  // Exercise the actual callback captured by SlideOver.open, including the
+  // destroy-before-close sequence used when opening the full detail page.
   const key = 'ab'.repeat(32);
   let close;
+  let fullDetailClick;
   const routeTitleCalls = [];
   ctx.setRouteTitle = (...args) => routeTitleCalls.push(args);
   ctx.innerWidth = 820;
@@ -110,7 +114,7 @@ test('hostile identifiers remain one encoded node parameter', () => {
   ctx.api = async () => ({ node: { public_key: key, role: 'companion' } });
   ctx.SlideOver = {
     shouldUse() { return true; },
-    open(options) { close = options.onClose; return {}; },
+    open(options) { close = options.onClose; return { querySelector() { return { addEventListener(_type, handler) { fullDetailClick = handler; } }; } }; },
   };
   for (const destination of ['#/nodes/' + key, '#/map?node=' + key, '#/packets?node=' + key,
     '#/nodes/' + key + '/analytics', '#/nodes/' + key + '/reach', '#/nodes/other']) {
@@ -118,6 +122,9 @@ test('hostile identifiers remain one encoded node parameter', () => {
     routeTitleCalls.length = 0;
     ctx.location.hash = destination;
     close();
+    test('closing the preview preserves destination ' + destination.split('?')[0], () => {
+      assert.equal(ctx.location.hash, destination === '#/nodes/' + key ? '#/nodes' : destination);
+    });
     test('closing the preview preserves the route title for ' + destination.split('?')[0], () => {
       assert.deepEqual(routeTitleCalls, destination === '#/nodes/' + key ? [['nodes']] : []);
     });
@@ -128,6 +135,14 @@ test('hostile identifiers remain one encoded node parameter', () => {
   close();
   test('closing after full-detail navigation does not reset its title', () => {
     assert.deepEqual(routeTitleCalls, []);
+  });
+  test('closing after full-detail navigation does not reset its identical hash', () => {
+    assert.equal(ctx.location.hash, '#/nodes/' + key);
+  });
+  test('modified full-detail clicks preserve native link behavior', () => {
+    for (const modifier of ['ctrlKey', 'metaKey', 'shiftKey', 'altKey']) {
+      fullDetailClick({ [modifier]: true, preventDefault() { assert.fail('Do not intercept ' + modifier + ' clicks'); } });
+    }
   });
   console.log(`${passed} passed, ${failed} failed`);
   process.exitCode = failed ? 1 : 0;

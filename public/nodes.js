@@ -252,6 +252,19 @@
     return renderNodeMetric('Hash Prefix', value, table);
   }
 
+  function renderNodeQuickActions(n) {
+    const nodeQuery = 'node=' + encodeURIComponent(n.public_key);
+    // Reject blanks/coercible non-numbers before the shared viewport parser
+    // validates the ranges. Zero coordinates are valid navigation targets.
+    const numeric = value => typeof value === 'number' || (typeof value === 'string' && value.trim() !== '');
+    const viewport = numeric(n.lat) && numeric(n.lon)
+      ? parseViewportHash('lat=' + Number(n.lat) + '&lon=' + Number(n.lon) + '&zoom=14') : null;
+    const mapLink = viewport
+      ? '<a class="btn-primary" href="' + escapeHtml('#/map?' + nodeQuery + '&lat=' + viewport.lat + '&lon=' + viewport.lon + '&zoom=' + viewport.zoom) + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Open in Map</a>' : '';
+    return '<div class="node-quick-actions">' + mapLink +
+      '<a class="btn-primary" href="' + escapeHtml('#/packets?' + nodeQuery) + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> View packets</a></div>';
+  }
+
   function getStatusTooltip(role, status) {
     const isInfra = role === 'repeater' || role === 'room';
     const threshMs = isInfra ? HEALTH_THRESHOLDS.infraSilentMs : HEALTH_THRESHOLDS.nodeSilentMs;
@@ -823,6 +836,7 @@
             <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="flex:0 0 auto;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Copy short URL</button>
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Analytics</a>
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Reach</a>
+            ${renderNodeQuickActions(n)}
             <a href="#/observers/${encodeURIComponent(n.public_key.toUpperCase())}" class="btn-primary" title="View this pubkey as an observer" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Observer →</a>
             <span class="node-notify-slot" id="nodeNotifySlotFull"></span>
           </div>
@@ -1857,9 +1871,12 @@
             + '"]');
         },
         onClose: function () {
+          // Only closing this preview returns to the list; keep any new route.
+          if (selectedKey === pubkey && location.hash === '#/nodes/' + encodeURIComponent(pubkey)) {
+            history.replaceState(null, '', '#/nodes');
+            if (window.setRouteTitle) window.setRouteTitle('nodes');
+          }
           selectedKey = null;
-          history.replaceState(null, '', '#/nodes');
-          if (window.setRouteTitle) window.setRouteTitle('nodes');
           renderRows();
         }
       });
@@ -1884,7 +1901,14 @@
             '<dt>Adverts</dt><dd>' + (n.advert_count != null ? n.advert_count : '—') + '</dd>' +
             renderHashPrefix(n) +
           '</dl>' +
-          '<p style="margin-top:14px"><a class="btn-primary" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>';
+          '<p style="margin-top:14px"><a class="btn-primary node-detail-btn" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>' +
+          renderNodeQuickActions(n);
+        so.querySelector('.node-detail-btn').addEventListener('click', function (e) {
+          if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          window.SlideOver.close();
+          navigateToNode(pubkey);
+        });
       } catch (e) {
         so.innerHTML = '<div class="text-muted">Error: ' + (e && e.message ? e.message : String(e)) + '</div>';
       }
@@ -1942,6 +1966,7 @@
           <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Reach</a>
           <span class="node-notify-slot" id="nodeNotifySlot"></span>
         </div>
+        ${renderNodeQuickActions(n)}
         ${renderStatusExplanation(n)}
 
         ${hasLoc ? `<div class="node-map-qr-wrap">
