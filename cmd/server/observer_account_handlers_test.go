@@ -98,8 +98,8 @@ func TestObserverLogin_CreateMailsOnce(t *testing.T) {
 	if m.Tag != "observer-credentials" || m.To != "obs@example.org" {
 		t.Fatalf("mail = tag %q to %q", m.Tag, m.To)
 	}
-	for _, want := range []string{user, pw, `method = "password"`, "set mqtt1.username " + user, "set mqtt1.password " + pw,
-		`server = "mqtt.example.org"`, "port = 8883", "enabled = true", "set mqtt1.port 8883", "set mqtt.iata <your IATA code>"} {
+	for _, want := range []string{user, pw, `method = "password"`, "set mqtt4.username " + user, "set mqtt4.password " + pw,
+		`server = "mqtt.example.org"`, "port = 8883", "enabled = true", "set mqtt4.port 8883", "set mqtt.iata <your IATA code>"} {
 		if !strings.Contains(m.Text, want) {
 			t.Fatalf("text part lacks %q:\n%s", want, m.Text)
 		}

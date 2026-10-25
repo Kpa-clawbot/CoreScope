@@ -10,12 +10,36 @@ import (
 func TestRenderPreBlock(t *testing.T) {
 	a, _ := newTestAuthService(t)
 	m := a.render("a@example.org", "A", "x", mailContent{subject: "S", greeting: "Hi",
-		pre: []string{"a = \"<b>&</b>\"\nb = 1"}})
-	if !strings.Contains(m.HTML, "<pre>a = &#34;&lt;b&gt;&amp;&lt;/b&gt;&#34;\nb = 1</pre>") {
+		pre: []mailBlock{{title: "1. T<i>", note: "Do <this>.", body: "a = \"<b>&</b>\"\nb = 1"}}})
+	if !strings.Contains(m.HTML, "<h3>1. T&lt;i&gt;</h3><p>Do &lt;this&gt;.</p><pre>a = &#34;&lt;b&gt;&amp;&lt;/b&gt;&#34;\nb = 1</pre>") {
 		t.Fatalf("html = %s", m.HTML)
 	}
-	if !strings.Contains(m.Text, "a = \"<b>&</b>\"\nb = 1\n") {
+	if !strings.Contains(m.Text, "=== 1. T<i> ===\nDo <this>.\n\na = \"<b>&</b>\"\nb = 1\n") {
 		t.Fatalf("text = %q", m.Text)
+	}
+}
+
+// Each format starts with a numbered title and one line saying where it goes,
+// so a reader can tell where one block ends and which client it is for.
+func TestObserverCredentialsMailBlockTitles(t *testing.T) {
+	a, _ := newTestAuthService(t)
+	a.set.observerLogins = observerLoginSettings{host: "mqtt.example.org", port: 1883, transport: "tcp"}
+	m := a.observerCredentialsMail(&users.User{Email: "a@example.org", DisplayName: "A"}, "obs_abc", "pw")
+	last := -1
+	for _, w := range []string{
+		"=== 1. meshcoretomqtt ",
+		"=== 2. MeshCore observer firmware (Gessaman or Dutch-MeshCore) ===",
+		"=== 3. Home Assistant (meshcore-ha) ===",
+		"=== 4. Any other MQTT client ===",
+	} {
+		i := strings.Index(m.Text, w)
+		if i <= last {
+			t.Fatalf("title %q missing or out of order:\n%s", w, m.Text)
+		}
+		last = i
+	}
+	if strings.Count(m.HTML, "<h3>") != 4 {
+		t.Fatalf("want 4 <h3> titles:\n%s", m.HTML)
 	}
 }
 
@@ -41,7 +65,7 @@ enabled = false
 method = "password"
 username = "obs_abc"
 password = "p<w>"`
-	for _, w := range []string{want, "set mqtt1.preset custom\nset mqtt1.server ws://mqtt.example.org\nset mqtt1.port 1883\nset mqtt1.username obs_abc\nset mqtt1.password p<w>\nset mqtt.iata <your IATA code>",
+	for _, w := range []string{want, "set mqtt4.preset custom\nset mqtt4.server ws://mqtt.example.org\nset mqtt4.port 1883\nset mqtt4.username obs_abc\nset mqtt4.password p<w>\nset mqtt.iata <your IATA code>",
 		"Host: mqtt.example.org", "Port: 1883", "TLS: no", "Username: obs_abc", "Password: p<w>"} {
 		if !strings.Contains(m.Text, w) {
 			t.Fatalf("text lacks %q:\n%s", w, m.Text)
@@ -50,7 +74,7 @@ password = "p<w>"`
 	if strings.Contains(m.HTML, "p<w>") || !strings.Contains(m.HTML, "p&lt;w&gt;") {
 		t.Fatal("html does not escape the password")
 	}
-	i1, i2, i3 := strings.Index(m.Text, "[[broker]]"), strings.Index(m.Text, "set mqtt1.preset"), strings.Index(m.Text, "Host: ")
+	i1, i2, i3 := strings.Index(m.Text, "[[broker]]"), strings.Index(m.Text, "set mqtt4.preset"), strings.Index(m.Text, "Host: ")
 	if !(i1 < i2 && i2 < i3) {
 		t.Fatalf("block order %d %d %d", i1, i2, i3)
 	}
@@ -60,7 +84,7 @@ password = "p<w>"`
 // mqtts, 443 wss, else mqtt: MQTTBridge.cpp setupSlot), so the mail always
 // names the scheme the configured transport and TLS need.
 // Firmware before the Dutch-MeshCore merge 32dd8ad (2026-10-19) does not parse a
-// scheme in mqtt1.server and builds "<proto>://<host>:<port>" with proto taken
+// scheme in mqttN.server and builds "<proto>://<host>:<port>" with proto taken
 // from the port alone (8883 mqtts, 443 wss, else mqtt). A bare host works on
 // both; the scheme is only written when the port would infer the wrong one.
 func TestFirmwareServerScheme(t *testing.T) {
@@ -104,7 +128,7 @@ func TestObserverCredentialsMailHomeAssistantBlock(t *testing.T) {
 	if !strings.Contains(m.HTML, "Broker IATA Code: &lt;your IATA code&gt;") || strings.Contains(m.HTML, "p<w>") {
 		t.Fatal("html does not escape the Home Assistant block")
 	}
-	i1, i2, i3, i4 := strings.Index(m.Text, "[[broker]]"), strings.Index(m.Text, "set mqtt1.preset"), strings.Index(m.Text, "Manage MQTT Brokers"), strings.Index(m.Text, "Host: ")
+	i1, i2, i3, i4 := strings.Index(m.Text, "[[broker]]"), strings.Index(m.Text, "set mqtt4.preset"), strings.Index(m.Text, "Manage MQTT Brokers"), strings.Index(m.Text, "Host: ")
 	if !(i1 < i2 && i2 < i3 && i3 < i4) {
 		t.Fatalf("block order %d %d %d %d", i1, i2, i3, i4)
 	}
@@ -113,5 +137,22 @@ func TestObserverCredentialsMailHomeAssistantBlock(t *testing.T) {
 	m = a.observerCredentialsMail(&users.User{Email: "a@example.org", DisplayName: "A"}, "obs_abc", "pw")
 	if !strings.Contains(m.Text, "Transport: tcp\nUse TLS: off\n") {
 		t.Fatalf("tcp/off variant missing:\n%s", m.Text)
+	}
+}
+
+// Slots 1-2 (Gessaman: Let's Mesh US/EU) and 1-3 (Dutch-MeshCore:
+// dutchmeshcore-1/-2, meshcore-analyzer-eu) hold default presets on a fresh
+// install, so the commands use slot 4, which is empty on both.
+func TestObserverCredentialsMailFirmwareSlot(t *testing.T) {
+	a, _ := newTestAuthService(t)
+	a.set.observerLogins = observerLoginSettings{host: "mqtt.example.org", port: 1883, transport: "tcp"}
+	m := a.observerCredentialsMail(&users.User{Email: "a@example.org", DisplayName: "A"}, "obs_abc", "pw")
+	if strings.Contains(m.Text, "mqtt1.") {
+		t.Fatalf("mail still uses slot 1:\n%s", m.Text)
+	}
+	for _, w := range []string{"Gessaman", "Dutch-MeshCore", "get mqtt.status", "set mqtt4.server mqtt.example.org"} {
+		if !strings.Contains(m.Text, w) {
+			t.Fatalf("text lacks %q:\n%s", w, m.Text)
+		}
 	}
 }

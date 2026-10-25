@@ -67,8 +67,10 @@ They are not for browsers: if CoreScope is public, you can also block `/api/mqtt
 reverse proxy for everything except the broker.
 
 The credentials mail holds the login in four forms: a meshcoretomqtt `[[broker]]` block, the
-Dutch-MeshCore observer firmware commands, a Home Assistant meshcore-ha block, and the plain values. For the firmware the server
-line is the bare host (`set mqtt1.server mqtt.example.org`): the firmware chooses the scheme
+observer firmware commands (Gessaman or Dutch-MeshCore, same CLI), a Home Assistant meshcore-ha block, and the plain
+values. The firmware commands use slot 4 (`set mqtt4.*`): on a fresh install slots 1-2 (Gessaman, Let's Mesh US/EU)
+and 1-3 (Dutch-MeshCore) hold default broker presets, and slot 4 is empty on both. For the firmware the server
+line is the bare host (`set mqtt4.server mqtt.example.org`): the firmware chooses the scheme
 from the port alone (8883 TLS, 443 secure websockets, anything else plain MQTT), and firmware
 before 2026-10-19 does not accept a scheme in the server. Only when the port would pick the
 wrong scheme (for example TLS on 8884) does the mail write one (`mqtts://mqtt.example.org`),
