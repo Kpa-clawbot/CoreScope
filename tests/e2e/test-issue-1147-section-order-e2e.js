@@ -137,6 +137,9 @@ async function previewMetadata(browser) {
           assert(hash.text === (n.hash_size ? n.public_key.slice(0, 4).toUpperCase() + ' (2-byte)' + (n.hash_size_inconsistent ? ' varies' : '') : 'Unknown'), 'incorrect hash prefix: ' + hash.text);
           const share = fields['Traffic share'];
           assert(n.want ? share && share.text.includes(n.want) : !share, 'wrong traffic score or missing-data state');
+          if (layout.name === 'full' && n.want) {
+            assert(await root.locator('#row-usefulness-score').count() === 1, 'full table must retain the legacy score-row ID');
+          }
           const relay = fields['Last Relayed'];
           if (n.role === 'companion') assert(!relay, 'companion must not show relay metrics');
           else {
@@ -170,6 +173,31 @@ async function previewMetadata(browser) {
               await root.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `node-preview-${layout.name}-${theme}.png`) });
             }
           }
+        });
+      }
+      if (layout.name === 'side') {
+        await step(`#2309 ${theme}: desktop-to-tablet transition keeps score IDs unique`, async () => {
+          await p.goto(BASE + '/?preview-case=resize#/nodes', { waitUntil: 'domcontentloaded' });
+          await p.waitForFunction(() => window.SITE_CONFIG && _themeRefreshTimer === null);
+          await p.locator('#nodesTable tbody tr[data-key="' + cases[0].public_key + '"] td:visible').first().click();
+          const sideScore = p.locator('#nodesRight [data-traffic-share-score]');
+          await sideScore.waitFor({ state: 'visible' });
+          const before = await p.locator('#row-usefulness-score').count();
+          await p.setViewportSize({ width: 800, height: 1000 });
+          await p.locator('#nodesTable tbody tr[data-key="' + cases[1].public_key + '"] td:visible').first().click();
+          const tabletScore = p.locator('.slide-over-content [data-traffic-share-score]');
+          await tabletScore.waitFor({ state: 'visible' });
+          const after = await p.locator('#row-usefulness-score').count();
+          console.log('    score-row IDs before resize: ' + before + ', after tablet selection: ' + after);
+          assert((await sideScore.innerText()).includes('0.0%'), 'retained side preview lost its score');
+          assert((await tabletScore.innerText()).includes('12.5%'), 'tablet preview did not render the new node score');
+          assert(await sideScore.getAttribute('data-usefulness-score') === '0.0000', 'side preview lost its legacy score data');
+          assert(await tabletScore.getAttribute('data-usefulness-score') === '0.1250', 'tablet preview lost its legacy score data');
+          for (const root of [p.locator('#nodesRight .detail-meta'), p.locator('.slide-over-content dl')]) {
+            const labels = await root.locator('dt').allTextContents();
+            assert(labels.includes('Last Relayed') && labels.includes('Hash Prefix'), 'transition lost preview metadata');
+          }
+          assert(after <= 1, 'duplicate row-usefulness-score IDs after desktop-to-tablet transition: ' + after);
         });
       }
       await step(`#2309 ${theme} ${layout.name}: no page errors`, async () => assert(errors.length === 0, errors.join(' | ')));

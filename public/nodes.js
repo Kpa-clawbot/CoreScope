@@ -233,8 +233,8 @@
     else if (s >= 0.1) { label = 'Marginal'; color = 'var(--status-orange)'; }
     else { label = 'Redundant'; color = 'var(--status-red)'; }
     const barWidth = Math.max(2, Math.round(s * 100));
-    const tooltip = "Fraction of all non-advert mesh traffic in the analyzer's memory that transited through this repeater as a relay hop. High = lots of packets pass through; low = quieter (may still be structurally important — see Bridge score). One of 4 planned scoring axes (#672); others pending.";
-    const attributes = `id="row-usefulness-score" data-usefulness-score="${s.toFixed(4)}" data-traffic-share-score="${s.toFixed(4)}"`;
+    const tooltip = "Fraction of all non-advert mesh traffic in the analyzer's memory that transited through this repeater as a relay hop. High = lots of packets pass through; low = quieter (may still be structurally important — see Bridge score).";
+    const attributes = (table ? 'id="row-usefulness-score" ' : '') + `data-usefulness-score="${s.toFixed(4)}" data-traffic-share-score="${s.toFixed(4)}"`;
     const value = `<span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${barWidth}%;height:100%;background:${color}"></span></span><span style="color:${color};font-weight:600">${pct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${label}</span>`;
     return renderNodeMetric('Traffic share <span style="color:var(--text-muted);cursor:help" aria-label="help">ⓘ</span>', value, table, tooltip, attributes);
   }

@@ -4505,6 +4505,12 @@ console.log('\n=== nodes.js: preview metadata (#2309) ===');
     assert.match(renderPreview({ traffic_share_score: '0.125' }).value('Traffic share') || '', /12\.5%/);
     assert.match(renderPreview({ traffic_share_score: null, usefulness_score: '0.25' }).value('Traffic share') || '', /25\.0%/);
   });
+  test('traffic-share help defines traffic and its Bridge distinction without stale planning claims', () => {
+    const { html } = renderPreview({ traffic_share_score: 0.5 });
+    assert.match(html, /non-advert mesh traffic/);
+    assert.match(html, /see Bridge score/);
+    assert.doesNotMatch(html, /others pending|planned scoring axes/);
+  });
   test('missing and malformed scores do not become a measured zero', () => {
     for (const raw of [undefined, null, '', ' ', 'bad', Infinity, -0.1, 1.1]) {
       assert.strictEqual(renderPreview({ traffic_share_score: raw }).value('Traffic share'), null, String(raw));
