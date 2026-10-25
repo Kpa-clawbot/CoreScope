@@ -681,6 +681,7 @@ jobs:
           suite 2 test-issue-1630-reach-mobile-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-node-reach-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-issue-1640-compare-discovery-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-observer-detail-ownership-e2e.js BASE_URL=$B
           suite 2 test-neighbor-map-btn-clip-e2e.js CHROMIUM_REQUIRE=1
           suite 3 test-rx-coverage-viewport-e2e.js BASE_URL=$B
           suite 1 test-rx-coverage-noise-e2e.js BASE_URL=$B

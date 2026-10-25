@@ -185,6 +185,7 @@ node tests/unit/test-notifications-ui.js
 node tests/unit/test-observer-iata-1188.js
 node tests/unit/test-observer-menu-interactions.js
 node tests/unit/test-observer-naive-clock-1478.js
+node tests/unit/test-observer-detail-ownership.js
 node tests/unit/test-observer-search-filter.js
 node tests/unit/test-observers-headings.js
 node tests/unit/test-packet-filter-time.js

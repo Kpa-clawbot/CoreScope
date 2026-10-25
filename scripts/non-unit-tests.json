@@ -111,6 +111,7 @@
       "tests/e2e/test-node-reach-e2e.js",
       "tests/e2e/test-nodes-export-e2e.js",
       "tests/e2e/test-observer-iata-1188-e2e.js",
+      "tests/e2e/test-observer-detail-ownership-e2e.js",
       "tests/e2e/test-packets-compact-columns-e2e.js",
       "tests/e2e/test-packets-node-filter-e2e.js",
       "tests/e2e/test-packets-scope-column.js",
