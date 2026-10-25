@@ -46,6 +46,13 @@ function expectHidden(pageName, w) {
   return vp ? vp.expectHidden : false;
 }
 
+async function waitForAnalyticsTables(page) {
+  // The initial theme-refresh replaces the Nodes tab's tables. Wait for that
+  // lifecycle event and the handles on the resulting render before measuring.
+  await page.waitForFunction(() => window.__columnResizeThemeReady &&
+    document.querySelector('#analyticsContent .analytics-table .col-resize-handle'));
+}
+
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -59,9 +66,12 @@ function expectHidden(pageName, w) {
     await step(`#2217: analytics resize handles stay on their headers at ${width}px`, async () => {
       const ctx = await browser.newContext({ viewport: { width, height: 900 } });
       try {
+        await ctx.addInitScript(() => {
+          window.addEventListener('theme-refresh', () => { window.__columnResizeThemeReady = true; }, { once: true });
+        });
         const page = await ctx.newPage();
         await page.goto(BASE + '/#/analytics?tab=nodes', { waitUntil: 'domcontentloaded' });
-        await page.waitForSelector('#analyticsContent .analytics-table .col-resize-handle', { state: 'attached' });
+        await waitForAnalyticsTables(page);
         const geometry = await page.evaluate(() => ({
           overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           handles: Array.from(document.querySelectorAll('#analyticsContent .col-resize-handle')).map(handle => {
@@ -79,8 +89,9 @@ function expectHidden(pageName, w) {
 
         if (width === 1250) {
           const selector = '#analyticsContent .analytics-table thead th:first-child';
-          await page.locator(selector).first().scrollIntoViewIfNeeded();
-          const before = await page.$eval(selector, th => {
+          const header = page.locator(selector).first();
+          await header.scrollIntoViewIfNeeded();
+          const before = await header.evaluate(th => {
             const r = th.getBoundingClientRect();
             return { width: th.offsetWidth, x: r.right - 2, y: r.top + r.height / 2 };
           });
@@ -88,7 +99,7 @@ function expectHidden(pageName, w) {
           await page.mouse.down();
           await page.mouse.move(before.x + 40, before.y, { steps: 4 });
           await page.mouse.up();
-          const dragged = await page.$eval(selector, th => ({
+          const dragged = await header.evaluate(th => ({
             width: th.offsetWidth,
             percent: th.offsetWidth / th.closest('table').offsetWidth * 100,
             saved: JSON.parse(localStorage.getItem('meshcore-analytics-nodes-0-col-widths')),
@@ -97,8 +108,8 @@ function expectHidden(pageName, w) {
           assert(Array.isArray(dragged.saved), 'drag must save column widths');
           assert(Math.abs(dragged.saved[0] - dragged.percent) < 1, 'saved percentage must match dragged width');
           await page.reload({ waitUntil: 'domcontentloaded' });
-          await page.waitForSelector('#analyticsContent .analytics-table .col-resize-handle', { state: 'attached' });
-          const restored = await page.$eval(selector, th => ({
+          await waitForAnalyticsTables(page);
+          const restored = await header.evaluate(th => ({
             percent: th.offsetWidth / th.closest('table').offsetWidth * 100,
             anchored: th.querySelector('.col-resize-handle').offsetParent === th,
           }));
