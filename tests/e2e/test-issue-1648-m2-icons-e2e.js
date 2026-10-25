@@ -163,7 +163,7 @@ async function checkBatteryStatus(page) {
       for (const [status, mv, label, icon, color] of cases) {
         battery = { status, latest_mv: mv, samples: [] };
         await page.goto('about:blank');
-        await page.goto(`${BASE}/?theme=${theme}#/nodes/${key}/analytics`, { waitUntil: 'domcontentloaded' });
+        await page.goto(`${BASE}/#/nodes/${key}/analytics?theme=${theme}`, { waitUntil: 'domcontentloaded' });
         await page.waitForFunction(() => window.__batteryThemeReady === true);
         await page.waitForFunction(() => document.getElementById('batteryStatusBadge')?.textContent.trim());
         assert.strictEqual(await page.locator('html').getAttribute('data-theme'), theme);

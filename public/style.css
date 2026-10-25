@@ -3518,11 +3518,9 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 @container (max-width: 480px) {
   .dumbbell-row, .dumbbell-axis { --relay-airtime-columns: 70px minmax(20px, 1fr) 90px; }
 }
-/* Constrain chart media inside the card (svg/canvas at any depth). The
-   `.analytics-chart-card svg, .analytics-chart-card canvas` descendant
-   selector is robust to wrapper elements (legends, tooltips, axis
-   groups) being added between the card and the chart media. */
-.analytics-chart-card svg,
+/* Constrain chart media at any depth, preserving inline Phosphor icons.
+   Descendant selectors allow wrappers between the card and chart media. */
+.analytics-chart-card svg:not(.ph-icon),
 .analytics-chart-card canvas { max-width: 100%; height: auto; display: block; }
 .analytics-chart-card h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin-bottom: 4px; }
 .analytics-chart-desc { font-size: 10px; color: var(--text-muted); margin-bottom: 8px; font-style: italic; }
