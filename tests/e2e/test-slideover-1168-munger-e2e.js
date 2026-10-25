@@ -126,9 +126,9 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     // test-slideover-1056-e2e.js. The packets page defaults to
     // `since = now - 15 min` client-side, and the freshened fixture's newest
     // rows age out of that window ~15 minutes after freshen-fixture.sh runs.
-    // Must be > 0: packets.js reads the param only under `_urlTimeWindow > 0`,
-    // so `timeWindow=0` silently keeps the default.
-    await page.goto(BASE + '/#/packets?timeWindow=1440', { waitUntil: 'domcontentloaded' });
+    // Tablet views accept at most 180 minutes; All time or larger values
+    // fall back to the default 15-minute window.
+    await page.goto(BASE + '/#/packets?timeWindow=180', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#pktTable tbody tr[data-action]', { timeout: 8000 });
 
     await step('hashchange: navigating away closes slide-over + releases scroll-lock', async () => {

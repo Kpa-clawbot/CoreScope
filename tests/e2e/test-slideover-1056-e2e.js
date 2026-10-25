@@ -38,21 +38,17 @@ step.skip = function (name, reason, fn) {
 };
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
-// The packets page defaults to a 15-minute time window (DEFAULT_TIME_WINDOW in
-// public/packets.js). CI freshens the fixture once at the start of the e2e job,
-// and this file runs twice: inside the main suite, and again as the #1616
-// flake-gate AFTER every other E2E — roughly 20 minutes later. By then every
-// fixture packet is older than 15 minutes, the packets table renders zero data
-// rows, and `packets@800: page renders + first row exists` times out after 30s.
-// The two tests that need a row to click then fail with it, so one expired
-// window reports as three failures. Whether it fires depends on how long the
-// preceding suite took, which is why it looked like flake and hit unrelated PRs.
-//
-// Pin an explicit window so this file tests the slide-over rather than the
-// clock. The value must be > 0: packets.js only reads the param under
-// `_urlTimeWindow > 0`, so `timeWindow=0` does NOT disable the filter, it
-// silently leaves the 15-minute default in place.
-const PACKETS_QUERY = '?timeWindow=1440';
+// #2302: DOM .click() bypasses hit-testing and hid navigation covering the X.
+async function pointerClick(page, selector, touch, position) {
+  const error = await page.locator(selector)[touch ? 'tap' : 'click']({ position, timeout: 2000 })
+    .then(() => null, e => e.message);
+  assert(!error, selector + ' must receive a real ' + (touch ? 'tap' : 'click') + ': ' + error);
+}
+
+// The CI fixture can outlive the default 15-minute window before the #1616
+// repeat gate runs. Tablet views accept at most 180 minutes; All time or a
+// larger value falls back to 15 minutes. Pin the supported tablet maximum.
+const PACKETS_QUERY = '?timeWindow=180';
 
 const PAGES = [
   { hash: '#/packets' + PACKETS_QUERY, tableSel: '#pktTable', rowSel: '#pktTable tbody tr[data-hash]',           name: 'packets'   },
@@ -70,16 +66,36 @@ const PAGES = [
   console.log(`\n=== #1056 AC#4 slide-over E2E against ${BASE} ===`);
 
   // ---- Narrow viewport: slide-over MUST appear ----
-  for (const p of PAGES) {
-    const ctx = await browser.newContext({ viewport: { width: 800, height: 800 } });
+  for (const p of PAGES) for (const width of p.name === 'observers' ? [800, 390] : [800]) for (const theme of ['light', 'dark']) {
+    const touch = theme === 'dark';
+    const ctx = await browser.newContext({ viewport: { width, height: 800 }, hasTouch: touch, colorScheme: theme });
     const page = await ctx.newPage();
     page.setDefaultTimeout(8000);
     page.on('pageerror', (e) => console.error('[pageerror]', e.message));
 
-    const tag = `${p.name}@800`;
+    const tag = `${p.name}@${width}/${theme}/${touch ? 'tap' : 'click'}`;
+    const url = BASE + '/' + p.hash + (p.hash.includes('?') ? '&' : '?') + 'theme=' + theme;
+
+    async function reopenPanel() {
+      // Observer rows also navigate; start each dismissal from the list.
+      await page.keyboard.press('Escape');
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      await page.locator(p.rowSel).first().locator('td').first().click();
+      await page.waitForSelector('.slide-over-panel');
+    }
 
     await step(`${tag}: page renders + first row exists`, async () => {
-      await page.goto(BASE + '/' + p.hash, { waitUntil: 'domcontentloaded' });
+      const packetsResponse = p.name === 'packets' && page.waitForResponse(response =>
+        new URL(response.url()).pathname === '/api/packets' && response.request().method() === 'GET');
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      if (packetsResponse) {
+        const response = await packetsResponse;
+        const since = new URL(response.url()).searchParams.get('since');
+        assert(Math.abs(Date.now() - Date.parse(since) - 180 * 60000) < 10000,
+          'packet request must use the supported 180-minute window, got since=' + since);
+        assert(response.ok() && (await response.json()).packets.length > 0,
+          'packet fixture must return rows within the requested window');
+      }
       await page.waitForSelector(p.tableSel, { timeout: 8000 });
       // Wait for at least one real data row (per the page-specific rowSel).
       // Using p.rowSel here — not a bare `tbody tr` — avoids the
@@ -237,28 +253,9 @@ const PAGES = [
     });
 
     await step(`${tag}: backdrop click closes slide-over`, async () => {
-      await page.evaluate((sel) => {
-        const t = document.querySelector(sel);
-        if (!t) return;
-        const rows = Array.from(t.querySelectorAll('tbody tr'));
-        const row = rows.find(r => r.hasAttribute('data-action'))
-                || rows.find(r => r.hasAttribute('data-value'))
-                || rows.find(r => r.children.length > 0);
-        if (!row) return;
-        const td = row.querySelector('td:not(:empty)') || row;
-        td.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-      }, p.tableSel);
-      try {
-        await page.waitForFunction(() => {
-          const panel = document.querySelector('.slide-over-panel');
-          return panel && !panel.hidden;
-        }, null, { timeout: 5000 });
-      } catch (_) {}
-      // Click the backdrop directly.
-      await page.evaluate(() => {
-        const b = document.querySelector('.slide-over-backdrop');
-        if (b) b.click();
-      });
+      await reopenPanel();
+      // Hit the scrim over the navigation, outside the right-anchored panel.
+      await pointerClick(page, '.slide-over-backdrop', touch, { x: 10, y: 20 });
       await page.waitForTimeout(200);
       const gone = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
@@ -270,27 +267,8 @@ const PAGES = [
     });
 
     await step(`${tag}: X button closes slide-over`, async () => {
-      await page.evaluate((sel) => {
-        const t = document.querySelector(sel);
-        if (!t) return;
-        const rows = Array.from(t.querySelectorAll('tbody tr'));
-        const row = rows.find(r => r.hasAttribute('data-action'))
-                || rows.find(r => r.hasAttribute('data-value'))
-                || rows.find(r => r.children.length > 0);
-        if (!row) return;
-        const td = row.querySelector('td:not(:empty)') || row;
-        td.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-      }, p.tableSel);
-      try {
-        await page.waitForFunction(() => {
-          const panel = document.querySelector('.slide-over-panel');
-          return panel && !panel.hidden;
-        }, null, { timeout: 5000 });
-      } catch (_) {}
-      await page.evaluate(() => {
-        const x = document.querySelector('.slide-over-panel .slide-over-close');
-        if (x) x.click();
-      });
+      await reopenPanel();
+      await pointerClick(page, '.slide-over-panel .slide-over-close', touch);
       await page.waitForTimeout(200);
       const gone = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
@@ -480,10 +458,7 @@ const PAGES = [
     // ------------------------------------------------------------------
     await step('focus-restore@800: X-button click returns focus to originating row', async () => {
       const rowKey = await openPanelFromRow();
-      await page.evaluate(() => {
-        const x = document.querySelector('.slide-over-panel .slide-over-close');
-        x.click();
-      });
+      await pointerClick(page, '.slide-over-panel .slide-over-close', false);
       await page.waitForTimeout(300);
       const r = await page.evaluate((key) => {
         const esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
