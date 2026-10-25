@@ -12,9 +12,9 @@ import (
 // match on the heard node.
 const coverageBenchSQL = `SELECT lat, lon, snr, rssi, heard_key, rx_at
 	FROM client_receptions
-	WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?
-	  AND ( (heard_keylen = 32 AND heard_key = ?)
-	     OR (heard_keylen IN (2,3) AND substr(?, 1, heard_keylen*2) = heard_key) )`
+	WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
+	  AND ( (heard_keylen = 32 AND heard_key = $5)
+	     OR (heard_keylen IN (2,3) AND substr($6, 1, heard_keylen*2) = heard_key) )`
 
 // BenchmarkCoverageQuery seeds ~1M receptions across a metro-area bbox and times
 // the coverage query with the indexes (#5/#18) versus a forced full table scan.
@@ -24,7 +24,7 @@ func BenchmarkCoverageQuery(b *testing.B) {
 	const prefixPool = 2000 // distinct 3-byte heard_key prefixes
 
 	dir := b.TempDir()
-	s, err := OpenStore(dir + "/bench.db")
+	s, err := openPostgresTestStore(b, dir+"/bench.db")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func BenchmarkCoverageQuery(b *testing.B) {
 	}
 	stmt, err := tx.Prepare(`INSERT INTO client_receptions
 		(rx_pubkey,heard_key,heard_keylen,snr,lat,lon,rx_at,ingested_at,src)
-		VALUES (?,?,?,?,?,?,?,?,?)`)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func BenchmarkCoverageQuery(b *testing.B) {
 	// full pubkey and its 2/3-byte prefixes, so an IN-list seeks them via the
 	// heard_key-leading composite instead of scanning the bbox.
 	inListSQL := `SELECT lat, lon, snr, rssi, heard_key, rx_at FROM client_receptions
-		WHERE heard_key IN (?,?,?) AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?`
+		WHERE heard_key IN ($1,$2,$3) AND lat BETWEEN $4 AND $5 AND lon BETWEEN $6 AND $7`
 	runIN := func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			rows, err := s.db.Query(inListSQL, target, target[:4], target[:6], 51.1, 51.3, 3.6, 3.8)

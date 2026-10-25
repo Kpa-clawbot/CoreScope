@@ -205,7 +205,9 @@ func countEstimates(nodes []ReportedNode) int {
 // client_receptions, which an older or partial database may lack.
 func (db *DB) tablePresent(name string) bool {
 	var n int
-	err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n)
+	query := db.nativeSQL(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = `,
+		`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name = `)
+	err := db.conn.QueryRow(query+db.parameter(1), name).Scan(&n)
 	return err == nil && n > 0
 }
 
@@ -228,15 +230,15 @@ func (s *Server) computeReportedNodes() (*ReportedNodesResponse, error) {
 	if s.db.inactiveNodesPresent() {
 		advertised += ` OR EXISTS (SELECT 1 FROM inactive_nodes n WHERE n.public_key = c.target)`
 	}
-	// The bare name beside MAX(observed_at) is SQLite's bare-column rule: the
-	// name of the newest observation (same as lookupPrefixes).
+	// Use the same indexed newest-name lookup as prefix resolution. Grouping
+	// still counts all reporting companions and orders by observation time.
 	rows, err := s.db.conn.Query(`
-		SELECT target, name, MAX(observed_at), COUNT(DISTINCT rx_pubkey)
+		SELECT target, `+latestClientNodeNameSQL+`, MAX(observed_at), COUNT(DISTINCT rx_pubkey)
 		FROM client_node_names c
 		WHERE NOT (`+advertised+`) AND `+s.db.clientNameHeard()+`
 		GROUP BY target
 		ORDER BY MAX(observed_at) DESC
-		LIMIT ?`, reportedNodesMax)
+		LIMIT `+s.db.parameter(1), reportedNodesMax)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +345,7 @@ func (s *Server) directReceptions(targets []string) (map[string]*targetReception
 		}
 		rows, err := s.db.conn.Query(`
 			SELECT heard_key, src, lat, lon, snr, rx_at FROM client_receptions
-			WHERE heard_key IN (`+sqlPlaceholders(len(batch))+`) AND src IN ('discover','advert','rxlog')`, args...)
+			WHERE heard_key IN (`+s.db.sqlPlaceholders(len(batch))+`) AND src IN ('discover','advert','rxlog')`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -421,7 +423,7 @@ func (s *Server) sharedEightBytePrefixes(targets []string) map[string]bool {
 		var args []interface{}
 		for _, p := range prefixes[i:end] {
 			for _, tc := range tables {
-				parts = append(parts, `SELECT * FROM (SELECT ? FROM `+tc[0]+` WHERE `+tc[1]+` >= ? AND `+tc[1]+` < ? AND `+tc[1]+` <> ? LIMIT 1)`)
+				parts = append(parts, `SELECT * FROM (SELECT `+s.db.parameter(len(args)+1)+` FROM `+tc[0]+` WHERE `+tc[1]+` >= `+s.db.parameter(len(args)+2)+` AND `+tc[1]+` < `+s.db.parameter(len(args)+3)+` AND `+tc[1]+` <> `+s.db.parameter(len(args)+4)+` LIMIT 1) AS prefix_match`)
 				args = append(args, p, p, p+"g", byPrefix[p])
 			}
 		}

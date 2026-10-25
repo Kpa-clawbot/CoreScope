@@ -19,7 +19,7 @@ func TestHiddenNamePrefix_1181_NodesList(t *testing.T) {
 	// Insert a node whose name starts with the configured 🚫 prefix.
 	_, err := srv.db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, ?, ?, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
+		VALUES ($1, $2, $3, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
 		"deadbeef00001181", "🚫 ban me", "companion")
 	if err != nil {
 		t.Fatalf("insert hidden node: %v", err)
@@ -70,7 +70,7 @@ func TestHiddenNamePrefix_1181_Search(t *testing.T) {
 
 	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, ?, ?, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
+		VALUES ($1, $2, $3, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
 		"deadbeef00001182", "🚫 search me", "companion"); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestHiddenNamePrefix_1181_Detail(t *testing.T) {
 	pk := "deadbeef00001183"
 	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, ?, ?, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
+		VALUES ($1, $2, $3, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
 		pk, "🚫 detail me", "companion"); err != nil {
 		t.Fatalf("insert: %v", err)
 	}

@@ -22,7 +22,7 @@ func setupScopeRegionServer(t *testing.T) (*Server, *mux.Router) {
 	t.Helper()
 	srv, router := setupScopeAuditServer(t)
 	for _, ddl := range []string{
-		`CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)`,
+		testNativeSQL(`CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)`, `CREATE TABLE observers (rowid BIGSERIAL PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`),
 		`ALTER TABLE observations ADD COLUMN observer_idx INTEGER`,
 		`INSERT INTO observers (rowid, id, name, iata) VALUES (1, 'obs-sfo', 'San Francisco', 'SFO'), (2, 'obs-bru', 'Brussels', 'BRU')`,
 	} {
@@ -46,18 +46,18 @@ var heardCounter int
 func seedHeard(t *testing.T, srv *Server, hop string, seed scopeSeed, observerRowid int) {
 	t.Helper()
 	heardCounter++
-	res, err := srv.db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, code1, code2, scope_name)
-		VALUES ('AA', ?, ?, ?, 1, ?, '00', ?)`, fmt.Sprintf("heard%d", heardCounter),
-		time.Now().UTC().Add(-time.Minute).Format(time.RFC3339), RouteFlood, seed.code1, seed.scopeName)
+	var id int64
+	err := srv.db.conn.QueryRow(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, code1, code2, scope_name)
+		VALUES ('AA', $1, $2, $3, 1, $4, '00', $5) RETURNING id`, fmt.Sprintf("heard%d", heardCounter),
+		time.Now().UTC().Add(-time.Minute).Format(time.RFC3339), RouteFlood, seed.code1, seed.scopeName).Scan(&id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := res.LastInsertId()
 	path := fmt.Sprintf(`["%s"]`, strings.ToUpper(hop))
 	if observerRowid == 0 { // v2 fixture: the caller attributes observer_id itself
-		_, err = srv.db.conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp) VALUES (?, ?, ?)`, id, path, time.Now().Unix())
+		_, err = srv.db.conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp) VALUES ($1, $2, $3)`, id, path, time.Now().Unix())
 	} else {
-		_, err = srv.db.conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp, observer_idx) VALUES (?, ?, ?, ?)`, id, path, time.Now().Unix(), observerRowid)
+		_, err = srv.db.conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp, observer_idx) VALUES ($1, $2, $3, $4)`, id, path, time.Now().Unix(), observerRowid)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestScopeAudit_RegionWithNoObserversMatchesNothing(t *testing.T) {
 func TestScopeTransport_RegionOnV2Schema(t *testing.T) {
 	srv, router := setupScopeAuditServer(t)
 	for _, ddl := range []string{
-		`CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)`,
+		testNativeSQL(`CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)`, `CREATE TABLE observers (rowid BIGSERIAL PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`),
 		`ALTER TABLE observations ADD COLUMN observer_id TEXT`,
 		`INSERT INTO observers (id, name, iata) VALUES ('obs-sfo', 'San Francisco', 'SFO'), ('obs-bru', 'Brussels', 'BRU')`,
 	} {
@@ -172,7 +172,7 @@ func TestScopeTransport_RegionOnV2Schema(t *testing.T) {
 	addRepeater(t, srv, testFullPubkeyB, "Bravo")
 	seedHeard(t, srv, testFullPubkeyA[:4], scopeMatched("#be"), 0)
 	seedHeard(t, srv, testFullPubkeyB[:4], scopeMatched("#fr"), 0)
-	if _, err := srv.db.conn.Exec(`UPDATE observations SET observer_id = CASE WHEN path_json LIKE ? THEN 'obs-sfo' ELSE 'obs-bru' END`,
+	if _, err := srv.db.conn.Exec(`UPDATE observations SET observer_id = CASE WHEN path_json LIKE $1 THEN 'obs-sfo' ELSE 'obs-bru' END`,
 		`%`+strings.ToUpper(testFullPubkeyA[:4])+`%`); err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +188,9 @@ func TestScopeTransport_RegionOnV2Schema(t *testing.T) {
 // live-shaped database that was 13.4s for one region over 24h against 0.25s when
 // the scan starts from the first_seen window as the unfiltered scan does.
 func TestScopeAudit_RegionScanKeepsTheTimeIndex(t *testing.T) {
+	if testBackendValue() != "sqlite" {
+		t.Skip("SQLite query-plan assertion")
+	}
 	srv, _ := setupScopeRegionServer(t)
 	for _, ddl := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_transmissions_first_seen ON transmissions(first_seen)`,
@@ -202,7 +205,7 @@ func TestScopeAudit_RegionScanKeepsTheTimeIndex(t *testing.T) {
 	if err != nil || clause == "" {
 		t.Fatalf("clause=%q err=%v", clause, err)
 	}
-	rows, err := srv.db.conn.Query("EXPLAIN QUERY PLAN "+scopeAuditForwarderScanQuery+clause,
+	rows, err := srv.db.conn.Query("EXPLAIN QUERY PLAN "+sqliteScopeAuditForwarderScanQuery+clause,
 		append([]interface{}{"2000-01-01T00:00:00Z"}, args...)...)
 	if err != nil {
 		t.Fatal(err)

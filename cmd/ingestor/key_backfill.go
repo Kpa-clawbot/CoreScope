@@ -159,7 +159,7 @@ func (b *keyBackfiller) pass(ctx context.Context) {
 
 // pruneFeed drops feed rows older than txRewriteFeedRetention.
 func (b *keyBackfiller) pruneFeed(ctx context.Context) {
-	if _, err := b.store.db.ExecContext(ctx, `DELETE FROM tx_rewrite_feed WHERE created_at < ?`,
+	if _, err := b.store.db.ExecContext(ctx, `DELETE FROM tx_rewrite_feed WHERE created_at < $1`,
 		time.Now().Add(-txRewriteFeedRetention).Unix()); err != nil && ctx.Err() == nil {
 		log.Printf("[key-backfill] pruning tx_rewrite_feed: %v", err)
 	}
@@ -282,7 +282,7 @@ func (b *keyBackfiller) runKind(ctx context.Context, kind string) error {
 
 	if len(p.pending) == 0 {
 		// Nothing new. Drop a state row a since-superseded run left behind.
-		_, err := db.ExecContext(ctx, `DELETE FROM key_backfill_state WHERE kind=?`, kind)
+		_, err := db.ExecContext(ctx, `DELETE FROM key_backfill_state WHERE kind=$1`, kind)
 		return err
 	}
 
@@ -363,7 +363,7 @@ func (b *keyBackfiller) keySetMoved(kind string, p *keyBackfillPlan, runFP strin
 }
 
 func loadDoneKeys(ctx context.Context, db *sql.DB, kind string) (map[string]bool, error) {
-	rows, err := db.QueryContext(ctx, `SELECT key_fp FROM key_backfill_done WHERE kind=?`, kind)
+	rows, err := db.QueryContext(ctx, `SELECT key_fp FROM key_backfill_done WHERE kind=$1`, kind)
 	if err != nil {
 		return nil, fmt.Errorf("load done keys: %w", err)
 	}
@@ -388,7 +388,7 @@ func forgetRemovedKeys(ctx context.Context, db *sql.DB, kind string, all []strin
 		if inForce[fp] {
 			continue
 		}
-		if _, err := db.ExecContext(ctx, `DELETE FROM key_backfill_done WHERE kind=? AND key_fp=?`, kind, fp); err != nil {
+		if _, err := db.ExecContext(ctx, `DELETE FROM key_backfill_done WHERE kind=$1 AND key_fp=$2`, kind, fp); err != nil {
 			return fmt.Errorf("forget removed key: %w", err)
 		}
 	}
@@ -402,7 +402,7 @@ func forgetRemovedKeys(ctx context.Context, db *sql.DB, kind string, all []strin
 func (b *keyBackfiller) resumeOrStart(ctx context.Context, kind, runFP string) (cursor, upper, rewritten int64, err error) {
 	db := b.store.db
 	var storedFP string
-	err = db.QueryRowContext(ctx, `SELECT run_fp, cursor, upper, rewritten FROM key_backfill_state WHERE kind=?`, kind).
+	err = db.QueryRowContext(ctx, `SELECT run_fp, cursor, upper, rewritten FROM key_backfill_state WHERE kind=$1`, kind).
 		Scan(&storedFP, &cursor, &upper, &rewritten)
 	if err == nil && storedFP == runFP {
 		return cursor, upper, rewritten, nil
@@ -413,7 +413,7 @@ func (b *keyBackfiller) resumeOrStart(ctx context.Context, kind, runFP string) (
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0) FROM transmissions`).Scan(&upper); err != nil {
 		return 0, 0, 0, fmt.Errorf("backfill upper bound: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO key_backfill_state(kind, run_fp, cursor, upper, rewritten) VALUES(?,?,0,?,0)`,
+	if _, err := db.ExecContext(ctx, `INSERT INTO key_backfill_state(kind, run_fp, cursor, upper, rewritten) VALUES($1,$2,0,$3,0) ON CONFLICT(kind) DO UPDATE SET run_fp=excluded.run_fp,cursor=0,upper=excluded.upper,rewritten=0,started_at=excluded.started_at`,
 		kind, runFP, upper); err != nil {
 		return 0, 0, 0, fmt.Errorf("start backfill run: %w", err)
 	}
@@ -429,11 +429,11 @@ func finishRun(ctx context.Context, db *sql.DB, kind, runFP string, all []string
 	}
 	defer tx.Rollback()
 	for _, fp := range all {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO key_backfill_done(kind, key_fp) VALUES(?,?)`, kind, fp); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO key_backfill_done(kind, key_fp) VALUES($1,$2) ON CONFLICT(kind,key_fp) DO NOTHING`, kind, fp); err != nil {
 			return fmt.Errorf("record done key: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM key_backfill_state WHERE kind=? AND run_fp=?`, kind, runFP); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM key_backfill_state WHERE kind=$1 AND run_fp=$2`, kind, runFP); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -475,18 +475,20 @@ func (b *keyBackfiller) batchOnce(ctx context.Context, kind string, p keyBackfil
 			return b.commitEmpty(ctx, kind, runFP, upper)
 		}
 		args := []interface{}{cursor, hi}
-		for _, h := range p.channelHash {
+		hashParams := make([]string, len(p.channelHash))
+		for i, h := range p.channelHash {
 			args = append(args, h)
+			hashParams[i] = b.store.parameter(i + 3)
 		}
 		rows, err = db.QueryContext(ctx, `
 			SELECT id, COALESCE(raw_hex,''), channel_hash FROM transmissions
-			WHERE id > ? AND id <= ? AND payload_type = 5
-			  AND channel_hash IN (`+strings.TrimSuffix(strings.Repeat("?,", len(p.channelHash)), ",")+`)
+			WHERE id > $1 AND id <= $2 AND payload_type = 5
+			  AND channel_hash IN (`+strings.Join(hashParams, ",")+`)
 			ORDER BY id`, args...)
 	case keyBackfillKindRegion:
 		rows, err = db.QueryContext(ctx, `
 			SELECT id, COALESCE(raw_hex,''), '' FROM transmissions
-			WHERE id > ? AND id <= ? AND scope_name = ''
+			WHERE id > $1 AND id <= $2 AND scope_name = ''
 			ORDER BY id`, cursor, hi)
 	default:
 		return cursor, 0, fmt.Errorf("unknown backfill kind %q", kind)
@@ -570,7 +572,7 @@ func (b *keyBackfiller) decide(kind string, p keyBackfillPlan, id int64, raw, ol
 func (b *keyBackfiller) commit(ctx context.Context, kind, runFP string, next int64, rewrites []keyRewrite) (int, error) {
 	writerMu.Lock()
 	defer writerMu.Unlock()
-	tx, err := b.store.db.BeginTx(ctx, nil)
+	tx, err := beginWriteContext(ctx, b.store.db, b.store.Backend())
 	if err != nil {
 		return 0, err
 	}
@@ -581,10 +583,10 @@ func (b *keyBackfiller) commit(ctx context.Context, kind, runFP string, next int
 		var res sql.Result
 		switch kind {
 		case keyBackfillKindChannel:
-			res, err = tx.ExecContext(ctx, `UPDATE transmissions SET channel_hash=?, decoded_json=? WHERE id=? AND channel_hash=?`,
+			res, err = tx.ExecContext(ctx, `UPDATE transmissions SET channel_hash=$1, decoded_json=$2 WHERE id=$3 AND channel_hash=$4`,
 				r.channelHash, r.decodedJSON, r.id, r.oldChannel)
 		case keyBackfillKindRegion:
-			res, err = tx.ExecContext(ctx, `UPDATE transmissions SET scope_name=? WHERE id=? AND scope_name=''`, r.scopeName, r.id)
+			res, err = tx.ExecContext(ctx, `UPDATE transmissions SET scope_name=$1 WHERE id=$2 AND scope_name=''`, r.scopeName, r.id)
 		}
 		if err != nil {
 			return 0, fmt.Errorf("rewrite tx %d: %w", r.id, err)
@@ -593,7 +595,7 @@ func (b *keyBackfiller) commit(ctx context.Context, kind, runFP string, next int
 			continue // resolved meanwhile by someone else; theirs stands
 		}
 		n++
-		if _, err := tx.ExecContext(ctx, `INSERT INTO tx_rewrite_feed(tx_id) VALUES(?)`, r.id); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO tx_rewrite_feed(tx_id) VALUES($1)`, r.id); err != nil {
 			return 0, fmt.Errorf("feed tx %d: %w", r.id, err)
 		}
 		// A node whose default_scope is still unknown gets the region its own
@@ -601,14 +603,14 @@ func (b *keyBackfiller) commit(ctx context.Context, kind, runFP string, next int
 		// backfilled advert can be, so it is never overwritten.
 		if r.advertFrom != "" {
 			for _, table := range []string{"nodes", "inactive_nodes"} {
-				if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET default_scope=?
-					WHERE public_key=? AND (default_scope IS NULL OR default_scope='')`, r.scopeName, r.advertFrom); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET default_scope=$1
+					WHERE public_key=$2 AND (default_scope IS NULL OR default_scope='')`, r.scopeName, r.advertFrom); err != nil {
 					return 0, fmt.Errorf("default_scope for %s: %w", r.advertFrom, err)
 				}
 			}
 		}
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE key_backfill_state SET cursor=?, rewritten=rewritten+? WHERE kind=? AND run_fp=?`,
+	res, err := tx.ExecContext(ctx, `UPDATE key_backfill_state SET cursor=$1, rewritten=rewritten+$2 WHERE kind=$3 AND run_fp=$4`,
 		next, n, kind, runFP)
 	if err != nil {
 		return 0, fmt.Errorf("advance cursor: %w", err)

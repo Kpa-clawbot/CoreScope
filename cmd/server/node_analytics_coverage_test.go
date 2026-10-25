@@ -19,7 +19,7 @@ func setupCoverageStore(t *testing.T, memHours int) *PacketStore {
 	t.Helper()
 	db := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES (?, ?, ?)", coverageNodePK, "Coverage", "repeater"); err != nil {
+	if _, err := db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, $2, $3)", coverageNodePK, "Coverage", "repeater"); err != nil {
 		t.Fatal(err)
 	}
 	ps := NewPacketStore(db, nil)
@@ -305,13 +305,12 @@ func TestNodeAnalyticsCoverageTooShortForRates(t *testing.T) {
 	}
 }
 
-// A load cut short by the memory cap leaves a gap between the last loaded
-// row and what the poller picks up, so the store is only complete from the
-// end of the load; packets[0] or the retention edge would overstate it.
+// A newest-first load knows the conservative edge of its omitted row group.
+// That edge is complete; replacing it with "now" would hide retained history.
 func TestLoadChunkedMemoryCapSetsCoverageEdge(t *testing.T) {
 	store := openReverseTimeStore(t, 1100)
 	defer store.db.conn.Close()
-	store.maxMemoryMB = 1 // floors to 1000 packets
+	store.maxMemoryMB = 1
 	store.retentionHours = 30 * 24
 	before := time.Now().UTC().Truncate(time.Second)
 	if err := store.LoadChunked(500); err != nil {
@@ -323,8 +322,8 @@ func TestLoadChunkedMemoryCapSetsCoverageEdge(t *testing.T) {
 	store.mu.RLock()
 	start, reason := store.coverageStart(time.Now().UTC())
 	store.mu.RUnlock()
-	if start.Before(before) || reason != "memory" {
-		t.Errorf("capped load: coverage start %v (%q), want at or after %v (\"memory\")", start, reason, before)
+	if start.Format(time.RFC3339) != store.oldestLoaded || !start.Before(before) || reason != "memory" {
+		t.Errorf("capped load: coverage start %v (%q), want known boundary %s before %v (\"memory\")", start, reason, store.oldestLoaded, before)
 	}
 }
 

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestMigrateContentHashesAsync(t *testing.T) {
+func TestVerifyContentHashesDoesNotWrite(t *testing.T) {
 	db := setupTestDBv2(t)
 	store := NewPacketStore(db, nil)
 
@@ -14,8 +14,9 @@ func TestMigrateContentHashesAsync(t *testing.T) {
 	correctHash := ComputeContentHash(rawHex)
 	wrongHash := "deadbeef12345678"
 
-	_, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		VALUES (?, ?, datetime('now'), 0, 2)`, rawHex, wrongHash)
+	_, err := db.conn.Exec(testNativeSQL(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 0, 2)`, `INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 0, 2)`), rawHex, wrongHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,25 +29,25 @@ func TestMigrateContentHashesAsync(t *testing.T) {
 		t.Fatal("expected packet under wrong hash before migration")
 	}
 
-	migrateContentHashesAsync(store, 100, time.Millisecond)
+	verifyContentHashesAsync(store, 100, time.Millisecond)
 
-	if !store.hashMigrationComplete.Load() {
-		t.Error("expected hashMigrationComplete to be true")
+	if store.hashMigrationComplete.Load() {
+		t.Error("stale hashes must not report migration complete")
 	}
-	if store.byHash[wrongHash] != nil {
-		t.Error("old hash should be removed from index")
+	if store.byHash[wrongHash] == nil {
+		t.Error("read-only verification must preserve the old hash index")
 	}
-	if store.byHash[correctHash] == nil {
-		t.Error("new hash should be in index")
+	if store.byHash[correctHash] != nil {
+		t.Error("verification must not invent a new hash")
 	}
 
 	var dbHash string
-	err = db.conn.QueryRow("SELECT hash FROM transmissions WHERE raw_hex = ?", rawHex).Scan(&dbHash)
+	err = db.conn.QueryRow("SELECT hash FROM transmissions WHERE raw_hex = $1", rawHex).Scan(&dbHash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dbHash != correctHash {
-		t.Errorf("DB hash = %s, want %s", dbHash, correctHash)
+	if dbHash != wrongHash {
+		t.Errorf("DB hash = %s, want unchanged %s", dbHash, wrongHash)
 	}
 }
 
@@ -57,8 +58,9 @@ func TestMigrateContentHashesAsync_NoOp(t *testing.T) {
 	rawHex := "0A00D69FD7A5A7475DB07337749AE61FA53A4788E976"
 	correctHash := ComputeContentHash(rawHex)
 
-	_, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		VALUES (?, ?, datetime('now'), 0, 2)`, rawHex, correctHash)
+	_, err := db.conn.Exec(testNativeSQL(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 0, 2)`, `INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 0, 2)`), rawHex, correctHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +69,7 @@ func TestMigrateContentHashesAsync_NoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrateContentHashesAsync(store, 100, time.Millisecond)
+	verifyContentHashesAsync(store, 100, time.Millisecond)
 
 	if !store.hashMigrationComplete.Load() {
 		t.Error("expected hashMigrationComplete to be true")
@@ -93,8 +95,9 @@ func TestMigrateContentHashesAsyncDoesNotClaimCompletionWhenWritesFail(t *testin
 
 	rawHex := "0A00D69FD7A5A7475DB07337749AE61FA53A4788E976"
 	wrongHash := "deadbeef12345678"
-	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		VALUES (?, ?, datetime('now'), 0, 2)`, rawHex, wrongHash); err != nil {
+	if _, err := db.conn.Exec(testNativeSQL(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 0, 2)`, `INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 0, 2)`), rawHex, wrongHash); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Load(); err != nil {
@@ -109,7 +112,7 @@ func TestMigrateContentHashesAsyncDoesNotClaimCompletionWhenWritesFail(t *testin
 		t.Fatal(err)
 	}
 
-	migrateContentHashesAsync(store, 100, time.Millisecond)
+	verifyContentHashesAsync(store, 100, time.Millisecond)
 
 	if store.hashMigrationComplete.Load() {
 		t.Error("hashMigrationComplete must stay false when no batch could be written; " +

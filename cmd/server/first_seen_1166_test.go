@@ -24,7 +24,7 @@ func TestFirstSeen_1166_HandleNodesSurface(t *testing.T) {
 	last := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	if _, err := db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'rpt', 'repeater', 37.5, -122.0, ?, ?, 5)`,
+		VALUES ($1, 'rpt', 'repeater', 37.5, -122.0, $2, $3, 5)`,
 		pk, last, first); err != nil {
 		t.Fatal(err)
 	}

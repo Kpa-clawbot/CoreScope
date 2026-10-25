@@ -20,8 +20,7 @@ func (db *DB) clientNodeNamesPresent() bool {
 	if db.clientNodeNamesTable.Load() {
 		return true
 	}
-	var n int
-	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'client_node_names'`).Scan(&n); err != nil || n == 0 {
+	if !db.tablePresent("client_node_names") {
 		return false
 	}
 	db.clientNodeNamesTable.Store(true)
@@ -89,10 +88,9 @@ type prefixHit struct {
 // source, so per-key work stays bounded. A key whose chunk failed is absent
 // from the result (logged), and callers treat it as unresolved.
 //
-// client_node_names: the bare `name` beside MAX(observed_at) is SQLite's
-// documented bare-column rule, so it is the name of the newest observation
-// for that target. Ordering by observed_at, not ingested_at, keeps a drive
-// buffered offline from overwriting a fresher answer.
+// Each reported candidate gets its newest name through an indexed target
+// lookup. Ordering by observed_at, not ingested_at, keeps a drive buffered
+// offline from overwriting a fresher answer on either storage engine.
 func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 	res := make(map[string]prefixHit, len(keys))
 	withClient := s.db.clientNamesUsable()
@@ -115,7 +113,7 @@ func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 			// Parameterized: the prefix flows in as bound args, never
 			// interpolated. The per-prefix LIMIT 2 lives in a subquery because a
 			// bare LIMIT on a UNION ALL term is a SQLite syntax error.
-			parts = append(parts, "SELECT * FROM (SELECT ? AS pfx, public_key AS pk, COALESCE(name,'') AS nm, 0 AS src FROM nodes WHERE public_key LIKE ? LIMIT 2)")
+			parts = append(parts, "SELECT * FROM (SELECT "+s.db.parameter(len(args)+1)+" AS pfx, public_key AS pk, COALESCE(name,'') AS nm, 0 AS src FROM nodes WHERE public_key LIKE "+s.db.parameter(len(args)+2)+" LIMIT 2) AS node_match")
 			args = append(args, k, k+"%")
 			if withClient {
 				// A range, not LIKE: LIKE on a case-sensitive column cannot use
@@ -123,7 +121,7 @@ func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 				// (the ingestor lowercases it), and "g" sorts after "f", so
 				// [k, k+"g") is exactly the keys starting with k.
 				lk := strings.ToLower(k)
-				parts = append(parts, "SELECT pfx, pk, nm, src FROM (SELECT ? AS pfx, target AS pk, name AS nm, 1 AS src, MAX(observed_at) FROM client_node_names c WHERE target >= ? AND target < ? AND "+heard+" GROUP BY target LIMIT 2)")
+				parts = append(parts, "SELECT * FROM (SELECT "+s.db.parameter(len(args)+1)+" AS pfx, target AS pk, "+latestClientNodeNameSQL+" AS nm, 1 AS src FROM client_node_names c WHERE target >= "+s.db.parameter(len(args)+2)+" AND target < "+s.db.parameter(len(args)+3)+" AND "+heard+" GROUP BY target LIMIT 2) AS client_match")
 				args = append(args, k, lk, lk+"g")
 			}
 		}
@@ -185,6 +183,12 @@ func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 	}
 	return res
 }
+
+// The caller groups client_node_names as c by target. The composite target /
+// observed_at index supplies one newest name per admitted target without
+// SQLite's bare-column MAX rule or an unbounded array/string aggregation.
+const latestClientNodeNameSQL = `(SELECT recent.name FROM client_node_names recent
+	WHERE recent.target=c.target ORDER BY recent.observed_at DESC LIMIT 1)`
 
 // visible applies the #15 / #1181 parity rule to a unique hit: a blacklisted
 // node or a hidden-prefix name is reported as not found, whichever source the

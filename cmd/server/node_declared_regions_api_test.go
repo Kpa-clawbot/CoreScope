@@ -163,7 +163,7 @@ func TestScopeAuditAndNodesAgreeOnDeclaredRegions(t *testing.T) {
 	for pk, csv := range cases {
 		if _, err := srv.db.conn.Exec(`INSERT INTO nodes
 			(public_key, name, role, lat, lon, last_seen, first_seen, advert_count, configured_scope, configured_scope_at)
-			VALUES (?, ?, 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, ?, '2026-01-01T00:00:00Z')`,
+			VALUES ($1, $2, 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, $3, '2026-01-01T00:00:00Z')`,
 			pk, "rp-"+pk, csv,
 		); err != nil {
 			t.Fatal(err)

@@ -99,13 +99,13 @@ func insertTx(t *testing.T, s *Store, raw string, payloadType int, channel strin
 	if channel != "" {
 		ch = channel
 	}
-	res, err := s.db.Exec(`INSERT INTO transmissions(raw_hex, hash, first_seen, payload_type, decoded_json, channel_hash, scope_name)
-		VALUES(?,?,?,?,?,?,?)`, raw, fmt.Sprintf("kb-%d", txSeq.Add(1)), "2026-10-01T00:00:00Z",
-		payloadType, decoded, ch, scope)
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO transmissions(raw_hex, hash, first_seen, payload_type, decoded_json, channel_hash, scope_name)
+		VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`, raw, fmt.Sprintf("kb-%d", txSeq.Add(1)), "2026-10-01T00:00:00Z",
+		payloadType, decoded, ch, scope).Scan(&id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := res.LastInsertId()
 	return id
 }
 
@@ -149,7 +149,7 @@ func feedRows(t *testing.T, s *Store) []int64 {
 func colOf(t *testing.T, s *Store, col string, id int64) string {
 	t.Helper()
 	var v *string
-	if err := s.db.QueryRow(`SELECT `+col+` FROM transmissions WHERE id=?`, id).Scan(&v); err != nil {
+	if err := s.db.QueryRow(`SELECT `+col+` FROM transmissions WHERE id=$1`, id).Scan(&v); err != nil {
 		t.Fatal(err)
 	}
 	if v == nil {
@@ -307,8 +307,8 @@ func TestKeyBackfillAdvertFillsOnlyEmptyDefaultScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	var e, k string
-	s.db.QueryRow(`SELECT COALESCE(default_scope,'') FROM nodes WHERE public_key=?`, pkEmpty).Scan(&e)
-	s.db.QueryRow(`SELECT COALESCE(default_scope,'') FROM nodes WHERE public_key=?`, pkKnown).Scan(&k)
+	s.db.QueryRow(`SELECT COALESCE(default_scope,'') FROM nodes WHERE public_key=$1`, pkEmpty).Scan(&e)
+	s.db.QueryRow(`SELECT COALESCE(default_scope,'') FROM nodes WHERE public_key=$1`, pkKnown).Scan(&k)
 	if e != "#saar" {
 		t.Fatalf("empty default_scope = %q, want #saar", e)
 	}
@@ -398,7 +398,7 @@ func TestKeyBackfillKeySetGrowthRestartsFromBeginning(t *testing.T) {
 	low := insertTx(t, s, transportFrame(regionKey("#new"), 5, []byte("early")), 5, "", "{}", strp(""))
 	high := insertTx(t, s, transportFrame(regionKey("#new"), 5, []byte("late")), 5, "", "{}", strp(""))
 	// A half-finished run for an older key set, already past `low`.
-	if _, err := s.db.Exec(`INSERT INTO key_backfill_state(kind, run_fp, cursor, upper) VALUES('region','stale-set',?,?)`, low, high); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO key_backfill_state(kind, run_fp, cursor, upper) VALUES('region','stale-set',$1,$2)`, low, high); err != nil {
 		t.Fatal(err)
 	}
 	b := newTestBackfiller(s, nil, regionSetOf("#old", "#new"))
@@ -462,10 +462,10 @@ func TestKeyBackfillCommitLeavesConcurrentlyResolvedRow(t *testing.T) {
 	s := newTestStore(t)
 	id := insertTx(t, s, transportFrame(regionKey("#saar"), 5, []byte("race")), 5, "", "{}", strp(""))
 	b := newTestBackfiller(s, nil, regionSetOf("#saar"))
-	if _, err := s.db.Exec(`INSERT INTO key_backfill_state(kind, run_fp, cursor, upper) VALUES('region','fp',0,?)`, id); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO key_backfill_state(kind, run_fp, cursor, upper) VALUES('region','fp',0,$1)`, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`UPDATE transmissions SET scope_name='#live' WHERE id=?`, id); err != nil {
+	if _, err := s.db.Exec(`UPDATE transmissions SET scope_name='#live' WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
 	n, err := b.commit(context.Background(), keyBackfillKindRegion, "fp", id, []keyRewrite{{id: id, scopeName: "#saar"}})
@@ -488,7 +488,7 @@ func TestKeyBackfillPrunesOldFeedRows(t *testing.T) {
 	s := newTestStore(t)
 	id := insertTx(t, s, "1500aa", 5, "", "{}", nil)
 	old := time.Now().Add(-48 * time.Hour).Unix()
-	if _, err := s.db.Exec(`INSERT INTO tx_rewrite_feed(tx_id, created_at) VALUES(?,?),(?,?)`, id, old, id, time.Now().Unix()); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO tx_rewrite_feed(tx_id, created_at) VALUES($1,$2),($3,$4)`, id, old, id, time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
 	newTestBackfiller(s, nil, nil).pass(context.Background())
@@ -594,7 +594,7 @@ func TestKeyBackfillPrunesFeedWithoutPass(t *testing.T) {
 	// Let the startup pass finish, then add a stale row no pass will see.
 	time.Sleep(50 * time.Millisecond)
 	id := insertTx(t, s, "1500aa", 5, "", "{}", nil)
-	if _, err := s.db.Exec(`INSERT INTO tx_rewrite_feed(tx_id, created_at) VALUES(?,?)`,
+	if _, err := s.db.Exec(`INSERT INTO tx_rewrite_feed(tx_id, created_at) VALUES($1,$2)`,
 		id, time.Now().Add(-48*time.Hour).Unix()); err != nil {
 		t.Fatal(err)
 	}
@@ -611,19 +611,28 @@ func TestKeyBackfillPrunesFeedWithoutPass(t *testing.T) {
 // transmission retention deletes would scan the whole feed.
 func TestTxRewriteFeedTxIDIsIndexed(t *testing.T) {
 	s := newTestStore(t)
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN SELECT id FROM tx_rewrite_feed WHERE tx_id = ?`, 1)
+	if testBackendValue() == "postgres" {
+		// The empty fixture otherwise makes a sequential scan cheaper; require
+		// an applicable tx_id index, matching the retention-plan regressions.
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN `, `EXPLAIN (COSTS OFF) `)+`SELECT id FROM tx_rewrite_feed WHERE tx_id = $1`, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	var plan []string
 	for rows.Next() {
-		var id, parent, notused int
 		var detail string
-		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 	if !strings.Contains(strings.Join(plan, " | "), "idx_tx_rewrite_feed_tx") {
 		t.Fatalf("lookup by tx_id does not use idx_tx_rewrite_feed_tx: %v", plan)

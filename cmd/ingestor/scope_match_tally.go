@@ -20,20 +20,7 @@ import (
 // scope_match_totals is one row. The ingestor reads it into the counters at
 // startup and writes them back periodically and on shutdown, which makes the
 // tally cumulative since `since_unix` instead of since boot. It is deliberately
-// NOT in internal/dbschema: the server neither reads this table nor detects it,
-// and putting it in AssertReady would make an old DB without the table fail the
-// server's startup check for data the server never looks at.
-
-const scopeMatchTotalsSchema = `
-	CREATE TABLE IF NOT EXISTS scope_match_totals (
-		id INTEGER PRIMARY KEY CHECK (id = 1),
-		since_unix INTEGER NOT NULL,
-		unique_matches INTEGER NOT NULL,
-		explicit_over_derived INTEGER NOT NULL,
-		ambiguous INTEGER NOT NULL,
-		none_matches INTEGER NOT NULL,
-		updated_unix INTEGER NOT NULL
-	)`
+// included in the canonical telemetry schema owned by the migration command.
 
 // LoadScopeMatchTotals seeds the in-process counters from the stored row so
 // counting continues where the previous process stopped. On a DB that has no
@@ -68,7 +55,7 @@ func (s *Store) SaveScopeMatchTotals() error {
 	_, err := s.db.Exec(`
 		INSERT INTO scope_match_totals
 			(id, since_unix, unique_matches, explicit_over_derived, ambiguous, none_matches, updated_unix)
-		VALUES (1, ?, ?, ?, ?, ?, ?)
+		VALUES (1, `+s.parameter(1)+`, `+s.parameter(2)+`, `+s.parameter(3)+`, `+s.parameter(4)+`, `+s.parameter(5)+`, `+s.parameter(6)+`)
 		ON CONFLICT(id) DO UPDATE SET
 			since_unix = excluded.since_unix,
 			unique_matches = excluded.unique_matches,

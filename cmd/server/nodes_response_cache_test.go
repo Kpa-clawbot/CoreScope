@@ -133,7 +133,7 @@ func nodesBenchServer(b *testing.B) http.Handler {
 		}
 		seen := now.Add(-time.Duration(i%720) * time.Hour).Format(time.RFC3339)
 		if _, err := db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 			fmt.Sprintf("%064x", i+1000), fmt.Sprintf("Bench node %d", i), role,
 			55+float64(i%100)/50, -4+float64(i%80)/40, seen, seen, i%50); err != nil {
 			b.Fatal(err)

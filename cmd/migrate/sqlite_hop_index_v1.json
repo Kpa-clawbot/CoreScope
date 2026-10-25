@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "objects": [
+    {
+      "type": "table",
+      "name": "observation_hops",
+      "table": "observation_hops",
+      "sql": "CREATE TABLE observation_hops (\n\t\t\thop            TEXT    NOT NULL,\n\t\t\ttimestamp      INTEGER NOT NULL,\n\t\t\tobservation_id INTEGER NOT NULL,\n\t\t\tPRIMARY KEY (hop, timestamp, observation_id)\n\t\t) WITHOUT ROWID"
+    },
+    {
+      "type": "table",
+      "name": "observation_hops_coverage",
+      "table": "observation_hops_coverage",
+      "sql": "CREATE TABLE observation_hops_coverage (\n\t\t\tid    INTEGER PRIMARY KEY CHECK (id = 1),\n\t\t\tsince INTEGER NOT NULL\n\t\t)"
+    },
+    {
+      "type": "trigger",
+      "name": "trg_observation_hops_ad",
+      "table": "observations",
+      "sql": "CREATE TRIGGER trg_observation_hops_ad\n\t\tAFTER DELETE ON observations\n\t\tWHEN OLD.path_json IS NOT NULL AND json_valid(OLD.path_json)\n\t\t  AND OLD.timestamp \u003e= (SELECT since FROM observation_hops_coverage WHERE id = 1)\n\t\tBEGIN\n\t\t\tDELETE FROM observation_hops\n\t\t\tWHERE observation_id = OLD.id AND timestamp = OLD.timestamp\n\t\t\t  AND hop IN (SELECT UPPER(value) FROM json_each(OLD.path_json) WHERE type = 'text');\n\t\tEND"
+    },
+    {
+      "type": "trigger",
+      "name": "trg_observation_hops_ai",
+      "table": "observations",
+      "sql": "CREATE TRIGGER trg_observation_hops_ai\n\t\tAFTER INSERT ON observations\n\t\tWHEN NEW.path_json IS NOT NULL AND json_valid(NEW.path_json)\n\t\t  AND NEW.timestamp \u003e= (SELECT since FROM observation_hops_coverage WHERE id = 1)\n\t\tBEGIN\n\t\t\tINSERT OR IGNORE INTO observation_hops (hop, timestamp, observation_id)\n\t\t\tSELECT DISTINCT UPPER(value), NEW.timestamp, NEW.id FROM json_each(NEW.path_json) WHERE type = 'text';\n\t\tEND"
+    },
+    {
+      "type": "trigger",
+      "name": "trg_observation_hops_au",
+      "table": "observations",
+      "sql": "CREATE TRIGGER trg_observation_hops_au\n\t\tAFTER UPDATE OF path_json ON observations\n\t\tWHEN IFNULL(OLD.path_json, '') != IFNULL(NEW.path_json, '')\n\t\tBEGIN\n\t\t\tDELETE FROM observation_hops\n\t\t\tWHERE observation_id = OLD.id AND timestamp = OLD.timestamp\n\t\t\t  AND json_valid(OLD.path_json)\n\t\t\t  AND OLD.timestamp \u003e= (SELECT since FROM observation_hops_coverage WHERE id = 1)\n\t\t\t  AND hop IN (SELECT UPPER(value) FROM json_each(OLD.path_json) WHERE type = 'text');\n\t\t\tINSERT OR IGNORE INTO observation_hops (hop, timestamp, observation_id)\n\t\t\tSELECT DISTINCT UPPER(value), NEW.timestamp, NEW.id FROM json_each(NEW.path_json)\n\t\t\tWHERE json_valid(NEW.path_json) AND type = 'text'\n\t\t\t  AND NEW.timestamp \u003e= (SELECT since FROM observation_hops_coverage WHERE id = 1);\n\t\tEND"
+    }
+  ]
+}

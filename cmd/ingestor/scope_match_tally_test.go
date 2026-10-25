@@ -37,7 +37,7 @@ func TestScopeMatchTallySurvivesReopen(t *testing.T) {
 	resetScopeMatchCounters(t)
 	dbPath := t.TempDir() + "/tally.db"
 
-	s, err := OpenStore(dbPath)
+	s, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestScopeMatchTallySurvivesReopen(t *testing.T) {
 	scopeMatchCounters.none.Store(0)
 	scopeMatchCounters.sinceUnix.Store(0)
 
-	s2, err := OpenStore(dbPath)
+	s2, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestScopeMatchTallyAnchorsSinceOnFirstOpen(t *testing.T) {
 	resetScopeMatchCounters(t)
 	before := time.Now().Unix()
 
-	s, err := OpenStore(t.TempDir() + "/tally.db")
+	s, err := openPostgresTestStore(t, t.TempDir()+"/tally.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestScopeMatchTallyContinuesAfterRestore(t *testing.T) {
 	resetScopeMatchCounters(t)
 	dbPath := t.TempDir() + "/tally.db"
 
-	s, err := OpenStore(dbPath)
+	s, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestScopeMatchTallyContinuesAfterRestore(t *testing.T) {
 	}
 	s.Close()
 
-	s2, err := OpenStore(dbPath)
+	s2, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestScopeMatchTallyContinuesAfterRestore(t *testing.T) {
 func TestScopeMatchTallySaveIsIdempotent(t *testing.T) {
 	resetScopeMatchCounters(t)
 
-	s, err := OpenStore(t.TempDir() + "/tally.db")
+	s, err := openPostgresTestStore(t, t.TempDir()+"/tally.db")
 	if err != nil {
 		t.Fatal(err)
 	}

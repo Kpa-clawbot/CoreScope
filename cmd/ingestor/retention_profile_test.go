@@ -21,12 +21,12 @@ func seedRetentionFanout(tb testing.TB, s *Store, transmissions, observations in
 		tb.Fatal(err)
 	}
 	defer tx.Rollback()
-	parents, err := tx.Prepare(`INSERT INTO transmissions(id,raw_hex,hash,first_seen,last_seen) VALUES(?,'00',?,'2020-01-01T00:00:00Z',1)`)
+	parents, err := tx.Prepare(`INSERT INTO transmissions(id,raw_hex,hash,first_seen,last_seen) VALUES($1,'00',$2,'2020-01-01T00:00:00Z',1)`)
 	if err != nil {
 		tb.Fatal(err)
 	}
 	defer parents.Close()
-	children, err := tx.Prepare(`INSERT INTO observations(transmission_id,observer_idx,path_json,timestamp) VALUES(?,?,'[]',1)`)
+	children, err := tx.Prepare(`INSERT INTO observations(transmission_id,observer_idx,path_json,timestamp) VALUES($1,$2,'[]',1)`)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -41,8 +41,14 @@ func seedRetentionFanout(tb testing.TB, s *Store, transmissions, observations in
 			tb.Fatal(err)
 		}
 	}
+
 	if err := tx.Commit(); err != nil {
 		tb.Fatal(err)
+	}
+	if s.Backend() == "postgres" {
+		if _, err := testAdmin(tb, s).Exec(`SELECT setval('transmissions_id_seq',$1,true)`, transmissions); err != nil {
+			tb.Fatal(err)
+		}
 	}
 }
 

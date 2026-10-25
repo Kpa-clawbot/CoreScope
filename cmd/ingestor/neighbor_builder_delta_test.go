@@ -29,27 +29,27 @@ func TestNeighborEdgesBuilderDeltaScan(t *testing.T) {
 
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "delta.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	defer store.Close()
 
 	if _, err := store.db.Exec(
-		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		`INSERT INTO nodes (public_key, name) VALUES ($1, $2), ($3, $4)`,
 		"aaaaaaaaaa", "from-node",
 		"bbbbbbbbbb", "first-hop",
 	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(
-		`INSERT INTO observers (id, name) VALUES (?, ?)`,
+		`INSERT INTO observers (id, name) VALUES ($1, $2)`,
 		"obs-1", "observer-1",
 	); err != nil {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = $1`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 
@@ -58,34 +58,53 @@ func TestNeighborEdgesBuilderDeltaScan(t *testing.T) {
 	const baselineStartTs int64 = 1735689600 // 2025-01-01 UTC
 	baselineMaxTs := baselineStartTs + int64(baseline) - 1
 
-	tx, err := store.db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	txStmt, err := tx.Prepare(`INSERT INTO transmissions
-		(raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
-		VALUES ('', ?, ?, 0, ?, 0, '{}', 'aaaaaaaaaa')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	obsStmt, err := tx.Prepare(`INSERT INTO observations
-		(transmission_id, observer_idx, path_json, timestamp) VALUES (?, ?, '["bb"]', ?)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < baseline; i++ {
-		res, err := txStmt.Exec(fmt.Sprintf("h%d", i), baselineStartTs+int64(i), payloadADVERT)
+	// Seed the same 100K logical rows in one transaction without per-row RPCs.
+	seed := func(prefix string, start int64, count int) {
+		t.Helper()
+		if store.Backend() == "sqlite" {
+			tx, err := store.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			parents, err := tx.Prepare(`INSERT INTO transmissions(raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,from_pubkey) VALUES('',?1,?2,0,?3,0,'{}','aaaaaaaaaa')`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parents.Close()
+			children, err := tx.Prepare(`INSERT INTO observations(transmission_id,observer_idx,path_json,timestamp) VALUES(?1,?2,'["bb"]',?3)`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer children.Close()
+			for i := 0; i < count; i++ {
+				stamp := start + int64(i)
+				res, err := parents.Exec(fmt.Sprint(prefix, i), time.Unix(stamp, 0).UTC().Format(time.RFC3339), payloadADVERT)
+				if err != nil {
+					t.Fatal(err)
+				}
+				id, _ := res.LastInsertId()
+				if _, err = children.Exec(id, obsRowid, stamp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+
+		_, err := store.db.Exec(`WITH inserted AS (
+   INSERT INTO transmissions(raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,from_pubkey)
+   SELECT '',$1::text||n::text,to_char(to_timestamp($2::bigint+n) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),0,$3,0,'{}','aaaaaaaaaa'
+   FROM generate_series(0,$4::integer-1) n RETURNING id,hash
+  ) INSERT INTO observations(transmission_id,observer_idx,path_json,timestamp)
+  SELECT id,$5,'["bb"]',$2::bigint+substring(hash,2)::bigint FROM inserted`, prefix, start, payloadADVERT, count, obsRowid)
 		if err != nil {
 			t.Fatal(err)
 		}
-		txID, _ := res.LastInsertId()
-		if _, err := obsStmt.Exec(txID, obsRowid, baselineStartTs+int64(i)); err != nil {
-			t.Fatal(err)
-		}
 	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
+	seed("h", baselineStartTs, baseline)
 
 	// Initial warm-up: drain to completion (StartNeighborEdgesBuilder
 	// does the same — call directly so the test doesn't depend on the
@@ -136,34 +155,7 @@ func TestNeighborEdgesBuilderDeltaScan(t *testing.T) {
 	// than baselineMaxTs.
 	const delta = 100
 	deltaStartTs := baselineMaxTs + 1
-	tx2, err := store.db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	txStmt2, err := tx2.Prepare(`INSERT INTO transmissions
-		(raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
-		VALUES ('', ?, ?, 0, ?, 0, '{}', 'aaaaaaaaaa')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	obsStmt2, err := tx2.Prepare(`INSERT INTO observations
-		(transmission_id, observer_idx, path_json, timestamp) VALUES (?, ?, '["bb"]', ?)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < delta; i++ {
-		res, err := txStmt2.Exec(fmt.Sprintf("d%d", i), deltaStartTs+int64(i), payloadADVERT)
-		if err != nil {
-			t.Fatal(err)
-		}
-		txID, _ := res.LastInsertId()
-		if _, err := obsStmt2.Exec(txID, obsRowid, deltaStartTs+int64(i)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := tx2.Commit(); err != nil {
-		t.Fatal(err)
-	}
+	seed("d", deltaStartTs, delta)
 
 	deltaStart := time.Now()
 	n3, err := store.buildAndPersistNeighborEdges(trustAllPrefixes())
@@ -183,6 +175,8 @@ func TestNeighborEdgesBuilderDeltaScan(t *testing.T) {
 	if deltaDur > 500*time.Millisecond {
 		t.Fatalf("delta build of %d rows took %v; expected <500ms. (#1339)", delta, deltaDur)
 	}
+
+	t.Logf("100K baseline: empty delta=%s; 100-row delta=%s", noopDur, deltaDur)
 
 	// Sanity: MAX(last_seen) advanced.
 	var maxLastSeen2 string

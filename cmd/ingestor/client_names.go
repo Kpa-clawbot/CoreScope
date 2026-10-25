@@ -113,7 +113,7 @@ func (s *Store) InsertClientNodeName(o *ClientNodeName) (bool, error) {
 	res, err := s.db.Exec(`
 		INSERT INTO client_node_names
 			(target, rx_pubkey, observed_at, ingested_at, name, lat, lon, pos_acc_m, repeater_clock)
-		VALUES (?,?,?,?,?,?,?,?,?)
+		VALUES (`+s.nativeSQL("?1,?2,?3,?4,?5,?6,?7,?8,?9", "$1,$2,$3,$4,$5,$6,$7,$8,$9")+`)
 		ON CONFLICT(target, rx_pubkey, observed_at) DO NOTHING`,
 		o.Target, o.RxPubkey, o.ObservedAt, o.IngestedAt, o.Name, o.Lat, o.Lon, o.PosAccM, o.RepeaterClock)
 	if err != nil {
@@ -131,7 +131,7 @@ func (s *Store) CurrentClientNodeName(target string) (*ClientNodeName, error) {
 	row := s.db.QueryRow(`
 		SELECT target, rx_pubkey, observed_at, ingested_at, name, lat, lon, pos_acc_m, repeater_clock
 		FROM client_node_names
-		WHERE target = ?
+		WHERE target = `+s.parameter(1)+`
 		ORDER BY observed_at DESC LIMIT 1`, target)
 	var o ClientNodeName
 	if err := row.Scan(&o.Target, &o.RxPubkey, &o.ObservedAt, &o.IngestedAt, &o.Name, &o.Lat, &o.Lon, &o.PosAccM, &o.RepeaterClock); err != nil {

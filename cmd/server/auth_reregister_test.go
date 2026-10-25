@@ -16,7 +16,10 @@ func TestAuthReregisterProfileFailureKeepsPassword(t *testing.T) {
 	}
 	sent := len(f.fake.Sent())
 	token := f.lastToken(t)
-	f.execDB(t, `CREATE TRIGGER reject_name BEFORE UPDATE OF display_name ON users BEGIN SELECT RAISE(ABORT, 'profile update failed'); END`)
+	f.execDB(t, testNativeSQL(
+		`CREATE TRIGGER reject_name BEFORE UPDATE OF display_name ON users BEGIN SELECT RAISE(ABORT, 'profile update failed'); END`,
+		`CREATE FUNCTION reject_name() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'profile update failed'; END $$;
+		CREATE TRIGGER reject_name BEFORE UPDATE OF display_name ON users FOR EACH ROW EXECUTE FUNCTION reject_name()`))
 	w := f.do("POST", "/api/auth/register", registerRequest{Email: u.Email, DisplayName: "Replacement", Password: "replacement password"})
 	expectStatus(t, w, 200)
 	if response := decode[okResponse](t, w); !response.OK || response.Message != msgCheckMail {
@@ -46,10 +49,14 @@ func TestAuthReregisterChangedAccountDoesNotIssueActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	sent := len(f.fake.Sent())
-	f.execDB(t, `CREATE TRIGGER activate_first BEFORE UPDATE OF password_hash ON users BEGIN
+	f.execDB(t, testNativeSQL(`CREATE TRIGGER activate_first BEFORE UPDATE OF password_hash ON users BEGIN
 		UPDATE users SET status='active', role='admin', activated_at=123 WHERE id=NEW.id;
 		SELECT RAISE(IGNORE);
-	END`)
+	END`, `CREATE FUNCTION activate_first() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+		UPDATE users SET status='active', role='admin', activated_at=123 WHERE id=NEW.id;
+		RETURN NULL;
+	END $$;
+	CREATE TRIGGER activate_first BEFORE UPDATE OF password_hash ON users FOR EACH ROW EXECUTE FUNCTION activate_first()`))
 	w := f.do("POST", "/api/auth/register", registerRequest{Email: u.Email, DisplayName: "Replacement", Password: "replacement password"})
 	expectStatus(t, w, 200)
 	if response := decode[okResponse](t, w); !response.OK || response.Message != msgCheckMail {

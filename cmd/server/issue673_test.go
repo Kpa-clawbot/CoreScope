@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 const issue673NodePK = "7502f19f44cad6d7b626e1d811c00a914af452636182ccded3fd019803395ec9"
@@ -18,7 +16,7 @@ func setupIssue673Store(t *testing.T) (*PacketStore, *DB) {
 	db := setupTestDB(t)
 
 	_, err := db.conn.Exec(
-		"INSERT INTO nodes (public_key, name, role) VALUES (?, ?, ?)",
+		"INSERT INTO nodes (public_key, name, role) VALUES ($1, $2, $3)",
 		issue673NodePK, "Quail Hollow Park", "repeater",
 	)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -14,6 +15,17 @@ import (
 )
 
 const day = int64(86400)
+
+func newSQLiteHopTestStore(t *testing.T) *Store {
+	t.Helper()
+	s, err := OpenStore(filepath.Join(t.TempDir(), "hop-index.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.WaitForAsyncMigrations()
+	t.Cleanup(func() { s.Close() })
+	return s
+}
 
 func fastHopBackfill(t *testing.T, chunk int64) {
 	t.Helper()
@@ -135,7 +147,7 @@ func insertObs(t *testing.T, s *Store, obs ...ob) {
 // predate it: no hop rows, and a coverage mark claiming only the present.
 func legacyStore(t *testing.T, days int, obs ...ob) *Store {
 	t.Helper()
-	s := newTestStore(t)
+	s := newSQLiteHopTestStore(t)
 	if _, err := s.db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (1,'00','h1','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +175,7 @@ func restart(t *testing.T, s *Store, days int) {
 // The default install and an upgrade that never sets the key: no table, no
 // triggers, no backfill, and ingest still works.
 func TestHopIndex_OffByDefault_InstallsNothing(t *testing.T) {
-	s := newTestStore(t)
+	s := newSQLiteHopTestStore(t)
 	if got := hopSchemaObjects(t, s); len(got) != 0 {
 		t.Fatalf("OpenStore installed hop index objects: %v", got)
 	}
@@ -225,7 +237,11 @@ func TestLoadConfig_RejectsNegativeHopIndexDays(t *testing.T) {
 // the window.
 func TestHopIndex_OffRemovesEverything_OnRebuilds(t *testing.T) {
 	fastHopBackfill(t, 3600)
-	now := time.Now().Unix()
+	fixed := time.Now().Truncate(time.Second)
+	clock := hopNow
+	t.Cleanup(func() { hopNow = clock })
+	hopNow = func() time.Time { return fixed }
+	now := fixed.Unix()
 	s := legacyStore(t, 14, ob{`["AA","BB"]`, now - 2*day})
 	restart(t, s, 14)
 	checkHopIndex(t, s)
@@ -498,7 +514,7 @@ func TestHopIndex_ShippedDefaultsAreOff(t *testing.T) {
 			t.Errorf("%s: hopIndexDays = %d, want 0 (opt-in)", path, d)
 		}
 	}
-	s := newTestStore(t)
+	s := newSQLiteHopTestStore(t)
 	restart(t, s, -1)
 	if got := hopSchemaObjects(t, s); len(got) != 0 {
 		t.Fatalf("hopIndexDays -1 installed %v", got)

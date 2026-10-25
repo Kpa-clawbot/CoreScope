@@ -76,7 +76,7 @@ func t1201InsertNode(t *testing.T, db *DB, n t1201Node) {
 	// "Berlin would win tier-3" premise of this fixture weakens silently —
 	// update both this insert and the candidate scoring assertions.
 	_, err := db.conn.Exec(
-		`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count) VALUES (?, ?, 'repeater', ?, ?, ?, '2026-01-01T00:00:00Z', ?)`,
+		`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count) VALUES ($1, $2, 'repeater', $3, $4, $5, '2026-01-01T00:00:00Z', $6)`,
 		n.pk, "node-"+n.pk[:4], n.lat, n.lon, "2026-05-01T00:00:00Z", n.obsCount,
 	)
 	if err != nil {
@@ -109,7 +109,7 @@ func TestTopHopsRespectsContextAcrossAllCallSites(t *testing.T) {
 
 	// Insert observer row (referenced by observations via observer_idx).
 	if _, err := db.conn.Exec(
-		`INSERT INTO observers (id, name, last_seen, first_seen, packet_count) VALUES (?, ?, ?, '2026-01-01T00:00:00Z', 100)`,
+		`INSERT INTO observers (id, name, last_seen, first_seen, packet_count) VALUES ($1, $2, $3, '2026-01-01T00:00:00Z', 100)`,
 		t1201Observer, "obs-ca", "2026-05-01T00:00:00Z",
 	); err != nil {
 		t.Fatal(err)
@@ -128,17 +128,18 @@ func TestTopHopsRespectsContextAcrossAllCallSites(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		ts := baseTime.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
 		hash := fmt.Sprintf("hash1201_%03d", i)
-		res, err := tx.Exec(
-			`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json) VALUES (?, ?, ?, 1, 1, ?)`,
+		var txID int64
+		err = tx.QueryRow(
+			`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json) VALUES ($1, $2, $3, 1, 1, $4) RETURNING id`,
 			"AA", hash, ts, string(decoded),
-		)
+		).Scan(&txID)
 		if err != nil {
 			_ = tx.Rollback()
 			t.Fatal(err)
 		}
-		txID, _ := res.LastInsertId()
+
 		if _, err := tx.Exec(
-			`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp) VALUES (?, 1, 12.0, -90, ?, ?)`,
+			`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp) VALUES ($1, 1, 12.0, -90, $2, $3)`,
 			txID, pathJSON, baseTime.Add(time.Duration(i)*time.Minute).Unix(),
 		); err != nil {
 			_ = tx.Rollback()

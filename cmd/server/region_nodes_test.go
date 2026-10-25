@@ -36,7 +36,7 @@ func newRegionTestStore(t testing.TB, observers map[string]string) *PacketStore 
 	t.Helper()
 	db := setupTestDB(t)
 	for id, iata := range observers {
-		if _, err := db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count) VALUES (?, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`, id, id, iata); err != nil {
+		if _, err := db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count) VALUES ($1, $2, $3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`, id, id, iata); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -1,15 +1,14 @@
 package main
 
 import (
-	"database/sql"
-	"fmt"
+	"context"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // Linked-only ingest (docs/specs/2026-10-08-companion-linking-design.md,
@@ -36,12 +35,11 @@ const linkedCompanionsQuery = `SELECT pubkey FROM companion_links`
 // pubkeys. Snapshots are never mutated after they are stored, so a hit is
 // lock-free. Reads (refresh, or a miss after the gap) are serialized by mu.
 type linkedCompanionSet struct {
-	path string
-	now  func() time.Time
-	cur  atomic.Pointer[map[string]struct{}]
+	reader *channelKeySet
+	now    func() time.Time
+	cur    atomic.Pointer[map[string]struct{}]
 
 	mu       sync.Mutex  // guards everything below
-	db       *sql.DB     // opened lazily, read-only
 	lastRead time.Time   // last read attempt, for the miss gap
 	reads    int         // read attempts (tests)
 	failing  bool        // the last read failed; logged once per failure streak
@@ -53,7 +51,7 @@ type linkedCompanionSet struct {
 // companion_links, every pubkey passes. A users.db that is missing, unreadable
 // or older than companion linking must not cost the data of linked companions.
 func newLinkedCompanionSet(usersDBPath string) *linkedCompanionSet {
-	s := &linkedCompanionSet{path: usersDBPath, now: time.Now}
+	s := &linkedCompanionSet{reader: newChannelKeySet(nil, usersDBPath, 0), now: time.Now}
 	empty := map[string]struct{}{}
 	s.cur.Store(&empty)
 	return s
@@ -106,9 +104,9 @@ func (s *linkedCompanionSet) readLocked() {
 	s.lastRead = s.now()
 	s.reads++
 	keys, err := s.query()
-	if err != nil && strings.Contains(err.Error(), "no such table") {
+	if err != nil && (strings.Contains(err.Error(), "no such table") || strings.Contains(err.Error(), "SQLSTATE 42P01")) {
 		if !s.noTable {
-			log.Printf("[companions] %s has no companion_links table (a server older than companion linking); passing client data until it appears", s.path)
+			log.Printf("[companions] selected %s account store has no companion_links table/projection (a server older than companion linking); passing client data until it appears", s.reader.backend)
 			s.noTable = true
 		}
 		return
@@ -121,7 +119,7 @@ func (s *linkedCompanionSet) readLocked() {
 		return
 	}
 	if s.failing {
-		log.Printf("[companions] linked companions readable again from %s", s.path)
+		log.Printf("[companions] linked companions readable again from %s", s.reader.backend)
 		s.failing = false
 	}
 	next := make(map[string]struct{}, len(keys))
@@ -133,21 +131,18 @@ func (s *linkedCompanionSet) readLocked() {
 }
 
 func (s *linkedCompanionSet) query() ([]string, error) {
-	if s.db == nil {
-		if _, err := os.Stat(s.path); err != nil {
-			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("%w at %s", errUsersDBMissing, s.path)
-			}
-			return nil, err
-		}
-		db, err := sql.Open("sqlite3", usersDBReadOnlyDSN(s.path))
-		if err != nil {
-			return nil, err
-		}
-		db.SetMaxOpenConns(1)
-		s.db = db
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := s.reader.readAccountSnapshot(ctx)
+	if err != nil {
+		return nil, err
 	}
-	rows, err := s.db.Query(linkedCompanionsQuery)
+	defer tx.Rollback()
+	query := linkedCompanionsQuery
+	if s.reader.backend == dbconfig.Postgres {
+		query = `SELECT pubkey FROM linked_companions`
+	}
+	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -160,17 +155,21 @@ func (s *linkedCompanionSet) query() ([]string, error) {
 		}
 		out = append(out, pk)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, tx.Commit()
 }
 
 // Close closes the read-only handle, if any.
 func (s *linkedCompanionSet) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.db != nil {
-		s.db.Close()
-		s.db = nil
-	}
+	s.reader.Close()
+	s.reader.db = nil
 }
 
 // allowClientPubkey applies the linked-only filter to a client topic's
@@ -188,7 +187,7 @@ func (s *Store) allowClientPubkey(pubkey string) bool {
 // once, when clientRxCoverage.requireLinkedCompanion is in effect, else nil.
 // The setting without userManagement.enabled is ignored with a startup
 // warning, as on the server.
-func newLinkedCompanionFilter(cfg *Config) *linkedCompanionSet {
+func newLinkedCompanionFilter(cfg *Config, storage dbconfig.Storage) *linkedCompanionSet {
 	if !cfg.RequireLinkedCompanionSet() {
 		return nil
 	}
@@ -196,12 +195,9 @@ func newLinkedCompanionFilter(cfg *Config) *linkedCompanionSet {
 		log.Printf("[companions] WARNING: clientRxCoverage.requireLinkedCompanion is ignored: it needs userManagement.enabled")
 		return nil
 	}
-	shown := cfg.UsersDBPath()
-	if abs, err := filepath.Abs(shown); err == nil {
-		shown = abs
-	}
-	log.Printf("[companions] only linked companions may publish client data; reading companion_links from %s", shown)
-	s := newLinkedCompanionSet(cfg.UsersDBPath())
+	log.Printf("[companions] only linked companions may publish client data; reading the selected %s account projection", storage.Backend)
+	s := newLinkedCompanionSet("")
+	s.reader = newChannelKeySetStorage(nil, storage, 0)
 	s.refresh()
 	return s
 }

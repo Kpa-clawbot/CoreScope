@@ -15,8 +15,9 @@ func TestMigrateV5DatabaseToV6(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer db.Close()
 	stmts := []string{`CREATE TABLE schema_version (version INTEGER NOT NULL)`, `INSERT INTO schema_version (version) VALUES (5)`}
-	for _, m := range migrations[:5] {
+	for _, m := range LegacyMigrations()[:5] {
 		stmts = append(stmts, m...)
 	}
 	stmts = append(stmts,
@@ -37,8 +38,8 @@ func TestMigrateV5DatabaseToV6(t *testing.T) {
 	if len(migrations) < 6 {
 		t.Fatal("migration v6 missing")
 	}
-	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
+	if v, err := st.SchemaVersion(); err != nil || v != SQLiteSchemaVersion {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, SQLiteSchemaVersion)
 	}
 
 	var kind, label, scopes string

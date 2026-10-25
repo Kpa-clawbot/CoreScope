@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -60,22 +59,16 @@ func TestActivationMailMentionsPassword(t *testing.T) {
 	}
 }
 
-// The startup line shows the absolute users.db path, so a relative path
-// resolved against another working directory than the ingestor's is visible.
-func TestLogStartupShowsAbsoluteUsersDBPath(t *testing.T) {
+func TestLogStartupRedactsDatabaseURL(t *testing.T) {
 	a, _ := newTestAuthService(t)
-	a.set.dbPath = "users.db"
+	a.set.databaseURL = "postgresql://private:secret@host/accounts?password=hidden"
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
 	defer log.SetOutput(prev)
 	a.logStartup()
-	want, err := filepath.Abs("users.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(buf.String(), "[users] user management enabled: db="+want+",") {
-		t.Fatalf("log line = %q, want the absolute path %q", buf.String(), want)
+	if !strings.Contains(buf.String(), string(a.st.Backend())) || strings.Contains(buf.String(), "secret") || strings.Contains(buf.String(), "hidden") {
+		t.Fatalf("unsafe startup log: %q", buf.String())
 	}
 }
 

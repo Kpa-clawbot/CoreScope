@@ -2,7 +2,7 @@
 # scripts/check-dockerfile-internal-pkgs.sh
 #
 # Asserts every internal/<pkg> referenced via a "replace" directive in
-# cmd/server/go.mod or cmd/ingestor/go.mod has a matching
+# each shipped command's go.mod has a matching
 # "COPY internal/<pkg>/" line in Dockerfile for each builder section that
 # needs it.
 #
@@ -18,7 +18,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DOCKERFILE="$ROOT/Dockerfile"
-MODS=("$ROOT/cmd/server/go.mod" "$ROOT/cmd/ingestor/go.mod")
+MODS=("$ROOT/cmd/server/go.mod" "$ROOT/cmd/ingestor/go.mod" "$ROOT/cmd/decrypt/go.mod" "$ROOT/cmd/migrate/go.mod")
 ERRORS=0
 
 # PKG_COUNT[pkg] = number of go.mod files that reference internal/<pkg>.

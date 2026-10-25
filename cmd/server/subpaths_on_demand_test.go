@@ -16,7 +16,7 @@ func setupSubpathCountDB(t *testing.T) *DB {
 	seen := now.Add(-time.Hour).Format(time.RFC3339)
 	epoch := now.Add(-time.Hour).Unix()
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obs1', 'Observer One', 'SJC', ?, '2025-01-01T00:00:00Z', 100)`, seen)
+		VALUES ('obs1', 'Observer One', 'SJC', $1, '2025-01-01T00:00:00Z', 100)`, seen)
 	paths := []string{
 		`["AA","bb","aa","bb"]`, // mixed case; "aa,bb" twice in one path
 		`["aa","bb"]`,
@@ -25,9 +25,9 @@ func setupSubpathCountDB(t *testing.T) *DB {
 	}
 	for i, pj := range paths {
 		db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-			VALUES ('01', ?, ?, 1, 4, '{}')`, "subpath_count_"+string(rune('a'+i)), seen)
+			VALUES ('01', $1, $2, 1, 4, '{}')`, "subpath_count_"+string(rune('a'+i)), seen)
 		db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-			VALUES (?, 1, 10.0, -90, ?, ?)`, i+1, pj, epoch)
+			VALUES ($1, 1, 10.0, -90, $2, $3)`, i+1, pj, epoch)
 	}
 	return db
 }

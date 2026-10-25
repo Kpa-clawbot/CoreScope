@@ -113,7 +113,7 @@ func TestRunAsyncMigration_PanicCapture(t *testing.T) {
 	}
 
 	var errMsg sql.NullString
-	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = ?`, name).Scan(&errMsg); err != nil {
+	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = $1`, name).Scan(&errMsg); err != nil {
 		t.Fatalf("error column lookup: %v", err)
 	}
 	if !errMsg.Valid || errMsg.String == "" {
@@ -158,7 +158,7 @@ func TestRunAsyncMigration_RestartSafetyInterruptedIsRetried(t *testing.T) {
 		t.Run(previous, func(t *testing.T) {
 			s := newTestStore(t)
 			const name = "test_restart_interrupted_v1"
-			if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status, ended_at, error) VALUES (?, ?, '2026-01-01 00:00:00', 'prior interruption')`, name, previous); err != nil {
+			if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status, ended_at, error) VALUES ($1, $2, '2026-01-01 00:00:00', 'prior interruption')`, name, previous); err != nil {
 				t.Fatalf("seed interrupted row: %v", err)
 			}
 
@@ -180,7 +180,7 @@ func TestRunAsyncMigration_RestartSafetyInterruptedIsRetried(t *testing.T) {
 
 			var status string
 			var endedAt, errCol sql.NullString
-			if err := s.db.QueryRow(`SELECT status, ended_at, error FROM _async_migrations WHERE name = ?`, name).Scan(&status, &endedAt, &errCol); err != nil {
+			if err := s.db.QueryRow(`SELECT status, ended_at, error FROM _async_migrations WHERE name = $1`, name).Scan(&status, &endedAt, &errCol); err != nil {
 				t.Fatal(err)
 			}
 			if status != "pending_async" || endedAt.Valid || errCol.Valid {
@@ -188,7 +188,7 @@ func TestRunAsyncMigration_RestartSafetyInterruptedIsRetried(t *testing.T) {
 			}
 			close(release)
 			s.WaitForAsyncMigrations()
-			if err := s.db.QueryRow(`SELECT status, ended_at, error FROM _async_migrations WHERE name = ?`, name).Scan(&status, &endedAt, &errCol); err != nil {
+			if err := s.db.QueryRow(`SELECT status, ended_at, error FROM _async_migrations WHERE name = $1`, name).Scan(&status, &endedAt, &errCol); err != nil {
 				t.Fatal(err)
 			}
 			if status != "done" || !endedAt.Valid || endedAt.String == "" || errCol.Valid || atomic.LoadInt32(&calls) != 1 {
@@ -206,10 +206,10 @@ func TestRunAsyncMigration_RestartSafetyPendingIsRetried(t *testing.T) {
 	s := newTestStore(t)
 	const name = "test_restart_pending_v1"
 
-	if err := ensureAsyncMigrationsTable(s.db); err != nil {
+	if err := ensureAsyncMigrationsTable(s.db, s.Backend()); err != nil {
 		t.Fatalf("ensure table: %v", err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status) VALUES (?, 'pending_async')`, name); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status) VALUES ($1, 'pending_async')`, name); err != nil {
 		t.Fatalf("seed pending row: %v", err)
 	}
 
@@ -266,7 +266,7 @@ func TestRunAsyncMigration_CompletionStatus(t *testing.T) {
 
 			var status string
 			var endedAt, errCol sql.NullString
-			if err := s.db.QueryRow(`SELECT status, ended_at, error FROM _async_migrations WHERE name = ?`, name).Scan(&status, &endedAt, &errCol); err != nil {
+			if err := s.db.QueryRow(`SELECT status, ended_at, error FROM _async_migrations WHERE name = $1`, name).Scan(&status, &endedAt, &errCol); err != nil {
 				t.Fatal(err)
 			}
 			if status != tt.want || !endedAt.Valid || endedAt.String == "" {

@@ -26,7 +26,7 @@ func seedObserver(t *testing.T, s *Store, id string, ageDays int) string {
 		t.Fatal(err)
 	}
 	old := time.Now().UTC().AddDate(0, 0, -ageDays).Format(time.RFC3339)
-	if _, err := s.db.Exec(`UPDATE observers SET last_seen = ? WHERE id = ?`, old, id); err != nil {
+	if _, err := s.db.Exec(`UPDATE observers SET last_seen = $1 WHERE id = $2`, old, id); err != nil {
 		t.Fatal(err)
 	}
 	return old
@@ -35,7 +35,7 @@ func seedObserver(t *testing.T, s *Store, id string, ageDays int) string {
 func observerLastSeen(t *testing.T, s *Store, id string) string {
 	t.Helper()
 	var got string
-	if err := s.db.QueryRow(`SELECT last_seen FROM observers WHERE id = ?`, id).Scan(&got); err != nil {
+	if err := s.db.QueryRow(`SELECT last_seen FROM observers WHERE id = $1`, id).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
 	return got
@@ -57,7 +57,7 @@ func TestRetainedStatusDoesNotAdvanceLastSeen(t *testing.T) {
 func TestRetainedStatusDoesNotReactivateInactiveObserver(t *testing.T) {
 	store := newTestStore(t)
 	seedObserver(t, store, "obs-retained", 60)
-	if _, err := store.db.Exec(`UPDATE observers SET inactive = 1 WHERE id = ?`, "obs-retained"); err != nil {
+	if _, err := store.db.Exec(`UPDATE observers SET inactive = 1 WHERE id = $1`, "obs-retained"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -66,7 +66,7 @@ func TestRetainedStatusDoesNotReactivateInactiveObserver(t *testing.T) {
 		nil, nil, &Config{})
 
 	var inactive int
-	if err := store.db.QueryRow(`SELECT inactive FROM observers WHERE id = ?`, "obs-retained").Scan(&inactive); err != nil {
+	if err := store.db.QueryRow(`SELECT inactive FROM observers WHERE id = $1`, "obs-retained").Scan(&inactive); err != nil {
 		t.Fatal(err)
 	}
 	if inactive != 1 {
@@ -85,7 +85,7 @@ func TestRetainedStatusDoesNotCreateUnknownObserver(t *testing.T) {
 		nil, nil, &Config{})
 
 	var count int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = ?`, "obs-never-seen").Scan(&count); err != nil {
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = $1`, "obs-never-seen").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -105,7 +105,7 @@ func TestRetainedStatusDoesNotInsertMetricsSample(t *testing.T) {
 
 	var count int
 	if err := store.db.QueryRow(
-		`SELECT COUNT(*) FROM observer_metrics WHERE observer_id = ?`, "obs-retained",
+		`SELECT COUNT(*) FROM observer_metrics WHERE observer_id = $1`, "obs-retained",
 	).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestRetainedStatusStillUpdatesMetadata(t *testing.T) {
 	var firmware string
 	var noiseFloor float64
 	if err := store.db.QueryRow(
-		`SELECT firmware, noise_floor FROM observers WHERE id = ?`, "obs-retained",
+		`SELECT firmware, noise_floor FROM observers WHERE id = $1`, "obs-retained",
 	).Scan(&firmware, &noiseFloor); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestLiveStatusStillCreatesUnknownObserver(t *testing.T) {
 		nil, nil, &Config{})
 
 	var count int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = ?`, "obs-fresh").Scan(&count); err != nil {
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = $1`, "obs-fresh").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
