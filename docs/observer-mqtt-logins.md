@@ -179,8 +179,22 @@ Measured on EMQX 5.8.6 with CoreScope stopped (the broker's connections to it ti
 | Personal login, new connection | refused (`not authorised`): no authenticator knows it. |
 | Personal login, already connected | publishing to a topic not in its authorization cache is denied, by the `^obs_` file rule. |
 
-Personal logins work again when CoreScope is back and EMQX reconnects its HTTP resource (EMQX
-checks every 15 s).
+Personal logins work again when CoreScope is back and EMQX's next health check of the HTTP
+resource passes (EMQX's default health-check interval; the resource stays marked down until then).
+
+**Short outages while CoreScope is up.** EMQX can also mark the HTTP authenticator down for one
+health-check interval while CoreScope is running fine. When CoreScope (or a proxy in front of
+it) closes an idle keep-alive connection, and an EMQX health check lands in the moment between
+the connection closing and its client process exiting, the check fails with
+`resource down: closed`. In the test this happened 3 times (once in a manual round, twice in
+one 150 s run of logins every 7 s) and lasted 15 s each time (alarm activated to deactivated).
+Five further runs of 150 to 300 s, including one with four parallel clients and a server that
+closes idle connections after 1 s, had none: it is a timing race, not a steady fault. During such a window a new connection with a
+personal login is refused (`not authorised`) and the uploader has to reconnect; the shared login
+and bridges are not affected. EMQX 5.8.6 has no setting that prevents it: the HTTP
+authenticator exposes no keepalive or health-check options, and EMQX 5.10.5 runs the same
+health-check code. Watch for the alarm in the EMQX log (`alarm_is_activated ...
+emqx_authn_http`).
 
 ## 4. Migrating from the shared login
 
