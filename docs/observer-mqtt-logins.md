@@ -9,8 +9,9 @@ username (`obs_` + 12 characters) and the password, and mails them; they are nev
 interface or returned by the API. One login serves all of a user's observers.
 
 The broker asks CoreScope over HTTP whether a login may connect and whether it may publish.
-A personal login may only publish to `meshcore/<iata>/<pubkey>/<type>`, and only for observers
-bound to its user:
+A personal login may only publish to `meshcore/<iata>/<pubkey>/<type>` (with a 64-hex pubkey,
+and not under the `client` IATA that client uploads use), and only for observers bound to its
+user:
 
 | Pubkey in the topic | Publish | Effect |
 |---|---|---|
@@ -18,10 +19,32 @@ bound to its user:
 | bound to another user, or orphaned (owner deleted) | denied | logged with the username and the first 8 characters of the pubkey |
 | not bound yet | allowed | bound to this user now (`auto`); admins get a mail if CoreScope already knew the observer |
 
-A user can auto-bind at most 20 observers; past that, publishing under a new pubkey is denied
-until an admin assigns it (`PUT /api/admin/observer-bindings/<pubkey>`). Subscribing is always
-denied for personal logins. Admins revoke and reissue logins, and unbind or reassign observers,
-on *Admin, Observer logins*.
+Automatic binding stops once a user owns 20 observers, counting the ones an admin assigned;
+past that, publishing under a new pubkey is denied until an admin assigns it
+(`PUT /api/admin/observer-bindings/<pubkey>`). Subscribing is always denied for personal
+logins. Admins revoke and reissue logins, and unbind or reassign observers, on *Admin,
+Observer logins*.
+
+When a login is created, the owner's notification events get "My observers go offline"
+(`observer.offline.own`). Mails only go out once the user has switched notifications on; the
+user can untick the event on the account page.
+
+**Who can claim an observer.** Any active account can request a login, and that login binds
+every observer it publishes for that is not bound yet, including observers CoreScope already
+knows from the shared login (first come wins). The observer pubkeys are public on
+`/api/observers`. With open registration this means: anyone with a mail address can claim up
+to 20 unbound observers per account, and publish as them. Before this feature, publishing
+needed the shared password you hand out. What limits it:
+
+- every claim of an observer CoreScope already knew mails the admins (`observer-bound`);
+- an admin can unbind or reassign a claimed observer, and revoke the login, on
+  *Admin, Observer logins*;
+- a claimed observer cannot be claimed again by another login, so the sooner the real owners
+  migrate, the smaller the window.
+
+Registration cannot be closed. If this is not acceptable for your instance, assign the known
+observers to their owners yourself (once the owners have a login) before you announce the
+feature, and watch the `observer-bound` mails during the migration.
 
 Logins CoreScope does not manage (the shared login, bridges, your own operator users) are
 answered with `ignore`, so the broker decides them with its own user store, exactly as before.
@@ -200,6 +223,23 @@ curl -s -u ... -X POST -H 'Content-Type: application/json' $E/authorization/sour
 
 A new source is added at the **front** of the chain, so the `move` is needed. `GET
 $E/authorization/sources` must list `file` last.
+
+**If `GET $E/authorization/sources` already lists a `file` source** (the stock EMQX config
+can ship one with an `acl.conf` that ends in `{allow, all}.`), the POST above is refused:
+EMQX keeps one source per type. Add the rule to the existing file instead, as its **first**
+line, so no `allow` rule in that file matches an `obs_` login before it:
+
+```bash
+curl -s -u ... $E/authorization/sources/file > file.json   # keep the other fields
+# edit file.json: prepend {deny, {username, {re, "^obs_"}}, all, ["#"]}.\n to "rules"
+curl -s -u ... -X PUT -H 'Content-Type: application/json' $E/authorization/sources/file \
+  --data-binary @file.json
+```
+
+Leave that source where it is in the chain: moving it would also move its other rules. The
+HTTP authorizer goes in front of it in step 2, so it only sees what the hook ignored. Do not go
+on to step 2 until the rule is in place; without it, a connected personal login can publish
+anywhere while CoreScope is unreachable (section 3).
 
 **2. The HTTP authorizer, first in the chain.** `authz.json`:
 

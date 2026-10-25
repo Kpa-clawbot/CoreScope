@@ -382,7 +382,11 @@ The analyzer database has its own backup route, `GET /api/backup`.
 - old passwords of users who changed them since;
 - sessions that were logged out or revoked since (valid again until they expire, for
   anyone who still holds the cookie);
-- activation, reset and email change links used since (valid again until they expire).
+- activation, reset and email change links used since (valid again until they expire);
+- with observer logins on: logins revoked since (they authenticate again), the username and
+  password from before a reissue (the reissued ones stop working), and the observer bindings
+  of the snapshot. Check *Admin, Observer logins* after a restore and revoke or reissue
+  where needed.
 
 The audit log is replaced too, so note the deletions before you overwrite it.
 
