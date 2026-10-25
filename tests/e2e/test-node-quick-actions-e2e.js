@@ -35,7 +35,7 @@ async function test(name, run) {
     async function open(surface, overrides = {}) {
       const ctx = await browser.newContext({
         viewport: { width: surface.width, height: 900 },
-        hasTouch: !!surface.touch, isMobile: !!surface.touch,
+        hasTouch: !!surface.touch, isMobile: surface.mobile == null ? !!surface.touch : surface.mobile,
       });
       await ctx.addInitScript(() => {
         localStorage.setItem('meshcore-time-window', '60');
@@ -164,6 +164,34 @@ async function test(name, run) {
         await page.getByRole('button', { name: 'Back to nodes', exact: true }).click();
         await page.locator('#nodesBody tr[data-action="select"]').waitFor();
         assert.equal(new URL(page.url()).hash, '#/nodes');
+      } finally { await ctx.close(); }
+    });
+    await test('touch tablet actions have separate 44px targets', async () => {
+      const { ctx, page, host } = await open({ ...surfaces[2], touch: true, mobile: false });
+      try {
+        assert.equal(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), true);
+        await host.evaluate(element => Promise.all(element.closest('.slide-over-panel').getAnimations().map(animation => animation.finished)));
+        const labels = ['Open full detail →', 'Open in Map', 'View packets'];
+        const bounds = [];
+        for (const label of labels) {
+          const rect = await host.getByRole('link', { name: label, exact: true }).boundingBox();
+          assert.ok(rect, label + ' must be visible');
+          bounds.push({ label, ...rect });
+        }
+        console.log('TABLET_ACTION_BOUNDS ' + JSON.stringify(bounds));
+        if (process.env.SCREENSHOT_DIR) {
+          fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+          await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'tablet-touch-actions.png'), animations: 'disabled' });
+        }
+        for (let i = 0; i < bounds.length; i++) {
+          for (let j = i + 1; j < bounds.length; j++) {
+            const a = bounds[i], b = bounds[j];
+            const overlap = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) *
+              Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+            assert.equal(overlap, 0, a.label + ' overlaps ' + b.label + ' by ' + overlap + 'px²');
+          }
+        }
+        for (const rect of bounds) assert.ok(rect.width >= 44 && rect.height >= 44, rect.label + ' must have a 44px touch target');
       } finally { await ctx.close(); }
     });
     for (const surface of [surfaces[0], surfaces[1], surfaces[2], surfaces[3]]) {
