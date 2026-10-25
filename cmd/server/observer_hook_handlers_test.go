@@ -125,6 +125,7 @@ func TestHook_AuthnTouchThrottled(t *testing.T) {
 	if f.authn(t, "obs_aaaaaaaaaaaa", "pw-a") != hookAllow {
 		t.Fatal("authn not allowed")
 	}
+	f.srv.auth.waitAudits()
 	l, _ := f.st.MQTTLoginForUser(uid)
 	if l.LastAuthAt == nil {
 		t.Fatal("first auth did not touch")
@@ -132,6 +133,7 @@ func TestHook_AuthnTouchThrottled(t *testing.T) {
 	first := *l.LastAuthAt
 	time.Sleep(1100 * time.Millisecond) // users.db stores whole seconds
 	f.authn(t, "obs_aaaaaaaaaaaa", "pw-a")
+	f.srv.auth.waitAudits()
 	l, _ = f.st.MQTTLoginForUser(uid)
 	if !l.LastAuthAt.Equal(first) {
 		t.Fatalf("touched again inside the window: %v -> %v", first, l.LastAuthAt)
