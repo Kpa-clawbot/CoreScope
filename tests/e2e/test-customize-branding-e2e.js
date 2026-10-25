@@ -73,6 +73,27 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     assert(await page.title() === 'Nodes | CoreScope', 'delayed branding replaced the route title');
   });
 
+  await step('#2259: selecting and closing inline details updates the title', async () => {
+    await navigate('#/home');
+    await navigate('#/nodes');
+    const node = page.locator('#nodesBody tr[data-action="select"]').first();
+    await node.waitFor();
+    const key = await node.getAttribute('data-value');
+    await node.click();
+    assert(await page.title() === 'Node ' + key.slice(0, 12) + ' | CoreScope', 'node selection kept the list title');
+    await page.locator('#nodesRight .panel-close-btn').click();
+    assert(await page.title() === 'Nodes | CoreScope', 'closing node detail kept its title');
+    await navigate('#/packets');
+    const packet = page.locator('#pktTable tr[data-hash]').first();
+    await packet.waitFor();
+    const hash = await packet.getAttribute('data-hash');
+    await packet.locator('.col-expand').click();
+    await page.locator('#pktRight .detail-title').waitFor();
+    assert(await page.title() === 'Packet ' + hash.slice(0, 12) + ' | CoreScope', 'packet selection kept the list title');
+    await page.locator('#pktRight .panel-close-btn').click();
+    assert(await page.title() === 'Packets | CoreScope', 'closing packet detail kept its title');
+  });
+
   await step('#2259: Analytics tab clicks and deep links identify the selected tab', async () => {
     await navigate('#/analytics?tab=rf');
     await page.waitForSelector('#analyticsTabs');

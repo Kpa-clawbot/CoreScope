@@ -114,6 +114,8 @@ function loadRouter() {
       ['#/packets/abcdef?obs=2', 'Packet abcdef | CoreScope'],
       ['#/observers/observer-one', 'Observer observer-one | CoreScope'],
       ['#/account/login', 'Account | CoreScope'],
+      ['#/account/activate?token=sample-value', 'Account | CoreScope'],
+      ['#/account/reset/sample-value', 'Account | CoreScope'],
       ['#/home', 'CoreScope'],
     ]) {
       r.go(hash);
