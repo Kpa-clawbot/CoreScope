@@ -589,6 +589,7 @@ jobs:
           suite 1 test-a11y-axe-1668.js BASE_URL=$B AXE_SCREENSHOT_DIR=/tmp/axe-1668
           suite 2 test-filter-ux-e2e.js BASE_URL=$B
           suite 2 test-radio-setting-1869-e2e.js BASE_URL=$B
+          suite 2 test-observer-neighbors-2270-e2e.js BASE_URL=$B
           suite 1 test-channel-issue-1087-e2e.js BASE_URL=$B
           suite 1 test-channel-issue-1111-e2e.js BASE_URL=$B
           suite 2 test-map-modal-fluid-e2e.js BASE_URL=$B
