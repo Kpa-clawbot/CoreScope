@@ -64,6 +64,41 @@ const COMPARISONS = [
 ];
 const comparesThresholds = (line) => COMPARISONS.some((re) => re.test(line));
 
+// Execute the actual Live detail renderer, with only its DOM/network boundary
+// replaced. This catches a view selecting the wrong timestamp even when the
+// shared health helpers themselves remain correct.
+async function liveDetail(node, stats = {}, healthFailed = false) {
+  const src = fs.readFileSync(path.join(PUBLIC, 'live.js'), 'utf8');
+  const start = src.indexOf('  async function showNodeDetail(');
+  const end = src.indexOf('  async function loadNodes(', start);
+  assert.ok(start >= 0 && end > start, 'Live detail renderer must exist');
+  const content = { innerHTML: '' };
+  const panel = { classList: { add() {}, remove() {} } };
+  const calls = [];
+  const helpers = loadRoles();
+  const ctx = {
+    ...helpers, window: helpers, console,
+    document: { getElementById: (id) => id === 'nodeDetailContent' ? content : panel },
+    api: async (url) => {
+      calls.push(url);
+      if (url.endsWith('/health')) {
+        if (healthFailed) throw new Error('Unavailable');
+        return { stats, observers: [], recentPackets: [] };
+      }
+      if (url.endsWith('/paths')) return { paths: [] };
+      return { node };
+    },
+    escapeHtml: String,
+    formatLiveTimestampHtml: (value) => Number.isNaN(value) ? '—' : String(value),
+    activeNodeDetailKey: null,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(src.slice(start, end), ctx);
+  await ctx.showNodeDetail(node.public_key);
+  assert.strictEqual(calls.length, 3, 'detail must not add network requests');
+  return content.innerHTML;
+}
+
 (async () => {
   const roles = loadRoles();
   const { getHealthStatus } = roles;
@@ -115,6 +150,48 @@ const comparesThresholds = (line) => COMPARISONS.some((re) => re.test(line));
     assert.strictEqual(r.getHealthStatus('companion', iso(4 * H), NOW), 'silent');
     // The default instance is unaffected.
     assert.strictEqual(getHealthStatus('repeater', iso(7 * H), NOW), 'healthy');
+  });
+
+  console.log('\n=== Live detail: certain activity instead of adverts alone (#2233) ===');
+  const recent = new Date(Date.now() - 30 * M).toISOString();
+  const old = new Date(Date.now() - 120 * H).toISOString();
+  const degraded = new Date(Date.now() - 30 * H).toISOString();
+  for (const role of ['repeater', 'room', 'companion']) {
+    await test(`${role}: recent certain heard activity wins over an old advert`, async () => {
+      const html = await liveDetail({ public_key: 'a'.repeat(64), role, last_seen: old, last_heard: recent });
+      assert.match(html, />Online<\/span>/);
+      assert.match(html, new RegExp('Last Activity</td><td>' + new Date(recent).getTime() + '</td>'));
+    });
+  }
+  await test('health and node timestamps use the newest certain evidence', async () => {
+    for (const [last_heard, lastHeard] of [[old, recent], [recent, old]]) {
+      const html = await liveDetail({ public_key: 'a'.repeat(64), role: 'repeater', last_seen: old, last_heard }, { lastHeard });
+      assert.match(html, />Online<\/span>/);
+      assert.match(html, new RegExp('Last Activity</td><td>' + new Date(recent).getTime() + '</td>'));
+    }
+  });
+  for (const role of ['repeater', 'room']) {
+    await test(`${role}: a recent shared-prefix relay is uncertain, not Online`, async () => {
+      const html = await liveDetail({ public_key: 'a'.repeat(64), role, last_seen: old, last_relayed: recent });
+      assert.match(html, />Uncertain<\/span>/);
+      assert.doesNotMatch(html, /class="health-green"/);
+      assert.match(html, new RegExp('Last Activity</td><td>' + new Date(old).getTime() + '</td>'));
+    });
+  }
+  await test('companion relay attribution does not replace certain activity', async () => {
+    const html = await liveDetail({ public_key: 'a'.repeat(64), role: 'companion', last_seen: old, last_relayed: recent });
+    assert.match(html, />Offline<\/span>/);
+  });
+  await test('degraded, missing and malformed activity remain conservative', async () => {
+    for (const [timestamp, label, display] of [[degraded, 'Degraded', new Date(degraded).getTime()], [null, 'Offline', '—'], ['bad date', 'Offline', '—']]) {
+      const html = await liveDetail({ public_key: 'a'.repeat(64), role: 'repeater', last_seen: timestamp });
+      assert.match(html, new RegExp('>' + label + '</span>'));
+      assert.match(html, new RegExp('Last Activity</td><td>' + display + '</td>'));
+    }
+  });
+  await test('node activity still works when the health request fails', async () => {
+    const html = await liveDetail({ public_key: 'a'.repeat(64), role: 'room', last_seen: 'bad date', last_heard: recent }, {}, true);
+    assert.match(html, />Online<\/span>/);
   });
 
   console.log('\n=== guard: no threshold comparison outside roles.js ===');
