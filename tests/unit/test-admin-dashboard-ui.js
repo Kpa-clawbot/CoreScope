@@ -422,13 +422,13 @@ function loadShell(hash, opts) {
   const listeners = {};
   const me = { current: opts.me === undefined ? { id: 1, role: 'admin' } : opts.me };
   const mods = {};
-  ['CSAdminOverview', 'CSAdminUsers', 'CSAdminAudit', 'CSAdminProposals'].forEach((n) => {
+  ['CSAdminOverview', 'CSAdminUsers', 'CSAdminAudit', 'CSAdminProposals', 'CSAdminObserverLogins'].forEach((n) => {
     mods[n] = { mounted: 0, unmounted: 0, el: null, mount(el) { this.mounted++; this.el = el; }, unmount() { this.unmounted++; } };
   });
   const CSAuth = { ready: () => Promise.resolve(), isEnabled: () => opts.enabled !== false,
     isAdmin: () => !!me.current && me.current.role === 'admin' };
   const ctx = Object.assign({ document: dom.document, location: loc, URLSearchParams, Promise, String, console, CSAuth,
-    MC_USER_MGMT: opts.proposals ? { enabled: true, channelProposals: true } : null,
+    MC_USER_MGMT: (opts.proposals || opts.observerLogins) ? { enabled: true, channelProposals: !!opts.proposals, observerLogins: !!opts.observerLogins } : null,
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } }, escapeHtml: loadEscapeHtml(),
     registerPage(n, m) { pages[n] = m; }, addEventListener(t, fn) { listeners[t] = fn; } }, mods);
   ctx.window = ctx;
@@ -547,6 +547,145 @@ test('the Proposals tab exists only when channel proposals are on', async () => 
   await on.page.init(on.app, null);
   assert.strictEqual(on.mods.CSAdminProposals.mounted, 1);
   assert.strictEqual(on.mods.CSAdminProposals.el, on.els.adminTab);
+});
+
+test('the Observer logins tab exists only when observer logins are on', async () => {
+  const off = loadShell('#/admin?tab=observer-logins', { proposals: true });
+  assert.strictEqual(off.t.readTab('#/admin?tab=observer-logins').id, 'overview');
+  assert.strictEqual(off.t.tabsHtml('overview').indexOf('tab=observer-logins'), -1);
+  const on = loadShell('#/admin?tab=observer-logins', { observerLogins: true });
+  assert.strictEqual(on.t.readTab(on.loc.hash).id, 'observer-logins');
+  assert(on.t.tabsHtml('observer-logins').indexOf('href="#/admin?tab=observer-logins" aria-current="page">Observer logins</a>') !== -1);
+  assert.strictEqual(on.t.tabsHtml('overview').indexOf('tab=proposals'), -1, 'proposals tab shown with proposals off');
+  await on.page.init(on.app, null);
+  assert.strictEqual(on.mods.CSAdminObserverLogins.mounted, 1);
+  assert.strictEqual(on.mods.CSAdminObserverLogins.el, on.els.adminTab);
+});
+
+test('index.html loads admin-observer-logins.js before admin.js, with the cache buster', () => {
+  const html = src('public/index.html');
+  const tab = html.indexOf('<script src="admin-observer-logins.js?v=__BUST__"');
+  assert(tab !== -1, 'script tag missing');
+  assert(tab < html.indexOf('<script src="admin.js?v=__BUST__"'), 'loaded after admin.js');
+});
+
+console.log('admin-observer-logins.js');
+
+const PKA = 'ab'.repeat(32), PKB = 'CD'.repeat(32), PKC = 'EF'.repeat(32);
+const LOGIN = (o) => Object.assign({ userId: 7, email: 'ann@example.org', displayName: 'Ann', username: 'obs_abc123def456',
+  createdAt: '2026-10-25T10:00:00Z', revoked: false, lastAuthAt: null, observers: [PKA.toUpperCase()] }, o);
+const OBS_ROUTES = (logins, bindings, observers) => (p) => {
+  if (p === '/api/admin/observer-logins') return OK({ logins, bindings });
+  if (p === '/api/observers') return OK({ observers, server_time: 'x' });
+  return OK({ ok: true });
+};
+const obsEnv = (routes) => loadTab('public/admin-observer-logins.js', '#/admin?tab=observer-logins', routes);
+const obsT = () => obsEnv(() => OK({})).ctx.CSAdminObserverLogins._test;
+const clickAct = (act, id) => ({ target: { closest: () => ({ getAttribute: (a) => (a === 'data-act' ? act : String(id)) }) } });
+
+test('joinObservers matches bindings case-insensitively and keeps bindings without an analyzer row', () => {
+  const rows = obsT().joinObservers(
+    [{ id: PKA, name: 'Roof', last_seen: '2026-10-25T09:00:00Z' }, { id: PKB, name: 'Shed' }, { id: PKA, name: 'dup' }],
+    [{ pubkey: PKA.toUpperCase(), userId: 7 }, { pubkey: PKC, userId: null }]);
+  assert.strictEqual(rows.length, 3, JSON.stringify(rows));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(rows.map((r) => [r.pubkey, r.bound, r.userId]))),
+    [[PKA.toUpperCase(), true, 7], [PKB, false, null], [PKC, true, null]]);
+  assert.strictEqual(rows[0].name, 'Roof');
+});
+
+test('ownerLabel: owner name, user #id for an unknown login, orphaned, not migrated', () => {
+  const t = obsT();
+  const by = { 7: LOGIN() };
+  assert.strictEqual(t.ownerLabel({ bound: true, userId: 7 }, by), 'Ann');
+  assert.strictEqual(t.ownerLabel({ bound: true, userId: 9 }, by), 'user #9');
+  assert.strictEqual(t.ownerLabel({ bound: true, userId: null }, by), 'orphaned');
+  assert.strictEqual(t.ownerLabel({ bound: false, userId: null }, by), 'not migrated');
+});
+
+test('login rows escape every field; a revoked login offers Reissue only', () => {
+  const t = obsT();
+  const h = t.loginRowHtml(LOGIN({ displayName: XSS, email: XSS, username: XSS }), null);
+  assert(h.indexOf('<img') === -1, 'raw tag: ' + h);
+  assert(h.indexOf('data-act="revoke"') !== -1 && h.indexOf('data-act="reissue"') !== -1 && h.indexOf('never') !== -1);
+  const r = t.loginRowHtml(LOGIN({ revoked: true }), null);
+  assert(r.indexOf('data-act="revoke"') === -1 && r.indexOf('data-act="reissue"') !== -1 && r.indexOf('um-status-disabled">revoked') !== -1, r);
+});
+
+test('observer rows: owner status, escaped names, a select only for a 64-hex key, orphaned stays selected', () => {
+  const t = obsT();
+  const logins = [LOGIN()];
+  const by = { 7: logins[0] };
+  const bound = t.observerRowHtml({ pubkey: PKB, name: XSS, lastSeen: null, bound: true, userId: 7 }, by, logins);
+  assert(bound.indexOf('<img') === -1, bound);
+  assert(bound.indexOf('<option value="7" selected>Ann (obs_abc123def456)</option>') !== -1, bound);
+  const open = t.observerRowHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: false, userId: null }, by, logins);
+  assert(open.indexOf('um-status-pending">not migrated') !== -1 && open.indexOf('<option value="" selected>not bound</option>') !== -1, open);
+  const orphan = t.observerRowHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: true, userId: null }, by, logins);
+  assert(orphan.indexOf('<option value="orphaned" disabled selected>orphaned</option>') !== -1, orphan);
+  const odd = t.observerRowHtml({ pubkey: 'NOT-A-KEY', name: 'x', lastSeen: null, bound: false, userId: null }, by, logins);
+  assert(odd.indexOf('<select') === -1, 'select for a key the PUT would refuse');
+  assert.strictEqual(t.summaryText([{ bound: false }, { bound: true }, { bound: false }]), '2 of 3 observers not migrated (no personal login yet).');
+});
+
+test('mount makes one logins and one observers request and renders both tables', async () => {
+  const env = obsEnv(OBS_ROUTES([LOGIN()], [{ pubkey: PKA.toUpperCase(), userId: 7 }], [{ id: PKA, name: 'Roof' }, { id: PKB, name: 'Shed' }]));
+  await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
+  assert.deepStrictEqual(env.calls.slice().sort(), ['/api/admin/observer-logins', '/api/observers']);
+  assert(env.els.obsAdminLogins.innerHTML.indexOf('data-username="obs_abc123def456"') !== -1);
+  assert(env.els.obsAdminObservers.innerHTML.indexOf('data-pubkey="' + PKB + '"') !== -1);
+  assert.strictEqual(env.els.obsAdminSummary.textContent, '1 of 2 observers not migrated (no personal login yet).');
+});
+
+test('Revoke asks inline first; Cancel sends nothing; confirming posts, says so and reloads', async () => {
+  const env = obsEnv(OBS_ROUTES([LOGIN()], [], []));
+  await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
+  const t = env.ctx.CSAdminObserverLogins._test;
+  t.onClick(clickAct('revoke', 7));
+  assert(env.els.obsAdminLogins.innerHTML.indexOf('data-act="revoke-confirm"') !== -1, 'no inline confirm');
+  t.onClick(clickAct('cancel', 7));
+  assert(env.els.obsAdminLogins.innerHTML.indexOf('revoke-confirm') === -1, 'confirm not cleared');
+  assert.strictEqual(env.calls.filter((c) => /revoke/.test(c)).length, 0, 'POST before confirming');
+  t.onClick(clickAct('revoke', 7));
+  await t.onClick(clickAct('revoke-confirm', 7));
+  assert(env.calls.indexOf('/api/admin/observer-logins/7/revoke') !== -1, env.calls.join());
+  assert.strictEqual(env.els.obsAdminMsg.textContent, 'obs_abc123def456: revoked');
+  assert.strictEqual(env.calls.filter((c) => c === '/api/admin/observer-logins').length, 2, 'not reloaded');
+});
+
+test('Reissue posts after its confirm; a refused action shows the server error', async () => {
+  const env = obsEnv((p) => (/reissue$/.test(p) ? { ok: false, status: 503, data: { error: 'could not send the mail, try again later' } }
+    : OBS_ROUTES([LOGIN()], [], [])(p)));
+  await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
+  const t = env.ctx.CSAdminObserverLogins._test;
+  t.onClick(clickAct('reissue', 7));
+  await t.onClick(clickAct('reissue-confirm', 7));
+  assert(env.calls.indexOf('/api/admin/observer-logins/7/reissue') !== -1);
+  assert.strictEqual(env.els.obsAdminMsg.textContent, 'could not send the mail, try again later');
+  assert.strictEqual(env.els.obsAdminMsg.ok, false);
+});
+
+test('the owner select PUTs the user id, or null to unbind', async () => {
+  const env = obsEnv(OBS_ROUTES([LOGIN()], [], [{ id: PKB, name: 'Shed' }]));
+  await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
+  const t = env.ctx.CSAdminObserverLogins._test;
+  const sel = (v) => ({ target: { value: v, getAttribute: () => PKB } });
+  await t.onChange(sel('7'));
+  await t.onChange(sel(''));
+  const puts = env.calls.map((c, i) => [c, env.bodies[i]]).filter((x) => x[0].indexOf('/api/admin/observer-bindings/') === 0);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(puts)),
+    [['/api/admin/observer-bindings/' + PKB, { userId: 7 }], ['/api/admin/observer-bindings/' + PKB, { userId: null }]]);
+  assert.strictEqual(env.els.obsAdminMsg.textContent, PKB.slice(0, 12) + '…: unbound');
+});
+
+test('unmount drops a load that answers later', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const env = obsEnv((p) => gate.then(() => OBS_ROUTES([LOGIN()], [], [])(p)));
+  const m = env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
+  env.ctx.CSAdminObserverLogins.unmount();
+  release();
+  await m;
+  assert.strictEqual(env.els.obsAdminLogins.innerHTML, '', 'late answer rendered');
 });
 
 console.log('admin-proposals.js');

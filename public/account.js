@@ -1,6 +1,7 @@
 /* Account pages for optional user management.
  *   #/account/login | register | activate?token= | forgot | reset?token= | confirm-email?token= | check-mail
- *   #/account                   : profile, password, address, sessions, my proposals, notifications, delete
+ *   #/account                   : profile, password, address, sessions, companions, observer MQTT login,
+ *                                 my proposals, notifications, delete (?section=observers|notifications scrolls there)
  *   #/account/unsubscribe?token= : confirm turning notification mails off (link from a notification mail)
  * Every dynamic string goes through escapeHtml; messages use textContent. */
 (function () {
@@ -112,6 +113,7 @@
       submitBtn('Change address') + msgBox('emailMsg') + '</form>' +
       '<h3>Devices</h3><ul class="account-sessions" id="sessList"></ul>' + msgBox('sessMsg') +
       '<h3>Companions</h3><ul class="account-sessions" id="compList"></ul>' + msgBox('compMsg') +
+      (observerLoginsOn() ? '<h3 id="observers">Observer MQTT login</h3><div id="obsLoginSection"></div>' + msgBox('obsLoginMsg') : '') +
       (window.CSProposals && window.CSProposals.enabled() ? '<h3>My proposals</h3><div id="propList"></div>' + msgBox('propMsg') : '') +
       (window.CSNotify && window.CSNotify.enabled() ? '<h3 id="notifications">Notifications</h3><div id="notifySection"></div>' + msgBox('notifyMsg') : '') +
       (window.CSSettingsSync ? '<h3>Settings sync</h3><div id="syncSection"></div>' : '') +
@@ -160,6 +162,63 @@
         '" aria-label="Unlink ' + escapeHtml(name) + '">Unlink</button></li>';
     });
     return html;
+  }
+
+  function observerLoginsOn() { return !!(window.MC_USER_MGMT && window.MC_USER_MGMT.observerLogins); }
+
+  // The observer MQTT login section. No API returns the password, so none is
+  // rendered: it reaches the user by mail only.
+  function observerLoginHtml(d, email) {
+    var l = d && d.login;
+    if (!l) {
+      return '<p class="account-hint">Request a personal login for your observers. The credentials are sent to <strong>' +
+        escapeHtml(email) + '</strong>.</p>' +
+        '<div class="account-actions"><button type="button" id="obsLoginRequest" class="account-btn account-btn-primary">Request observer login</button></div>';
+    }
+    if (l.revoked) return '<p class="account-hint" id="obsLoginRevoked">Your observer login was revoked. Contact the administrator.</p>';
+    var html = '<dl class="account-obs-login"><dt>Username</dt><dd><code id="obsLoginUser">' + escapeHtml(l.username) + '</code></dd>' +
+      '<dt>Created</dt><dd>' + escapeHtml(fmtDate(l.createdAt)) + '</dd></dl><ul class="account-sessions" id="obsList">';
+    var list = d.observers || [];
+    if (!list.length) {
+      html += '<li class="account-empty"><span>No observers linked yet. An observer is linked to you the first time it publishes with this login.</span></li>';
+    }
+    list.forEach(function (o) {
+      html += '<li data-pubkey="' + escapeHtml(o.pubkey) + '"><span>' + escapeHtml(o.name || shortKey(o.pubkey)) +
+        ' <small><code>' + escapeHtml(shortKey(o.pubkey)) + '</code></small><br><small>last seen ' +
+        escapeHtml(o.lastSeenAt ? fmtDate(o.lastSeenAt) : 'never') + '</small></span></li>';
+    });
+    return html + '</ul><div class="account-actions">' +
+      '<button type="button" id="obsLoginResend" class="account-btn account-btn-secondary">Mail my credentials again</button></div>';
+  }
+
+  // mountObserverLogin loads the section and wires Request / Mail again;
+  // after either it reloads, so a 409 or 403 shows the current state.
+  function mountObserverLogin(box, email) {
+    function load() {
+      return CSAuth.request('GET', '/api/account/observer-login').then(function (r) {
+        if (!r.ok) { CSAuth.say('obsLoginMsg', CSAuth.errText(r), false); return; }
+        box.innerHTML = observerLoginHtml(r.data, email);
+      }).catch(function () { CSAuth.say('obsLoginMsg', 'Network error, try again.', false); });
+    }
+    box.addEventListener('click', function (e) {
+      var btn = e.target;
+      var id = btn && btn.id;
+      if (id !== 'obsLoginRequest' && id !== 'obsLoginResend') return;
+      btn.disabled = true;
+      var path = id === 'obsLoginRequest' ? '/api/account/observer-login' : '/api/account/observer-login/resend';
+      return CSAuth.request('POST', path).then(function (r) {
+        CSAuth.say('obsLoginMsg', r.ok ? 'Sent. Check your mailbox at ' + email + '.' : CSAuth.errText(r), r.ok);
+        return load();
+      }, function () { CSAuth.say('obsLoginMsg', 'Network error, try again.', false); })
+        .then(function () { btn.disabled = false; });
+    });
+    return load();
+  }
+
+  // scrollToSection brings the ?section= heading into view once its content loaded.
+  function scrollToSection(name) {
+    var h = query().get('section') === name && document.getElementById(name);
+    if (h && h.scrollIntoView) h.scrollIntoView();
   }
 
   function tokenView(app, title, view, path, okText, renew) {
@@ -319,10 +378,10 @@
       if (window.CSSettingsSync) window.CSSettingsSync.mountSection(document.getElementById('syncSection'));
       if (window.CSProposals && window.CSProposals.enabled()) window.CSProposals.loadMine(document.getElementById('propList'), 'propMsg');
       if (window.CSNotify && window.CSNotify.enabled()) {
-        window.CSNotify.mountSection(document.getElementById('notifySection'), 'notifyMsg').then(function () {
-          var h = query().get('section') === 'notifications' && document.getElementById('notifications');
-          if (h && h.scrollIntoView) h.scrollIntoView();
-        });
+        window.CSNotify.mountSection(document.getElementById('notifySection'), 'notifyMsg').then(function () { scrollToSection('notifications'); });
+      }
+      if (observerLoginsOn()) {
+        mountObserverLogin(document.getElementById('obsLoginSection'), u.email).then(function () { scrollToSection('observers'); });
       }
 
       document.getElementById('accountPageLogout').addEventListener('click', function () {
@@ -428,5 +487,5 @@
   }
 
   registerPage('account', { init: init, destroy: destroy });
-  window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, companionsHtml: companionsHtml, renewLinkHtml: renewLinkHtml, views: views, checkMailHtml: checkMailHtml } };
+  window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, companionsHtml: companionsHtml, observerLoginHtml: observerLoginHtml, renewLinkHtml: renewLinkHtml, views: views, checkMailHtml: checkMailHtml } };
 })();
