@@ -41,6 +41,10 @@ type authService struct {
 	// (or when its load failed, see newAuthService).
 	obsIdx  *observerLoginIndex
 	touches authTouches
+	// sealbox seals and opens the stored observer passwords; nil when the
+	// feature is off or the key is unusable.
+	sealbox *users.SecretBox
+	now     func() time.Time
 
 	warnIndistinct sync.Once
 	stop           chan struct{}
@@ -59,6 +63,7 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 		settingsPut: newRateLimiter(60, time.Hour),
 		companion:   newRateLimiter(60, time.Hour),
 		stop:        make(chan struct{}),
+		now:         time.Now,
 	}
 	a.refreshApproved()
 	if set.observerLogins.enabled {
@@ -69,6 +74,10 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 			log.Printf("[observer-logins] load logins: %v", err)
 		} else {
 			a.obsIdx = idx
+		}
+		if a.sealbox, err = users.NewSecretBox(set.observerLogins.key); err != nil {
+			log.Printf("[observer-logins] secret box: %v", err)
+			a.sealbox = nil
 		}
 	}
 	return a

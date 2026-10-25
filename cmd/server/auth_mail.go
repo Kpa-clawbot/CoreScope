@@ -22,6 +22,7 @@ type mailContent struct {
 	subject     string
 	greeting    string
 	paragraphs  []string
+	pre         []string   // preformatted blocks after the paragraphs, verbatim in text, escaped in <pre> in HTML
 	lines       []mailLine // after the paragraphs
 	actionLabel string
 	actionURL   string
@@ -55,6 +56,10 @@ func (a *authService) render(to, toName, tag string, c mailContent) mailer.Messa
 	for _, p := range c.paragraphs {
 		text.WriteString(p + "\n\n")
 		h.WriteString("<p>" + html.EscapeString(p) + "</p>")
+	}
+	for _, p := range c.pre {
+		text.WriteString(p + "\n\n")
+		h.WriteString("<pre>" + html.EscapeString(p) + "</pre>")
 	}
 	if len(c.lines) > 0 {
 		h.WriteString("<ul>")

@@ -63,6 +63,9 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	if s.auth.set.observerLogins.enabled {
 		r.HandleFunc("/api/mqtt-hook/emqx/authn", s.handleEMQXAuthn).Methods("POST")
 		r.HandleFunc("/api/mqtt-hook/emqx/authz", s.handleEMQXAuthz).Methods("POST")
+		r.HandleFunc("/api/account/observer-login", s.withUser(s.handleObserverLoginGet)).Methods("GET")
+		r.HandleFunc("/api/account/observer-login", s.withUser(s.handleObserverLoginCreate)).Methods("POST")
+		r.HandleFunc("/api/account/observer-login/resend", s.withUser(s.handleObserverLoginResend)).Methods("POST")
 	}
 	if s.auth.notify != nil {
 		s.registerNotifyRoutes(r)
