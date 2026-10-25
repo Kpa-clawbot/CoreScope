@@ -15,6 +15,11 @@ func TestRfParamsVisibility(t *testing.T) {
 		for _, initiallyHidden := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/initially-hidden=%t", policy, initiallyHidden), func(t *testing.T) {
 				srv, router := setupTestServer(t)
+				t.Cleanup(func() {
+					if err := srv.db.Close(); err != nil {
+						t.Errorf("close test database: %v", err)
+					}
+				})
 				target := strings.Repeat("ab", 32)
 				control := strings.Repeat("cd", 32)
 				const targetName = "RF-hidden-fixture"
