@@ -1,6 +1,11 @@
 # Force LF line endings for all text files (prevents CRLF churn from Windows agents)
 * text=auto eol=lf
 
+# Vendored third-party files stay byte-identical to upstream: index.html
+# pins their SRI hashes, and an EOL rewrite (leaflet.css ships with CRLF)
+# makes the browser refuse them.
+public/vendor/** -text
+
 # Explicitly mark binary files
 *.png binary
 *.jpg binary
