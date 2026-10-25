@@ -1525,14 +1525,8 @@ window.addEventListener('DOMContentLoaded', () => {
       navMoreBtn.classList.toggle('active', !!hasActiveMore);
     }
 
-    // #1105 MINOR 1: cached intrinsic width of the More button. Captured
-    // the first time `fits()` sees navMoreWrap rendered (display:flex).
-    // Falls back to MORE_BTN_RESERVE_PX (a conservative initial guess
-    // sized for "More ▾" at default font/padding) until that happens.
-    var cachedMoreW = 0;
-    var MORE_BTN_RESERVE_PX = 70;
-
     function applyNavPriority() {
+      navTop.classList.remove('nav-hide-stats', 'nav-compact');
       // Skip on mobile (<768px) — hamburger CSS owns that layout.
       if (window.innerWidth < 768) {
         allLinks.forEach(a => a.classList.remove('is-overflow'));
@@ -1565,59 +1559,12 @@ window.addEventListener('DOMContentLoaded', () => {
             a.classList.add('is-overflow');
           }
         });
-        rebuildMoreMenu();
-        return;
       }
-      // Iteratively hide low-priority links until the link strip fits.
-      // .top-nav has overflow:hidden and .nav-left has flex-shrink:1, so
-      // an overflowing strip silently clips rather than pushing
-      // nav-right out — bounding-rect math on .nav-left lies. Instead
-      // measure the *intrinsic* widths of the parts (independent of
-      // current clipping) and compare to the viewport. SAFETY absorbs
-      // the .top-nav side padding + nav-right inner gaps + sub-pixel
-      // rounding (the historic #1055 bug was a 6–20px overlap).
-      //
-      // #1105 MINOR 3: at the 1101px media-query flip `.nav-stats`
-      // toggles from display:none → flex (and vice-versa). The resize
-      // handler is rAF-debounced and runs *after* the layout flip, so
-      // navRightEl.scrollWidth measured here reflects the post-flip
-      // intrinsic width — not stale pre-flip width.
-      const navBrand   = document.querySelector('.nav-brand');
-      const SAFETY     = 32;
-      // #1105 MINOR 1+2: read both gap values from CSS rather than a
-      // shared `GUTTER = 24` constant. Today `.nav-left` (gap between
-      // brand/links/more/right cells) and `.nav-links` (gap between
-      // individual link items) both resolve to --space-lg = 24px, but
-      // they're conceptually distinct gaps. If --space-lg or .nav-left's
-      // gap diverges in the future, the fit math must follow.
-      const navLeftGap = parseFloat(getComputedStyle(navLeft).columnGap ||
-                                    getComputedStyle(navLeft).gap || '0') || 0;
-      // #1105 MINOR 1: compute the More-button reserve from its actual
-      // rendered width on first measure, instead of a hard-coded 70px
-      // fallback. Cached so we don't re-measure (offsetWidth is 0 when
-      // display:none; we capture the value the first time it's visible).
+      // The flex strip shrinks to the actual room left by the brand, More,
+      // statistics and optional account control. Measure its overflow rather
+      // than guessing those widths and gaps from the viewport.
       function fits() {
-        const visibleLinks = allLinks.filter(a => !a.classList.contains('is-overflow'));
-        let linkW = 0;
-        visibleLinks.forEach(a => { linkW += a.getBoundingClientRect().width; });
-        const linkGapPx = parseFloat(getComputedStyle(linksContainer).columnGap ||
-                                     getComputedStyle(linksContainer).gap || '0') || 0;
-        const linksGap = Math.max(0, visibleLinks.length - 1) * linkGapPx;
-        const brandW = navBrand ? navBrand.getBoundingClientRect().width : 0;
-        // Always reserve space for the More button if anything could
-        // overflow. Measure the live width when visible and cache it
-        // for use when the button is currently hidden (display:none →
-        // getBoundingClientRect() returns 0). MORE_BTN_RESERVE_PX is
-        // the conservative initial fallback used until we get a real
-        // measurement.
-        const moreVis = !navMoreWrap.classList.contains('is-hidden');
-        const liveMoreW = moreVis ? navMoreWrap.getBoundingClientRect().width : 0;
-        if (liveMoreW > 0) cachedMoreW = liveMoreW;
-        const moreW = liveMoreW > 0 ? liveMoreW
-                    : (cachedMoreW > 0 ? cachedMoreW : MORE_BTN_RESERVE_PX);
-        const rightW  = navRightEl.scrollWidth; // intrinsic, ignores clipping
-        const needed  = brandW + navLeftGap + linkW + linksGap + navLeftGap + moreW + navLeftGap + rightW + SAFETY;
-        return needed <= window.innerWidth;
+        return linksContainer.scrollWidth <= linksContainer.clientWidth;
       }
       let i = 0;
       // #1391: rebuild queue here so it reflects the CURRENT active
@@ -1674,26 +1621,32 @@ window.addEventListener('DOMContentLoaded', () => {
           console.warn('[nav] More menu floor: overflowQueue exhausted with 1 item; cannot enforce >=2 floor');
         }
       }
+      // Keep the primary/active floor. Optional stats yield first, then
+      // compact desktop spacing without reducing button touch targets.
+      if (!fits()) navTop.classList.add('nav-hide-stats');
+      if (!fits()) navTop.classList.add('nav-compact');
       rebuildMoreMenu();
     }
 
     // Run once on load, again after fonts settle (label widths shift),
     // and on resize (debounced via rAF).
-    navPriorityFn = applyNavPriority;
+    navPriorityFn = scheduleNavPriority;
     applyNavPriority();
     if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(applyNavPriority);
+      document.fonts.ready.then(scheduleNavPriority);
     }
     let rafId = 0;
-    window.addEventListener('resize', function() {
+    function scheduleNavPriority() {
       if (rafId) cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(applyNavPriority);
-    });
+    }
+    window.addEventListener('resize', scheduleNavPriority);
+    window.addEventListener('cs-auth-changed', scheduleNavPriority);
     // Re-apply on route change too: the active link gets bigger padding
     // (background pill), so which links fit can shift between pages.
     window.addEventListener('hashchange', function() {
       // Defer so the route handler's class toggles run first.
-      requestAnimationFrame(applyNavPriority);
+      scheduleNavPriority();
     });
 
     // #1406: position the fixed dropdown relative to the More button on each open.
@@ -1931,7 +1884,7 @@ window.addEventListener('DOMContentLoaded', () => {
         el.innerHTML = `<span class="stat-val">${stats.totalPackets}</span> pkts · <span class="stat-val">${stats.totalNodes}</span> nodes · <span class="stat-val">${stats.totalObservers}</span> obs`;
         el.querySelectorAll('.stat-val').forEach(s => s.classList.add('updated'));
         setTimeout(() => { el.querySelectorAll('.stat-val').forEach(s => s.classList.remove('updated')); }, 600);
-        if (navPriorityFn) requestAnimationFrame(navPriorityFn);
+        if (navPriorityFn) navPriorityFn();
       }
     } catch {}
   }
