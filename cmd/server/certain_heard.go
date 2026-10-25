@@ -47,6 +47,11 @@ func (s *PacketStore) noteCertainHeard(pubkey string, tx *StoreTx) {
 // (signatureValid false): a corrupted or forged advert is no evidence the
 // node transmitted. Absent means not checked, which is not a failure.
 func (tx *StoreTx) signatureFailed() bool {
+	// Ordinary relay payloads have no signature field. Leave their decoded
+	// cache cold; a Unicode escape may encode the key, so keep that fallback.
+	if !strings.Contains(tx.DecodedJSON, "signatureValid") && !strings.Contains(tx.DecodedJSON, `\u`) {
+		return false
+	}
 	v, ok := tx.ParsedDecoded()["signatureValid"].(bool)
 	return ok && !v
 }
