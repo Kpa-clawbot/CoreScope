@@ -83,7 +83,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     assert(await page.title() === 'Node ' + key.slice(0, 12) + ' | CoreScope', 'node selection kept the list title');
     await page.locator('#nodesRight .panel-close-btn').click();
     assert(await page.title() === 'Nodes | CoreScope', 'closing node detail kept its title');
-    await navigate('#/packets');
+    // Selection must not depend on the fixture still being within 15 minutes.
+    await navigate('#/packets?timeWindow=0');
     const packet = page.locator('#pktTable tr[data-hash]').first();
     await packet.waitFor();
     const hash = await packet.getAttribute('data-hash');
