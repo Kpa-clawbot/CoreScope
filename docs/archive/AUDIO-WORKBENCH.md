@@ -1,5 +1,9 @@
 # AUDIO-WORKBENCH.md — Sound Shaping & Debug Interface
 
+> **Archived plan.** Historical planning material; proposals, status claims, and
+> instructions below may be outdated or unimplemented. For current guidance, see
+> the [README](../../README.md) and [deployment guide](../../DEPLOY.md).
+
 ## Problem
 
 Live packets arrive randomly and animate too fast to understand what's happening musically. You hear sound, but can't connect it to what the data is doing — which bytes become which notes, why this packet sounds different from that one.

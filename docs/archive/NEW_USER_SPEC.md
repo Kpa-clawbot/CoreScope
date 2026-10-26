@@ -1,5 +1,9 @@
 # New User Experience
 
+> **Archived plan.** Historical planning material; proposals, status claims, and
+> instructions below may be outdated or unimplemented. For current guidance, see
+> the [README](../../README.md) and [deployment guide](../../DEPLOY.md).
+
 ## Overview
 The home page (`#/` or `#/home`) is the front door to the analyzer — a diagnostic companion for mesh users to check if their node is being heard, and a dashboard for regulars to monitor favorites.
 
