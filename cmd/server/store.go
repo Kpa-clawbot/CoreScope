@@ -2228,14 +2228,18 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	})
 
 	// Cache the sorted entries (not maps) — lightweight and reusable for any page.
+	s.cacheGroupedPackets(txs, cacheKey, 0)
+
+	return s.groupedPage(txs, total, q.Offset, q.Limit)
+}
+
+func (s *PacketStore) cacheGroupedPackets(txs []groupedEntry, cacheKey string, _ int64) {
 	s.groupedCacheMu.Lock()
 	s.groupedCacheTxs = txs
-	s.groupedCacheTotal = total
+	s.groupedCacheTotal = len(txs)
 	s.groupedCacheKey = cacheKey
 	s.groupedCacheExp = time.Now().Add(3 * time.Second)
 	s.groupedCacheMu.Unlock()
-
-	return s.groupedPage(txs, total, q.Offset, q.Limit)
 }
 
 // pagePacketResult returns a window of a PacketResult without re-allocating the slice.
@@ -8379,6 +8383,12 @@ func (s *PacketStore) GetAnalyticsDistance(region, area string) map[string]inter
 	return result
 }
 
+// snapshotDistanceIndexLocked captures the record arrays borrowed by an
+// unlocked reader. Caller holds s.mu.
+func (s *PacketStore) snapshotDistanceIndexLocked() ([]distHopRecord, []distPathRecord) {
+	return s.distHops, s.distPaths
+}
+
 func (s *PacketStore) computeAnalyticsDistance(region, area string) map[string]interface{} {
 	// #1239: hold s.mu.RLock() only long enough to (a) snapshot the
 	// distHops/distPaths slice headers and (b) build the region match
@@ -8407,8 +8417,7 @@ func (s *PacketStore) computeAnalyticsDistance(region, area string) map[string]i
 	}
 
 	s.mu.RLock()
-	hopsSnap := s.distHops
-	pathsSnap := s.distPaths
+	hopsSnap, pathsSnap := s.snapshotDistanceIndexLocked()
 
 	// Build region match set INSIDE the lock — touches tx.Observations
 	// (slice header mutated by ingest). For non-region calls (the common
