@@ -47,6 +47,7 @@ window.ObserverDetailNaiveBanner = {
   let charts = [];
   let currentDays = 7;
   let currentId = null;
+  let detailGeneration = 0;
 
   function destroyCharts() {
     charts.forEach(c => { try { c.destroy(); } catch {} });
@@ -70,6 +71,7 @@ window.ObserverDetailNaiveBanner = {
   }
 
   function init(app, routeParam) {
+    currentDays = 7;
     currentId = routeParam;
     if (!currentId) {
       app.innerHTML = '<div class="text-center text-muted" style="padding:40px">No observer ID specified.</div>';
@@ -135,26 +137,33 @@ window.ObserverDetailNaiveBanner = {
   }
 
   function destroy() {
+    detailGeneration++;
     destroyCharts();
     currentId = null;
   }
 
   async function loadDetail() {
+    const generation = ++detailGeneration;
+    const observerId = currentId;
+    const days = currentDays;
     try {
       destroyCharts();
       chartDefaults();
       const [obs, analytics, obsSkewArr] = await Promise.all([
-        api('/observers/' + encodeURIComponent(currentId)),
-        api('/observers/' + encodeURIComponent(currentId) + '/analytics?days=' + currentDays),
+        api('/observers/' + encodeURIComponent(observerId)),
+        api('/observers/' + encodeURIComponent(observerId) + '/analytics?days=' + days),
         api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; }),
       ]);
+      // Only the latest load of the current visit owns the detail view.
+      if (generation !== detailGeneration) return;
       // Find this observer's calibration data.
       var obsSkew = null;
       (Array.isArray(obsSkewArr) ? obsSkewArr : []).forEach(function(s) {
-        if (s && s.observerID === currentId) obsSkew = s;
+        if (s && s.observerID === observerId) obsSkew = s;
       });
       renderDetail(obs, analytics, obsSkew);
     } catch (e) {
+      if (generation !== detailGeneration) return;
       // SECURITY (OBS-2, PR #1539): use textContent for error messages.
       // Error.message is JS-controlled and shouldn't normally carry attacker
       // strings, but textContent is a one-line defense against an upstream
