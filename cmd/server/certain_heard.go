@@ -129,8 +129,10 @@ func (s *PacketStore) noteCertainRelays(tx *StoreTx, obs *StoreObs, pm *prefixMa
 	// chronologically. Only adverts need decoding; ordinary payloads stay cold.
 	relayTime, _ := parseRelayTS(tx.FirstSeen)
 	var advertSender string
+	canProveForwarding := true
 	if tx.PayloadType != nil && *tx.PayloadType == payloadTypeAdvert {
 		advertSender, _ = tx.ParsedDecoded()["pubKey"].(string)
+		canProveForwarding = advertSender != ""
 	}
 	for pos := 0; ; {
 		hop, next, ok := nextPathHop(obs.PathJSON, pos)
@@ -145,7 +147,8 @@ func (s *PacketStore) noteCertainRelays(tx *StoreTx, obs *StoreObs, pm *prefixMa
 				s.noteCertainHeard(pk, tx)
 				// Originating an advert proves transmission, not forwarding.
 				// A different node's observed hop can forward that same advert.
-				if !strings.EqualFold(pk, advertSender) && relayTime.After(s.certainRelayed[pk]) {
+				// An unknown advert origin cannot prove forwarding either.
+				if canProveForwarding && !strings.EqualFold(pk, advertSender) && relayTime.After(s.certainRelayed[pk]) {
 					if s.certainRelayed == nil {
 						s.certainRelayed = make(map[string]time.Time)
 					}
