@@ -193,6 +193,65 @@
 
   /* === Shared helper functions for node detail rendering === */
 
+  function renderNodeMetric(label, value, table, title = '', attributes = '') {
+    const tip = title ? ' title="' + escapeHtml(title) + '"' : '';
+    return table
+      ? `<tr ${attributes}><td${tip}>${label}</td><td>${value}</td></tr>`
+      : `<dt${tip}>${label}</dt><dd ${attributes}>${value}</dd>`;
+  }
+
+  function nodeMetricNumber(raw) {
+    if (typeof raw !== 'number' && (typeof raw !== 'string' || !raw.trim())) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  function renderLastRelayed(n, table) {
+    if (n.role !== 'repeater' && n.role !== 'room') return '';
+    const hasRelay = n.last_relayed && Number.isFinite(new Date(n.last_relayed).getTime());
+    let value = hasRelay
+      ? renderNodeTimestampHtml(n.last_relayed) + ' <span style="color:var(--text-muted);font-size:11px">attributed relay observation</span>'
+      : '<span style="color:var(--text-muted)">never observed as relay hop</span>';
+    if (n.relay_count_1h != null || n.relay_count_24h != null) {
+      const count = raw => { const v = nodeMetricNumber(raw); return Number.isSafeInteger(v) ? v : '—'; };
+      value += ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${count(n.relay_count_1h)} relays/hr, ${count(n.relay_count_24h)} relays/24h)</span>`;
+    }
+    return renderNodeMetric('Last Relayed', value, table, "Last time this node was attributed as a relay hop in a non-advert packet observed by the network. This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: 'Last Heard' counts only packets that can be this node alone.");
+  }
+
+  function renderTrafficShare(n, table) {
+    if (n.role !== 'repeater' && n.role !== 'room') return '';
+    // Older servers expose only usefulness_score; a measured zero is present.
+    const raw = n.traffic_share_score != null ? n.traffic_share_score : n.usefulness_score;
+    const s = nodeMetricNumber(raw);
+    if (s === null || s > 1) return '';
+    const pct = (s * 100).toFixed(1);
+    let label, color;
+    if (s >= 0.8) { label = 'Critical'; color = 'var(--status-green)'; }
+    else if (s >= 0.6) { label = 'Valuable'; color = 'var(--status-green)'; }
+    else if (s >= 0.3) { label = 'Moderate'; color = 'var(--status-yellow)'; }
+    else if (s >= 0.1) { label = 'Marginal'; color = 'var(--status-orange)'; }
+    else { label = 'Redundant'; color = 'var(--status-red)'; }
+    const barWidth = Math.max(2, Math.round(s * 100));
+    const tooltip = "Fraction of all non-advert mesh traffic in the analyzer's memory that transited through this repeater as a relay hop. High = lots of packets pass through; low = quieter (may still be structurally important — see Bridge score).";
+    const attributes = (table ? 'id="row-usefulness-score" ' : '') + `data-usefulness-score="${s.toFixed(4)}" data-traffic-share-score="${s.toFixed(4)}"`;
+    const value = `<span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${barWidth}%;height:100%;background:${color}"></span></span><span style="color:${color};font-weight:600">${pct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${label}</span>`;
+    return renderNodeMetric('Traffic share <span style="color:var(--text-muted);cursor:help" aria-label="help">ⓘ</span>', value, table, tooltip, attributes);
+  }
+
+  function renderHashPrefix(n, table) {
+    const key = String(n.public_key || '');
+    const size = nodeMetricNumber(n.hash_size);
+    let value = Number.isSafeInteger(size) && size > 0 && size * 2 <= key.length
+      ? '<code style="font-family:var(--mono);font-weight:700">' + escapeHtml(key.slice(0, size * 2).toUpperCase()) + '</code> (' + size + '-byte)'
+      : 'Unknown';
+    if (n.hash_size_inconsistent) {
+      const sizes = Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : [];
+      value += ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + escapeHtml(sizes.join(', ')) + '-byte"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>varies</span>';
+    }
+    return renderNodeMetric('Hash Prefix', value, table);
+  }
+
   function getStatusTooltip(role, status) {
     const isInfra = role === 'repeater' || role === 'room';
     const threshMs = isInfra ? HEALTH_THRESHOLDS.infraSilentMs : HEALTH_THRESHOLDS.nodeSilentMs;
@@ -289,7 +348,7 @@
   function renderHashInconsistencyWarning(n) {
     if (!n.hash_size_inconsistent) return '';
     const sizes = Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : [];
-    return `<div style="font-size:11px;color:var(--text-muted);margin:-2px 0 6px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">Adverts show varying hash sizes (<strong>${sizes.join('-byte, ')}-byte</strong>). This is a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--link-color)">known bug</a> where automatic adverts ignore the configured multibyte path setting. Fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--link-color)">repeater v1.14.1</a>.</div>`;
+    return `<div style="font-size:11px;color:var(--text-muted);margin:-2px 0 6px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">Adverts show varying hash sizes (<strong>${escapeHtml(sizes.join('-byte, '))}-byte</strong>). This is a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--link-color)">known bug</a> where automatic adverts ignore the configured multibyte path setting. Fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--link-color)">repeater v1.14.1</a>.</div>`;
   }
 
   // ─── Neighbor section helpers ───────────────────────────────────────────────
@@ -780,29 +839,8 @@
         <table class="node-stats-table" id="node-stats">
           <tr><td>Status</td><td><span title="${si.statusTooltip}">${statusLabel}</span> <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
           <tr><td>Last Heard</td><td>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</td></tr>
-          ${(n.role === 'repeater' || n.role === 'room') ? `<tr><td title="Last time this repeater appeared as a relay hop in a non-advert packet observed by the network (#662). This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: 'Last Heard' counts only packets that can be this node alone (#2260).">Last Relayed</td><td>${n.last_relayed ? renderNodeTimestampHtml(n.last_relayed) + ' ' + (n.relay_active ? '<span style="color:var(--status-green-text);font-size:11px"><span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> actively relaying</span>' : '<span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> alive (idle)</span>') : '<span style="color:var(--text-muted)">never observed as relay hop</span> <span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> alive (idle)</span>'}${(n.relay_count_1h != null || n.relay_count_24h != null) ? ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${n.relay_count_1h || 0} relays/hr, ${n.relay_count_24h || 0} relays/24h)</span>` : ''}</td></tr>` : ''}
-          ${(n.role === 'repeater' || n.role === 'room') && (n.traffic_share_score != null || n.usefulness_score != null) ? (() => {
-            // #1456: prefer the new traffic_share_score field; fall back
-            // to legacy usefulness_score for graceful degradation
-            // against stale servers. The visible label is now "Traffic
-            // share" (the old "Usefulness" implied a composite that
-            // doesn't exist yet — see #672).
-            const raw = (n.traffic_share_score != null) ? n.traffic_share_score : n.usefulness_score;
-            const s = Number(raw) || 0;
-            const pct = (s * 100).toFixed(1);
-            // Visual indicator: width % bar with green→yellow→red color by score.
-            // Per issue #672 classification table: 0.8+ Critical, 0.6+ Valuable,
-            // 0.3+ Moderate, 0.1+ Marginal, else Redundant.
-            let label, color;
-            if (s >= 0.8) { label = 'Critical'; color = 'var(--status-green, #2ecc71)'; }
-            else if (s >= 0.6) { label = 'Valuable'; color = 'var(--status-green, #2ecc71)'; }
-            else if (s >= 0.3) { label = 'Moderate'; color = 'var(--status-yellow, #f1c40f)'; }
-            else if (s >= 0.1) { label = 'Marginal'; color = 'var(--status-orange, #e67e22)'; }
-            else { label = 'Redundant'; color = 'var(--status-red, #e74c3c)'; }
-            const barWidth = Math.max(2, Math.round(s * 100));
-            const tooltip = "Fraction of all non-advert mesh traffic in the analyzer's memory that transited through this repeater as a relay hop. High = lots of packets pass through; low = quieter (may still be structurally important — see Bridge score). One of 4 planned scoring axes (#672); others pending.";
-            return `<tr id="row-usefulness-score" data-usefulness-score="${s.toFixed(4)}" data-traffic-share-score="${s.toFixed(4)}"><td title="${tooltip}">Traffic share <span style="color:var(--text-muted);cursor:help" aria-label="help">ⓘ</span></td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${barWidth}%;height:100%;background:${color}"></span></span><span style="color:${color};font-weight:600">${pct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${label}</span></td></tr>`;
-          })() : ''}
+          ${renderLastRelayed(n, true)}
+          ${renderTrafficShare(n, true)}
           ${(n.role === 'repeater' || n.role === 'room') && n.bridge_score != null ? (() => {
             // Bridge axis (issue #672 axis 2 of 4): normalized betweenness
             // centrality from the neighbor-edges graph. Distinct from the
@@ -828,7 +866,7 @@
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
           ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
           ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
-          <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + (Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : []).join(', ') + '-byte"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> varies</span>' : ''}</td></tr>
+          ${renderHashPrefix(n, true)}
           ${rfOn() ? `<tr><td title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</td><td data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</td></tr>` : ''}
         </table>
 
@@ -1831,16 +1869,20 @@
         if (selectedKey !== pubkey) return;
         const n = (data && data.node) || data || {};
         const titleEl = document.querySelector('.slide-over-title');
-        if (titleEl) titleEl.textContent = n.advert_name || (n.public_key ? n.public_key.slice(0, 10) : 'Node');
+        const name = n.name || n.advert_name;
+        if (titleEl) titleEl.textContent = name || (n.public_key ? n.public_key.slice(0, 10) : 'Node');
         var role = (n.role || '').toString();
         var lastHeard = n.last_heard || n.last_seen;
         so.innerHTML =
           '<dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
-            '<dt>Name</dt><dd>' + escapeHtml(n.advert_name || '—') + '</dd>' +
+            '<dt>Name</dt><dd>' + escapeHtml(name || '—') + '</dd>' +
             '<dt>Role</dt><dd>' + escapeHtml(role || '—') + '</dd>' +
             '<dt>Public key</dt><dd class="mono" style="word-break:break-all">' + escapeHtml(n.public_key || '—') + '</dd>' +
-            '<dt>Last heard</dt><dd>' + (lastHeard ? timeAgo(lastHeard) : '—') + '</dd>' +
+            '<dt>Last Heard</dt><dd>' + renderNodeTimestampHtml(lastHeard) + '</dd>' +
+            renderLastRelayed(n) +
+            renderTrafficShare(n) +
             '<dt>Adverts</dt><dd>' + (n.advert_count != null ? n.advert_count : '—') + '</dd>' +
+            renderHashPrefix(n) +
           '</dl>' +
           '<p style="margin-top:14px"><a class="btn-primary" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>';
       } catch (e) {
@@ -1915,11 +1957,14 @@
           <h4>Overview</h4>
           <dl class="detail-meta">
             <dt>Last Heard</dt><dd>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</dd>
+            ${renderLastRelayed(n)}
+            ${renderTrafficShare(n)}
             <dt>First Seen</dt><dd>${renderNodeTimestampHtml(n.first_seen)}</dd>
             <dt>${renderPacketCountLabel('nodePacketCountHelp')}</dt><dd>${totalPackets}</dd>
             <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
             ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
             ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
+            ${renderHashPrefix(n)}
             ${rfOn() ? `<dt title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</dt><dd data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</dd>` : ''}
           </dl>
         </div>
