@@ -214,6 +214,20 @@ async function main() {
 
   await resizeAndRefit(1250);
   await page.locator('#navMoreBtn').click();
+  await page.keyboard.press('Tab');
+  const secondHref = await page.locator('#navMoreMenu .nav-link').nth(1).getAttribute('href');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), secondHref);
+  await resizeAndRefit(1249);
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), secondHref,
+    'refitting More must retain a later destination instead of resetting to the first');
+  assert.equal(await page.evaluate(() => document.getElementById('navMoreMenu').contains(document.activeElement)), true);
+  assert.equal(await page.locator('#navMoreBtn').getAttribute('aria-expanded'), 'true');
+  await page.keyboard.press('Escape');
+  passes++;
+  console.log('  ✅ More retains a later keyboard destination after a refit');
+
+  await resizeAndRefit(1250);
+  await page.locator('#navMoreBtn').click();
   await page.locator('#accountToggle').focus();
   await resizeAndRefit(1249);
   assert.equal(await page.evaluate(() => document.activeElement === document.getElementById('accountToggle')), true,
@@ -301,7 +315,7 @@ async function main() {
 
   await browser.close();
 
-  const total = ROUTES.length * VIEWPORTS.length + resizeWidths.length + 10;
+  const total = ROUTES.length * VIEWPORTS.length + resizeWidths.length + 11;
   console.log(`\ntest-nav-fluid-1055-e2e.js: ${failures === 0 ? 'OK' : 'FAIL'} — ${passes}/${total} passed`);
   process.exit(failures === 0 ? 0 : 1);
 }
