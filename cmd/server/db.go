@@ -713,6 +713,7 @@ type PacketQuery struct {
 	Area               string // area key; filters by transmitting node's GPS position
 	Node               string
 	Channel            string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
+	Radio              string // canonical "MHz,kHz,SF,CR": some observation heard on it (#1869; in-memory store only)
 	Order              string // ASC or DESC
 	ExpandObservations bool   // when true, include observation sub-maps in txToMap output
 }

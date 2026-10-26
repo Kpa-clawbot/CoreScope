@@ -1,6 +1,39 @@
 /* === CoreScope — observer-detail.js === */
 'use strict';
 
+// Issue #1869 — every radio setting the observer reported, so a retune shows
+// as a change instead of silently relabelling everything heard before it.
+// Only rendered once there is more than one stretch to list. Window global
+// like the banner below, so the XSS sink test can call it directly; every
+// field is observer-published (MQTT status) and escaped here.
+window.ObserverDetailRadioHistory = {
+  render: function (history) {
+    if (!Array.isArray(history) || history.length < 2) return '';
+    var cell = 'padding:3px 8px';
+    var radioText = function (r) {
+      return window.RfParams && window.RfParams.radioText ? window.RfParams.radioText(r) : escapeHtml(r || '');
+    };
+    var when = function (t) {
+      var d = new Date(t);
+      return escapeHtml(isNaN(d.getTime()) ? String(t || '') : d.toLocaleString());
+    };
+    var rows = history.slice().reverse().map(function (h) {
+      return '<tr><td style="' + cell + '">' + radioText(h.radio) + '</td>' +
+        '<td style="' + cell + '">' + (h.radio_id ? escapeHtml(h.radio_id) : '<span class="text-muted">main</span>') + '</td>' +
+        '<td style="' + cell + '">' + when(h.first_seen) + '</td>' +
+        '<td style="' + cell + '">' + when(h.last_seen) + '</td></tr>';
+    }).join('');
+    return '<div class="node-full-card" data-testid="observer-radio-history" style="margin-bottom:20px;padding:12px">' +
+      '<h4 style="margin:0 0 6px">Radio history</h4>' +
+      '<table style="border-collapse:collapse;font-size:0.85em"><thead><tr>' +
+      '<th style="' + cell + ';text-align:left">Setting</th><th style="' + cell + ';text-align:left">Radio</th>' +
+      '<th style="' + cell + ';text-align:left">From</th><th style="' + cell + ';text-align:left">Last reported</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<div class="text-muted" style="font-size:12px;margin-top:6px">Packets carry the setting the observer was on when it heard them.</div>' +
+      '</div>';
+  },
+};
+
 // Issue #1478 — naive-clock banner for observer detail page.
 // Exposed as a window global so a jsdom-style test can call it directly.
 // Returns the banner HTML when clock_naive is true, or "" when clean.
@@ -296,6 +329,7 @@ window.ObserverDetailNaiveBanner = {
           <strong>How this is computed:</strong> when this observer and another observer see the same packet, we compare their receive timestamps. The median deviation across all multi-observer packets is this observer's offset.
         </div>
       </div>` : ''}
+      ${window.ObserverDetailRadioHistory ? window.ObserverDetailRadioHistory.render(obs.radio_history) : ''}
       <div class="obs-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px">
         <div class="chart-card" style="padding:12px">
           <h3 style="margin:0 0 8px;font-size:0.95em">Packets Over Time</h3>

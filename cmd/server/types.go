@@ -1001,6 +1001,9 @@ type ObserverResp struct {
 	// field). UI tri-state badge renders nothing when nil so legacy
 	// rows don't masquerade as confirmed repeaters (PR #1624 MAJOR-2).
 	CanRelay *bool `json:"can_relay,omitempty"`
+	// RadioHistory is every setting the observer reported, oldest first
+	// (#1869). Only on GET /api/observers/{id}.
+	RadioHistory []RadioStint `json:"radio_history,omitempty"`
 }
 
 type ObserverListResponse struct {
