@@ -165,7 +165,7 @@ async function previewMetadata(browser) {
               assert(relay.stampText && relay.stampTitle && relay.stampTitle.includes(relayed.slice(0, 10)), 'absolute timestamp tooltip missing');
               assert(relay.text.includes('0 relays/hr, 7 relays/24h'), 'zero and string relay counts must be preserved');
               if (layout.name !== 'tablet') assert((await p.locator(layout.ready).first().innerText()).includes('Uncertain'), 'ambiguous relay must leave status uncertain');
-            } else if (n.expectActive) assert(relay.text.includes('no attributed non-advert relay'), 'certain forwarded adverts must not be called never observed');
+            } else if (n.last_certain_relay && Number.isFinite(Date.parse(n.last_certain_relay))) assert(relay.text.includes('no attributed non-advert relay'), 'certain forwarded adverts must not be called never observed');
             else assert(relay.text.includes('never observed as relay hop'), 'missing relay timestamp changed meaning');
           }
           if (n.label === 'escaped') {

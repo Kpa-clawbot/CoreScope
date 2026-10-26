@@ -406,6 +406,7 @@ func TestCertainEvidenceConcurrentLateDedup(t *testing.T) {
 				s.mu.RUnlock()
 				s.CertainActivity([]string{lpRelay}, time.Now())
 				s.LastHeardMap([]string{lpRelay})
+				s.LastCertainRelayMap([]string{lpRelay})
 			}
 		}()
 	}

@@ -250,24 +250,25 @@ type PacketStore struct {
 	txRewriteMu     sync.Mutex
 	txRewriteCursor int64
 
-	mu            sync.RWMutex
-	db            *DB
-	packets       []*StoreTx                  // sorted by first_seen ASC (oldest first; newest at tail)
-	byHash        map[string]*StoreTx         // hash → *StoreTx
-	byTxID        map[int]*StoreTx            // transmission_id → *StoreTx
-	byObsID       map[int]*StoreObs           // observation_id → *StoreObs
-	maxTxID       int                         // highest transmission_id in store
-	maxObsID      int                         // highest observation_id in store
-	byObserver    map[string][]*StoreObs      // observer_id → observations
-	byNode        map[string][]*StoreTx       // pubkey → transmissions
-	nodeHashes    map[string]map[int]struct{} // pubkey → set of tx IDs listed in byNode[pubkey]
-	certainHeard  map[string]string           // pubkey → newest FirstSeen certainly from that node (certain_heard.go)
-	byPathHop     map[string][]*StoreTx       // lowercase hop/pubkey → transmissions with that hop in path
-	byPayloadType map[int][]*StoreTx          // payload_type → transmissions
-	loaded        bool
-	totalObs      int
-	insertCount   int64
-	queryCount    int64
+	mu             sync.RWMutex
+	db             *DB
+	packets        []*StoreTx                  // sorted by first_seen ASC (oldest first; newest at tail)
+	byHash         map[string]*StoreTx         // hash → *StoreTx
+	byTxID         map[int]*StoreTx            // transmission_id → *StoreTx
+	byObsID        map[int]*StoreObs           // observation_id → *StoreObs
+	maxTxID        int                         // highest transmission_id in store
+	maxObsID       int                         // highest observation_id in store
+	byObserver     map[string][]*StoreObs      // observer_id → observations
+	byNode         map[string][]*StoreTx       // pubkey → transmissions
+	nodeHashes     map[string]map[int]struct{} // pubkey → set of tx IDs listed in byNode[pubkey]
+	certainHeard   map[string]string           // pubkey → newest FirstSeen certainly from that node (certain_heard.go)
+	certainRelayed map[string]time.Time        // newest valid FirstSeen of a certain observed relay; bounded/evicted with byNode
+	byPathHop      map[string][]*StoreTx       // lowercase hop/pubkey → transmissions with that hop in path
+	byPayloadType  map[int][]*StoreTx          // payload_type → transmissions
+	loaded         bool
+	totalObs       int
+	insertCount    int64
+	queryCount     int64
 	// Response caches (separate mutex to avoid contention with store RWMutex)
 	cacheMu           sync.RWMutex
 	rfCache           map[string]*cachedResult // region → cached RF result
@@ -5485,6 +5486,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		if len(filtered) == 0 {
 			delete(s.byNode, nodeKey)
 			delete(s.certainHeard, nodeKey)
+			delete(s.certainRelayed, nodeKey)
 		} else {
 			s.byNode[nodeKey] = filtered
 		}

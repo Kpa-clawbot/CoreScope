@@ -245,7 +245,7 @@
     "relayActiveHours": 24,
     "observerOnlineMinutes": 60,
     "observerStaleMinutes": 1440,
-    "_comment": "How long (hours) before nodes show as degraded/silent. 'infra' = repeaters & rooms, 'node' = companions & others. relayActiveHours: a repeater is shown as 'actively relaying' if its pubkey appeared as a path hop in a non-advert packet within this window (issue #662).",
+    "_comment": "How long (hours) before nodes show as degraded/silent. 'infra' = repeaters & rooms, 'node' = companions & others. relayActiveHours: repeaters/rooms show 'actively relaying' only with certain observed relay evidence within this window (#2331); forwarding another node's advert counts, originating an advert does not. Missing or expired evidence adds no idle/alive claim. The legacy relay_active API field still uses attributed non-advert path appearances (#662).",
     "_comment_observerThresholds": "Observer health classification. Online: last_seen < observerOnlineMinutes ago. Stale: between Online and observerStaleMinutes. Offline: beyond observerStaleMinutes. Defaults 60 / 1440 (1h / 24h) match the node thresholds for consistency and eliminate flap on low-traffic / CDN-fronted instances (#1552). Operators who want the old aggressive 10-min Online threshold can set observerOnlineMinutes: 10."
   },
   "pathTrust": {

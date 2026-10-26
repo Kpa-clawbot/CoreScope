@@ -1645,6 +1645,7 @@ func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 			}
 		}
 		heard, _ := s.store.LastHeardMap(pageKeys)
+		certainRelayed := s.store.LastCertainRelayMap(pageKeys)
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				node["last_heard"] = lastHeardValue(node["last_seen"], heard[pk])
@@ -1653,6 +1654,9 @@ func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 				EnrichNodeWithMultiByte(node, mbEntry)
 				node["region_placement"] = RegionPlacementFor(placements, pk)
 				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+					if at := certainRelayed[pk]; !at.IsZero() {
+						node["last_certain_relay"] = at.UTC().Format(time.RFC3339Nano)
+					}
 					info, _ := lookupRelayInfo(relayMap, pk)
 					info.WindowHours = relayWindow
 					if info.LastRelayed != "" {
@@ -1877,6 +1881,9 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		heard, _ := s.store.LastHeardMap([]string{pubkey})
 		node["last_heard"] = lastHeardValue(node["last_seen"], heard[pubkey])
 		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+			if at := s.store.LastCertainRelayMap([]string{pubkey})[pubkey]; !at.IsZero() {
+				node["last_certain_relay"] = at.UTC().Format(time.RFC3339Nano)
+			}
 			ht := s.cfg.GetHealthThresholds()
 			info := s.store.GetRepeaterRelayInfo(pubkey, ht.RelayActiveHours)
 			if info.LastRelayed != "" {
