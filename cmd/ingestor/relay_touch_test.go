@@ -106,7 +106,7 @@ func TestTouchRelayNodes_Debounces(t *testing.T) {
 }
 
 // TestTouchRelayNodes_IgnoresEmptyAndUnknown covers the unresolved-hop case:
-// resolvePathWithContext yields nil for ambiguous or unknown prefixes, and
+// resolvePath yields nil for ambiguous or unknown prefixes, and
 // unknown pubkeys must not create rows.
 func TestTouchRelayNodes_IgnoresEmptyAndUnknown(t *testing.T) {
 	store := newTestStore(t)
