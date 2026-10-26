@@ -144,10 +144,16 @@ func (s *Server) requireClientRfSamples(w http.ResponseWriter, r *http.Request) 
 }
 
 // queryRfNoiseRows returns raw RF-environment samples within a bbox, over a
-// time window (days; 0 = all time). Read-only (server RO connection).
-func (s *Server) queryRfNoiseRows(days int, b bbox) ([]rfNoiseRow, error) {
+// time window (days; 0 = all time), optionally narrowed to one companion (rx)
+// or a set of companions (rxIn, see queryCoverageFiltered). Read-only (server
+// RO connection).
+func (s *Server) queryRfNoiseRows(rx string, rxIn []string, days int, b bbox) ([]rfNoiseRow, error) {
+	if rxIn != nil && len(rxIn) == 0 {
+		return []rfNoiseRow{}, nil
+	}
 	where := []string{"lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?", "noise_floor IS NOT NULL"}
 	args := []interface{}{b.MinLat, b.MaxLat, b.MinLon, b.MaxLon}
+	where, args = appendRxFilter(where, args, "rx_pubkey", rx, rxIn)
 	if days > 0 {
 		since := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 		where = append(where, "sampled_at >= ?")
@@ -174,10 +180,18 @@ func (s *Server) queryRfNoiseRows(days int, b bbox) ([]rfNoiseRow, error) {
 }
 
 // handleRfNoise serves the RF noise-floor map layer as GeoJSON hex cells,
-// over a time window. Mirrors handleRxCoverage's parameter handling.
+// over a time window. Mirrors handleRxCoverage's parameter handling,
+// including ?rx= and ?mine=1.
 func (s *Server) handleRfNoise(w http.ResponseWriter, r *http.Request) {
 	if !s.requireClientRfSamples(w, r) {
 		return
+	}
+	var mine []string
+	if r.URL.Query().Get("mine") == "1" {
+		var ok bool
+		if mine, ok = s.myCompanionPubkeys(w, r); !ok {
+			return
+		}
 	}
 	b, ok := parseBBox(r.URL.Query().Get("bbox"))
 	if !ok {
@@ -190,7 +204,7 @@ func (s *Server) handleRfNoise(w http.ResponseWriter, r *http.Request) {
 	}
 	days := clampDays(atoiDefault(r.URL.Query().Get("days"), 7))
 	z, _ := strconv.Atoi(r.URL.Query().Get("z"))
-	rows, err := s.queryRfNoiseRows(days, b)
+	rows, err := s.queryRfNoiseRows(r.URL.Query().Get("rx"), mine, days, b)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return

@@ -168,6 +168,8 @@ func routeDescriptions() map[string]routeMeta {
 				{Name: "bbox", Description: "Bounding box as minLat,minLon,maxLat,maxLon", Type: "string", Required: true},
 				{Name: "z", Description: "Leaflet zoom level; sets the hex resolution", Type: "integer"},
 				{Name: "days", Description: "Look-back window in days (1-30, default 7)", Type: "integer"},
+				{Name: "rx", Description: "Only this companion's samples", Type: "string"},
+				{Name: "mine", Description: "1 = only samples of companions linked to the logged-in user (browser session; 401 without one)", Type: "string"},
 			}},
 		"GET /api/rx-coverage": {Summary: "Mobile RX coverage hex grid", Description: "GeoJSON hex cells where mobile clients directly heard nodes (client_receptions): count, best SNR and the nodes heard per cell. With gaps=1 the payload also carries a `gaps` member: cells a companion drove through (moving client_rf_samples) with no reception in the same window, each with its sample count, plus `gaps_truncated` when capped. Gaps are only returned without a node filter and with clientRfSamples on; they mean nothing was received in this period, not that there is no coverage. Gated on clientRxCoverage.", Tag: "coverage",
 			QueryParams: []paramMeta{
