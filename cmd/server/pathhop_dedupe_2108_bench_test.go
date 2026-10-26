@@ -39,7 +39,7 @@ func phdBenchStore(n int) (store *PacketStore, resolve func(j int) []string) {
 		store.byTxID[tx.ID] = tx
 		store.byPayloadType[pt] = append(store.byPayloadType[pt], tx)
 		addTxToPathHopIndex(store.byPathHop, tx)
-		store.indexResolvedPathHops(tx, resolve(i), hopsSeen, nil)
+		store.indexResolvedPathHops(tx, resolve(i), hopsSeen, nil, nil)
 	}
 	return store, resolve
 }
@@ -78,7 +78,7 @@ func BenchmarkLateObservationIndex_2108(b *testing.B) {
 					b.StartTimer()
 				}
 				store.mu.Lock()
-				store.indexResolvedPathHops(store.packets[j], pks[i%batch], hopsSeen, nil)
+				store.indexResolvedPathHops(store.packets[j], pks[i%batch], hopsSeen, nil, nil)
 				store.mu.Unlock()
 			}
 			b.StopTimer()
@@ -142,7 +142,7 @@ func BenchmarkTrafficShareScoreMap_2108(b *testing.B) {
 			hopsSeen := map[string]bool{}
 			for o := 1; o < c.obs; o++ {
 				for j, tx := range store.packets {
-					store.indexResolvedPathHops(tx, resolve(j), hopsSeen, nil)
+					store.indexResolvedPathHops(tx, resolve(j), hopsSeen, nil, nil)
 				}
 			}
 			if c.reversed {

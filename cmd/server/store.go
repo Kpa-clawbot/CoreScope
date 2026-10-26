@@ -68,7 +68,7 @@ type StoreTx struct {
 	parsedDecoded       map[string]interface{} // cached json.Unmarshal of DecodedJSON
 	// Dedup maps, built only once a transmission passes obsIndexThreshold
 	// observations (see obs_dedup.go); nil below it.
-	obsKeys     map[obsDedupKey]struct{}
+	obsKeys     map[obsDedupKey]*StoreObs
 	observerSet map[string]struct{} // distinct observer IDs (for UniqueObserverCount)
 	// accountedBytes is what trackedBytes was last charged for this tx
 	// (observations excluded). See rechargeTx.
@@ -92,8 +92,12 @@ type StoreObs struct {
 	RSSI           *float64
 	Score          *int
 	PathJSON       string
-	RawHex         string
 	Timestamp      string
+	// Width in hex characters, only when PathJSON matches this observation's
+	// eligible flood frame. Replaces the unused RawHex field without growing
+	// the 160-byte allocation class. Zero includes missing legacy headers.
+	// Read/write under the owning store's mu after publication.
+	relayHopHexLen uint8
 
 	// #1481 P0-2: cached parsed timestamp. The legacy handlers parse
 	// Timestamp as RFC3339Nano/RFC3339/"2006-01-02 15:04:05" with a
@@ -1073,8 +1077,10 @@ func (s *PacketStore) Load() error {
 			obsIDStr := nullStrVal(observerID)
 			obsPJ := nullStrVal(pathJSON)
 
-			// Dedup: skip if same observer + same path already loaded (O(1) map lookup)
-			if tx.hasObservation(obsIDStr, obsPJ) {
+			n := observedRelayHopHexLen(nullStrVal(obsRawHex), obsPJ)
+			// Dedup the observation, but retain a later eligible frame's evidence.
+			if obs := tx.mergeObservationEvidence(obsIDStr, obsPJ, n); obs != nil {
+				s.noteCertainRelays(tx, obs, relayPM)
 				continue
 			}
 
@@ -1090,6 +1096,7 @@ func (s *PacketStore) Load() error {
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
+				relayHopHexLen: n,
 			}
 
 			// Decode-window: extract resolved pubkeys for index, don't store on struct.
@@ -1097,7 +1104,7 @@ func (s *PacketStore) Load() error {
 			if rpStr != "" {
 				pks := resolvedPubkeysFromJSON(rpStr)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
-				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM, obs)
 			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
 				// resolved_path not persisted — reconstruct relay hops from
 				// path_json so relay-node analytics history survives a restart.
@@ -1110,7 +1117,7 @@ func (s *PacketStore) Load() error {
 				// PR #1643 R1 munger #1: gate on unique_prefix only — ambiguous
 				// hops are silently dropped (skipped counter logged at end).
 				rp := resolvePathForObsColdLoad(obsPJ, obsIDStr, tx, relayPM, &coldLoadAmbiguousHopsSkipped)
-				s.indexColdLoadRelayHops(tx, extractResolvedPubkeys(rp), relayPM)
+				s.indexColdLoadRelayHops(tx, extractResolvedPubkeys(rp), relayPM, obs)
 			}
 
 			tx.addObservation(obs)
@@ -1400,7 +1407,8 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			obsIDStr := nullStrVal(observerID)
 			obsPJ := nullStrVal(pathJSON)
 
-			if tx.hasObservation(obsIDStr, obsPJ) {
+			n := observedRelayHopHexLen(nullStrVal(obsRawHex), obsPJ)
+			if tx.mergeObservationEvidence(obsIDStr, obsPJ, n) != nil {
 				continue
 			}
 
@@ -1416,6 +1424,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
+				relayHopHexLen: n,
 			}
 
 			tx.addObservation(obs)
@@ -1587,12 +1596,15 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			// stats collapse after restart for relay-heavy nodes. The
 			// pubkey union was pre-built outside the lock above.
 			if pks := localResolvedPKsByTx[tx.ID]; len(pks) > 0 {
-				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM, nil)
 			}
 			// path_json fallback (resolved_path NULL): byNode ONLY, so relay
 			// nodes keep their analytics history across a restart without
 			// polluting the resolved_path/path-hop indexes (#1352).
-			s.indexColdLoadRelayHops(tx, localByNodePKsByTx[tx.ID], relayPM)
+			s.indexColdLoadRelayHops(tx, localByNodePKsByTx[tx.ID], relayPM, nil)
+			for _, obs := range tx.Observations {
+				s.noteCertainRelays(tx, obs, relayPM)
+			}
 		}
 		s.mu.Unlock()
 		runtime.Gosched()
@@ -1973,16 +1985,16 @@ func skipPlainJSONString(s string, i int) (int, bool) {
 //     idempotent per (transmission, pubkey) — byNode via nodeHashes, the
 //     resolved index via its forward-list check, byPathHop via
 //     pathHopResolved (#2108).
-//   - pm decides which hops are certain liveness evidence (#2260,
-//     noteCertainRelays); nil records none.
-func (s *PacketStore) indexResolvedPathHops(tx *StoreTx, pks []string, hopsSeen map[string]bool, pm *prefixMap) {
+//   - pm and obs decide which hops are certain liveness evidence (#2266);
+//     nil obs indexes attribution only (a background chunk's union).
+func (s *PacketStore) indexResolvedPathHops(tx *StoreTx, pks []string, hopsSeen map[string]bool, pm *prefixMap, obs *StoreObs) {
 	if len(pks) == 0 {
 		return
 	}
 	for _, pk := range pks {
 		s.addToByNode(tx, pk)
 	}
-	s.noteCertainRelays(tx, pks, pm)
+	s.noteCertainRelays(tx, obs, pm)
 	s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
 	s.addToResolvedPubkeyIndex(tx.ID, pks)
 }
@@ -1992,11 +2004,11 @@ func (s *PacketStore) indexResolvedPathHops(tx *StoreTx, pks []string, hopsSeen 
 // load (resolved_path NULL, #1352): the path-hop and resolved indexes stay
 // untouched, liveness still learns from the certain hops. Caller holds s.mu
 // for writing.
-func (s *PacketStore) indexColdLoadRelayHops(tx *StoreTx, pks []string, pm *prefixMap) {
+func (s *PacketStore) indexColdLoadRelayHops(tx *StoreTx, pks []string, pm *prefixMap, obs *StoreObs) {
 	for _, pk := range pks {
 		s.addToByNode(tx, pk)
 	}
-	s.noteCertainRelays(tx, pks, pm)
+	s.noteCertainRelays(tx, obs, pm)
 }
 
 // indexByNode extracts pubkeys from decoded_json and indexes the transmission.
@@ -3042,7 +3054,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		routeType, payloadType                                             *int
 		obsID                                                              *int
 		observerID, observerName, observerIATA, direction, pathJSON, obsTS string
-		obsRawHex                                                          string
+		relayHopHexLen                                                     uint8
 		scopeName                                                          *string
 		snr, rssi                                                          *float64
 		score                                                              *int
@@ -3086,24 +3098,24 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		}
 
 		tr := tempRow{
-			txID:         txID,
-			rawHex:       nullStrVal(rawHex),
-			hash:         nullStrVal(hash),
-			firstSeen:    nullStrVal(firstSeen),
-			decodedJSON:  nullStrVal(decodedJSON),
-			routeType:    nullIntPtr(routeType),
-			payloadType:  nullIntPtr(payloadType),
-			observerID:   internStr(nullStrVal(observerID)),
-			observerName: internStr(nullStrVal(observerName)),
-			observerIATA: internStr(nullStrVal(observerIATA)),
-			direction:    internStr(nullStrVal(direction)),
-			pathJSON:     nullStrVal(pathJSON),
-			obsTS:        nullStrVal(obsTimestamp),
-			obsRawHex:    nullStrVal(obsRawHex),
-			scopeName:    nullStrPtr(scopeName),
-			snr:          nullFloatPtr(snrVal),
-			rssi:         nullFloatPtr(rssiVal),
-			score:        nullIntPtr(scoreVal),
+			txID:           txID,
+			rawHex:         nullStrVal(rawHex),
+			hash:           nullStrVal(hash),
+			firstSeen:      nullStrVal(firstSeen),
+			decodedJSON:    nullStrVal(decodedJSON),
+			routeType:      nullIntPtr(routeType),
+			payloadType:    nullIntPtr(payloadType),
+			observerID:     internStr(nullStrVal(observerID)),
+			observerName:   internStr(nullStrVal(observerName)),
+			observerIATA:   internStr(nullStrVal(observerIATA)),
+			direction:      internStr(nullStrVal(direction)),
+			pathJSON:       nullStrVal(pathJSON),
+			obsTS:          nullStrVal(obsTimestamp),
+			relayHopHexLen: observedRelayHopHexLen(nullStrVal(obsRawHex), nullStrVal(pathJSON)),
+			scopeName:      nullStrPtr(scopeName),
+			snr:            nullFloatPtr(snrVal),
+			rssi:           nullFloatPtr(rssiVal),
+			score:          nullIntPtr(scoreVal),
 		}
 		if obsIDVal.Valid {
 			oid := int(obsIDVal.Int64)
@@ -3202,8 +3214,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		}
 		if r.obsID != nil {
 			oid := *r.obsID
-			// Dedup (O(1) map lookup)
-			if tx.hasObservation(r.observerID, r.pathJSON) {
+			if obs := tx.mergeObservationEvidence(r.observerID, r.pathJSON, r.relayHopHexLen); obs != nil {
+				s.noteCertainRelays(tx, obs, cachedPM)
 				continue
 			}
 
@@ -3219,6 +3231,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				Score:          r.score,
 				PathJSON:       r.pathJSON,
 				Timestamp:      normalizeTimestamp(r.obsTS),
+				relayHopHexLen: r.relayHopHexLen,
 			}
 
 			// Resolve path at ingest time using neighbor graph — decode-window discipline:
@@ -3229,7 +3242,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, cachedGraph)
 				resolvedPubkeys = extractResolvedPubkeys(rpForBroadcast)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
-				s.indexResolvedPathHops(tx, resolvedPubkeys, hopsSeen, cachedPM)
+				s.indexResolvedPathHops(tx, resolvedPubkeys, hopsSeen, cachedPM, obs)
 			}
 			// Stash rpForBroadcast for later broadcast/persist (keyed by obs ID)
 			if rpForBroadcast != nil {
@@ -3436,17 +3449,17 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	defer rows.Close()
 
 	type obsRow struct {
-		obsID        int
-		txID         int
-		observerID   string
-		observerName string
-		observerIATA string
-		direction    string
-		snr, rssi    *float64
-		score        *int
-		pathJSON     string
-		rawHex       string
-		timestamp    string
+		obsID          int
+		txID           int
+		observerID     string
+		observerName   string
+		observerIATA   string
+		direction      string
+		snr, rssi      *float64
+		score          *int
+		pathJSON       string
+		relayHopHexLen uint8
+		timestamp      string
 	}
 
 	var obsRows []obsRow
@@ -3467,18 +3480,18 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		}
 
 		obsRows = append(obsRows, obsRow{
-			obsID:        oid,
-			txID:         txID,
-			observerID:   internStr(nullStrVal(observerID)),
-			observerName: internStr(nullStrVal(observerName)),
-			observerIATA: internStr(nullStrVal(observerIATA)),
-			direction:    internStr(nullStrVal(direction)),
-			snr:          nullFloatPtr(snr),
-			rssi:         nullFloatPtr(rssi),
-			score:        nullIntPtr(score),
-			pathJSON:     nullStrVal(pathJSON),
-			rawHex:       nullStrVal(obsRawHex),
-			timestamp:    nullStrVal(ts),
+			obsID:          oid,
+			txID:           txID,
+			observerID:     internStr(nullStrVal(observerID)),
+			observerName:   internStr(nullStrVal(observerName)),
+			observerIATA:   internStr(nullStrVal(observerIATA)),
+			direction:      internStr(nullStrVal(direction)),
+			snr:            nullFloatPtr(snr),
+			rssi:           nullFloatPtr(rssi),
+			score:          nullIntPtr(score),
+			pathJSON:       nullStrVal(pathJSON),
+			relayHopHexLen: observedRelayHopHexLen(nullStrVal(obsRawHex), nullStrVal(pathJSON)),
+			timestamp:      nullStrVal(ts),
 		})
 	}
 
@@ -3513,8 +3526,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			continue // transmission not yet in store
 		}
 
-		// Dedup by observer + path (O(1) map lookup)
-		if tx.hasObservation(r.observerID, r.pathJSON) {
+		if obs := tx.mergeObservationEvidence(r.observerID, r.pathJSON, r.relayHopHexLen); obs != nil {
+			s.noteCertainRelays(tx, obs, pm)
 			continue
 		}
 
@@ -3529,10 +3542,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			RSSI:           r.rssi,
 			Score:          r.score,
 			PathJSON:       r.pathJSON,
-			// obs.RawHex deliberately NOT stored: it duplicates the parent
-			// tx.RawHex and enrichObs falls back to tx.RawHex when obs.RawHex
-			// == "". Live-polled observations must not re-introduce the dup.
-			Timestamp: normalizeTimestamp(r.timestamp),
+			Timestamp:      normalizeTimestamp(r.timestamp),
+			relayHopHexLen: r.relayHopHexLen,
 		}
 
 		// Resolve path at ingest time for late-arriving observations (review item #2).
@@ -3543,7 +3554,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, graphRef)
 				pks := extractResolvedPubkeys(obsResolvedPath)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
-				s.indexResolvedPathHops(tx, pks, hopsSeen, pm)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, pm, obs)
 			}
 		}
 		// Stash for broadcast/persist
@@ -4277,16 +4288,10 @@ func enrichObsFields(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 
 	if tx != nil {
 		m["hash"] = strOrNil(tx.Hash)
-		// raw_hex comes from the transmission (#881). obs.RawHex is no longer
-		// retained when loading/ingesting the store — it duplicated this exact
-		// value (same content hash ⇒ same frame) and at ~10.6 observations/tx
-		// wasted ~98MB on a live ~1.7M-observation store. The obs.RawHex branch
-		// stays for callers that build a StoreObs from a response map.
-		if obs.RawHex != "" {
-			m["raw_hex"] = obs.RawHex
-		} else {
-			m["raw_hex"] = strOrNil(tx.RawHex)
-		}
+		// The hot store keeps no per-observation wire frames (#881).
+		// Packet detail replaces this representative raw with the stored
+		// observation's bytes from SQLite; equal hashes can have other paths.
+		m["raw_hex"] = strOrNil(tx.RawHex)
 		m["payload_type"] = intPtrOrNil(tx.PayloadType)
 		m["route_type"] = intPtrOrNil(tx.RouteType)
 		m["decoded_json"] = strOrNil(tx.DecodedJSON)
@@ -5122,7 +5127,7 @@ func estimateStoreTxBytesTypical(numObs int) int64 {
 func estimateStoreObsBytes(obs *StoreObs) int64 {
 	base := int64(storeObsBaseBytes)
 	base += int64(len(obs.PathJSON) + len(obs.ObserverID) + len(obs.ObserverName) +
-		len(obs.ObserverIATA) + len(obs.Direction) + len(obs.RawHex) + len(obs.Timestamp))
+		len(obs.ObserverIATA) + len(obs.Direction) + len(obs.Timestamp))
 	base += int64(numIndexesPerObs * indexEntryBytes)
 	// ResolvedPath field removed (#800) — no per-obs RP overhead
 	return base

@@ -135,9 +135,7 @@ func assertAdvertEvidenceViews(t *testing.T, s *PacketStore, want string) {
 		t.Errorf("airtime changed: %v, want %d", result["total_score"], wantScore)
 	}
 	for _, obs := range tx.Observations {
-		if obs.RawHex != "" {
-			t.Error("route evidence must not retain raw frames on StoreObs")
-		}
+		ceAssertNoRaw(t, obs)
 	}
 	adverts, err := s.db.GetRecentTransmissionsForNode("fixture-origin", 20)
 	if err != nil {

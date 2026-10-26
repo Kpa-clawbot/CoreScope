@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
+	"github.com/meshcore-analyzer/packetpath"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -40,6 +42,37 @@ func chTx(id, routeType, payloadType, hashSize int, firstSeen time.Time) *StoreT
 	return &StoreTx{ID: id, RawHex: raw, PayloadType: &pt, FirstSeen: firstSeen.UTC().Format(time.RFC3339)}
 }
 
+// chObservation gives these index tests real observation evidence. Previously
+// their resolved pubkeys named arbitrary hops while the raw frame held AB.
+// Preserve existing observer identities used by the adaptive learner tests.
+func chObservation(tx *StoreTx, pks ...string) *StoreObs {
+	route, pathByte, _ := packetpath.PathByte(tx.RawHex)
+	n := 2 * (int(pathByte>>6) + 1)
+	offset := 2
+	if route == 0 || route == 3 {
+		offset += 8
+	}
+	hops := make([]string, 0, len(pks))
+	for _, pk := range pks {
+		hops = append(hops, strings.ToUpper(pk[:n]))
+	}
+	tx.RawHex = tx.RawHex[:offset] + fmt.Sprintf("%02x", pathByte&0xc0|byte(len(hops))) + strings.Join(hops, "") + "00"
+	pj, _ := json.Marshal(hops)
+	if len(tx.Observations) == 0 {
+		tx.Observations = []*StoreObs{{}}
+	}
+	for _, obs := range tx.Observations {
+		obs.PathJSON = string(pj)
+		obs.relayHopHexLen = observedRelayHopHexLen(tx.RawHex, obs.PathJSON)
+	}
+	return tx.Observations[0]
+}
+
+func chIndexResolved(s *PacketStore, tx *StoreTx, pks []string, seen map[string]bool, pm *prefixMap) {
+	obs := chObservation(tx, pks...)
+	s.indexResolvedPathHops(tx, pks, seen, pm, obs)
+}
+
 func TestRelayHopHexLen(t *testing.T) {
 	at := time.Date(2026, 10, 18, 16, 0, 0, 0, time.UTC)
 	cases := []struct {
@@ -57,7 +90,7 @@ func TestRelayHopHexLen(t *testing.T) {
 		{"no raw", &StoreTx{ID: 8}, 0},
 	}
 	for _, c := range cases {
-		if got := relayHopHexLen(c.tx); got != c.want {
+		if got := relayHopHexLen(c.tx.RawHex); got != c.want {
 			t.Errorf("%s: %d; want %d", c.name, got, c.want)
 		}
 	}
@@ -79,15 +112,15 @@ func TestNoteCertainRelays(t *testing.T) {
 	hopsSeen := map[string]bool{}
 
 	// 2-byte flood hop 67a7: only chA has it, certain.
-	s.indexResolvedPathHops(chTx(1, 1, 5, 2, t0), []string{chA}, hopsSeen, pm)
+	chIndexResolved(s, chTx(1, 1, 5, 2, t0), []string{chA}, hopsSeen, pm)
 	// Later 1-byte flood hops 67 (shared with chB) and 40 (unique): the
 	// resolver attributed 67 to chA, but only 40 is certain.
 	later := t0.Add(70 * time.Hour)
-	s.indexResolvedPathHops(chTx(2, 1, 5, 1, later), []string{chA, chC}, hopsSeen, pm)
+	chIndexResolved(s, chTx(2, 1, 5, 1, later), []string{chA, chC}, hopsSeen, pm)
 	// Direct route and TRACE never count; a nil prefix map records nothing.
-	s.indexResolvedPathHops(chTx(3, 2, 5, 2, later), []string{chA}, hopsSeen, pm)
-	s.indexResolvedPathHops(chTx(4, 1, packetpathTrace, 2, later), []string{chA}, hopsSeen, pm)
-	s.indexResolvedPathHops(chTx(5, 1, 5, 2, later), []string{chA}, hopsSeen, nil)
+	chIndexResolved(s, chTx(3, 2, 5, 2, later), []string{chA}, hopsSeen, pm)
+	chIndexResolved(s, chTx(4, 1, packetpathTrace, 2, later), []string{chA}, hopsSeen, pm)
+	chIndexResolved(s, chTx(5, 1, 5, 2, later), []string{chA}, hopsSeen, nil)
 
 	if got := s.certainHeard[chA]; got != t0.Format(time.RFC3339) {
 		t.Errorf("chA certain = %q; want the 2-byte hop at %s", got, t0.Format(time.RFC3339))
@@ -100,7 +133,8 @@ func TestNoteCertainRelays(t *testing.T) {
 	}
 
 	// The cold-load path (resolved_path NULL) feeds liveness the same way.
-	s.indexColdLoadRelayHops(chTx(6, 1, 5, 2, later.Add(time.Hour)), []string{chB}, pm)
+	tx := chTx(6, 1, 5, 2, later.Add(time.Hour))
+	s.indexColdLoadRelayHops(tx, []string{chB}, pm, chObservation(tx, chB))
 	if got := s.certainHeard[chB]; got != later.Add(time.Hour).Format(time.RFC3339) {
 		t.Errorf("chB certain from cold load = %q", got)
 	}
@@ -128,10 +162,10 @@ func TestSilentRepeaterWithNamesakePrefixGoesOffline(t *testing.T) {
 	lastCertain := time.Date(2026, 10, 18, 16, 49, 25, 0, time.UTC)
 	s := chStore()
 	hopsSeen := map[string]bool{}
-	s.indexResolvedPathHops(chTx(1, 1, 5, 2, lastCertain), []string{chA}, hopsSeen, pm)
+	chIndexResolved(s, chTx(1, 1, 5, 2, lastCertain), []string{chA}, hopsSeen, pm)
 	for i := 0; i < 20; i++ {
 		ts := lastCertain.Add(time.Duration(70+i) * time.Hour)
-		s.indexResolvedPathHops(chTx(2+i, 1, 5, 1, ts), []string{chA}, hopsSeen, pm)
+		chIndexResolved(s, chTx(2+i, 1, 5, 1, ts), []string{chA}, hopsSeen, pm)
 	}
 
 	heard, _ := s.LastHeardMap([]string{chA})
@@ -253,12 +287,12 @@ func TestNodeEndpointsLastHeardIsCertain(t *testing.T) {
 }
 
 // noteCertainRelays runs per observation on ingest, under the write lock.
-// An 8-hop 2-byte flood path against a 2,000-repeater prefix map: two hex
-// bytes of header parsing plus one map lookup per hop. Quote in the PR.
+// An 8-hop 2-byte flood path against a 2,000-repeater prefix map. The frame
+// was validated once while loading; each call scans only the retained path.
 func BenchmarkNoteCertainRelays(b *testing.B) {
 	nodes := make([]nodeInfo, 0, 2000)
 	for i := 0; i < 2000; i++ {
-		nodes = append(nodes, nodeInfo{PublicKey: fmt.Sprintf("%064x", i*7919), Role: "repeater"})
+		nodes = append(nodes, nodeInfo{PublicKey: fmt.Sprintf("%04x%060x", i, i*7919), Role: "repeater"})
 	}
 	pm := buildPrefixMap(nodes)
 	pks := make([]string, 0, 8)
@@ -267,10 +301,13 @@ func BenchmarkNoteCertainRelays(b *testing.B) {
 	}
 	s := chStore()
 	tx := chTx(1, 1, 5, 2, time.Date(2026, 10, 18, 16, 0, 0, 0, time.UTC))
+	obs := chObservation(tx, pks...)
+	s.indexResolvedPathHops(tx, pks, map[string]bool{}, pm, obs)
 	b.ReportAllocs()
 	b.ResetTimer()
+	b.ReportMetric(float64(unsafe.Sizeof(StoreObs{})), "bytes/obs")
 	for i := 0; i < b.N; i++ {
-		s.noteCertainRelays(tx, pks, pm)
+		s.noteCertainRelays(tx, obs, pm)
 	}
 }
 
