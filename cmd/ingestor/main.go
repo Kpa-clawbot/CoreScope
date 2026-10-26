@@ -27,6 +27,15 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// finishIngestStartup coordinates the required migration barrier, ingestion
+// readiness and the initial packet-retention sweep.
+func finishIngestStartup(store *Store, ready func(), prunePackets func() (int64, error)) (int64, error) {
+	n, err := prunePackets()
+	store.WaitForAsyncMigrations()
+	ready()
+	return n, err
+}
+
 func main() {
 	// pprof profiling — off by default, enable with ENABLE_PPROF=true
 	if os.Getenv("ENABLE_PPROF") == "true" {
