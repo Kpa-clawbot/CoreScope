@@ -89,6 +89,7 @@ func TestStartupRetentionAdmitsBufferedMQTTBetweenBatches(t *testing.T) {
 	seedRetentionFanout(t, s, aged, aged*2)
 	b := NewIngestBuffer(3)
 	b.Start()
+	t.Cleanup(func() { b.Stop(); <-b.Done() })
 	initRelease, initialized := make(chan struct{}), make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -135,8 +136,6 @@ func TestStartupRetentionAdmitsBufferedMQTTBetweenBatches(t *testing.T) {
 		cancel()
 		releaseOnce.Do(func() { close(releaseRetention) })
 		<-done
-		b.Stop()
-		<-b.Done()
 	})
 	go func() {
 		defer close(done)
@@ -157,6 +156,11 @@ func TestStartupRetentionAdmitsBufferedMQTTBetweenBatches(t *testing.T) {
 			})
 		})
 	}()
+	select {
+	case <-b.ready:
+		t.Error("ingestion opened while the required migration was still blocked")
+	case <-time.After(30 * time.Millisecond):
+	}
 	close(initRelease)
 	select {
 	case <-paused:
