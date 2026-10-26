@@ -7,6 +7,11 @@ import (
 	"github.com/meshcore-analyzer/packetpath"
 )
 
+// LastCertainRelayMap returns a snapshot for the requested node keys.
+func (s *PacketStore) LastCertainRelayMap(pubkeys []string) map[string]time.Time {
+	return nil
+}
+
 // Certain liveness (#2260). certainHeard holds, per pubkey, the newest
 // FirstSeen of a transmission that can only have come from that node:
 //

@@ -117,6 +117,7 @@ func TestCertainHeardFedByEveryLoadPath(t *testing.T) {
 			if !heard[lpRelay].Equal(want) {
 				t.Fatalf("LastHeardMap[relay] = %v; want %v: this path does not feed certainHeard", heard[lpRelay], want)
 			}
+			assertCertainRelay(t, s, lpRelay, at)
 		})
 	}
 }

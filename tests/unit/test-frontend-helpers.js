@@ -4476,8 +4476,10 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
 // #2309: exercise the real side-panel renderer, not a copied formatter.
 console.log('\n=== nodes.js: preview metadata (#2309) ===');
 {
-  function renderPreview(overrides) {
+  function renderPreview(overrides, relayActiveMs, now) {
     const ctx = makeNodesSandbox();
+    if (relayActiveMs !== undefined) ctx.HEALTH_THRESHOLDS.relayActiveMs = relayActiveMs;
+    if (now !== undefined) ctx.Date = class extends Date { static now() { return now; } };
     const source = fs.readFileSync('public/nodes.js', 'utf8');
     vm.runInContext(source.replace('  // Test hooks',
       '  window.testRenderNodeDetail = renderDetail;\n  // Test hooks'), ctx);
@@ -4535,6 +4537,34 @@ console.log('\n=== nodes.js: preview metadata (#2309) ===');
     assert.match(value('Last Relayed') || '', /never observed as relay hop/);
     assert.match(value('Last Relayed'), /— relays\/hr, 0 relays\/24h/);
     assert.doesNotMatch(value('Last Relayed'), /alive|actively relaying/i);
+  });
+  test('certain relay evidence restores the green mark for repeaters and rooms only', () => {
+    const now = Date.parse('2026-10-26T12:00:00Z');
+    for (const role of ['repeater', 'room']) {
+      const { value } = renderPreview({ role, last_certain_relay: '2026-10-26T11:59:00Z', relay_active: false }, undefined, now);
+      assert.match(value('Last Relayed'), /actively relaying/);
+      assert.match(value('Last Relayed'), /var\(--status-green-text\)/);
+      assert.doesNotMatch(value('Last Relayed'), /alive|idle|never observed as relay hop/i);
+    }
+    assert.strictEqual(renderPreview({ role: 'companion', last_certain_relay: '2026-10-26T11:59:00Z' }, undefined, now).value('Last Relayed'), null);
+  });
+  test('certain relay mark uses the existing configured window with an exclusive expiry boundary', () => {
+    const now = Date.parse('2026-10-26T12:00:00Z');
+    const hour = 3600000;
+    for (const [age, active] of [[0, true], [2 * hour - 1, true], [2 * hour, false], [3 * hour, false], [-1, false]]) {
+      const { value } = renderPreview({ last_certain_relay: new Date(now - age).toISOString(), relay_active: true }, 2 * hour, now);
+      assert.strictEqual(/actively relaying/.test(value('Last Relayed')), active, 'age=' + age);
+      assert.doesNotMatch(value('Last Relayed'), /alive|idle/i);
+    }
+    assert.match(renderPreview({ last_certain_relay: new Date(now - 23 * hour).toISOString() }, undefined, now).value('Last Relayed'), /actively relaying/);
+    assert.doesNotMatch(renderPreview({ last_certain_relay: new Date(now - 24 * hour).toISOString() }, undefined, now).value('Last Relayed'), /actively relaying/);
+  });
+  test('absent or invalid certainty never falls back to attributed relay activity', () => {
+    for (const evidence of [undefined, null, '', 'bad-date', 0, true, {}, '<img src=x onerror="bad()">']) {
+      const { value } = renderPreview({ last_certain_relay: evidence, last_relayed: new Date().toISOString(), relay_active: true });
+      assert.doesNotMatch(value('Last Relayed'), /alive|idle|actively relaying|<img|onerror=/i, String(evidence));
+      assert.match(value('Last Relayed'), /attributed relay observation/);
+    }
   });
   test('hash size strings format consistently, missing and malformed sizes stay unknown', () => {
     assert.match(renderPreview({ hash_size: '2' }).value('Hash Prefix') || '', /ABCD.*\(2-byte\)/);
