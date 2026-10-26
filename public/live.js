@@ -1295,6 +1295,8 @@
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
             <label><input type="checkbox" id="liveMultibyteToggle" aria-describedby="multibyteDesc"> Multibyte only</label>
             <span id="multibyteDesc" class="sr-only">Show only multibyte (≥2-byte path-hash) packets; hide unreliable single-byte traffic</span>
+            <label id="liveRadioOnlyLabel" style="display:none">Radio <select id="liveRadioOnlySelect" aria-describedby="radioOnlyDesc"><option value="">All</option></select></label>
+            <span id="radioOnlyDesc" class="sr-only">Show only packets heard solely on the chosen radio channel</span>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             </div>
             <div class="live-toggles">
@@ -1685,6 +1687,7 @@
     clickablePathsLayer = L.layerGroup().addTo(map);
 
     injectSVGFilters();
+    if (window.LiveRadioFilter) LiveRadioFilter.init(rebuildFeedList); // live-radio-filter.js
     AreaFilter.init(document.getElementById('liveAreaFilter'));
     AreaFilter.onChange(function () { loadNodes(); });
     await loadNodes();
@@ -2968,6 +2971,7 @@
 
     for (const group of sorted) {
       if (multibyteOnly && !groupIsMultibyte(group.packets)) continue;
+      if (window.LiveRadioFilter && !LiveRadioFilter.matches(group.packets)) continue;
       const pkt = Object.assign({}, group.latestPkt, { observation_count: group.count });
       const decoded = pkt.decoded || {};
       const header = decoded.header || {};
@@ -3373,6 +3377,7 @@
     // entire live view (feed, map, rain, counter — live AND replay). Placed
     // above the counter so livePktCount reflects multibyte-only traffic.
     if (multibyteOnly && !groupIsMultibyte(packets)) return;
+    if (window.LiveRadioFilter && !LiveRadioFilter.matches(packets)) return; // live-radio-filter.js
     const first = packets[0];
     const decoded = first.decoded || {};
     const header = decoded.header || {};

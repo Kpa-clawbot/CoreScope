@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,6 +117,11 @@ type Config struct {
 	Roles            map[string]interface{} `json:"roles"`
 	HealthThresholds *HealthThresholds      `json:"healthThresholds"`
 	PathTrust        *PathTrustConfig       `json:"pathTrust,omitempty"`
+
+	// LiveRadioFilters names radio channels the /live page can narrow to:
+	// packets heard only on that frequency, e.g. a second mesh that
+	// multi-radio observers listen to next to the main one.
+	LiveRadioFilters []LiveRadioFilter      `json:"liveRadioFilters,omitempty"`
 	Map              map[string]interface{} `json:"map"`
 	Tiles            map[string]interface{} `json:"tiles"` // deprecated
 	SnrThresholds    map[string]interface{} `json:"snrThresholds"`
@@ -1310,4 +1316,24 @@ func (c *Config) RegionFallbackMaxHops() int {
 		return *c.RegionFallback.MaxHops
 	}
 	return regionFallbackMaxHopsDefault
+}
+
+// LiveRadioFilter is one radio channel offered by the /live "Radio" picker.
+type LiveRadioFilter struct {
+	Label   string  `json:"label"`
+	FreqMHz float64 `json:"freqMHz"`
+}
+
+// ClientLiveRadioFilters returns the configured live radio filters that have
+// a label and a positive frequency, never nil so the JSON shape is `[]`.
+func (c *Config) ClientLiveRadioFilters() []LiveRadioFilter {
+	out := []LiveRadioFilter{}
+	for _, f := range c.LiveRadioFilters {
+		f.Label = strings.TrimSpace(f.Label)
+		if f.Label == "" || !(f.FreqMHz > 0) || math.IsInf(f.FreqMHz, 0) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
