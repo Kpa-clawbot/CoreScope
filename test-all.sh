@@ -6,6 +6,7 @@ set -e
 cd "$(dirname "$0")"
 
 node tests/unit/test-test-inventory.js
+node tests/unit/test-manage-workflow.js
 node tests/unit/test-1108-region-hide-nodes.js
 node tests/unit/test-1659-analytics-warmup.js
 node tests/unit/test-a11y-1705-subpath-hop-prefix-e2e.js
@@ -185,6 +186,7 @@ node tests/unit/test-notifications-ui.js
 node tests/unit/test-observer-iata-1188.js
 node tests/unit/test-observer-menu-interactions.js
 node tests/unit/test-observer-naive-clock-1478.js
+node tests/unit/test-observer-detail-ownership.js
 node tests/unit/test-observer-search-filter.js
 node tests/unit/test-observers-headings.js
 node tests/unit/test-packet-filter-time.js
@@ -220,6 +222,7 @@ node tests/unit/test-top-routes-overlay.js
 node tests/unit/test-traces.js
 node tests/unit/test-url-state.js
 node tests/unit/test-user-management-ui.js
+node tests/unit/test-vendored-libs.js
 node tests/unit/test-warmup-banner.js
 node tests/unit/test-ws-stale-watchdog-1074.js
 node tests/unit/test-xss-escape-sinks.js

@@ -1034,6 +1034,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		if err := store.UpsertObserverAt(observerID, name, iata, meta, ""); err != nil {
 			log.Printf("MQTT [%s] observer status error: %v", tag, err)
 		}
+		if err := store.RecordObserverRadios(observerID, extractRadioReports(msg), time.Now()); err != nil {
+			log.Printf("MQTT [%s] observer radio history error: %v", tag, err)
+		}
 		// Insert metrics sample from status message
 		if meta != nil {
 			metricsData := &MetricsData{
@@ -1161,6 +1164,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 		if v, ok := msg["origin"].(string); ok {
 			mqttMsg.Origin = v
+		}
+		if v, ok := msg["rx_radio_id"].(string); ok {
+			mqttMsg.RxRadioID = clampObserverField(strings.TrimSpace(v), maxRadioIDLen)
 		}
 
 		// For ADVERT packets with known coordinates, enforce geo_filter before

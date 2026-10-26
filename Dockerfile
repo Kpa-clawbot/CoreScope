@@ -124,7 +124,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     -o /corescope-decrypt .
 
 # Runtime image
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget
 

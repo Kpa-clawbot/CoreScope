@@ -47,7 +47,7 @@ func appendEvictionChurnBatch(s *PacketStore, firstID, count, fanout int, now ti
 			s.byObserver[observer] = append(s.byObserver[observer], obs)
 			s.totalObs++
 			s.trackedBytes += estimateStoreObsBytes(obs)
-			s.indexResolvedPathHops(tx, pks, hopsSeen, nil)
+			s.indexResolvedPathHops(tx, pks, hopsSeen, nil, obs)
 		}
 		pickBestObservation(tx)
 		s.trackedBytes += rechargeTx(tx)

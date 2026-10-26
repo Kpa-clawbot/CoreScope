@@ -1,5 +1,9 @@
 # Packet Deduplication Design
 
+> **Archived plan.** Historical planning material; proposals, status claims, and
+> instructions below may be outdated or unimplemented. For current guidance, see
+> the [README](../../README.md) and [deployment guide](../../DEPLOY.md).
+
 ## The Problem
 
 A single physical RF transmission gets recorded as N rows in the DB, where N = number of observers that heard it. Each row has the same `hash` but different `path_json` and `observer_id`.

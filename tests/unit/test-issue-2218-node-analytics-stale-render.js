@@ -34,7 +34,9 @@ function load() {
   const calls = [];
   const nav = { gen: 0 };
   const hop = { loads: 0 };
-  const mkEl = () => ({ style: {}, textContent: '', innerHTML: '' });
+  const mkEl = () => ({ style: {}, textContent: '', innerHTML: '',
+    insertAdjacentText(position, text) { this.textContent += text; },
+  });
   const ctx = {
     console, Math, JSON, Date, Number, String, Array, Object, Promise, isNaN, setTimeout,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
@@ -79,6 +81,7 @@ function loadRouter() {
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     location: { hash: '' }, history: { replaceState() {} }, CustomEvent: class {},
     document: {
+      title: 'CoreScope',
       readyState: 'complete', body: { classList: { toggle() {}, add() {}, remove() {} } },
       createElement: () => ({}), head: { appendChild() {} },
       getElementById: (id) => (id === 'app' ? app : null),
@@ -96,6 +99,42 @@ function loadRouter() {
 }
 
 (async () => {
+  console.log('Router: current view in the browser title (#2259)');
+  {
+    const r = loadRouter();
+    for (const page of ['home', 'packets', 'packet-detail', 'nodes', 'node-analytics', 'node-reach', 'observer-detail', 'analytics', 'account']) {
+      r.ctx.registerPage(page, { init() {}, destroy() {} });
+    }
+    for (const [hash, title] of [
+      ['#/home', 'CoreScope'],
+      ['#/packets', 'Packets | CoreScope'],
+      ['#/nodes', 'Nodes | CoreScope'],
+      ['#/nodes/' + PK, 'Node abababababab | CoreScope'],
+      ['#/nodes/' + PK + '/reach', 'Node abababababab | Reach | CoreScope'],
+      ['#/nodes/' + PK + '/analytics', 'Node abababababab | Analytics | CoreScope'],
+      ['#/packet/123', 'Packet 123 | CoreScope'],
+      ['#/packets/abcdef?obs=2', 'Packet abcdef | CoreScope'],
+      ['#/observers/observer-one', 'Observer observer-one | CoreScope'],
+      ['#/account/login', 'Account | CoreScope'],
+      ['#/account/activate?token=sample-value', 'Account | CoreScope'],
+      ['#/account/reset/sample-value', 'Account | CoreScope'],
+      ['#/home', 'CoreScope'],
+    ]) {
+      r.go(hash);
+      assert(r.ctx.document.title === title, hash + ': ' + title);
+    }
+    assert(typeof r.ctx.setSiteTitle === 'function' && typeof r.ctx.setRouteTitle === 'function',
+      'branding and detail updates have shared title helpers');
+    if (r.ctx.setSiteTitle && r.ctx.setRouteTitle) {
+      r.go('#/nodes');
+      r.ctx.setSiteTitle('Example Mesh');
+      assert(r.ctx.document.title === 'Nodes | Example Mesh', 'late branding preserves the current page');
+      r.ctx.setRouteTitle('packets', 'late-packet');
+      assert(r.ctx.document.title === 'Nodes | Example Mesh', 'a detail callback from another page cannot replace the title');
+      r.ctx.setSiteTitle('  ');
+      assert(r.ctx.document.title === 'Nodes | CoreScope', 'blank branding falls back without accumulating suffixes');
+    }
+  }
   console.log('Router: viewGeneration()');
   {
     const r = loadRouter();
@@ -208,6 +247,30 @@ function loadRouter() {
     t.call('/nodes/')[0].reject(new Error('server down'));
     await flush();
     assert(t.app.innerHTML.includes('Failed to load analytics: server down'), 'the current rejection renders');
+  }
+
+  console.log('Node Analytics: battery badge separates icons from data (#2232)');
+  for (const [status, mv, label, color] of [
+    ['ok', 4100, 'OK', 'var(--success)'],
+    ['low', 3200, 'Low', 'var(--warning)'],
+    ['critical', 2900, 'Critical', 'var(--danger)'],
+    ['critical', 0, 'Critical', 'var(--danger)'],
+    ['unknown', null, 'No data', 'var(--text-muted)'],
+    ['constructor', null, 'No data', 'var(--text-muted)'],
+    ['ok', '<img src=x onerror=alert(1)>', 'OK', 'var(--success)'],
+  ]) {
+    const t = load();
+    t.page.init(t.app, PK + '/analytics');
+    t.call('/nodes/')[0].resolve(analyticsData(7));
+    await flush();
+    t.call('/nodes/' + PK + '/battery')[0].resolve({ status, latest_mv: mv, samples: [] });
+    await flush();
+    const badge = t.els.batteryStatusBadge;
+    assert(badge.innerHTML.includes(label), status + ': trusted badge label is rendered');
+    assert(!badge.textContent.includes('<svg'), status + ': SVG source is not displayed as text');
+    assert(!badge.innerHTML.includes('<img'), status + ': voltage never enters HTML');
+    assert(badge.textContent === (mv == null ? '' : ' · ' + mv + ' mV'), status + ': voltage is appended as text, including zero');
+    assert(badge.style.color === color, status + ': badge uses its theme color');
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

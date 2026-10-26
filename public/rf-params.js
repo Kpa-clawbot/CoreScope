@@ -5,7 +5,9 @@ window.RfParams = (function () {
   'use strict';
 
   function esc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    // All five OWASP characters, like app.js escapeHtml: radioText (#1869)
+    // renders observer-published strings.
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function preset(p, presets) {
@@ -57,5 +59,15 @@ window.RfParams = (function () {
       (dev ? '<div class="lora-deviation" data-testid="lora-deviation">Differs from ' + esc(dev.agree + ' of ' + dev.peers + ' nearby nodes on this band, which use ' + settingText(dev.majority)) + '</div>' : '');
   }
 
-  return { detailHtml: detailHtml, deviationBadge: deviationBadge };
+  // radioText renders the "MHz,kHz,SF,CR" string an observer reports
+  // (#1869: the setting a packet was heard on). Unparseable input comes back
+  // escaped as it is.
+  function radioText(radio) {
+    var p = String(radio || '').split(',');
+    var num = /^\s*\d+(\.\d+)?\s*$/;
+    if (p.length !== 4 || !p.every(function (x) { return num.test(x); })) return esc(radio || '');
+    return esc(Number(p[0]).toFixed(3) + ' MHz · SF' + p[2].trim() + ' · BW ' + p[1].trim() + ' kHz · CR 4/' + p[3].trim());
+  }
+
+  return { detailHtml: detailHtml, deviationBadge: deviationBadge, radioText: radioText };
 })();

@@ -44,7 +44,7 @@ func TestEvictionOwnsResolvedNodeMemberships(t *testing.T) {
 			s.byPathHop = make(map[string][]*StoreTx)
 			relay, other := strings.Repeat("a", 64), strings.Repeat("b", 64)
 			for _, tx := range s.packets {
-				s.indexResolvedPathHops(tx, []string{relay}, make(map[string]bool), nil)
+				s.indexResolvedPathHops(tx, []string{relay}, make(map[string]bool), nil, nil)
 			}
 			s.packets[0].FirstSeen = now.Add(-2 * time.Hour).Format(time.RFC3339)
 			batch := map[int][]string{}

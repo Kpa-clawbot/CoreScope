@@ -86,6 +86,7 @@ type Store struct {
 	stmtUpdateTxFirstSeen      *sql.Stmt
 	stmtBumpTxLastSeen         *sql.Stmt
 	stmtInsertObservation      *sql.Stmt
+	stmtInsertObservationRadio *sql.Stmt // #1869, sparse rx_radio_id
 	stmtInsertAdvertEvidence   *sql.Stmt
 	hopBackfillCancel          context.CancelFunc // stops the observation_hops backfill on Close
 	hopIndexDays               int                // retention.hopIndexDays; 0 = no hop index (see ConfigureObservationHops)
@@ -1009,7 +1010,14 @@ func (s *Store) prepareStatements() error {
 			score         = COALESCE(excluded.score,         score),
 			raw_hex       = COALESCE(excluded.raw_hex,       raw_hex),
 			resolved_path = COALESCE(excluded.resolved_path, resolved_path)
+		RETURNING id
 	`)
+	if err != nil {
+		return err
+	}
+
+	s.stmtInsertObservationRadio, err = s.db.Prepare(`
+		INSERT OR REPLACE INTO observation_radios (observation_id, radio_id) VALUES (?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -1220,21 +1228,28 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	)
 	resolvedJSON := marshalResolvedPath(resolved)
 
-	_, err = s.stmtInsertObservation.Exec(
+	// RETURNING id: the upsert's DO UPDATE runs on every conflict, so the row
+	// id comes back for a new and for an existing observation alike (#1869).
+	var obsID int64
+	err = s.stmtInsertObservation.QueryRow(
 		txID, observerIdx, data.Direction,
 		data.SNR, data.RSSI, data.Score,
 		data.PathJSON, epochTs, nilIfEmpty(data.RawHex),
 		nilIfEmpty(resolvedJSON),
-	)
+	).Scan(&obsID)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)
 		log.Printf("[db] observation insert (non-fatal): %v", err)
 	} else {
 		s.Stats.ObservationsInserted.Add(1)
+		s.recordObservationRadio(obsID, data.RxRadioID)
 		// #1598: a resolved hop proves the node was forwarding traffic at
 		// rxTime. Refresh its last_seen so staleness/eviction logic sees
-		// relay activity, not just ADVERTs.
-		s.touchRelayNodesLocked(resolvedPubkeys(resolved), rxTime)
+		// relay activity, not just ADVERTs. Only flood paths are that
+		// proof; see pathHopsTransmitted.
+		if pathHopsTransmitted(data) {
+			s.touchRelayNodesLocked(resolvedPubkeys(resolved), rxTime)
+		}
 		// #1690: bump transmissions.last_seen so cold-load can filter on
 		// effective recency. Conditional `last_seen < ?` so we never go
 		// backwards on out-of-order ingest.
@@ -2066,6 +2081,19 @@ func (s *Store) LogStats() {
 	)
 }
 
+// pathHopsTransmitted reports whether data's path lists relays that already
+// transmitted the packet: a flood route whose path bytes are hop hashes.
+// Direct-route paths list the hops still to come (Mesh::removeSelfFromPath),
+// and a TRACE's path_json is the route it was asked to take, its header path
+// bytes being SNR, so neither proves a hop transmitted. Same rule as the
+// server's certain liveness (cmd/server/certain_heard.go relayHopHexLen).
+func pathHopsTransmitted(data *PacketData) bool {
+	if !packetpath.PathBytesAreHops(byte(data.PayloadType)) {
+		return false
+	}
+	return data.RouteType == packetpath.RouteFlood || data.RouteType == packetpath.RouteTransportFlood
+}
+
 // touchRelayNodesLocked refreshes nodes.last_seen for nodes observed as
 // relay hops, so a node that forwards traffic stays fresh even when it
 // adverts rarely or not at all.
@@ -2231,6 +2259,11 @@ func (s *Store) PurgeStaleObservers(purgeDays int) (int64, error) {
 	purged, _ := result.RowsAffected()
 	if purged > 0 {
 		log.Printf("Purged %d inactive observer(s) with no remaining data (not seen in %d days)", purged, purgeDays)
+		// Their radio history goes with them (#1869).
+		if _, err := s.instrumentedExec("purge_observers",
+			`DELETE FROM observer_radios WHERE observer_id NOT IN (SELECT id FROM observers)`); err != nil {
+			log.Printf("[purge] observer radio history: %v", err)
+		}
 	}
 	return purged, nil
 }
@@ -2301,6 +2334,7 @@ type PacketData struct {
 	Region            string // observer region: payload > topic > source config (#788)
 	Foreign           bool   // true when ADVERT GPS lies outside configured geofilter (#730)
 	FromPubkey        string // pubkey of the originating node, for exact-match attribution (#1143)
+	RxRadioID         string // multi-radio observer: which of its radios heard it (#1869), "" otherwise
 }
 
 // nilIfEmpty returns nil for empty strings (for nullable DB columns).
@@ -2510,8 +2544,9 @@ type MQTTPacketMessage struct {
 	Score     *float64 `json:"score"`
 	Direction *string  `json:"direction"`
 	Origin    string   `json:"origin"`
-	Region    string   `json:"region,omitempty"`    // optional region override (#788)
-	Timestamp string   `json:"timestamp,omitempty"` // observer receive time, resolved by handler
+	Region    string   `json:"region,omitempty"`      // optional region override (#788)
+	Timestamp string   `json:"timestamp,omitempty"`   // observer receive time, resolved by handler
+	RxRadioID string   `json:"rx_radio_id,omitempty"` // multi-radio observer: radio that heard it (#1869)
 }
 
 // BuildPacketData constructs a PacketData from a decoded packet and MQTT message.
@@ -2558,6 +2593,7 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		PayloadType:    decoded.Header.PayloadType,
 		PayloadVersion: decoded.Header.PayloadVersion,
 		PathJSON:       pathJSON,
+		RxRadioID:      msg.RxRadioID,
 		DecodedJSON:    PayloadJSON(&decoded.Payload),
 	}
 

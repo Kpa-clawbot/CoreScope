@@ -47,42 +47,80 @@ func (s *PacketStore) noteCertainHeard(pubkey string, tx *StoreTx) {
 // (signatureValid false): a corrupted or forged advert is no evidence the
 // node transmitted. Absent means not checked, which is not a failure.
 func (tx *StoreTx) signatureFailed() bool {
+	// Ordinary relay payloads have no signature field. Leave their decoded
+	// cache cold; a Unicode escape may encode the key, so keep that fallback.
+	if !strings.Contains(tx.DecodedJSON, "signatureValid") && !strings.Contains(tx.DecodedJSON, `\u`) {
+		return false
+	}
 	v, ok := tx.ParsedDecoded()["signatureValid"].(bool)
 	return ok && !v
 }
 
-// relayHopHexLen is the hex length of one relay hop in tx's path, or 0 when
+// relayHopHexLen is the hex length of one relay hop in this frame, or 0 when
 // the path is no evidence of who transmitted: not a flood route, a TRACE, or
 // an unreadable header.
-func relayHopHexLen(tx *StoreTx) int {
-	if tx.PayloadType != nil && !packetpath.PathBytesAreHops(byte(*tx.PayloadType)) {
-		return 0
-	}
-	routeType, pathByte, ok := packetpath.PathByte(tx.RawHex)
+func relayHopHexLen(raw string) int {
+	routeType, _, ok := packetpath.PathByte(raw)
 	if !ok || (routeType != packetpath.RouteFlood && routeType != packetpath.RouteTransportFlood) {
 		return 0
 	}
-	size := int(pathByte>>6) + 1
-	if size > 3 { // reserved (firmware Packet::isValidPathLen)
-		return 0
-	}
-	return 2 * size
+	return 2 * packetpath.HashSize(raw) // also excludes TRACE and reserved widths
 }
 
-// noteCertainRelays records tx for each resolved relay hop pubkey whose hop
-// prefix is unique among path-capable nodes in pm. pm nil records nothing.
-// Caller holds s.mu for writing.
-func (s *PacketStore) noteCertainRelays(tx *StoreTx, pks []string, pm *prefixMap) {
-	if pm == nil || len(pks) == 0 {
-		return
-	}
-	n := relayHopHexLen(tx)
+// observedRelayHopHexLen binds the retained path_json to its own wire frame.
+// Only this byte survives loading; no extra raw packets or parsed paths are
+// retained. Missing legacy raw_hex is unknown, never borrowed from tx.RawHex.
+// The comparison also rejects a truncated frame or a path/header mismatch.
+func observedRelayHopHexLen(raw, pathJSON string) uint8 {
+	n := relayHopHexLen(raw)
 	if n == 0 {
+		return 0
+	}
+	route, pathByte, _ := packetpath.PathByte(raw)
+	count := int(pathByte & 63)
+	offset := 4 // header and path byte, in hex characters
+	if route == packetpath.RouteTransportFlood {
+		offset += 8
+	}
+	if count == 0 || count*n > 128 || len(raw) < offset+count*n {
+		return 0 // firmware Packet::isValidPathLen: at most 64 path bytes
+	}
+	pos := 0
+	for i := 0; i < count; i++ {
+		hop, next, ok := nextPathHop(pathJSON, pos)
+		if !ok || len(hop) != n || !strings.EqualFold(hop, raw[offset+i*n:offset+(i+1)*n]) {
+			return 0
+		}
+		if _, ok := hopKey(hop); !ok {
+			return 0
+		}
+		pos = next
+	}
+	if _, _, extra := nextPathHop(pathJSON, pos); extra {
+		return 0
+	}
+	return uint8(n)
+}
+
+// noteCertainRelays records only hops actually present in this eligible
+// observation, using the same membership/uniqueness rule as certainFor.
+// Caller holds s.mu for writing and has indexed the relay attribution.
+func (s *PacketStore) noteCertainRelays(tx *StoreTx, obs *StoreObs, pm *prefixMap) {
+	if obs == nil || obs.relayHopHexLen == 0 || pm == nil || tx.signatureFailed() {
 		return
 	}
-	for _, pk := range pks {
-		if uniqueHopPrefix(pk, n, pm) {
-			s.noteCertainHeard(pk, tx)
+	for pos := 0; ; {
+		hop, next, ok := nextPathHop(obs.PathJSON, pos)
+		if !ok {
+			return
+		}
+		pos = next
+		c := pm.relayCandidates(hop)
+		if len(c) == 1 {
+			pk := strings.ToLower(c[0].PublicKey)
+			if s.nodeHasTx(pk, tx) && uniqueHopPrefix(pk, int(obs.relayHopHexLen), pm) {
+				s.noteCertainHeard(pk, tx)
+			}
 		}
 	}
 }
@@ -143,12 +181,13 @@ func (pm *prefixMap) markRetired(db *DB) error {
 // for pk under the same rule as certainHeard: pk sent it, or it is a flood
 // relay whose hop prefix only pk has. Packet-level counterpart of
 // certainHeard for analytics and the adaptive offline threshold; it uses the
-// prefix map of now, certainHeard the one at ingest. Reads tx only.
+// prefix map of now, certainHeard the one at ingest. Caller holds s.mu for
+// reading: late duplicates can upgrade an observation's retained evidence.
 func certainFor(tx *StoreTx, pk string, pm *prefixMap) bool {
-	if tx == nil || pk == "" {
+	if tx == nil || pk == "" || tx.signatureFailed() {
 		return false
 	}
-	if tx.DecodedJSON != "" && strings.Contains(tx.DecodedJSON, "ubKey") && !tx.signatureFailed() {
+	if tx.DecodedJSON != "" && strings.Contains(tx.DecodedJSON, "ubKey") {
 		if d := tx.ParsedDecoded(); d != nil {
 			for _, f := range []string{"pubKey", "srcPubKey"} {
 				if v, _ := d[f].(string); v != "" && strings.EqualFold(v, pk) {
@@ -157,7 +196,22 @@ func certainFor(tx *StoreTx, pk string, pm *prefixMap) bool {
 			}
 		}
 	}
-	return uniqueHopPrefix(pk, relayHopHexLen(tx), pm)
+	for _, obs := range tx.Observations {
+		if obs == nil || !uniqueHopPrefix(pk, int(obs.relayHopHexLen), pm) {
+			continue
+		}
+		for pos := 0; ; {
+			hop, next, ok := nextPathHop(obs.PathJSON, pos)
+			if !ok {
+				break
+			}
+			if strings.EqualFold(hop, pk[:obs.relayHopHexLen]) {
+				return true
+			}
+			pos = next
+		}
+	}
+	return false
 }
 
 // lastHeardValue is a node's last_heard in /api/nodes and the node detail:

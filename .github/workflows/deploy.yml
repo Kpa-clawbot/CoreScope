@@ -166,12 +166,14 @@ jobs:
           # cache, so a key that misses on an unrelated module hurts.
           cache-dependency-path: "**/go.sum"
 
+      - name: Run JS unit tests
+        run: sh test-all.sh
+
       - name: Enforce gofmt + go vet (issue #1859)
         run: |
           set -e
-          # gofmt: every tracked *.go file except the misnamed Dockerfile.go,
-          # which is a Dockerfile (FROM ...) that gofmt cannot parse.
-          unformatted=$(gofmt -l $(git ls-files '*.go' | grep -vi 'Dockerfile.go'))
+          # gofmt: every tracked *.go file.
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt required on these files:"
             echo "$unformatted"
@@ -253,9 +255,6 @@ jobs:
           set -e
           node scripts/check-css-vars.js
           node scripts/test-check-css-vars.js
-
-      - name: Run JS unit tests
-        run: sh test-all.sh
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
         # The fixture self-test above (test-preflight-xss-gate.js) only
@@ -586,6 +585,7 @@ jobs:
           # Per-viewport summary printed at the end; any net>0 fails the build.
           suite 1 test-a11y-axe-1668.js BASE_URL=$B AXE_SCREENSHOT_DIR=/tmp/axe-1668
           suite 2 test-filter-ux-e2e.js BASE_URL=$B
+          suite 2 test-radio-setting-1869-e2e.js BASE_URL=$B
           suite 1 test-channel-issue-1087-e2e.js BASE_URL=$B
           suite 1 test-channel-issue-1111-e2e.js BASE_URL=$B
           suite 2 test-map-modal-fluid-e2e.js BASE_URL=$B
@@ -687,6 +687,7 @@ jobs:
           suite 2 test-issue-1630-reach-mobile-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-node-reach-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-issue-1640-compare-discovery-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-observer-detail-ownership-e2e.js BASE_URL=$B
           suite 2 test-neighbor-map-btn-clip-e2e.js CHROMIUM_REQUIRE=1
           suite 3 test-rx-coverage-viewport-e2e.js BASE_URL=$B
           suite 1 test-rx-coverage-noise-e2e.js BASE_URL=$B
@@ -972,7 +973,7 @@ jobs:
               || { echo "::error::$b is not an arm64 binary"; exit 1; }
           done
           docker run --rm --platform linux/arm64 \
-            -v "$PWD/arm64-image/app:/bin-under-test:ro" alpine:3.20 \
+            -v "$PWD/arm64-image/app:/bin-under-test:ro" alpine:3.24 \
             /bin-under-test/corescope-decrypt --version
           rm -rf ./arm64-image
           echo "arm64 static binaries run under QEMU ✅"
