@@ -6,6 +6,7 @@ set -e
 cd "$(dirname "$0")"
 
 node tests/unit/test-test-inventory.js
+node tests/unit/test-manage-workflow.js
 node tests/unit/test-1108-region-hide-nodes.js
 node tests/unit/test-1659-analytics-warmup.js
 node tests/unit/test-a11y-1705-subpath-hop-prefix-e2e.js
