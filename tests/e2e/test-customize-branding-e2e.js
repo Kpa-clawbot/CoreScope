@@ -151,10 +151,11 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     } finally { await input.fill('MyMeshTest'); }
     await navigate('#/packets');
     await navigate('#/nodes');
-    assert(await page.title() === 'Nodes | MyMeshTest', 'navigation accumulated duplicate suffixes');
+    const title = await page.title();
+    assert(title === 'Nodes | MyMeshTest', 'expected Nodes | MyMeshTest after navigation, got: ' + title);
   });
 
-  await step('a pending packets render preserves the next route and branded title', async () => {
+  await step('#2335: a pending packets render preserves the next route and branded title', async () => {
     await navigate('#/home');
     await page.evaluate(() => {
       window.__brandingOriginalApi = window.api;
@@ -170,15 +171,15 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     try {
       await navigate('#/packets?timeWindow=0');
       await page.waitForFunction(() => window.__brandingReleasePackets);
-      const state = await page.evaluate(async () => {
-        const routed = new Promise(resolve => window.addEventListener('hashchange', () => {
-          resolve({ hash: location.hash, title: document.title });
-        }, { once: true }));
+      const before = await page.evaluate(() => {
+        const generation = viewGeneration();
         // The response continuation runs before the queued hashchange task.
         location.hash = '#/nodes';
         window.__brandingReleasePackets();
-        return routed;
+        return generation;
       });
+      await page.waitForFunction(gen => viewGeneration() > gen, before);
+      const state = await page.evaluate(() => ({ hash: location.hash, title: document.title }));
       assert(state.hash === '#/nodes', 'pending packets render replaced the route with ' + state.hash);
       assert(state.title === 'Nodes | MyMeshTest', 'pending packets render replaced the title with ' + state.title);
     } finally {
