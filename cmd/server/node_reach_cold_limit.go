@@ -23,9 +23,11 @@ import (
 // At most reachColdWaiterLimit distinct cold build leaders may queue for up
 // to reachColdBuildWait; excess leaders are shed immediately with 429 +
 // Retry-After. The wait costs a parked goroutine and timer, not a database
-// connection. The ceiling is two active scans plus eight queued leaders per
-// Server, independent of request rate. Same-key singleflight followers share
-// their leader's admission; this does not cap those pre-existing followers.
+// connection. For distinct (pubkey, days) keys the ceiling is two active
+// scans plus eight queued leaders per Server, whatever the request rate.
+// Requests for a key that is already queued or building are singleflight
+// followers: they wait in sf.Do on their leader's admission and are not
+// counted, so their number still grows with the request rate.
 //
 // Design and tests by dborup (dborup/CoreScope@195ec4c3), reviewing #2127.
 //
