@@ -46,36 +46,8 @@ func TestMigrateContentHashesAsyncSurvivesEviction(t *testing.T) {
 			}
 			original := append([]*StoreTx(nil), store.packets...)
 
-			// Occupy the native read-only SQL pool until the real migration has
-			// captured its first batch and released the store's read lock.
-			db.conn.SetMaxOpenConns(1)
-			conn, err := db.conn.Conn(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			before := db.conn.Stats().WaitCount
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				migrateContentHashesAsync(store, tc.batchSize, 0)
-			}()
-			finish := func() {
-				t.Helper()
-				conn.Close()
-				select {
-				case <-done:
-				case <-time.After(5 * time.Second):
-					t.Fatal("migration did not return after releasing the SQL connection")
-				}
-			}
+			finish := pauseHashMigrationAtSQL(t, store, tc.batchSize)
 			defer finish()
-			deadline := time.Now().Add(5 * time.Second)
-			for db.conn.Stats().WaitCount == before && time.Now().Before(deadline) {
-				runtime.Gosched()
-			}
-			if db.conn.Stats().WaitCount == before {
-				t.Fatal("migration did not reach its first SQL batch")
-			}
 			if got := store.RunEviction(); got != 4 {
 				t.Fatalf("evicted %d packets, want 4", got)
 			}
@@ -141,4 +113,98 @@ func TestMigrateContentHashesAsyncSurvivesEviction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMigrateContentHashesAsyncKeepsInitialRange(t *testing.T) {
+	for _, prepend := range []bool{false, true} {
+		name := "append"
+		if prepend {
+			name = "prepend"
+		}
+		t.Run(name, func(t *testing.T) {
+			db := setupTestDBv2(t)
+			defer db.Close()
+			store := NewPacketStore(db, nil)
+			rawHex := "0A00D69FD7A5A7475DB07337749AE61FA53A4788E976"
+			for _, suffix := range []string{"76", "77", "78"} {
+				raw := rawHex[:len(rawHex)-2] + suffix
+				if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+					VALUES (?, ?, datetime('now'), 0, 2)`, raw, "old-"+raw); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.Load(); err != nil {
+				t.Fatal(err)
+			}
+			if len(store.packets) != 3 {
+				t.Fatalf("fixture loaded %d packets, want 3", len(store.packets))
+			}
+			original := append([]*StoreTx(nil), store.packets...)
+			finish := pauseHashMigrationAtSQL(t, store, 2)
+			defer finish()
+
+			added := &StoreTx{ID: 4, RawHex: rawHex, Hash: "added-hash"}
+			store.mu.Lock()
+			if prepend {
+				store.packets = mergeChunkIntoPackets([]*StoreTx{added}, store.packets)
+			} else {
+				store.packets = append(store.packets, added)
+			}
+			store.byTxID[added.ID] = added
+			store.byHash[added.Hash] = added
+			store.mu.Unlock()
+			finish()
+
+			for i, tx := range original {
+				wantHash := ComputeContentHash(tx.RawHex)
+				if prepend && i >= 2 {
+					wantHash = "old-" + tx.RawHex
+				}
+				if store.byHash[wantHash] != tx || tx.Hash != wantHash {
+					t.Errorf("original transmission %d hash = %q, want %q and retained ownership", tx.ID, tx.Hash, wantHash)
+				}
+			}
+			if added.Hash != "added-hash" || store.byHash["added-hash"] != added {
+				t.Error("bounded migration changed a transmission outside its initial range")
+			}
+			if got := store.hashMigrationComplete.Load(); got != !prepend {
+				t.Errorf("hashMigrationComplete = %v, want %v", got, !prepend)
+			}
+		})
+	}
+}
+
+// Occupy the SQL pool until the real migration captures its first batch and
+// releases the store's read lock. The caller must release and drain it.
+func pauseHashMigrationAtSQL(t *testing.T, store *PacketStore, batchSize int) func() {
+	t.Helper()
+	store.db.conn.SetMaxOpenConns(1)
+	conn, err := store.db.conn.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := store.db.conn.Stats().WaitCount
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		migrateContentHashesAsync(store, batchSize, 0)
+	}()
+	finish := func() {
+		t.Helper()
+		conn.Close()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("migration did not return after releasing the SQL connection")
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for store.db.conn.Stats().WaitCount == before && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
+	if store.db.conn.Stats().WaitCount == before {
+		finish()
+		t.Fatal("migration did not reach its first SQL batch")
+	}
+	return finish
 }
