@@ -39,6 +39,7 @@ fi
 # "Unexpected token '<'" pageerrors and a missing `qrcode` global —
 # which makes the QR Generate path hit the "[QR library not loaded]"
 # fallback in channel-qr.js (issue #1087 bug 1 manifests in CI only).
+# Recursive: Leaflet lives in vendor/leaflet-1.9.4/ with its images/.
 mkdir -p public-instrumented/vendor
-cp public/vendor/* public-instrumented/vendor/ 2>/dev/null
+cp -r public/vendor/. public-instrumented/vendor/
 echo "Frontend instrumented successfully"
