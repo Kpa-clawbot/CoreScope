@@ -48,6 +48,46 @@ func TestCertainRelaySeparatesOwnAdvertsAndForwarding(t *testing.T) {
 	assertCertainRelay(t, s, chA, at.Add(time.Second).Format(time.RFC3339))
 }
 
+func TestCertainRelayRequiresAdvertOrigin(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		raw  string
+	}{
+		{"malformed payload", "114140aa00"},
+		{"truncated public key", "114140aa" + strings.Repeat("33", 31)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			decoded, err := DecodePacket(c.raw, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Header.PayloadType != payloadTypeAdvert || decoded.Payload.Error == "" || decoded.Payload.PubKey != "" {
+				t.Fatalf("expected an advert without a decoded origin, got %+v", decoded.Payload)
+			}
+			path, err := json.Marshal(decoded.Path.Hops)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pt := decoded.Header.PayloadType
+			tx := &StoreTx{
+				ID: 1, RawHex: c.raw, PayloadType: &pt,
+				FirstSeen: "2026-10-20T12:00:00Z", DecodedJSON: PayloadJSON(&decoded.Payload),
+			}
+			obs := &StoreObs{PathJSON: string(path), relayHopHexLen: observedRelayHopHexLen(c.raw, string(path))}
+			if obs.relayHopHexLen != 4 {
+				t.Fatalf("expected an eligible two-byte hop, got %d hex characters", obs.relayHopHexLen)
+			}
+			tx.Observations = []*StoreObs{obs}
+			s := chStore()
+			s.indexResolvedPathHops(tx, []string{chC}, map[string]bool{}, chPM(), obs)
+			if got := s.certainHeard[chC]; got != tx.FirstSeen {
+				t.Errorf("existing certain last heard = %q; want %q", got, tx.FirstSeen)
+			}
+			assertCertainRelay(t, s, chC, "")
+		})
+	}
+}
+
 func TestCertainRelayGatesAndTimestamps(t *testing.T) {
 	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	for _, c := range []struct {
