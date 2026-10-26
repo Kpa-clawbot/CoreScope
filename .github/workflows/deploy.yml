@@ -533,7 +533,13 @@ jobs:
               "publicBaseUrl": "http://localhost:13582",
               "mail": { "provider": "fake", "fromEmail": "noreply@e2e.test" },
               "channelProposals": { "enabled": true },
-              "notifications": { "enabled": true }
+              "notifications": { "enabled": true },
+              "observerLogins": {
+                "enabled": true,
+                "hookSecret": "e2e-hook-secret-0123",
+                "encryptionKey": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+                "broker": { "host": "mqtt.e2e.test" }
+              }
             }
           }
           JSON

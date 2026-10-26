@@ -35,6 +35,8 @@ var (
 	ErrChallengeMissing  = errors.New("users: link challenge unknown or already used")
 	ErrChallengeExpired  = errors.New("users: link challenge expired")
 	ErrChallengeMismatch = errors.New("users: link challenge bound to another user or pubkey")
+	// ErrMQTTLoginExists: the user already has an observer MQTT login.
+	ErrMQTTLoginExists = errors.New("users: observer login already exists")
 )
 
 // noLimit is SQLite's LIMIT value for "every row" (the account export).

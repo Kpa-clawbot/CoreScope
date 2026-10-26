@@ -108,3 +108,8 @@ a.account-btn { display: inline-flex; align-items: center; text-decoration: none
 #notifyForm + h4 { margin-top: var(--space-lg); }
 .account-watches { list-style: none; padding: 0; margin: 0 0 8px; }
 .account-watches li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+
+/* Observer MQTT login section (account.js). */
+.account-obs-login { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 8px; font-size: var(--fs-sm); }
+.account-obs-login dt { color: var(--text-muted); }
+.account-obs-login dd { margin: 0; overflow-wrap: anywhere; }

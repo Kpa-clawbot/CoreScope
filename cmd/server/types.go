@@ -1119,6 +1119,7 @@ type ClientUserManagement struct {
 	ChannelProposals bool `json:"channelProposals,omitempty"`
 	Notifications    bool `json:"notifications,omitempty"`
 	CompanionLinking bool `json:"companionLinking,omitempty"`
+	ObserverLogins   bool `json:"observerLogins,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that

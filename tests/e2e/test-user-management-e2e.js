@@ -9,7 +9,9 @@
  *   (cd cmd/server && go build -o ../../corescope-server . && go build -tags e2etest -o ../../corescope-server-e2e .)
  *   # config.json for the on-server (in $CFGDIR): port 13582, userManagement {enabled: true,
  *   #   dbPath "users.db", adminEmails ["admin@e2e.test"], publicBaseUrl "http://localhost:13582",
- *   #   mail {provider "fake", fromEmail "noreply@e2e.test"}, channelProposals {enabled: true}, notifications {enabled: true}}
+ *   #   mail {provider "fake", fromEmail "noreply@e2e.test"}, channelProposals {enabled: true}, notifications {enabled: true},
+ *   #   observerLogins {enabled: true, hookSecret "e2e-hook-secret-0123", encryptionKey "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+ *   #   broker {host "mqtt.e2e.test"}}}
  *   corescope-server -port 13581 -db "$TMP/off.db" -public public &
  *   (cd "$CFGDIR" && corescope-server-e2e -config-dir . -port 13582 -db "$TMP/on.db" -public <repo>/public) &
  *   BASE_URL=http://localhost:13582 BASE_URL_OFF=http://localhost:13581 node tests/e2e/test-user-management-e2e.js
@@ -470,6 +472,148 @@ async function until(fn, label) {
     await api.dispose();
   });
   await driver.context().close();
+
+  // Observer MQTT logins (docs/superpowers/specs/2026-10-25-observer-mqtt-logins-design.md).
+  const OBS_EMAIL = 'observer@e2e.test';
+  const owner = await (await browser.newContext()).newPage();
+  owner.setDefaultTimeout(8000);
+  owner.on('pageerror', (e) => console.error('[pageerror owner]', e.message));
+  const obs = { username: null, password: null, pubkey: null, name: null };
+  // The newest fake mail, once it satisfies ok.
+  async function mailWhere(pg, ok, label) {
+    let m = null;
+    await until(async () => {
+      const r = await pg.request.get(BASE + '/__e2e/last-mail');
+      m = r.ok() ? await r.json() : null;
+      return !!m && ok(m);
+    }, label);
+    return m;
+  }
+  async function credentialsMail(pg, username) {
+    const m = await mailWhere(pg, (x) => x.to === OBS_EMAIL && /Password: [A-Za-z0-9]{32}/.test(x.text) &&
+      (!username || x.text.indexOf('Username: ' + username) !== -1), 'credentials mail');
+    return { username: /Username: (obs_[a-z0-9]{12})/.exec(m.text)[1], password: /Password: ([A-Za-z0-9]{32})/.exec(m.text)[1], text: m.text };
+  }
+  async function noPasswordShown(pg, password) {
+    const html = await pg.evaluate(() => document.documentElement.outerHTML);
+    assert(html.indexOf(password) === -1, 'the password is on the page');
+  }
+
+  await step('observer logins: the account section offers a login mailed to the account address', async () => {
+    await registerAndActivate(owner, OBS_EMAIL, 'E2E Observer');
+    await owner.goto(BASE + '/#/account?section=observers');
+    await owner.waitForSelector('#obsLoginRequest');
+    const text = await owner.textContent('#obsLoginSection');
+    assert(text.indexOf('Request a personal login for your observers. The credentials are sent to ' + OBS_EMAIL + '.') !== -1, text);
+    assert((await owner.textContent('#obsLoginRequest')) === 'Request observer login', 'button label');
+    await until(() => owner.evaluate(() => {
+      const r = document.getElementById('observers').getBoundingClientRect();
+      return r.top >= -1 && r.top < window.innerHeight;
+    }), 'section=observers scrolls to the heading');
+    await axeClean(owner, '#obsLoginSection');
+  });
+
+  await step('observer logins: request mails obs_ credentials; the page shows the username, never the password', async () => {
+    await owner.click('#obsLoginRequest');
+    await owner.waitForSelector('#obsLoginUser');
+    const c = await credentialsMail(owner);
+    obs.username = c.username;
+    obs.password = c.password;
+    assert(c.text.indexOf('obs_') !== -1, 'no obs_ in the mail');
+    assert(c.text.indexOf('#/account?section=observers') !== -1, 'mail does not link to the section');
+    assert((await owner.textContent('#obsLoginUser')) === obs.username, 'username not shown');
+    assert((await owner.textContent('#obsLoginMsg')).indexOf('Check your mailbox') !== -1, 'no sent message');
+    await noPasswordShown(owner, obs.password);
+    const api = await (await owner.request.get(BASE + '/api/account/observer-login')).text();
+    assert(api.indexOf(obs.password) === -1, 'the API returned the password');
+  });
+
+  await step('observer logins: an observer publishing with the login is listed as bound', async () => {
+    const list = await (await owner.request.get(BASE + '/api/observers')).json();
+    const o = list.observers.find((x) => /^[0-9A-Fa-f]{64}$/.test(x.id));
+    assert(o, 'no observer with a 64-hex id in the fixture');
+    obs.pubkey = o.id.toUpperCase();
+    obs.name = o.name;
+    const r = await owner.request.post(BASE + '/api/mqtt-hook/emqx/authz', {
+      headers: { 'X-CoreScope-Hook-Secret': 'e2e-hook-secret-0123' },
+      data: { username: obs.username, topic: 'meshcore/TST/' + obs.pubkey + '/status', action: 'publish' },
+    });
+    assert(r.ok() && (await r.json()).result === 'allow', 'authz did not allow the publish');
+    // The fixture already knows this observer, so the admins get a claim notice.
+    await mailWhere(owner, (m) => m.to === 'admin@e2e.test' && /existing observer was claimed/.test(m.subject), 'admin claim notice');
+    await owner.reload();
+    await owner.waitForSelector('#obsList li[data-pubkey="' + obs.pubkey + '"]');
+    const text = await owner.textContent('#obsList');
+    assert(text.indexOf(obs.pubkey.slice(0, 12)) !== -1 && text.indexOf(obs.name) !== -1, text);
+  });
+
+  await step('observer logins: Mail my credentials again sends the same login', async () => {
+    await owner.click('#obsLoginResend');
+    await until(async () => (await owner.textContent('#obsLoginMsg')).indexOf('Check your mailbox') !== -1, 'resend message');
+    const c = await credentialsMail(owner, obs.username);
+    assert(c.password === obs.password, 'resend mailed another password');
+    await noPasswordShown(owner, obs.password);
+  });
+
+  await step('observer logins: the admin tab lists the login and the observer with its owner', async () => {
+    await admin.goto(BASE + '/#/admin?tab=observer-logins');
+    const row = admin.locator('#obsAdminLogins tr[data-username="' + obs.username + '"]');
+    await row.waitFor();
+    const t = await row.textContent();
+    assert(t.indexOf('E2E Observer') !== -1 && t.indexOf(OBS_EMAIL) !== -1, t);
+    const orow = admin.locator('#obsAdminObservers tr[data-pubkey="' + obs.pubkey + '"]');
+    await orow.waitFor();
+    assert((await orow.locator('td').nth(2).textContent()) === 'E2E Observer', 'bound observer does not show its owner');
+    assert(await orow.locator('select').count() === 0, 'a select rendered before Reassign');
+    assert((await admin.textContent('#obsAdminObservers')).indexOf('not migrated') !== -1, 'unbound observers not marked');
+    await noPasswordShown(admin, obs.password);
+    await admin.mouse.move(0, 0);
+    await admin.waitForTimeout(1500);
+    await axeClean(admin, '#app');
+  });
+
+  await step('observer logins: Reassign unbinds the observer and binds it back, row by row', async () => {
+    const orow = '#obsAdminObservers tr[data-pubkey="' + obs.pubkey + '"]';
+    await admin.click(orow + ' button[data-reassign]');
+    await admin.waitForSelector(orow + ' select:focus');
+    await axeClean(admin, orow);
+    await admin.selectOption(orow + ' select', '');
+    await admin.waitForSelector(orow + ' .um-status-pending');
+    assert((await admin.textContent('#obsAdminMsg')).indexOf('unbound') !== -1, 'no unbound message');
+    let api = await (await admin.request.get(BASE + '/api/admin/observer-logins')).json();
+    assert(!api.bindings.some((b) => b.pubkey === obs.pubkey), 'binding still present after unbinding');
+    const uid = api.logins.find((l) => l.username === obs.username).userId;
+    await admin.click(orow + ' button[data-reassign]');
+    await admin.selectOption(orow + ' select', String(uid));
+    await until(async () => (await admin.textContent(orow + ' td:nth-child(3)')) === 'E2E Observer', 'owner back on the row');
+    api = await (await admin.request.get(BASE + '/api/admin/observer-logins')).json();
+    assert(api.bindings.some((b) => b.pubkey === obs.pubkey && b.userId === uid && b.boundBy === 'admin'), JSON.stringify(api.bindings));
+  });
+
+  await step('observer logins: revoke asks inline, then the account page says revoked', async () => {
+    const row = '#obsAdminLogins tr[data-username="' + obs.username + '"]';
+    await admin.click(row + ' button[data-act="revoke"]');
+    await admin.click(row + ' button[data-act="revoke-confirm"]');
+    await until(async () => (await admin.textContent('#obsAdminMsg')).indexOf('revoked') !== -1, 'revoke message');
+    await admin.waitForSelector(row + ' .um-status-disabled');
+    await owner.reload();
+    await owner.waitForSelector('#obsLoginRevoked');
+    assert((await owner.textContent('#obsLoginRevoked')) === 'Your observer login was revoked. Contact the administrator.', 'revoked text');
+    assert(await owner.locator('#obsLoginResend').count() === 0, 'resend offered while revoked');
+  });
+
+  await step('observer logins: reissue mails a new login and the account page shows it again', async () => {
+    const row = '#obsAdminLogins tr[data-username="' + obs.username + '"]';
+    await admin.click(row + ' button[data-act="reissue"]');
+    await admin.click(row + ' button[data-act="reissue-confirm"]');
+    const c = await mailWhere(admin, (m) => m.to === OBS_EMAIL && m.text.indexOf('Username: ' + obs.username) === -1 && /Username: obs_/.test(m.text), 'reissue mail');
+    const fresh = /Username: (obs_[a-z0-9]{12})/.exec(c.text)[1];
+    await admin.waitForSelector('#obsAdminLogins tr[data-username="' + fresh + '"]');
+    await owner.reload();
+    await owner.waitForSelector('#obsLoginUser');
+    assert((await owner.textContent('#obsLoginUser')) === fresh, 'new username not shown');
+  });
+  await owner.context().close();
 
   await step('feature off: no userManagement block, so no notifications flag, and no toggle on the node page', async () => {
     const body = await (await off.request.get(BASE_OFF + '/api/config/client')).json();

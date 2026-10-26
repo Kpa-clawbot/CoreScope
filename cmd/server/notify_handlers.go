@@ -76,11 +76,15 @@ func notifyPubkey(raw string) (string, bool) {
 }
 
 // availableNotifyEvents lists what u may choose; node.external only when
-// the instance configures externalAlerts.
-func availableNotifyEvents(u *users.User, external bool) []string {
+// the instance configures externalAlerts, observer.offline.own only when
+// observer logins are enabled.
+func availableNotifyEvents(u *users.User, external, observerLogins bool) []string {
 	out := append([]string{}, users.NodeNotifyEvents...)
 	if external {
 		out = append(out, users.OptionalNodeNotifyEvents...)
+	}
+	if observerLogins {
+		out = append(out, users.OwnerNotifyEvents...)
 	}
 	if u.Role == users.RoleAdmin {
 		out = append(out, users.AdminNotifyEvents...)
@@ -119,7 +123,7 @@ func (s *Server) notifyAccount(u *users.User) (notifyAccountJSON, error) {
 		return notifyAccountJSON{}, err
 	}
 	ext := ns.external.url != ""
-	out := notifyAccountJSON{Enabled: p.Enabled, Events: []string{}, AvailableEvents: availableNotifyEvents(u, ext),
+	out := notifyAccountJSON{Enabled: p.Enabled, Events: []string{}, AvailableEvents: availableNotifyEvents(u, ext, s.auth.set.observerLogins.enabled),
 		Watches: make([]notifyWatchJSON, 0, len(ws)),
 		Limits:  notifyLimitsJSON{MaxWatches: ns.maxWatchesPerUser, PerUserPerDay: ns.perUserPerDay, MailsLast24h: perUser[u.ID]}}
 	if ext {

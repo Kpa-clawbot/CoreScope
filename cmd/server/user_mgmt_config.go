@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -25,6 +26,7 @@ type UserManagementConfig struct {
 	ChannelProposals *ChannelProposalsConfig `json:"channelProposals,omitempty"`
 	Notifications    *NotificationsConfig    `json:"notifications,omitempty"`
 	Backup           *UsersBackupConfig      `json:"backup,omitempty"`
+	ObserverLogins   *ObserverLoginsConfig   `json:"observerLogins,omitempty"`
 }
 
 // UserMailConfig is userManagement.mail.
@@ -239,6 +241,78 @@ func resolveBackup(c *UsersBackupConfig, dbPath string) backupSettings {
 	return b
 }
 
+// ObserverLoginsConfig is userManagement.observerLogins: personal MQTT logins
+// for observers. Off by default.
+type ObserverLoginsConfig struct {
+	Enabled       bool                 `json:"enabled"`
+	HookSecret    string               `json:"hookSecret,omitempty"`
+	EncryptionKey string               `json:"encryptionKey,omitempty"`
+	Broker        ObserverBrokerConfig `json:"broker"`
+}
+
+// ObserverBrokerConfig is the broker an observer connects to, as shown to
+// the user.
+type ObserverBrokerConfig struct {
+	Host      string `json:"host"`
+	Port      int    `json:"port,omitempty"`
+	Transport string `json:"transport,omitempty"`
+	TLS       bool   `json:"tls,omitempty"`
+}
+
+// observerLoginSettings is the resolved form; the zero value means off.
+type observerLoginSettings struct {
+	enabled    bool
+	hookSecret string
+	key        []byte // 32 bytes, for users.NewSecretBox
+	host       string
+	port       int
+	transport  string
+	tls        bool
+}
+
+const (
+	defaultObserverBrokerPort      = 1883
+	defaultObserverBrokerTransport = "tcp"
+)
+
+// resolveObserverLogins validates the block only when it is enabled. The
+// hook secret and key may come from the environment, which wins.
+func resolveObserverLogins(c *ObserverLoginsConfig, getenv func(string) string) (observerLoginSettings, error) {
+	if c == nil || !c.Enabled {
+		return observerLoginSettings{}, nil
+	}
+	o := observerLoginSettings{enabled: true, tls: c.Broker.TLS}
+	o.hookSecret = envOrValue(getenv, "CORESCOPE_OBSERVER_HOOK_SECRET", c.HookSecret)
+	if o.hookSecret == "" {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.hookSecret is required (or CORESCOPE_OBSERVER_HOOK_SECRET)")
+	}
+	if len(o.hookSecret) < 16 {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.hookSecret must be at least 16 characters")
+	}
+	rawKey := envOrValue(getenv, "CORESCOPE_OBSERVER_KEY", c.EncryptionKey)
+	if rawKey == "" {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.encryptionKey is required (or CORESCOPE_OBSERVER_KEY)")
+	}
+	key, err := base64.StdEncoding.DecodeString(rawKey)
+	if err != nil || len(key) != 32 {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.encryptionKey must be standard base64 of exactly 32 bytes")
+	}
+	o.key = key
+	o.host = strings.TrimSpace(c.Broker.Host)
+	if o.host == "" {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.broker.host is required")
+	}
+	o.port = positiveOr(c.Broker.Port, defaultObserverBrokerPort)
+	o.transport = strings.TrimSpace(c.Broker.Transport)
+	if o.transport == "" {
+		o.transport = defaultObserverBrokerTransport
+	}
+	if o.transport != "tcp" && o.transport != "websockets" {
+		return observerLoginSettings{}, fmt.Errorf("userManagement.observerLogins.broker.transport %q is not supported (use \"tcp\" or \"websockets\")", o.transport)
+	}
+	return o, nil
+}
+
 // UserManagementEnabled reports whether optional accounts are on. Nil config
 // or absent section means off (the default).
 func (c *Config) UserManagementEnabled() bool {
@@ -263,6 +337,7 @@ type userMgmtSettings struct {
 	proposals      proposalSettings
 	notify         notifySettings
 	backup         backupSettings
+	observerLogins observerLoginSettings
 }
 
 const defaultSessionDays = 30
@@ -363,6 +438,9 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 		}
 	}
 	set.backup = resolveBackup(u.Backup, set.dbPath)
+	if set.observerLogins, err = resolveObserverLogins(u.ObserverLogins, getenv); err != nil {
+		return nil, err
+	}
 	return set, nil
 }
 
