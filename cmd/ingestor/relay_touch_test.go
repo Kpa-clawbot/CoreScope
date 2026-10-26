@@ -144,3 +144,54 @@ func TestTouchRelayNodes_MalformedTimestamp(t *testing.T) {
 		t.Errorf("RelayTouches = %d, want 0", n)
 	}
 }
+
+// TestInsertTransmission_TouchesOnlyFloodRelays: only a flood path lists
+// relays that already transmitted. A direct route's path is the hops still
+// to come and a TRACE's path_json is the route it was asked to take, so a
+// trace to a node that is switched off must not mark it heard.
+func TestInsertTransmission_TouchesOnlyFloodRelays(t *testing.T) {
+	cases := []struct {
+		name        string
+		routeType   int
+		payloadType int
+		rawHex      string
+		wantTouch   bool
+	}{
+		{"flood TXT_MSG", 1, 2, "09414b60", true},
+		{"transport flood TXT_MSG", 0, 2, "0811223344414b60", true},
+		{"direct TXT_MSG", 2, 2, "0a414b60", false},
+		{"direct TRACE", 2, 9, "260032", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+
+			const relay = "4b6091e5d29f53738c0dbe013cb4aeb738955447a92465d9445e18d4099d940e"
+			const before = "2026-07-01T00:00:00Z"
+			seedRelayNode(t, store, relay, "Switched off", before)
+			if err := store.RefreshPrefixIndex(); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.UpsertObserver("fixture-observer", "Fixture observer", "", nil); err != nil {
+				t.Fatal(err)
+			}
+
+			rxTime := "2026-07-10T12:00:00Z"
+			data := &PacketData{
+				Hash: "touch-" + tc.name, RouteType: tc.routeType, PayloadType: tc.payloadType,
+				RawHex: tc.rawHex, PathJSON: `["4b60"]`, ObserverID: "fixture-observer", Timestamp: rxTime,
+			}
+			if _, err := store.InsertTransmission(data); err != nil {
+				t.Fatal(err)
+			}
+
+			want := before
+			if tc.wantTouch {
+				want = rxTime
+			}
+			if got := nodeLastSeen(t, store, relay); got != want {
+				t.Errorf("last_seen = %q, want %q", got, want)
+			}
+		})
+	}
+}

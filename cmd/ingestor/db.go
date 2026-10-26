@@ -1233,8 +1233,11 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		s.Stats.ObservationsInserted.Add(1)
 		// #1598: a resolved hop proves the node was forwarding traffic at
 		// rxTime. Refresh its last_seen so staleness/eviction logic sees
-		// relay activity, not just ADVERTs.
-		s.touchRelayNodesLocked(resolvedPubkeys(resolved), rxTime)
+		// relay activity, not just ADVERTs. Only flood paths are that
+		// proof; see pathHopsTransmitted.
+		if pathHopsTransmitted(data) {
+			s.touchRelayNodesLocked(resolvedPubkeys(resolved), rxTime)
+		}
 		// #1690: bump transmissions.last_seen so cold-load can filter on
 		// effective recency. Conditional `last_seen < ?` so we never go
 		// backwards on out-of-order ingest.
@@ -2064,6 +2067,19 @@ func (s *Store) LogStats() {
 		s.Stats.WriteErrors.Load(),
 		s.Stats.SignatureDrops.Load(),
 	)
+}
+
+// pathHopsTransmitted reports whether data's path lists relays that already
+// transmitted the packet: a flood route whose path bytes are hop hashes.
+// Direct-route paths list the hops still to come (Mesh::removeSelfFromPath),
+// and a TRACE's path_json is the route it was asked to take, its header path
+// bytes being SNR, so neither proves a hop transmitted. Same rule as the
+// server's certain liveness (cmd/server/certain_heard.go relayHopHexLen).
+func pathHopsTransmitted(data *PacketData) bool {
+	if !packetpath.PathBytesAreHops(byte(data.PayloadType)) {
+		return false
+	}
+	return data.RouteType == packetpath.RouteFlood || data.RouteType == packetpath.RouteTransportFlood
 }
 
 // touchRelayNodesLocked refreshes nodes.last_seen for nodes observed as
