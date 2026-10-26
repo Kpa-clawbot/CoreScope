@@ -79,6 +79,7 @@ function loadRouter() {
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     location: { hash: '' }, history: { replaceState() {} }, CustomEvent: class {},
     document: {
+      title: 'CoreScope',
       readyState: 'complete', body: { classList: { toggle() {}, add() {}, remove() {} } },
       createElement: () => ({}), head: { appendChild() {} },
       getElementById: (id) => (id === 'app' ? app : null),
@@ -96,6 +97,42 @@ function loadRouter() {
 }
 
 (async () => {
+  console.log('Router: current view in the browser title (#2259)');
+  {
+    const r = loadRouter();
+    for (const page of ['home', 'packets', 'packet-detail', 'nodes', 'node-analytics', 'node-reach', 'observer-detail', 'analytics', 'account']) {
+      r.ctx.registerPage(page, { init() {}, destroy() {} });
+    }
+    for (const [hash, title] of [
+      ['#/home', 'CoreScope'],
+      ['#/packets', 'Packets | CoreScope'],
+      ['#/nodes', 'Nodes | CoreScope'],
+      ['#/nodes/' + PK, 'Node abababababab | CoreScope'],
+      ['#/nodes/' + PK + '/reach', 'Node abababababab | Reach | CoreScope'],
+      ['#/nodes/' + PK + '/analytics', 'Node abababababab | Analytics | CoreScope'],
+      ['#/packet/123', 'Packet 123 | CoreScope'],
+      ['#/packets/abcdef?obs=2', 'Packet abcdef | CoreScope'],
+      ['#/observers/observer-one', 'Observer observer-one | CoreScope'],
+      ['#/account/login', 'Account | CoreScope'],
+      ['#/account/activate?token=sample-value', 'Account | CoreScope'],
+      ['#/account/reset/sample-value', 'Account | CoreScope'],
+      ['#/home', 'CoreScope'],
+    ]) {
+      r.go(hash);
+      assert(r.ctx.document.title === title, hash + ': ' + title);
+    }
+    assert(typeof r.ctx.setSiteTitle === 'function' && typeof r.ctx.setRouteTitle === 'function',
+      'branding and detail updates have shared title helpers');
+    if (r.ctx.setSiteTitle && r.ctx.setRouteTitle) {
+      r.go('#/nodes');
+      r.ctx.setSiteTitle('Example Mesh');
+      assert(r.ctx.document.title === 'Nodes | Example Mesh', 'late branding preserves the current page');
+      r.ctx.setRouteTitle('packets', 'late-packet');
+      assert(r.ctx.document.title === 'Nodes | Example Mesh', 'a detail callback from another page cannot replace the title');
+      r.ctx.setSiteTitle('  ');
+      assert(r.ctx.document.title === 'Nodes | CoreScope', 'blank branding falls back without accumulating suffixes');
+    }
+  }
   console.log('Router: viewGeneration()');
   {
     const r = loadRouter();

@@ -503,6 +503,7 @@
   let packetCountHelpCleanup = null;
 
   function init(app, routeParam) {
+    if (window.setRouteTitle) window.setRouteTitle('nodes', routeParam);
     directNode = routeParam || null;
     packetCountHelpCleanup = setupPacketCountHelp(app);
 
@@ -1650,6 +1651,7 @@
           panel.innerHTML = '<span>Select a node to view details</span>';
           selectedKey = null;
           history.replaceState(null, '', '#/nodes');
+          if (window.setRouteTitle) window.setRouteTitle('nodes');
           renderRows();
         }
       }
@@ -1677,6 +1679,7 @@
         panel.innerHTML = '<span>Select a node to view details</span>';
         selectedKey = null;
         history.replaceState(null, '', '#/nodes');
+        if (window.setRouteTitle) window.setRouteTitle('nodes');
         renderRows();
       }
     });
@@ -1800,6 +1803,7 @@
       location.hash = '#/nodes/' + encodeURIComponent(pubkey);
       return;
     }
+    if (window.setRouteTitle) window.setRouteTitle('nodes', pubkey);
     // #1056 AC#4: narrow desktop/tablet (641–1023) — open detail in slide-over.
     if (window.SlideOver && window.SlideOver.shouldUse()) {
       selectedKey = pubkey;
@@ -1817,6 +1821,7 @@
         onClose: function () {
           selectedKey = null;
           history.replaceState(null, '', '#/nodes');
+          if (window.setRouteTitle) window.setRouteTitle('nodes');
           renderRows();
         }
       });
