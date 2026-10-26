@@ -55,6 +55,10 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/perf":        {Summary: "Performance statistics", Description: "Returns per-endpoint request timing and slow query log.", Tag: "admin"},
 		"GET /api/mqtt/status": {Summary: "MQTT source status", Description: "Returns per-MQTT-source connection state and counters (lastConnectUnix, lastPacketUnix, packetsTotal, etc.). Broker URL passwords are masked. Sourced from the ingestor stats file; empty list when unavailable. (#1043)", Tag: "admin"},
 		"POST /api/perf/reset": {Summary: "Reset performance stats", Tag: "admin", Auth: true, Session: true},
+
+		"GET /api/perf/io":            {Summary: "Process disk I/O rates", Description: "Per-second server disk I/O rates from /proc/self/io (Linux): read/write/cancelled-write bytes and read/write syscall rates. The first server sample has zero rates. Includes an ingestor object when a usable, recent ingestor I/O sample is available; omits it when unavailable.", Tag: "admin"},
+		"GET /api/perf/sqlite":        {Summary: "SQLite diagnostic metrics", Description: "Returns SQLite WAL sizes (walSize in bytes; walSizeMB in MiB), pageCount, pageSize and cacheSize. cacheHitRate is the PacketStore row-cache hit ratio, not a SQLite cache counter. Unavailable database/WAL measurements remain zero; failures reading these diagnostics do not change the 200 status.", Tag: "admin"},
+		"GET /api/perf/write-sources": {Summary: "Ingestor write counters", Description: "Returns ingestor write counters under sources and the published timestamp as sampleAt. Backfill counters use backfill_ prefixes. Successfully decoded stats also include writer_perf (empty when no writer metrics were published). An unreadable or malformed stats file returns 200 with empty sources, an empty sampleAt and no writer_perf. No freshness check is applied to the published timestamp.", Tag: "admin"},
 		// "POST /api/admin/prune" removed in #1283 (ingestor owns prune).
 		"GET /api/debug/affinity": {Summary: "Debug neighbor affinity scores", Tag: "admin", Auth: true, Session: true},
 		"GET /api/backup":         {Summary: "Download SQLite backup", Description: "Streams a consistent SQLite snapshot of the analyzer DB (VACUUM INTO). Response is application/octet-stream with attachment filename corescope-backup-<unix>.db.", Tag: "admin", Auth: true, Session: true},
@@ -163,6 +167,10 @@ func routeDescriptions() map[string]routeMeta {
 			}},
 		"GET /api/nodes/{pubkey}/neighbors": {Summary: "Get node neighbors", Description: "Returns the queried node's first-hop neighbors with affinity scores and observation metadata (count, SNR, distance, observers). Ambiguous edges carry candidate pubkeys.", Tag: "nodes", Response: schemaRef("NodeNeighborsResponse")},
 
+		"GET /api/nodes/clock-skew": {Summary: "Fleet clock-skew summaries", Description: "Returns an array of clock-skew summaries for nodes with available data, enriched with nodeName/nodeRole when known. Fleet rows omit samples, recentHashEvidence and calibrationSummary; use the single-node endpoint for that detail. Returns an empty array when no store or no clock-skew data is available.", Tag: "nodes", Response: schemaRef("FleetClockSkewResponse"),
+			QueryParams: []paramMeta{{Name: "area", Description: "Configured area key. Omit for the unfiltered fleet. Filtering applies only when the area resolves to a non-empty node set; unknown keys and empty results leave the fleet unfiltered.", Type: "string"}}},
+		"GET /api/nodes/{pubkey}/clock-skew": {Summary: "Get node clock skew", Description: "Returns clock-skew statistics and available sample/calibration evidence for the path pubkey. Returns 404 when the packet store is unavailable or the node has no clock-skew data.", Tag: "nodes"},
+
 		"GET /api/rf-noise": {Summary: "RF noise-floor hex grid", Description: "GeoJSON hex cells of the LoRa noise floor measured by mobile clients along their tracks, from client_rf_samples. Lower (more negative) dBm is quieter, the opposite direction to the SNR-coloured coverage layer. Stationary samples are excluded: a parked companion logs hundreds of samples at one point and would otherwise define the cell. Gated on clientRfSamples.", Tag: "coverage",
 			QueryParams: []paramMeta{
 				{Name: "bbox", Description: "Bounding box as minLat,minLon,maxLat,maxLon", Type: "string", Required: true},
@@ -212,6 +220,7 @@ func routeDescriptions() map[string]routeMeta {
 
 		// Observers
 		"GET /api/observers":                 {Summary: "List observers", Description: "Returns all known packet observers/gateways.", Tag: "observers"},
+		"GET /api/observers/clock-skew":      {Summary: "Observer clock calibrations", Description: "Returns an array of observer clock calibrations: observerID, offsetSec (seconds; positive means the observer clock is ahead) and samples (number of multi-observer packet samples used). Returns an empty array when the store or calibration data is unavailable.", Tag: "observers", Response: schemaRef("ObserverClockSkewResponse")},
 		"GET /api/observers/{id}":            {Summary: "Get observer detail", Tag: "observers"},
 		"GET /api/observers/{id}/metrics":    {Summary: "Get observer metrics", Description: "Packet rates, uptime, and performance metrics.", Tag: "observers"},
 		"GET /api/observers/{id}/analytics":  {Summary: "Get observer analytics", Tag: "observers"},
@@ -264,6 +273,12 @@ func componentSchemas() map[string]interface{} {
 		return m
 	}
 	return map[string]interface{}{
+		"FleetClockSkewResponse": openAPISchema{
+			Type: "array", Items: &openAPISchema{Type: "object"},
+		},
+		"ObserverClockSkewResponse": openAPISchema{
+			Type: "array", Items: &openAPISchema{Type: "object"},
+		},
 		"Node": map[string]interface{}{
 			"type": "object",
 			// additionalProperties:true — the node object carries more fields
