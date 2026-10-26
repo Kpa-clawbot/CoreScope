@@ -166,6 +166,9 @@ jobs:
           # cache, so a key that misses on an unrelated module hurts.
           cache-dependency-path: "**/go.sum"
 
+      - name: Run JS unit tests
+        run: sh test-all.sh
+
       - name: Enforce gofmt + go vet (issue #1859)
         run: |
           set -e
@@ -253,9 +256,6 @@ jobs:
           set -e
           node scripts/check-css-vars.js
           node scripts/test-check-css-vars.js
-
-      - name: Run JS unit tests
-        run: sh test-all.sh
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
         # The fixture self-test above (test-preflight-xss-gate.js) only
