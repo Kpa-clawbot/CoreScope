@@ -10,9 +10,9 @@ const IDS = { A: 'AA'.repeat(32), B: 'BB'.repeat(32) };
 const ARTIFACTS = process.env.ARTIFACT_DIR;
 if (ARTIFACTS) fs.mkdirSync(ARTIFACTS, { recursive: true });
 const cases = [];
-function test(name, run) { cases.push({ name, run }); }
+function test(name, run, options = {}) { cases.push({ name, run, options }); }
 
-async function setup(browser, viewport, theme) {
+async function setup(browser, viewport, theme, options) {
   const context = await browser.newContext({ viewport, colorScheme: theme });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
@@ -22,9 +22,11 @@ async function setup(browser, viewport, theme) {
   const ready = new Map();
   const visits = { A: 0, B: 0 };
   const network = [];
+  let holdClock = false;
   function observer(letter, visit = 0) {
     return { id: IDS[letter], name: 'Observer ' + letter + (visit ? ' visit ' + visit : ''),
-      last_seen: letter === 'B' ? new Date().toISOString() : null, packet_count: 5 };
+      last_seen: letter === 'B' ? new Date().toISOString() : null, packet_count: 5,
+      model: 'Test radio', radio: '910.0,250,10,5' };
   }
   await page.route('**/api/observers**', async route => {
     const url = new URL(route.request().url());
@@ -34,6 +36,11 @@ async function setup(browser, viewport, theme) {
       return route.fulfill({ json: { observers: ['A', 'B'].map(letter => observer(letter)), server_time: new Date().toISOString() } });
     }
     if (url.pathname === '/api/observers/clock-skew') {
+      if (holdClock) {
+        pending.set('clock', route);
+        if (ready.has('clock')) ready.get('clock')();
+        return;
+      }
       return route.fulfill({ json: [
         { observerID: IDS.A, offsetSec: 1, samples: 11 },
         { observerID: IDS.B, offsetSec: 2, samples: 22 },
@@ -42,6 +49,7 @@ async function setup(browser, viewport, theme) {
     }
     for (const letter of ['A', 'B']) {
       if (url.pathname === '/api/observers/' + IDS[letter]) {
+        if (options.identityFailure) return route.fulfill({ status: 404, json: { error: 'fixture identity failure' } });
         return route.fulfill({ json: observer(letter, ++visits[letter]) });
       }
       if (url.pathname === '/api/observers/' + IDS[letter] + '/analytics') {
@@ -55,6 +63,10 @@ async function setup(browser, viewport, theme) {
   });
   await page.goto(BASE + '/?theme=' + theme + '#/observers', { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#obsTable tbody tr[data-value]');
+  // The list also requests calibration. Hold only the detail request, after
+  // clearing that completed list cache entry (preserve real in-flight dedup).
+  holdClock = !!options.holdClock;
+  if (holdClock) await page.evaluate(() => invalidateApiCache('/observers/clock-skew'));
   // Observe the real api() promises (including its in-flight deduplication),
   // so assertions wait for loadDetail's continuations, never a guessed sleep.
   await page.evaluate(() => {
@@ -67,43 +79,63 @@ async function setup(browser, viewport, theme) {
     };
   });
   async function open(letter) {
-    if (await page.locator('#obsTitle').count()) {
-      await page.locator('a[title="Back to Observers"]').click();
-    }
-    await page.locator('#obsTable tbody tr[data-value="#/observers/' + IDS[letter] + '"]').click();
-    if (viewport.width < 768) {
-      await page.locator('.slide-over-panel a').filter({ hasText: 'Open full detail' }).click();
-      await page.keyboard.press('Escape');
-      await page.locator('.slide-over-panel[data-state="open"]').waitFor({ state: 'hidden' });
+    if (holdClock && await page.locator('#obsTitle').count()) {
+      // Navigate through the real router without making the list wait for
+      // this deliberately held, shared calibration request.
+      await page.evaluate(id => { location.hash = '#/observers/' + id; }, IDS[letter]);
+    } else {
+      if (await page.locator('#obsTitle').count()) {
+        await page.locator('a[title="Back to Observers"]').click();
+      }
+      await page.locator('#obsTable tbody tr[data-value="#/observers/' + IDS[letter] + '"]').click();
+      if (viewport.width < 768) {
+        await page.locator('.slide-over-panel a').filter({ hasText: 'Open full detail' }).click();
+        await page.keyboard.press('Escape');
+        await page.locator('.slide-over-panel[data-state="open"]').waitFor({ state: 'hidden' });
+      }
     }
     await page.waitForSelector('#obsDaysSelect');
     await page.waitForFunction(id => window.__observerRequests.some(r => r.path.startsWith('/observers/' + id + '/analytics')), IDS[letter]);
     await page.evaluate(id => Promise.allSettled(window.__observerRequests.filter(r => r.path === '/observers/' + id).map(r => r.promise)), IDS[letter]);
   }
-  async function release(letter, days, status = 200) {
-    const key = letter + ':' + days;
+  async function held(key) {
     // Wait until this exact route is intercepted, without a timing assumption.
     if (!pending.has(key)) {
       let timeout;
       try {
         await new Promise((resolve, reject) => {
           ready.set(key, resolve);
-          timeout = setTimeout(() => reject(new Error('Missing held analytics request: ' + key)), 10000);
+          timeout = setTimeout(() => reject(new Error('Missing held request: ' + key)), 10000);
         });
       } finally { clearTimeout(timeout); ready.delete(key); }
     }
     const route = pending.get(key);
-    assert.ok(route, 'analytics request is held: ' + key);
+    assert.ok(route, 'request is held: ' + key);
     pending.delete(key);
+    return route;
+  }
+  async function settled(path) {
+    await page.evaluate(async path => {
+      await Promise.allSettled(window.__observerRequests.filter(r => r.path === path).map(r => r.promise));
+      await new Promise(requestAnimationFrame);
+    }, path);
+  }
+  async function releaseClock(status = 200) {
+    const route = await held('clock');
+    await route.fulfill({ status, json: status === 200 ? [
+      { observerID: IDS.A, offsetSec: 3, samples: 33 },
+      { observerID: IDS.B, offsetSec: 2, samples: 22 },
+    ] : { error: 'fixture calibration failure' } });
+    await settled('/observers/clock-skew');
+  }
+  async function release(letter, days, status = 200) {
+    const route = await held(letter + ':' + days);
     const label = letter + ' ' + days + ' days';
     await route.fulfill({ status, json: status === 200 ? {
       timeline: [{ label, count: days }], packetTypes: { 4: days },
       nodesTimeline: [{ label, count: 1 }], snrDistribution: [{ range: '0 to 5', count: days }], recentPackets: [],
     } : { error: 'fixture failure' } });
-    await page.evaluate(async suffix => {
-      await Promise.allSettled(window.__observerRequests.filter(r => r.path.endsWith(suffix) || !r.path.includes('/analytics?')).map(r => r.promise));
-      await new Promise(requestAnimationFrame);
-    }, '/observers/' + IDS[letter] + '/analytics?days=' + days);
+    await settled('/observers/' + IDS[letter] + '/analytics?days=' + days);
   }
   async function snapshot() {
     return page.evaluate(() => ({
@@ -122,8 +154,81 @@ async function setup(browser, viewport, theme) {
     assert.match(state.content, letter === 'B' ? /22 samples/ : /33 samples/);
     assert.strictEqual(await page.locator('#obsDaysSelect').inputValue(), String(days));
   }
-  return { page, context, errors, open, release, snapshot, current, network };
+  return { page, context, errors, open, release, releaseClock, snapshot, current, network };
 }
+
+for (const first of ['analytics', 'clock']) test('progressive-' + first + '-first', async h => {
+  await h.open('B');
+  assert.strictEqual(await h.page.locator('#obsTitle').textContent(), 'Observer B visit 1',
+    'identity must be visible with both secondary responses held');
+  const info = h.page.locator('.obs-info-grid');
+  assert.match(await info.innerText(), /Online/);
+  assert.match(await info.innerText(), /Test radio/);
+  assert.match(await info.innerText(), /910.0 MHz/);
+  assert.strictEqual((await h.snapshot()).charts.length, 0);
+  assert.strictEqual(await h.page.locator('#obsAnalytics').getAttribute('aria-busy'), 'true');
+  await h.page.evaluate(() => { window.__observerMetadata = document.querySelector('.obs-info-grid'); });
+  if (ARTIFACTS) await h.page.screenshot({ path: path.join(ARTIFACTS, h.label + '-pending.png'), fullPage: true });
+  if (first === 'analytics') {
+    await h.release('B', 7);
+    assert.strictEqual((await h.snapshot()).charts.length, 4, 'analytics does not wait for calibration');
+    await h.releaseClock();
+  } else {
+    await h.releaseClock();
+    assert.match((await h.snapshot()).content, /22 samples/, 'calibration does not wait for analytics');
+    assert.strictEqual((await h.snapshot()).charts.length, 0);
+    await h.release('B', 7);
+  }
+  await h.current('B', 7);
+  assert.strictEqual(await h.page.locator('#obsAnalytics').getAttribute('aria-busy'), 'false');
+  assert.strictEqual(await h.page.evaluate(() => window.__observerMetadata === document.querySelector('.obs-info-grid')), true,
+    'secondary replies preserve the actual metadata DOM node');
+  assert.strictEqual(h.network.filter(url => url.includes('/analytics?')).length, 1);
+  assert.strictEqual(h.network.filter(url => url === '/api/observers/clock-skew').length, 2,
+    'one list calibration request plus one detail request');
+  if (ARTIFACTS) await h.page.screenshot({ path: path.join(ARTIFACTS, h.label + '-complete.png'), fullPage: true });
+}, { holdClock: true });
+
+test('analytics-error-keeps-identity', async h => {
+  await h.open('B');
+  await h.release('B', 7, 500);
+  assert.strictEqual(await h.page.locator('#obsTitle').textContent(), 'Observer B visit 1');
+  assert.match(await h.page.locator('.obs-info-grid').innerText(), /Online/);
+  assert.match(await h.page.locator('#obsAnalytics').innerText(), /Error: API 500:/);
+  await h.releaseClock();
+  assert.match((await h.snapshot()).content, /22 samples/);
+  assert.strictEqual((await h.snapshot()).charts.length, 0);
+}, { holdClock: true });
+
+test('calibration-error-keeps-identity', async h => {
+  await h.open('B');
+  await h.releaseClock(500);
+  assert.match(await h.page.locator('.obs-info-grid').innerText(), /Test radio/);
+  await h.release('B', 7);
+  assert.strictEqual((await h.snapshot()).charts.length, 4);
+  assert.strictEqual(await h.page.locator('.skew-detail-section').count(), 0);
+}, { holdClock: true });
+
+test('identity-error-with-late-secondary-results', async h => {
+  await h.open('B');
+  const before = await h.snapshot();
+  assert.match(before.content, /Error: API 404:/);
+  await h.release('B', 7);
+  await h.releaseClock();
+  assert.deepStrictEqual(await h.snapshot(), before, 'secondary success cannot hide a failed identity');
+}, { holdClock: true, identityFailure: true });
+
+test('early-identity-route-with-held-calibration', async h => {
+  await h.open('A');
+  assert.strictEqual(await h.page.locator('#obsTitle').textContent(), 'Observer A visit 1');
+  await h.open('B');
+  await h.release('B', 7);
+  await h.releaseClock();
+  await h.current('B', 7);
+  const before = await h.snapshot();
+  await h.release('A', 7);
+  assert.deepStrictEqual(await h.snapshot(), before, 'old observer cannot mutate independently completed sections');
+}, { holdClock: true });
 
 test('late-success', async h => {
   await h.open('A');
@@ -229,9 +334,10 @@ test('dispose-and-controls', async h => {
   try {
     for (const [device, viewport] of Object.entries({ desktop: { width: 1400, height: 900 }, mobile: { width: 390, height: 844 } })) {
       for (const theme of ['light', 'dark']) {
-        for (const { name, run } of cases) {
+        for (const { name, run, options } of cases) {
           const label = device + '-' + theme + '-' + name;
-          const h = await setup(browser, viewport, theme);
+          const h = await setup(browser, viewport, theme, options);
+          h.label = label;
           try {
             await run(h);
             assert.deepStrictEqual(h.errors, [], 'no uncaught browser errors');
