@@ -205,18 +205,42 @@ test('visit-default-days', async h => {
   assert.strictEqual(h.network.filter(url => url.includes('/analytics?')).length, 5, 'no corrective refetch on either new visit');
 });
 
-test('dispose-and-controls', async h => {
+// #2342: comparison results can precede the router's heading focus frame.
+for (const lateFocus of [false, true]) test('dispose-and-controls' + (lateFocus ? '-late-focus' : ''), async h => {
   await h.open('A');
   await h.release('A', 7);
   await h.current('A', 7);
   await h.page.selectOption('#obsCompareWithPicker', IDS.B);
   assert.strictEqual(await h.page.locator('[data-action="compare-with-go"]').isEnabled(), true);
   await h.page.selectOption('#obsDaysSelect', '30');
+  if (lateFocus) await h.page.evaluate(() => {
+    const init = pages.compare.init;
+    const requestFrame = window.requestAnimationFrame;
+    pages.compare.init = function (...args) {
+      pages.compare.init = init;
+      init(...args);
+      // navigate() queues heading focus immediately after page init. Hold
+      // that real callback until the baseline capture has been requested.
+      window.requestAnimationFrame = callback => {
+        window.requestAnimationFrame = requestFrame;
+        window.__releaseComparisonFocus = () => requestFrame(callback);
+        return 0;
+      };
+    };
+  });
   await h.page.locator('[data-action="compare-with-go"]').click();
   await h.page.waitForFunction(ids => location.hash.startsWith('#/compare?a=' + ids.A + '&b=' + ids.B), IDS);
   await h.page.waitForSelector('#compareContent .compare-results');
   assert.strictEqual((await h.snapshot()).charts.length, 0, 'leaving detail destroys its charts');
-  const before = await h.page.locator('#app').innerHTML();
+  const baseline = (async () => {
+    return h.page.evaluate(() => document.getElementById('app').innerHTML);
+  })();
+  if (lateFocus) {
+    assert.strictEqual(await h.page.locator('.compare-page h2').getAttribute('tabindex'), null,
+      'comparison results can render before route focus');
+    await h.page.evaluate(() => window.__releaseComparisonFocus());
+  }
+  const before = await baseline;
   await h.release('A', 30);
   assert.strictEqual(await h.page.locator('#app').innerHTML(), before, 'disposed request cannot change comparison page');
   assert.strictEqual((await h.snapshot()).charts.length, 0);
