@@ -12,8 +12,6 @@
     "/api/dropped-packets",
     "/api/healthz",
     "/api/known-channels",
-    "/api/nodes/resolve",
-    "/api/nodes/{pubkey}/battery",
     "/api/nodes/{pubkey}/reach",
     "/api/nodes/{pubkey}/rx-coverage",
     "/api/paths/inspect",

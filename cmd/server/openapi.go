@@ -161,6 +161,16 @@ func routeDescriptions() map[string]routeMeta {
 				{Name: "role", Description: "Filter by node role", Type: "string"},
 				{Name: "status", Description: "Filter by status (active/stale/offline)", Type: "string"},
 			}},
+		"GET /api/nodes/resolve": {
+			Summary: "Resolve a node prefix", Tag: "nodes", Response: schemaRef("NodeResolveResponse"),
+			Description: "Resolves against nodes and eligible client_node_names entries (reported nodes heard directly), counting distinct public keys across both sources. A unique visible match includes pubkey and a non-empty name when available. No match, or a unique blacklisted or hidden-name match, returns only prefix and ambiguous=false. Multiple candidates return ambiguous=true without pubkey/name. Errors use text/plain: 400 (prefix must be hex / prefix must be at least 4 hex chars), 503 (unavailable database), or 500 (query failed).",
+			QueryParams: []paramMeta{{Name: "prefix", Type: "string", Required: true, Description: "Hex prefix or full public key, 4 to 64 characters after trimming whitespace and lowercasing. Odd lengths are accepted. Missing, empty, non-hex, shorter or longer values return 400."}},
+		},
+		"GET /api/nodes/{pubkey}/battery": {
+			Summary: "Get node battery history", Tag: "nodes", Response: schemaRef("NodeBatteryResponse"),
+			Description: "Battery voltage history from observer_metrics for the exact stored pubkey. The node lookup does not normalize case or validate hex; unknown keys return 404. Observer IDs are matched in lowercase or uppercase. Samples with non-null battery_mv in the lookback window are sorted oldest first. With no samples, samples is [], latest_mv and latest_ts are null, and status is unknown. Errors use application/json objects with an error string: 404 (node not found), or 500 for node/history database query failures.",
+			QueryParams: []paramMeta{{Name: "days", Type: "integer", Description: "Lookback in whole days, 1 through 365. Defaults to 7 when omitted, invalid, non-positive or above 365; values are not clamped."}},
+		},
 		"GET /api/nodes/search":             {Summary: "Search nodes", Description: "Search nodes by name or public key prefix.", Tag: "nodes", QueryParams: []paramMeta{{Name: "q", Description: "Search query", Type: "string", Required: true}}},
 		"GET /api/nodes/reported":           {Summary: "Repeaters known only from their reported name", Description: "Repeaters that told a mobile companion their own name (client_node_names, ANON_REQ_TYPE_OWNER) have no row in nodes or inactive_nodes, and were heard directly at least once (a discover or advert reception). 404 when clientRxCoverage is disabled. Each carries its reception counts and, when companions heard it directly from at least `method.min_spots` spots at least `method.min_spread_m` apart, an `estimate`: a SNR-weighted centroid of those spots with `radius_m` (never below `method.min_radius_m`). The estimate is where companions stood, weighted, not a measured position. Cached for 5 minutes.", Tag: "nodes"},
 		"GET /api/nodes/bulk-health":        {Summary: "Bulk node health", Description: "Returns health status for all nodes in one call.", Tag: "nodes"},
@@ -249,6 +259,7 @@ func routeDescriptions() map[string]routeMeta {
 type openAPISchema struct {
 	Type        string                   `json:"type"`
 	Description string                   `json:"description,omitempty"`
+	Nullable    bool                     `json:"nullable,omitempty"`
 	Enum        []string                 `json:"enum,omitempty"`
 	Items       *openAPISchema           `json:"items,omitempty"`
 	Properties  map[string]openAPISchema `json:"properties,omitempty"`
@@ -282,6 +293,36 @@ func componentSchemas() map[string]interface{} {
 		return m
 	}
 	return map[string]interface{}{
+		"NodeResolveResponse": openAPISchema{
+			Type: "object", Required: []string{"prefix", "ambiguous"},
+			Properties: map[string]openAPISchema{
+				"prefix":    {Type: "string", Description: "Trimmed, lowercase query prefix."},
+				"pubkey":    {Type: "string", Description: "Present only for a unique visible match."},
+				"name":      {Type: "string", Description: "Present only when a unique visible match has a non-empty name."},
+				"ambiguous": {Type: "boolean", Description: "True when multiple distinct public keys match; pubkey and name are then omitted."},
+			},
+		},
+		"NodeBatteryResponse": openAPISchema{
+			Type: "object", Required: []string{"public_key", "days", "samples", "latest_mv", "latest_ts", "status", "thresholds"},
+			Properties: map[string]openAPISchema{
+				"public_key": {Type: "string", Description: "The requested public key, lowercased in the response."},
+				"days":       {Type: "integer", Description: "Effective lookback window in days."},
+				"samples": {Type: "array", Description: "Battery samples in timestamp order, oldest first; empty array when none are available.", Items: &openAPISchema{
+					Type: "object", Required: []string{"timestamp", "battery_mv"},
+					Properties: map[string]openAPISchema{
+						"timestamp":  {Type: "string", Description: "Stored sample timestamp."},
+						"battery_mv": {Type: "integer", Description: "Battery voltage in millivolts."},
+					},
+				}},
+				"latest_mv": {Type: "integer", Nullable: true, Description: "Newest sample voltage in millivolts, or null when the window is empty."},
+				"latest_ts": {Type: "string", Nullable: true, Description: "Newest sample timestamp, or null when the window is empty."},
+				"status":    {Type: "string", Enum: []string{"critical", "low", "ok", "unknown"}, Description: "critical below critical_mv; otherwise low below low_mv; otherwise ok. unknown when the window has no samples."},
+				"thresholds": {Type: "object", Required: []string{"low_mv", "critical_mv"}, Properties: map[string]openAPISchema{
+					"low_mv":      {Type: "integer", Description: "Configured low-battery threshold in millivolts; default 3300."},
+					"critical_mv": {Type: "integer", Description: "Configured critical-battery threshold in millivolts; default 3000."},
+				}},
+			},
+		},
 		"FleetClockSkewResponse": openAPISchema{
 			Type: "array", Items: &openAPISchema{Type: "object"},
 		},
