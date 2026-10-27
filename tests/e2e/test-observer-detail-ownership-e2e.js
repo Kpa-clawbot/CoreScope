@@ -233,6 +233,8 @@ for (const lateFocus of [false, true]) test('dispose-and-controls' + (lateFocus 
   await h.page.waitForSelector('#compareContent .compare-results');
   assert.strictEqual((await h.snapshot()).charts.length, 0, 'leaving detail destroys its charts');
   const baseline = (async () => {
+    // Results do not imply route focus has run; the heading may be hidden on mobile.
+    await h.page.locator('.compare-page h2[tabindex="-1"]').waitFor({ state: 'attached' });
     return h.page.evaluate(() => document.getElementById('app').innerHTML);
   })();
   if (lateFocus) {
