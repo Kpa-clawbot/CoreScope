@@ -161,3 +161,85 @@ func TestNeighborsTopicStoresReport(t *testing.T) {
 		t.Errorf("self = %q %q (%v)", selfScopes, def, err)
 	}
 }
+
+// #2330: a bridge republishes retained reports with RETAIN cleared, so an
+// old payload is a replay whatever the flag says. It never refreshes or
+// replaces a live row, and into an empty row it goes dated by itself.
+func TestUpsertNeighborReportOldUnretainedIsReplay(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	old := neighborsMsg(t, `{"timestamp":"2026-10-20T08:00:00Z","neighbors":[{"pubkey":"`+nbKeyA+`"}]}`)
+
+	if err := s.UpsertNeighborReport("OBS1", old, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if r := loadReport(t, s, "OBS1"); r == nil || r.receivedAt != "2026-10-20T08:00:00Z" {
+		t.Errorf("old report into empty row: %+v, want dated 2026-10-20T08:00:00Z", r)
+	}
+
+	live := neighborsMsg(t, `{"timestamp":"2026-10-25T11:59:59Z","neighbors":[{"pubkey":"`+nbKeyB+`"}]}`)
+	if err := s.UpsertNeighborReport("OBS2", live, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertNeighborReport("OBS2", old, false, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if r := loadReport(t, s, "OBS2"); r == nil || r.receivedAt != "2026-10-25T12:00:00Z" || r.neighbors[0].Pubkey != nbKeyB {
+		t.Errorf("old unretained report replaced a live one: %+v", r)
+	}
+}
+
+// #2330: a replay newer than the stored row still replaces it; one older
+// than the stored row does not.
+func TestUpsertNeighborReportReplayKeepsNewest(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	older := neighborsMsg(t, `{"timestamp":"2026-10-18T08:00:00Z","neighbors":[{"pubkey":"`+nbKeyA+`"}]}`)
+	newer := neighborsMsg(t, `{"timestamp":"2026-10-20T08:00:00Z","neighbors":[{"pubkey":"`+nbKeyB+`"}]}`)
+
+	for _, m := range []map[string]interface{}{older, newer, older} {
+		if err := s.UpsertNeighborReport("OBS1", m, true, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := loadReport(t, s, "OBS1"); r == nil || r.receivedAt != "2026-10-20T08:00:00Z" || r.neighbors[0].Pubkey != nbKeyB {
+		t.Errorf("after older, newer, older replay: %+v, want the 2026-10-20 report", r)
+	}
+}
+
+// #2330: a retained report with a zone-less timestamp (#1478) is stored and
+// keeps its own age instead of being dropped.
+func TestUpsertNeighborReportRetainedNaiveTimestamp(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	for id, ts := range map[string]string{"OBS1": "2026-10-20T08:00:00", "OBS2": "2026-10-20T08:00:00.123456"} {
+		msg := neighborsMsg(t, `{"timestamp":"`+ts+`","neighbors":[{"pubkey":"`+nbKeyA+`"}]}`)
+		if err := s.UpsertNeighborReport(id, msg, true, now); err != nil {
+			t.Fatal(err)
+		}
+		if r := loadReport(t, s, id); r == nil || r.receivedAt != "2026-10-20T08:00:00Z" {
+			t.Errorf("%s: retained %q stored as %+v, want dated 2026-10-20T08:00:00Z", id, ts, r)
+		}
+	}
+}
+
+// #2330 end to end: an old report arriving without RETAIN (as through a
+// bridge) does not refresh the observer's report.
+func TestNeighborsTopicOldReportDoesNotRefresh(t *testing.T) {
+	s := newTestStore(t)
+	payload := func(ts string) []byte {
+		return []byte(`{"timestamp":"` + ts + `","neighbors":[{"pubkey":"` + nbKeyA + `"}]}`)
+	}
+	live := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	handleMessage(s, "test", MQTTSource{Name: "test"},
+		&mockMessage{topic: "meshcore/TST/OBS9/neighbors", payload: payload(live)}, nil, nil, &Config{})
+	before := loadReport(t, s, "OBS9")
+	if before == nil {
+		t.Fatal("live report not stored")
+	}
+	handleMessage(s, "test", MQTTSource{Name: "test"},
+		&mockMessage{topic: "meshcore/TST/OBS9/neighbors", payload: payload("2026-01-01T00:00:00Z")}, nil, nil, &Config{})
+	if after := loadReport(t, s, "OBS9"); after == nil || after.receivedAt != before.receivedAt || after.reportedAt != live {
+		t.Errorf("old report changed the row: before %+v, after %+v", before, after)
+	}
+}

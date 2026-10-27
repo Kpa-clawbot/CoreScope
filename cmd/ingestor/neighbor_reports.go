@@ -64,9 +64,15 @@ func sanitizeNeighbors(raw []interface{}) []StoredNeighbor {
 	return out
 }
 
-// UpsertNeighborReport stores the observer's latest report. A retained
-// replay (the broker handing back the last report on subscribe) only fills
-// a missing row: it is not evidence the observer reported now.
+// UpsertNeighborReport stores the observer's latest report.
+//
+// Only a live report is dated "now". A replay is dated by the observer's own
+// timestamp and replaces the stored row only when it is newer, so it can fill
+// a gap but never make a long-dead observer look fresh. What counts as a
+// replay is judged like status liveness (#2330): the retain flag, or a
+// payload timestamp older than statusLivenessMaxAge. The flag alone is not
+// enough, because a mosquitto bridge republishes retained messages with
+// RETAIN cleared (statusIsLiveness explains how).
 func (s *Store) UpsertNeighborReport(observerID string, msg map[string]interface{}, retained bool, now time.Time) error {
 	if observerID == "" {
 		return nil
@@ -97,22 +103,26 @@ func (s *Store) UpsertNeighborReport(observerID string, msg map[string]interface
 	if err != nil {
 		return err
 	}
-	verb, receivedAt := "INSERT OR REPLACE", now.UTC()
-	if retained {
-		// Dated by the observer's own timestamp, never "now": after an
-		// ingestor restart a long-dead observer must not look fresh.
-		t, err := time.Parse(time.RFC3339Nano, reportedAt)
-		if err != nil {
-			return nil
+	receivedAt := now.UTC()
+	// A live report replaces the row; a replay only when it is newer.
+	onConflict := ""
+	if t, _, perr := parseEnvelopeTime(reportedAt); perr == nil && (retained || t.Before(now.Add(-statusLivenessMaxAge))) {
+		if t.Before(receivedAt) {
+			receivedAt = t.UTC()
 		}
-		if t.After(receivedAt) {
-			t = receivedAt
-		}
-		verb, receivedAt = "INSERT OR IGNORE", t.UTC()
+		onConflict = " WHERE excluded.received_at > observer_neighbor_reports.received_at"
+	} else if retained {
+		// A replay we cannot date says nothing about when it was made.
+		return nil
 	}
-	_, err = s.db.Exec(verb+` INTO observer_neighbor_reports
+	_, err = s.db.Exec(`INSERT INTO observer_neighbor_reports
 		(observer_id, received_at, reported_at, neighbor_count, queried_neighbors, self_scopes, self_default_scope, neighbors_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(observer_id) DO UPDATE SET
+			received_at = excluded.received_at, reported_at = excluded.reported_at,
+			neighbor_count = excluded.neighbor_count, queried_neighbors = excluded.queried_neighbors,
+			self_scopes = excluded.self_scopes, self_default_scope = excluded.self_default_scope,
+			neighbors_json = excluded.neighbors_json`+onConflict,
 		observerID, receivedAt.Format(time.RFC3339), nilIfEmpty(clampObserverField(reportedAt, 40)),
 		count, queried, selfScopes, selfDefault, string(body))
 	if err != nil {
