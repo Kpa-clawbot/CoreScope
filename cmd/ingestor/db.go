@@ -2264,6 +2264,11 @@ func (s *Store) PurgeStaleObservers(purgeDays int) (int64, error) {
 			`DELETE FROM observer_radios WHERE observer_id NOT IN (SELECT id FROM observers)`); err != nil {
 			log.Printf("[purge] observer radio history: %v", err)
 		}
+		// And so do their /neighbors reports (#2330).
+		if _, err := s.instrumentedExec("purge_observers",
+			`DELETE FROM observer_neighbor_reports WHERE observer_id NOT IN (SELECT id FROM observers)`); err != nil {
+			log.Printf("[purge] observer neighbor reports: %v", err)
+		}
 	}
 	return purged, nil
 }
