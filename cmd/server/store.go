@@ -2206,8 +2206,8 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 		q.Limit = 50
 	}
 
-	// Cache key covers all filter dimensions. Empty key = no filters.
-	cacheKey := q.Since + "|" + q.Until + "|" + q.Region + "|" + q.Area + "|" + q.Node + "|" + q.Hash + "|" + q.Observer + "|" + q.Channel + "|" + q.Radio
+	// Put the boolean before user-supplied fields so those cannot alias it.
+	cacheKey := strconv.FormatBool(q.ExcludeTx) + "|" + q.Since + "|" + q.Until + "|" + q.Region + "|" + q.Area + "|" + q.Node + "|" + q.Hash + "|" + q.Observer + "|" + q.Channel + "|" + q.Radio
 	if q.Type != nil {
 		cacheKey += fmt.Sprintf("|t%d", *q.Type)
 	}
@@ -3766,6 +3766,7 @@ func (s *PacketStore) resolvePacketFilterSets(q PacketQuery) packetFilterSets {
 // filterPackets applies PacketQuery filters to the in-memory packet list.
 // f holds q's filters resolved by resolvePacketFilterSets. Caller holds s.mu.
 func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreTx {
+	source := s.packets
 	// Fast path: single-key index lookups
 	if q.Hash != "" && q.Type == nil && q.Route == nil && q.Observer == "" && q.Radio == "" &&
 		q.Region == "" && q.Area == "" && q.Node == "" && q.Channel == "" && q.Since == "" && q.Until == "" {
@@ -3774,11 +3775,17 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 		if tx == nil {
 			return nil
 		}
-		return []*StoreTx{tx}
+		source = []*StoreTx{tx}
+		if !q.ExcludeTx {
+			return source
+		}
 	}
 	if q.Observer != "" && q.Type == nil && q.Route == nil && q.Radio == "" &&
 		q.Region == "" && q.Area == "" && q.Node == "" && q.Channel == "" && q.Hash == "" && q.Since == "" && q.Until == "" {
-		return s.transmissionsForObserver(q.Observer, nil)
+		source = s.transmissionsForObserver(q.Observer, nil)
+		if !q.ExcludeTx {
+			return source
+		}
 	}
 
 	// Pre-compute filter parameters outside the hot loop.
@@ -3836,11 +3843,13 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 
 	// Determine the source slice. Use index-based source when only node
 	// filter is active and an index exists.
-	source := s.packets
 	if hasNode && !hasType && !hasRoute && q.Observer == "" &&
 		filterHash == "" && !hasSince && !hasUntil && q.Region == "" && q.Area == "" && filterChannel == "" && q.Radio == "" {
 		if indexed, ok := s.byNode[f.nodePK]; ok {
-			return indexed
+			source = indexed
+			if !q.ExcludeTx {
+				return source
+			}
 		}
 	}
 	// Single-pass filter: apply all predicates in one scan.
@@ -3864,10 +3873,10 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 		if hasUntil && tx.FirstSeen >= q.Until {
 			return false
 		}
-		if observerSet != nil {
+		if observerSet != nil || q.ExcludeTx {
 			found := false
 			for _, obs := range tx.Observations {
-				if observerSet[obs.ObserverID] {
+				if (observerSet == nil || observerSet[obs.ObserverID]) && (!q.ExcludeTx || !obs.isOwnTransmission()) {
 					found = true
 					break
 				}

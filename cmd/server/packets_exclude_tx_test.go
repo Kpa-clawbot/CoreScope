@@ -123,3 +123,29 @@ func TestPacketsExcludeTx(t *testing.T) {
 		})
 	}
 }
+
+func TestPacketsExcludeTxGroupedCacheCannotAliasRadio(t *testing.T) {
+	srv, router := setupTestServer(t)
+	t.Cleanup(func() { srv.db.Close() })
+	for _, tc := range []struct {
+		query string
+		total int
+	}{
+		{"", 3},
+		{"&radio=%7CexcludeTx", 0},
+		{"&excludeTx=true", 3},
+	} {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/packets?groupByHash=true&observer=obs1"+tc.query, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+		var got PacketResult
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Total != tc.total || len(got.Packets) != tc.total {
+			t.Errorf("query %q: got %d packets (total %d), want %d; filters must have separate cache entries", tc.query, len(got.Packets), got.Total, tc.total)
+		}
+	}
+}
