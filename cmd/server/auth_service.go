@@ -69,7 +69,7 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 	if set.observerLogins.enabled {
 		// No error return here: a failed load leaves obsIdx nil, the hook
 		// routes answer 503 and the broker falls back to its own users.
-		idx, err := newObserverLoginIndex(st)
+		idx, err := newObserverLoginIndex(st, set.observerLogins.sharedUsernames)
 		if err != nil {
 			log.Printf("[observer-logins] load logins: %v", err)
 		} else {
