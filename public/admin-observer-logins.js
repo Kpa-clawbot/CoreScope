@@ -2,7 +2,8 @@
  * personal MQTT logins with Revoke / Reissue, and every observer with its
  * owner ("not migrated" without a binding, "orphaned" when the owner's
  * account is gone) and a Reassign button that swaps one shared owner select
- * into that row only. One GET /api/admin/observer-logins and one
+ * into that row only. A Confirmed column shows when the owner's own login
+ * first published as the observer. One GET /api/admin/observer-logins and one
  * GET /api/observers per load, joined client-side. The observers table is
  * built on load only; a reassign updates its own row and the summary, and
  * the Revoke / Reissue inline confirm (no browser dialog) touches only the
@@ -28,25 +29,26 @@
 
   // joinObservers merges the analyzer's observers with the bindings, keyed by
   // uppercase pubkey; a binding without an analyzer row still gets a row.
-  // Each row: { pubkey, name, lastSeen, bound, userId }.
+  // Each row: { pubkey, name, lastSeen, bound, userId, confirmedAt }.
   function joinObservers(observers, bindings) {
     var byKey = {};
     var rows = [];
     (observers || []).forEach(function (o) {
       var k = String(o.id || '').toUpperCase();
       if (!k || byKey[k]) return;
-      byKey[k] = { pubkey: k, name: o.name || '', lastSeen: o.last_seen || null, bound: false, userId: null };
+      byKey[k] = { pubkey: k, name: o.name || '', lastSeen: o.last_seen || null, bound: false, userId: null, confirmedAt: null };
       rows.push(byKey[k]);
     });
     (bindings || []).forEach(function (b) {
       var k = String(b.pubkey || '').toUpperCase();
       var row = byKey[k];
       if (!row) {
-        row = byKey[k] = { pubkey: k, name: '', lastSeen: null, bound: false, userId: null };
+        row = byKey[k] = { pubkey: k, name: '', lastSeen: null, bound: false, userId: null, confirmedAt: null };
         rows.push(row);
       }
       row.bound = true;
       row.userId = b.userId == null ? null : b.userId;
+      row.confirmedAt = b.confirmedAt || null;
     });
     return rows;
   }
@@ -58,6 +60,13 @@
     if (row.userId == null) return 'orphaned';
     var l = loginsById[row.userId];
     return l ? l.displayName : 'user #' + row.userId;
+  }
+
+  // confirmedLabel: when the owner's own login first published under the
+  // key; until then the shared login may still publish as it.
+  function confirmedLabel(row) {
+    if (!row.bound) return '—';
+    return row.confirmedAt ? fmt(row.confirmedAt) : 'not yet';
   }
 
   function loginsById(logins) {
@@ -123,6 +132,7 @@
     return '<td>' + escapeHtml(label(row)) + '<br><small><code>' + escapeHtml(shortKey(row.pubkey)) + '</code></small></td>' +
       '<td class="um-col-optional">' + escapeHtml(row.lastSeen ? fmt(row.lastSeen) : '—') + '</td>' +
       '<td>' + (cls ? '<span class="um-status' + cls + '">' + escapeHtml(owner) + '</span>' : escapeHtml(owner)) + '</td>' +
+      '<td class="um-col-optional obs-confirmed">' + escapeHtml(confirmedLabel(row)) + '</td>' +
       '<td>' + action + '</td>';
   }
 
@@ -152,7 +162,7 @@
     var ob = document.getElementById('obsAdminObservers');
     if (!ob) return;
     ob.innerHTML = state.rows.map(function (r) { return observerRowHtml(r, state.byId); }).join('') ||
-      '<tr><td colspan="4">No observers.</td></tr>';
+      '<tr><td colspan="5">No observers.</td></tr>';
     renderSummary();
   }
 
@@ -268,6 +278,8 @@
         sel.value = ownerValue(row);
         return;
       }
+      // The server keeps confirmed_at only for the same owner.
+      if (userId == null || userId !== row.userId) row.confirmedAt = null;
       row.bound = userId != null;
       row.userId = userId;
       say(shortKey(pk) + ': ' + (userId == null ? 'unbound' : 'reassigned'), true);
@@ -298,7 +310,7 @@
       '</tr></thead><tbody id="obsAdminLogins"></tbody></table></div>' +
       '<h3>Observers</h3><p class="account-hint" id="obsAdminSummary"></p>' +
       '<div class="um-table-wrap"><table class="um-table"><thead><tr>' +
-      '<th scope="col">Observer</th><th scope="col" class="um-col-optional">Last seen</th><th scope="col">Owner</th><th scope="col">Reassign</th>' +
+      '<th scope="col">Observer</th><th scope="col" class="um-col-optional">Last seen</th><th scope="col">Owner</th><th scope="col" class="um-col-optional">Confirmed</th><th scope="col">Reassign</th>' +
       '</tr></thead><tbody id="obsAdminObservers"></tbody></table></div></div>';
     document.getElementById('obsAdminLogins').addEventListener('click', onLoginClick);
     var ob = document.getElementById('obsAdminObservers');

@@ -116,7 +116,7 @@ func (s *Server) handleEMQXAuthz(w http.ResponseWriter, r *http.Request) {
 	a := s.auth
 	res, pk, created := a.obsIdx.authorize(req.Username, req.Action, req.Topic, func(pk string, uid int64) (*int64, bool, error) {
 		return a.st.BindObserver(pk, uid, "auto")
-	})
+	}, a.st.ConfirmObserver)
 	writeJSON(w, emqxHookResp{Result: res})
 	if res == hookAllow && created {
 		uid, _ := a.obsIdx.userIDFor(req.Username)

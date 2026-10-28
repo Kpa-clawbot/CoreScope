@@ -498,7 +498,9 @@
       "enabled": false,
       "hookSecret": "",
       "encryptionKey": "",
-      "broker": { "host": "mqtt.example.org", "port": 8883, "transport": "tcp", "tls": true }
+      "broker": { "host": "mqtt.example.org", "port": 8883, "transport": "tcp", "tls": true },
+      "sharedUsernames": [],
+      "_comment_sharedUsernames": "Optional (docs/observer-mqtt-logins.md, Locking the shared login out of migrated observers). The broker's own shared login names, e.g. [\"meshcore_shared\"]. The authz hook denies them a publish under an observer whose owner's personal login has published as it (confirmed); every other request from them stays ignore. A name starting with obs_ is refused at startup."
     }
   },
   "_comment_userManagement": "Optional accounts (off by default; see docs/user-guide/accounts.md). When enabled: visitors can register with email + password and activate through a mailed link; addresses in adminEmails become admins; admins manage users at #/admin/users and can use the operator endpoints without the apiKey. The dashboard stays public. dbPath defaults to users.db next to the analyzer database: a separate file, the server never writes measurement data. publicBaseUrl is required and is used for every link in every mail. Mail goes through Brevo's transactional API (a free account is enough); brevoApiKey and webhookSecret may instead come from CORESCOPE_BREVO_API_KEY and CORESCOPE_BREVO_WEBHOOK_SECRET. Set webhookSecret (16+ chars) and point a Brevo transactional webhook at <publicBaseUrl>/api/mail/brevo/webhook with bearer auth to see delivery status per user. Alternatively set mail.provider to \"postal\" to send through your own Postal server: postalBaseUrl (https) and postalApiKey (or CORESCOPE_POSTAL_API_KEY) are then required, and the webhook is https://postal:<webhookSecret>@<host>/api/mail/postal/webhook (secret: letters, digits, . _ - only; or CORESCOPE_POSTAL_WEBHOOK_SECRET). trustedProxies (CIDRs) lets login rate limits use X-Forwarded-For behind a reverse proxy. Startup fails if enabled with an incomplete mail setup.",

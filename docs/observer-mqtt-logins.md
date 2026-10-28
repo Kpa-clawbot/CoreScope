@@ -77,6 +77,7 @@ section 2.
 | `broker.port` | Default 1883. |
 | `broker.transport` | `tcp` (default) or `websockets`, as in meshcoretomqtt. |
 | `broker.tls` | Whether observers connect with TLS. Default false. |
+| `sharedUsernames` | The broker's own shared login names. Optional, default none. The authz hook denies them a publish under an observer whose owner has confirmed it; see [Locking the shared login out of migrated observers](#locking-the-shared-login-out-of-migrated-observers). |
 
 The server refuses to start when the block is enabled without a hook secret, a valid key or a
 host. The `broker` values only fill the mail; CoreScope never connects to the broker.
@@ -335,3 +336,42 @@ emqx_authn_http`).
 
 Bridges (mosquitto bridges that forward many observers) and operator users stay in the built-in
 database; this feature does not replace them.
+
+### Locking the shared login out of migrated observers
+
+Step 5 is all or nothing. To close the gap per observer while the shared login stays, list it in
+`sharedUsernames`:
+
+```json
+"observerLogins": {
+  "sharedUsernames": ["meshcore_shared"]
+}
+```
+
+The authz hook then answers `deny` when one of these logins publishes to any topic that starts
+with `meshcore/<iata>/<pubkey>` (any number of further segments, including none) and that
+pubkey is **confirmed**: bound to a user whose own
+personal login has published under it. CoreScope logs
+`publish denied: user=<shared> observer=<8 hex>: confirmed owner`. Every other request from a
+shared login (unbound, unconfirmed or orphaned observers, other topics, subscribe) keeps the
+`ignore` it gets today, so the built-in database decides as before.
+
+When a binding counts as confirmed:
+
+- An observer bound by its owner's first publish is confirmed from that moment.
+- An observer an admin assigns (*Reassign*) is not confirmed until the new owner's login
+  publishes under it once. Reassigning to the same owner keeps the confirmation.
+- Reassigning to another owner, unbinding, or deleting the owner's account clears it.
+
+`sharedUsernames` entries are trimmed and empty ones dropped; a name starting with `obs_` is a
+personal login and stops the server at startup.
+
+Risk: an owner who confirmed an observer and also still runs a second uploader on the shared
+login for the same observer (an old meshcoretomqtt install, a second firmware slot) loses that
+second uploader: its publishes are denied. Check with the owner before you add the shared login
+here, or watch the CoreScope log for the `confirmed owner` line.
+
+*Admin, Observer logins* shows per observer a **Confirmed** column: the date the owner's login
+first published as it, "not yet" for a binding that is not confirmed, and a dash for an observer
+without a binding. `GET /api/admin/observer-logins` has the same value as `confirmedAt` on each
+binding (null when unconfirmed).
