@@ -99,7 +99,7 @@ enabled = false
 method = "password"
 username = "obs_abc"
 password = "p<w>"`
-	for _, w := range []string{want, "set mqtt4.preset custom\nset mqtt4.server ws://mqtt.example.org\nset mqtt4.port 1883\nset mqtt4.username obs_abc\nset mqtt4.password p<w>\nset mqtt.iata <your IATA code>",
+	for _, w := range []string{want, "set mqtt4.preset custom\nset mqtt4.server ws://mqtt.example.org\nset mqtt4.port 1883\nset mqtt4.username obs_abc\nset mqtt4.password p<w>\nset mqtt.iata <your IATA code>\nset mqtt.neighbors on",
 		"Host: mqtt.example.org", "Port: 1883", "TLS: no", "Username: obs_abc", "Password: p<w>"} {
 		if !strings.Contains(m.Text, w) {
 			t.Fatalf("text lacks %q:\n%s", w, m.Text)
@@ -184,7 +184,7 @@ func TestObserverCredentialsMailFirmwareSlot(t *testing.T) {
 	if strings.Contains(m.Text, "mqtt1.") {
 		t.Fatalf("mail still uses slot 1:\n%s", m.Text)
 	}
-	for _, w := range []string{"Gessaman", "Dutch-MeshCore", "get mqtt.status", "set mqtt4.server mqtt.example.org"} {
+	for _, w := range []string{"Gessaman", "Dutch-MeshCore", "get mqtt.status", "set mqtt4.server mqtt.example.org", "set mqtt.neighbors on", "older firmware does not know it"} {
 		if !strings.Contains(m.Text, w) {
 			t.Fatalf("text lacks %q:\n%s", w, m.Text)
 		}

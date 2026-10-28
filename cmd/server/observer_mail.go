@@ -41,7 +41,8 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 		"set mqtt4.port " + port + "\n" +
 		"set mqtt4.username " + username + "\n" +
 		"set mqtt4.password " + password + "\n" +
-		"set mqtt.iata <your IATA code>"
+		"set mqtt.iata <your IATA code>\n" +
+		"set mqtt.neighbors on"
 	tlsSwitch := "off"
 	if o.tls {
 		tlsSwitch = "on"
@@ -85,7 +86,7 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 			{title: "1. meshcoretomqtt (uploader on a Raspberry Pi or Linux box)",
 				note: "Add this block to your meshcoretomqtt config file, next to any brokers already in it, and restart the service.", body: meshcoretomqtt},
 			{title: "2. MeshCore observer firmware (Gessaman or Dutch-MeshCore)",
-				note: "Type these commands one by one on the serial console, replace <your IATA code> with your area code, then reboot. They use slot 4, which is empty on a fresh install; if get mqtt.status shows it in use, replace mqtt4 with an empty slot.", body: firmware},
+				note: "Type these commands one by one on the serial console, replace <your IATA code> with your area code, then reboot. They use slot 4, which is empty on a fresh install; if get mqtt.status shows it in use, replace mqtt4 with an empty slot. The last command sends your node's neighbour table and region scopes once a day, which this analyzer reads; older firmware does not know it, skip it there.", body: firmware},
 			{title: "3. Home Assistant (meshcore-ha)",
 				note: "Settings > Devices & services > MeshCore > Configure > Manage MQTT Brokers > add a broker, then fill in these fields.", body: homeAssistant},
 			{title: "4. OpenHop (repeater software)",
