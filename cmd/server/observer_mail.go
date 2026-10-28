@@ -11,7 +11,7 @@ import (
 // credentials mail.
 const observerCredentialsPurpose = "observer-credentials"
 
-// observerCredentialsMail carries the login in four formats. It is the only
+// observerCredentialsMail carries the login in five formats. It is the only
 // place the password leaves the server, and it is never logged: mail_log
 // keeps only the purpose and the provider message id.
 func (a *authService) observerCredentialsMail(u *users.User, username, password string) mailer.Message {
@@ -55,6 +55,20 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 		"Username: " + username + "\n" +
 		"Password: " + password + "\n" +
 		"Broker IATA Code: <your IATA code>"
+	openHopTransport := "TCP"
+	if o.transport == "websockets" {
+		openHopTransport = "Websockets"
+	}
+	openHop := "Format: Letsmesh\n" +
+		"Transport: " + openHopTransport + "\n" +
+		"Host: " + o.host + "\n" +
+		"Port: " + port + "\n" +
+		"Username: " + username + "\n" +
+		"Password: " + password + "\n" +
+		"TLS: " + tlsSwitch + "\n" +
+		"Use JWT Auth: off\n" +
+		"Retain Status: on\n" +
+		"Publish Neighbours: on"
 	plain := "Host: " + o.host + "\n" +
 		"Port: " + port + "\n" +
 		"TLS: " + tlsWord + "\n" +
@@ -64,7 +78,7 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 		subject:  "Your observer MQTT login",
 		greeting: "Hello " + u.DisplayName + ",",
 		paragraphs: []string{
-			"Below is your personal MQTT login for " + a.set.baseURL.Host + ", in four formats: the meshcoretomqtt config, the MeshCore observer firmware commands (Gessaman or Dutch-MeshCore), the Home Assistant (meshcore-ha) form fields, and the plain values.",
+			"Below is your personal MQTT login for " + a.set.baseURL.Host + ", in five formats: the meshcoretomqtt config, the MeshCore observer firmware commands (Gessaman or Dutch-MeshCore), the Home Assistant (meshcore-ha) form fields, the OpenHop broker form, and the plain values.",
 			"One login serves all your observers. Each observer is linked to you the first time it publishes with this login. If you lose this mail, ask a new copy from your account page.",
 		},
 		pre: []mailBlock{
@@ -74,7 +88,9 @@ func (a *authService) observerCredentialsMail(u *users.User, username, password 
 				note: "Type these commands one by one on the serial console, replace <your IATA code> with your area code, then reboot. They use slot 4, which is empty on a fresh install; if get mqtt.status shows it in use, replace mqtt4 with an empty slot.", body: firmware},
 			{title: "3. Home Assistant (meshcore-ha)",
 				note: "Settings > Devices & services > MeshCore > Configure > Manage MQTT Brokers > add a broker, then fill in these fields.", body: homeAssistant},
-			{title: "4. Any other MQTT client",
+			{title: "4. OpenHop (repeater software)",
+				note: "In the OpenHop web UI, Configuration > Add Broker, fill in these fields. Format Meshcoretomqtt works too, but not \"openHop\": that one publishes to a topic this broker refuses. Publish Neighbours sends your node's neighbour table and region scopes, which this analyzer reads.", body: openHop},
+			{title: "5. Any other MQTT client",
 				note: "The plain values.", body: plain},
 		},
 		actionLabel: "Your account", actionURL: a.set.baseURL.String() + "/#/account?section=observers",

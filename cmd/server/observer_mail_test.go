@@ -30,7 +30,8 @@ func TestObserverCredentialsMailBlockTitles(t *testing.T) {
 		"=== 1. meshcoretomqtt ",
 		"=== 2. MeshCore observer firmware (Gessaman or Dutch-MeshCore) ===",
 		"=== 3. Home Assistant (meshcore-ha) ===",
-		"=== 4. Any other MQTT client ===",
+		"=== 4. OpenHop (repeater software) ===",
+		"=== 5. Any other MQTT client ===",
 	} {
 		i := strings.Index(m.Text, w)
 		if i <= last {
@@ -38,8 +39,41 @@ func TestObserverCredentialsMailBlockTitles(t *testing.T) {
 		}
 		last = i
 	}
-	if strings.Count(m.HTML, "<h3>") != 4 {
-		t.Fatalf("want 4 <h3> titles:\n%s", m.HTML)
+	if strings.Count(m.HTML, "<h3>") != 5 {
+		t.Fatalf("want 5 <h3> titles:\n%s", m.HTML)
+	}
+}
+
+// OpenHop's broker form, with the field and option labels of its web UI.
+// Its "openHop" format (value mqtt) publishes to meshcore/repeater/<name>,
+// which a personal login may not use, so the note names the right formats.
+func TestObserverCredentialsMailOpenHopBlock(t *testing.T) {
+	a, _ := newTestAuthService(t)
+	a.set.observerLogins = observerLoginSettings{host: "mqtt.example.org", port: 1883, transport: "tcp"}
+	m := a.observerCredentialsMail(&users.User{Email: "a@example.org", DisplayName: "A"}, "obs_abc", "p<w>")
+	for _, w := range []string{
+		"Add Broker",
+		`not "openHop"`,
+		"Format: Letsmesh\nTransport: TCP\nHost: mqtt.example.org\nPort: 1883\nUsername: obs_abc\nPassword: p<w>\n" +
+			"TLS: off\nUse JWT Auth: off\nRetain Status: on\nPublish Neighbours: on",
+	} {
+		if !strings.Contains(m.Text, w) {
+			t.Fatalf("text lacks %q:\n%s", w, m.Text)
+		}
+	}
+	if !strings.Contains(m.HTML, "Password: p&lt;w&gt;\nTLS: off") {
+		t.Fatal("html does not escape the OpenHop block")
+	}
+	i3, i4, i5 := strings.Index(m.Text, "=== 3. "), strings.Index(m.Text, "Format: Letsmesh"), strings.Index(m.Text, "=== 5. ")
+	if !(i3 < i4 && i4 < i5) {
+		t.Fatalf("block order %d %d %d", i3, i4, i5)
+	}
+
+	a.set.observerLogins = observerLoginSettings{host: "mqtt.example.org", port: 8884, transport: "websockets", tls: true}
+	m = a.observerCredentialsMail(&users.User{Email: "a@example.org", DisplayName: "A"}, "obs_abc", "pw")
+	if !strings.Contains(m.Text, "Transport: Websockets\nHost: mqtt.example.org\nPort: 8884\n") ||
+		!strings.Contains(m.Text, "TLS: on\nUse JWT Auth: off\n") {
+		t.Fatalf("websockets/TLS variant missing:\n%s", m.Text)
 	}
 }
 

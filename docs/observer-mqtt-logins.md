@@ -91,9 +91,11 @@ when the login index could not be loaded. Let the broker reach them over your in
 They are not for browsers: if CoreScope is public, you can also block `/api/mqtt-hook/` at the
 reverse proxy for everything except the broker.
 
-The credentials mail holds the login in four forms: a meshcoretomqtt `[[broker]]` block, the
-observer firmware commands (Gessaman or Dutch-MeshCore, same CLI), a Home Assistant meshcore-ha block, and the plain
-values. The firmware commands use slot 4 (`set mqtt4.*`): on a fresh install slots 1-2 (Gessaman, Let's Mesh US/EU)
+The credentials mail holds the login in five forms: a meshcoretomqtt `[[broker]]` block, the
+observer firmware commands (Gessaman or Dutch-MeshCore, same CLI), a Home Assistant meshcore-ha block, the OpenHop
+broker form, and the plain values. The OpenHop block names format Letsmesh (Meshcoretomqtt works too) and warns
+against the format labelled "openHop", which publishes to `meshcore/repeater/<name>`; it also turns on Publish
+Neighbours, whose `neighbors` topic the ingestor reads for region scopes. The firmware commands use slot 4 (`set mqtt4.*`): on a fresh install slots 1-2 (Gessaman, Let's Mesh US/EU)
 and 1-3 (Dutch-MeshCore) hold default broker presets, and slot 4 is empty on both. For the firmware the server
 line is the bare host (`set mqtt4.server mqtt.example.org`): the firmware chooses the scheme
 from the port alone (8883 TLS, 443 secure websockets, anything else plain MQTT), and firmware
