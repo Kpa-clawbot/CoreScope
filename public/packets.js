@@ -808,8 +808,11 @@
     // Preserve any subpath after /packets (e.g. #/packets/<hash>).
     var cur = String(location.hash || '');
     var subpath = '';
-    var m = cur.match(/^#\/packets(\/[^?]*)?/);
-    if (m && m[1]) subpath = m[1];
+    // A response may render after the hash changes but before hashchange
+    // destroys this view. Its filters must not replace the requested route.
+    var m = cur.match(/^#\/packets(\/[^?]*)?(?:\?|$)/);
+    if (!m) return;
+    if (m[1]) subpath = m[1];
     // Don't double-encode filters.hash when it's already the path segment.
     var skipHash = !!(filters.hash && subpath === '/' + filters.hash);
     var query = buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam(), skipHash);

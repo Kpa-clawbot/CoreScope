@@ -151,7 +151,45 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     } finally { await input.fill('MyMeshTest'); }
     await navigate('#/packets');
     await navigate('#/nodes');
-    assert(await page.title() === 'Nodes | MyMeshTest', 'navigation accumulated duplicate suffixes');
+    const title = await page.title();
+    assert(title === 'Nodes | MyMeshTest', 'expected Nodes | MyMeshTest after navigation, got: ' + title);
+  });
+
+  await step('#2335: a pending packets render preserves the next route and branded title', async () => {
+    await navigate('#/home');
+    await page.evaluate(() => {
+      window.__brandingOriginalApi = window.api;
+      window.api = Object.assign(function(url, options) {
+        const result = window.__brandingOriginalApi(url, options);
+        if (!url.startsWith('/packets?')) return result;
+        // Hold the real response so the render runs at the navigation boundary.
+        return result.then(data => new Promise(resolve => {
+          window.__brandingReleasePackets = () => resolve(data);
+        }));
+      }, window.api);
+    });
+    try {
+      await navigate('#/packets?timeWindow=0');
+      await page.waitForFunction(() => window.__brandingReleasePackets);
+      const before = await page.evaluate(() => {
+        const generation = viewGeneration();
+        // The response continuation runs before the queued hashchange task.
+        location.hash = '#/nodes';
+        window.__brandingReleasePackets();
+        return generation;
+      });
+      await page.waitForFunction(gen => viewGeneration() > gen, before);
+      const state = await page.evaluate(() => ({ hash: location.hash, title: document.title }));
+      assert(state.hash === '#/nodes', 'pending packets render replaced the route with ' + state.hash);
+      assert(state.title === 'Nodes | MyMeshTest', 'pending packets render replaced the title with ' + state.title);
+    } finally {
+      await page.evaluate(() => {
+        if (window.__brandingReleasePackets) window.__brandingReleasePackets();
+        window.api = window.__brandingOriginalApi;
+        delete window.__brandingOriginalApi;
+        delete window.__brandingReleasePackets;
+      });
+    }
   });
 
   await step('logoUrl input triggers _setBrandLogoUrl helper (swaps SVG → img)', async () => {
