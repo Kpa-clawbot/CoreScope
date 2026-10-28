@@ -348,8 +348,9 @@ Step 5 is all or nothing. To close the gap per observer while the shared login s
 }
 ```
 
-The authz hook then answers `deny` when one of these logins publishes to
-`meshcore/<iata>/<pubkey>/<type>` and that pubkey is **confirmed**: bound to a user whose own
+The authz hook then answers `deny` when one of these logins publishes to any topic that starts
+with `meshcore/<iata>/<pubkey>` (any number of further segments, including none) and that
+pubkey is **confirmed**: bound to a user whose own
 personal login has published under it. CoreScope logs
 `publish denied: user=<shared> observer=<8 hex>: confirmed owner`. Every other request from a
 shared login (unbound, unconfirmed or orphaned observers, other topics, subscribe) keeps the

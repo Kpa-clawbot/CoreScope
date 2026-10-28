@@ -104,9 +104,24 @@ func TestAuthorizeSharedLoginDeniedOnConfirmed(t *testing.T) {
 	if res, _, _ := ix.authorize(olShared, "publish", olTopic(olPK2), noBind(t), noConfirm(t)); res != hookIgnore {
 		t.Fatalf("unbound: res = %s", res)
 	}
-	for _, topic := range []string{"meshcore/BRU/" + olPK, "meshcore/#", "meshcore/client/" + olPK + "/packets"} {
+	// Any topic the ingestor would attribute to the confirmed pubkey is
+	// denied, whatever its segment count.
+	for _, topic := range []string{
+		"meshcore/BRU/" + olPK,
+		"meshcore/BRU/" + olPK + "/",
+		"meshcore/BRU/" + olPK + "/neighbors/x",
+		"meshcore/BRU/" + olPK + "/neighbors/",
+		"meshcore/BRU/" + strings.ToLower(olPK) + "/neighbors/x",
+		"meshcore//" + olPK + "/packets",
+		"meshcore/client/" + olPK + "/packets",
+	} {
+		if res, pk, _ := ix.authorize(olShared, "publish", topic, noBind(t), noConfirm(t)); res != hookDeny || pk != olPK {
+			t.Fatalf("confirmed %q: res = %s pk = %q", topic, res, pk)
+		}
+	}
+	for _, topic := range []string{"meshcore/#", "meshcore/BRU", "meshcore/BRU/", "other/BRU/" + olPK + "/packets", "meshcore/BRU/" + olPK2 + "/neighbors/x"} {
 		if res, _, _ := ix.authorize(olShared, "publish", topic, noBind(t), noConfirm(t)); res != hookIgnore {
-			t.Fatalf("malformed %q: res = %s", topic, res)
+			t.Fatalf("malformed or unconfirmed %q: res = %s", topic, res)
 		}
 	}
 	for _, action := range []string{"subscribe", ""} {
@@ -125,8 +140,10 @@ func TestAuthorizeSharedLoginIgnoredOnUnconfirmed(t *testing.T) {
 	ix.setOwner(olPK, i64(1))
 	ix.setOwner(olPK2, nil)
 	for _, pk := range []string{olPK, olPK2} {
-		if res, _, _ := ix.authorize(olShared, "publish", olTopic(pk), noBind(t), noConfirm(t)); res != hookIgnore {
-			t.Fatalf("%s: res = %s", pk[:8], res)
+		for _, topic := range []string{olTopic(pk), "meshcore/BRU/" + pk, "meshcore/BRU/" + pk + "/neighbors/x", "meshcore/client/" + pk + "/packets"} {
+			if res, _, _ := ix.authorize(olShared, "publish", topic, noBind(t), noConfirm(t)); res != hookIgnore {
+				t.Fatalf("%q: res = %s", topic, res)
+			}
 		}
 	}
 }

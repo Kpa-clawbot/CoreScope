@@ -289,11 +289,17 @@ func (ix *observerLoginIndex) authorize(username, action, topic string, bind fun
 	return ix.authorizePublish(username, topic, bind, confirm)
 }
 
-// authorizeShared denies a shared login on a well-formed topic whose pubkey
-// is confirmed and ignores everything else, so the broker decides as before.
+// authorizeShared denies a shared login on any meshcore/<x>/<pubkey>... topic
+// whose pubkey is confirmed, whatever the segment count, because the ingestor
+// attributes such a topic to that pubkey. Everything else is ignored, so the
+// broker decides as before.
 func (ix *observerLoginIndex) authorizeShared(username, topic string) (hookResult, string, bool) {
-	pk, ok := parsePublishTopic(topic)
-	if !ok {
+	seg := strings.SplitN(topic, "/", 4)
+	if len(seg) < 3 || seg[0] != "meshcore" {
+		return hookIgnore, "", false
+	}
+	pk, err := users.NormalizeObserverKey(seg[2])
+	if err != nil {
 		return hookIgnore, "", false
 	}
 	ix.mu.RLock()
