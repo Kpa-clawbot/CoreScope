@@ -42,6 +42,9 @@ type ObserverBinding struct {
 	UserID  *int64
 	BoundAt time.Time
 	BoundBy string
+	// ConfirmedAt is when the owner's own login first published under this
+	// pubkey; nil until then (admin assignments start unconfirmed).
+	ConfirmedAt *time.Time
 }
 
 const mqttLoginCols = `user_id, username, password_hash, password_enc, created_at, revoked_at, last_auth_at`
@@ -152,8 +155,13 @@ func (s *Store) BindObserver(pubkey string, userID int64, by string) (owner *int
 		return nil, false, err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`INSERT INTO observer_bindings (pubkey, user_id, bound_at, bound_by) VALUES (?, ?, ?, ?)
-		ON CONFLICT(pubkey) DO NOTHING`, pk, userID, unix(s.now()), by)
+	now := unix(s.now())
+	var confirmed any
+	if by == "auto" {
+		confirmed = now
+	}
+	res, err := tx.Exec(`INSERT INTO observer_bindings (pubkey, user_id, bound_at, bound_by, confirmed_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(pubkey) DO NOTHING`, pk, userID, now, by, confirmed)
 	if err != nil {
 		return nil, false, fmt.Errorf("users: bind observer: %w", err)
 	}
@@ -175,7 +183,8 @@ func (s *Store) BindObserver(pubkey string, userID int64, by string) (owner *int
 }
 
 // SetObserverOwner is the admin reassignment: a non-nil userID takes the key
-// over (bound_by 'admin', fresh bound_at); nil unbinds it by deleting the row.
+// over (bound_by 'admin', fresh bound_at; confirmed_at survives only when the
+// owner is unchanged); nil unbinds it by deleting the row.
 func (s *Store) SetObserverOwner(pubkey string, userID *int64) error {
 	pk, err := NormalizeObserverKey(pubkey)
 	if err != nil {
@@ -188,29 +197,51 @@ func (s *Store) SetObserverOwner(pubkey string, userID *int64) error {
 		return nil
 	}
 	if _, err := s.db.Exec(`INSERT INTO observer_bindings (pubkey, user_id, bound_at, bound_by) VALUES (?, ?, ?, 'admin')
-		ON CONFLICT(pubkey) DO UPDATE SET user_id = excluded.user_id, bound_at = excluded.bound_at, bound_by = 'admin'`,
+		ON CONFLICT(pubkey) DO UPDATE SET
+			confirmed_at = CASE WHEN observer_bindings.user_id = excluded.user_id THEN observer_bindings.confirmed_at ELSE NULL END,
+			user_id = excluded.user_id, bound_at = excluded.bound_at, bound_by = 'admin'`,
 		pk, *userID, unix(s.now())); err != nil {
 		return fmt.Errorf("users: reassign observer: %w", err)
 	}
 	return nil
 }
 
+// ConfirmObserver marks the binding confirmed now when userID owns it and it
+// is still unconfirmed. It reports whether this call set confirmed_at.
+func (s *Store) ConfirmObserver(pubkey string, userID int64) (bool, error) {
+	pk, err := NormalizeObserverKey(pubkey)
+	if err != nil {
+		return false, err
+	}
+	res, err := s.db.Exec(`UPDATE observer_bindings SET confirmed_at = ? WHERE pubkey = ? AND user_id = ? AND confirmed_at IS NULL`,
+		unix(s.now()), pk, userID)
+	if err != nil {
+		return false, fmt.Errorf("users: confirm observer: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 func scanBinding(row rowScanner) (ObserverBinding, error) {
 	var b ObserverBinding
-	var uid sql.NullInt64
+	var uid, confirmed sql.NullInt64
 	var at int64
-	if err := row.Scan(&b.Pubkey, &uid, &at, &b.BoundBy); err != nil {
+	if err := row.Scan(&b.Pubkey, &uid, &at, &b.BoundBy, &confirmed); err != nil {
 		return b, err
 	}
 	if uid.Valid {
 		b.UserID = &uid.Int64
 	}
 	b.BoundAt = fromUnix(at)
+	b.ConfirmedAt = fromNullUnix(confirmed)
 	return b, nil
 }
 
 func (s *Store) queryBindings(where string, args ...any) ([]ObserverBinding, error) {
-	rows, err := s.db.Query(`SELECT pubkey, user_id, bound_at, bound_by FROM observer_bindings `+where+` ORDER BY pubkey`, args...)
+	rows, err := s.db.Query(`SELECT pubkey, user_id, bound_at, bound_by, confirmed_at FROM observer_bindings `+where+` ORDER BY pubkey`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("users: list observer bindings: %w", err)
 	}
