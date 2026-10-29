@@ -141,6 +141,8 @@
     rowStripe: '--row-stripe',
     rowHover: '--row-hover',
     selectedBg: '--selected-bg',
+    mediaMeshPath: '--mediamesh-path-color',
+    mediaMeshNode: '--mediamesh-node-color',
     font: '--font',
     mono: '--mono',
   };

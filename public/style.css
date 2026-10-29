@@ -373,6 +373,10 @@
    * light theme. Dark theme override is set in both dark-mode blocks below. */
   --shadow: rgba(0,0,0,0.3);
   --trace-ghost-color: #94a3b8;
+  /* MediaMesh (radio2): ring paths on Live, and MediaMesh repeaters. Fuchsia,
+   * as MeshCore Open TAK and Wadamesh TAK mark them. */
+  --mediamesh-path-color: #d946ef;
+  --mediamesh-node-color: #d946ef;
 
   /* #1128: documented z-index scale. Use these custom props for any new
    * stacking context decision. Existing legacy z-index values that work are
@@ -456,6 +460,8 @@
     --hover-bg: rgba(255,255,255, 0.06);
     --shadow: rgba(0,0,0,0.5);
     --trace-ghost-color: #94a3b8;
+    --mediamesh-path-color: #e879f9;
+    --mediamesh-node-color: #e879f9;
     --section-bg: #1e1e34;
   }
 }
@@ -516,6 +522,8 @@
   --hover-bg: rgba(255,255,255, 0.06);
   --shadow: rgba(0,0,0,0.5);
   --trace-ghost-color: #94a3b8;
+  --mediamesh-path-color: #e879f9;
+  --mediamesh-node-color: #e879f9;
   --section-bg: #1e1e34;
 }
 

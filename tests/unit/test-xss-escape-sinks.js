@@ -293,18 +293,19 @@ test('live.js buildClickablePathPopupHtml: hopNames join escapes each hop', () =
   // Extract the function body and evaluate with a malicious hopNames array.
   const src = fs.readFileSync('public/live.js', 'utf8');
   const m = src.match(
-    /function buildClickablePathPopupHtml\(typeName, color, hopNames, tsMs, hash\)\s*\{([\s\S]*?)\n\s*\}/
+    /function buildClickablePathPopupHtml\(typeName, color, hopNames, tsMs, hash(?:, mediaMesh)?\)\s*\{([\s\S]*?)\n\s*\}/
   );
   assert.ok(m, 'buildClickablePathPopupHtml not found');
   const body = m[1];
   const html = new Function(
-    'typeName','color','hopNames','tsMs','hash','escapeHtml',
+    'typeName','color','hopNames','tsMs','hash','escapeHtml','mediaMesh',
     body + '\n;' // body returns
   )(
     'CHAN', '#fff',
     [TAG_PAYLOAD, ATTR_PAYLOAD],
     Date.now(), 'abc123',
-    escapeHtml
+    escapeHtml,
+    true // MediaMesh path: its extra popup line is a fixed string
   );
   assertNoXss(html, 'live.js hop popup');
 });

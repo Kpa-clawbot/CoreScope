@@ -33,6 +33,50 @@
   // 2 object allocations per anim per frame (50 anims × 60fps = ~6000/sec).
   const _scratchFrom = { x: 0, y: 0 };
   const _scratchTo = { x: 0, y: 0 };
+
+  // MediaMesh (radio2): an observation the server marks `mediamesh: true` was
+  // carried on the second radio profile Keymind Cascade repeaters, Wadamesh
+  // TAK and MeshCore Open TAK use for photos and voice. Its path is drawn as a
+  // row of hollow rings, so it reads apart from normal paths (solid) and from
+  // TRACE / ghost hops (dashed). Ring positions are in screen pixels.
+  const MEDIAMESH_RING_SPACING_PX = 12;
+  const MEDIAMESH_RING_RADIUS = 3.5;
+  const MEDIAMESH_RING_WEIGHT = 1.6;
+  const MEDIAMESH_RINGS_PER_HOP = 40;
+  const MEDIAMESH_RINGS_PER_PATH = 200;
+  let mediaMeshRenderer = null;   // one shared L.canvas for the fading rings
+  let mediaMeshZoomMap = null;    // the map the zoomend re-spacing is hooked to
+
+  // Rings allowed per hop for a path of hopCount hops: 40, fewer on long paths
+  // so the whole path stays within 200.
+  function mediaMeshRingCap(hopCount) {
+    const hops = Math.max(1, hopCount | 0);
+    return Math.max(1, Math.min(MEDIAMESH_RINGS_PER_HOP, Math.floor(MEDIAMESH_RINGS_PER_PATH / hops)));
+  }
+
+  // Where the rings sit along a hop lenPx pixels long, as fractions 0..1:
+  // one every 12 px, evenly spread, at most cap of them (spacing widens past it).
+  function mediaMeshRingFractions(lenPx, cap) {
+    if (!(lenPx > 0)) return [];
+    const n = Math.max(1, Math.min(Math.floor(lenPx / MEDIAMESH_RING_SPACING_PX), cap || MEDIAMESH_RINGS_PER_HOP));
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = (i + 0.5) / n;
+    return out;
+  }
+
+  // Which style a hop is drawn in: 'dashed' (TRACE unreached / ghost hops keep
+  // theirs), 'rings' (MediaMesh), else 'line'.
+  function pathHopStyle(isDashed, isMediaMesh) {
+    if (isDashed) return 'dashed';
+    return isMediaMesh ? 'rings' : 'line';
+  }
+
+  function mediaMeshPathColor() {
+    return getComputedStyle(document.documentElement).getPropertyValue('--mediamesh-path-color').trim() || 'currentColor';
+  }
+  if (typeof window !== 'undefined') {
+    window._liveMediaMesh = { ringCap: mediaMeshRingCap, ringFractions: mediaMeshRingFractions, hopStyle: pathHopStyle };
+  }
   let clickablePaths = [];
   const CLICKABLE_PATH_TTL_MS = 30000;
   const CLICKABLE_PATH_MAX = 50;
@@ -623,7 +667,7 @@
     if (VCR.replayTimer) { clearTimeout(VCR.replayTimer); VCR.replayTimer = null; }
   }
 
-  function buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash) {
+  function buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash, mediaMesh) {
     // tsMs is packet receive time — "ago" is relative to when the packet arrived, not when the animation ended
     const secsAgo = Math.round((Date.now() - tsMs) / 1000);
     const timeStr = secsAgo < 60 ? secsAgo + 's ago' : Math.round(secsAgo / 60) + 'm ago';
@@ -634,6 +678,7 @@
     return `<div class="lc-path-popup">
       <span class="lc-path-badge" style="background:${color}">${typeName}</span>
       <div class="lc-path-time">${timeStr}</div>
+      ${mediaMesh ? '<div class="lc-path-mediamesh"><span class="live-path-swatch live-path-swatch--mediamesh" aria-hidden="true"></span> MediaMesh (radio2)</div>' : ''}
       <div class="lc-path-chain">${chain}</div>
       ${link ? '<div class="lc-path-link-wrap">' + link + '</div>' : ''}
     </div>`;
@@ -653,7 +698,7 @@
     }
   }
 
-  function registerClickablePath(latLngs, typeName, color, hopNames, tsMs, hash) {
+  function registerClickablePath(latLngs, typeName, color, hopNames, tsMs, hash, mediaMesh) {
     if (!clickablePathsLayer) return;
     const poly = L.polyline(latLngs, { weight: 12, opacity: 0, interactive: true }).addTo(clickablePathsLayer);
     const entry = { addedAt: Date.now(), poly };
@@ -662,7 +707,7 @@
     let dismissTimer = null;
     poly.on('click', function(e) {
       if (dismissTimer) clearTimeout(dismissTimer);
-      const html = buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash);
+      const html = buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash, mediaMesh);
       L.popup({ maxWidth: 280, className: 'path-info-popup' })
         .setLatLng(e.latlng)
         .setContent(html)
@@ -851,7 +896,8 @@
       // so the filter skips them all and drops the whole group. observer_iata
       // is carried too so obsIataBadgeHtml does not have to fall back to the
       // roster map for replayed packets.
-      observer_id: pkt.observer_id, observer_iata: pkt.observer_iata
+      observer_id: pkt.observer_id, observer_iata: pkt.observer_iata,
+      mediamesh: pkt.mediamesh === true
     };
   }
 
@@ -1351,6 +1397,10 @@
           <ul class="legend-list">
             <li><span class="live-ring live-ring--repeater" aria-hidden="true"></span> Bright white ring — repeater</li>
             <li><span class="live-ring live-ring--other" aria-hidden="true"></span> Faded ring — companion / sensor / room</li>
+          </ul>
+          <h3 class="legend-title" style="margin-top:8px">PATH STYLES</h3>
+          <ul class="legend-list">
+            <li><span class="live-path-swatch live-path-swatch--mediamesh" aria-hidden="true"></span> Hollow rings — MediaMesh (radio2)</li>
           </ul>
           </div>
         </div>
@@ -3274,7 +3324,11 @@
     getPathCount: () => (typeof recentPaths !== 'undefined' ? recentPaths.length : 0),
     wake: wakeCanvasEngine,
     getPulses: () => activePulses,
-    triggerPulse: pulseNode
+    triggerPulse: pulseNode,
+    // MediaMesh: rings on the fading hops, and a zoom that fires zoomend now.
+    getMediaMeshRingCount: () => activeFades.reduce((n, f) => n + (f.mediaMesh ? f.line.getLayers().length : 0), 0),
+    zoomBy: (d) => { if (map) map.setZoom(map.getZoom() + d, { animate: false }); },
+    getMap: () => map
   };
 
   async function replayRecent() {
@@ -3495,11 +3549,19 @@
         hops = qd.path?.hops || [];
       }
       var pathKey = hops.join(',');
-      if (seenPathKeys.has(pathKey)) continue;
+      if (seenPathKeys.has(pathKey)) {
+        // Same path heard again: MediaMesh if any observation of it was.
+        if (qpkt.mediamesh === true) {
+          for (var mi = 0; mi < allPaths.length; mi++) {
+            if (allPaths[mi].key === pathKey) allPaths[mi].mediamesh = true;
+          }
+        }
+        continue;
+      }
       seenPathKeys.add(pathKey);
       var hopPositions = resolveHopPositions(hops, qp, window.getResolvedPath ? getResolvedPath(qpkt) : null);
       if (hopPositions.length >= 2) {
-        allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw });
+        allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw, key: pathKey, mediamesh: qpkt.mediamesh === true });
       } else if (hopPositions.length === 1) {
         pulseNode(hopPositions[0].key, hopPositions[0].pos, typeName);
       }
@@ -3510,7 +3572,7 @@
       var fallbackHops = decoded.path?.hops || [];
       var fallbackPositions = resolveHopPositions(fallbackHops, payload);
       if (fallbackPositions.length >= 2) {
-        allPaths.push({ hopPositions: fallbackPositions, raw: first.raw });
+        allPaths.push({ hopPositions: fallbackPositions, raw: first.raw, mediamesh: packets.some(function (p) { return p.mediamesh === true; }) });
       } else if (fallbackPositions.length === 1) {
         pulseNode(fallbackPositions[0].key, fallbackPositions[0].pos, typeName);
       }
@@ -3537,7 +3599,7 @@
         var completedPositions = allPaths[ai].hopPositions.slice(0, hopsCompleted + 1);
         var remainingPositions = allPaths[ai].hopPositions.slice(hopsCompleted);
         if (completedPositions.length >= 2) {
-          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop, pktMeta);
+          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop, Object.assign({}, pktMeta, { mediamesh: allPaths[ai].mediamesh }));
         } else if (completedPositions.length === 1) {
           pulseNode(completedPositions[0].key, completedPositions[0].pos, typeName);
         }
@@ -3545,7 +3607,7 @@
           drawDashedPath(remainingPositions, color);
         }
       } else {
-        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop, pktMeta);
+        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop, Object.assign({}, pktMeta, { mediamesh: allPaths[ai].mediamesh }));
       }
     }
   }
@@ -3660,6 +3722,11 @@
     activeAnims++;
     document.getElementById('liveAnimCount').textContent = activeAnims;
     let hopIndex = 0;
+    // MediaMesh: rings, with a per-hop cap that keeps the path under 200.
+    const mediaMesh = pktMeta && pktMeta.mediamesh ? {
+      cap: mediaMeshRingCap(hopPositions.length - 1),
+      color: mediaMeshPathColor()
+    } : null;
 
     function nextHop() {
       if (hopIndex >= hopPositions.length) {
@@ -3672,7 +3739,7 @@
             latLngs.push(hp.pos);
             hopNames.push(hp.name || (hp.key ? hp.key.slice(0, 8) : '?'));
           }
-          registerClickablePath(latLngs, typeName, color, hopNames, pktMeta.ts, pktMeta.hash);
+          registerClickablePath(latLngs, typeName, color, hopNames, pktMeta.ts, pktMeta.hash, !!pktMeta.mediamesh);
         }
         return;
       }
@@ -3710,7 +3777,7 @@
         const nextGhost = hopPositions[hopIndex + 1].ghost;
         const lineColor = (isGhost || nextGhost) ? '#94a3b8' : color;
         const lineOpacity = (isGhost || nextGhost) ? 0.3 : undefined;
-        drawAnimatedLine(hp.pos, nextPos, lineColor, () => { hopIndex++; nextHop(); }, lineOpacity, rawHex, pktMeta?.hash);
+        drawAnimatedLine(hp.pos, nextPos, lineColor, () => { hopIndex++; nextHop(); }, lineOpacity, rawHex, pktMeta?.hash, mediaMesh);
       } else {
         if (!isGhost) pulseNode(hp.key, hp.pos, typeName);
         hopIndex++; nextHop();
@@ -4182,16 +4249,29 @@
         const currentX = fromPt.x + (toPt.x - fromPt.x) * t;
         const currentY = fromPt.y + (toPt.y - fromPt.y) * t;
 
-        // Draw Contrail (glow)
+        // Draw Contrail (glow); fainter under MediaMesh rings
         animCtx.beginPath();
         animCtx.moveTo(fromPt.x, fromPt.y);
         animCtx.lineTo(currentX, currentY);
         animCtx.strokeStyle = anim.contrailColor;
         animCtx.lineWidth = 6;
-        animCtx.globalAlpha = anim.opacity * 0.2;
+        animCtx.globalAlpha = anim.opacity * (anim.isMediaMesh ? 0.15 : 0.2);
         animCtx.lineCap = 'round';
         animCtx.stroke();
 
+        if (anim.isMediaMesh) {
+          // MediaMesh: hollow rings appear behind the head
+          const dx = toPt.x - fromPt.x, dy = toPt.y - fromPt.y;
+          const fr = mediaMeshRingFractions(Math.sqrt(dx * dx + dy * dy), anim.ringCap);
+          animCtx.lineWidth = MEDIAMESH_RING_WEIGHT;
+          animCtx.strokeStyle = anim.ringColor;
+          animCtx.globalAlpha = anim.opacity;
+          for (let r = 0; r < fr.length && fr[r] <= t; r++) {
+            animCtx.beginPath();
+            animCtx.arc(fromPt.x + dx * fr[r], fromPt.y + dy * fr[r], MEDIAMESH_RING_RADIUS, 0, Math.PI * 2);
+            animCtx.stroke();
+          }
+        } else {
         // Draw Core Line
         animCtx.beginPath();
         animCtx.moveTo(fromPt.x, fromPt.y);
@@ -4206,6 +4286,7 @@
         animCtx.globalAlpha = anim.opacity;
         animCtx.stroke();
         animCtx.setLineDash([]); // Reset for next draw
+        }
 
         // Draw Leading Dot
         animCtx.beginPath();
@@ -4260,7 +4341,7 @@
           activeFades.splice(i, 1);
         } else {
           f.line.setStyle({ opacity: f.opacity });
-          f.contrail.setStyle({ opacity: f.opacity * 0.15 });
+          f.contrail.setStyle({ opacity: f.opacity * (f.mediaMesh ? 0.12 : 0.15) });
         }
       }
     }
@@ -4271,19 +4352,64 @@
     }
   }
 
+  // The fading copy of a MediaMesh hop: its rings as circle markers on one
+  // shared canvas renderer, never SVG nodes.
+  function buildMediaMeshRings(group, from, to, cap, color, opacity) {
+    const a = map.latLngToLayerPoint(from), b = map.latLngToLayerPoint(to);
+    const fr = mediaMeshRingFractions(a.distanceTo(b), cap);
+    for (let r = 0; r < fr.length; r++) {
+      const ll = L.latLng(from.lat + (to.lat - from.lat) * fr[r], from.lng + (to.lng - from.lng) * fr[r]);
+      L.circleMarker(ll, {
+        pane: 'animationsPane', renderer: mediaMeshRenderer, interactive: false,
+        radius: MEDIAMESH_RING_RADIUS, weight: MEDIAMESH_RING_WEIGHT, fill: false,
+        color: color, opacity: opacity
+      }).addTo(group);
+    }
+  }
+
+  // Rings sit at pixel spacing, so a zoom re-spaces the ones still fading.
+  function respaceMediaMeshRings() {
+    if (!map) return;
+    for (let i = 0; i < activeFades.length; i++) {
+      const f = activeFades[i];
+      if (!f.mediaMesh) continue;
+      f.line.clearLayers();
+      buildMediaMeshRings(f.line, f.mediaMesh.from, f.mediaMesh.to, f.mediaMesh.cap, f.mediaMesh.color, f.opacity);
+    }
+  }
+
+  function createFadingMediaMeshRings(anim) {
+    if (!mediaMeshRenderer) mediaMeshRenderer = L.canvas({ pane: 'animationsPane' });
+    if (mediaMeshZoomMap !== map) {
+      map.on('zoomend', respaceMediaMeshRings);
+      mediaMeshZoomMap = map;
+    }
+    const from = L.latLng(anim.from), to = L.latLng(anim.to);
+    const group = L.featureGroup();
+    buildMediaMeshRings(group, from, to, anim.ringCap, anim.ringColor, anim.opacity);
+    return { group: group, ring: { from: from, to: to, cap: anim.ringCap, color: anim.ringColor } };
+  }
+
   function createFadingLeafletLine(anim) {
     if (!pathsLayer) return;
 
     const contrail = L.polyline([anim.from, anim.to], {
       pane: 'animationsPane', // #1514 M2 — fades stack with the moving phase (z=625).
-      color: anim.contrailColor, weight: 6, opacity: anim.opacity * 0.2, lineCap: 'round'
+      color: anim.contrailColor, weight: 6, opacity: anim.opacity * (anim.isMediaMesh ? 0.15 : 0.2), lineCap: 'round'
     }).addTo(pathsLayer);
 
-    const line = L.polyline([anim.from, anim.to], {
-      pane: 'animationsPane', // #1514 M2 — fades stack with the moving phase (z=625).
-      color: anim.lineColor, weight: anim.isDashed ? 1.5 : 2, opacity: anim.opacity,
-      lineCap: 'round', dashArray: anim.isDashed ? '4 6' : null
-    }).addTo(pathsLayer);
+    let line, ringInfo = null;
+    if (anim.isMediaMesh) {
+      const rings = createFadingMediaMeshRings(anim);
+      line = rings.group.addTo(pathsLayer);
+      ringInfo = rings.ring;
+    } else {
+      line = L.polyline([anim.from, anim.to], {
+        pane: 'animationsPane', // #1514 M2 — fades stack with the moving phase (z=625).
+        color: anim.lineColor, weight: anim.isDashed ? 1.5 : 2, opacity: anim.opacity,
+        lineCap: 'round', dashArray: anim.isDashed ? '4 6' : null
+      }).addTo(pathsLayer);
+    }
 
           recentPaths.push({ line, glowLine: contrail, time: Date.now() });
           while (recentPaths.length > 5) {
@@ -4296,6 +4422,7 @@
       line: line,
       contrail: contrail,
       opacity: anim.opacity,
+      mediaMesh: ringInfo,
       lastFade: performance.now()
     });
 
@@ -4305,7 +4432,7 @@
     }
   }
 
-  function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex, hash) {
+  function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex, hash, mediaMesh) {
     // GUARD: Prevent stale callbacks from pushing to a destroyed map
     if (!map || !animCtx) {
       if (onComplete) onComplete();
@@ -4316,6 +4443,7 @@
 
     const mainOpacity = overrideOpacity ?? 0.8;
     const isDashed = overrideOpacity != null;
+    const style = pathHopStyle(isDashed, !!mediaMesh);
 
     var hashFill = '#fff';
     var hashOutline = color;
@@ -4340,6 +4468,11 @@
       contrailColor: contrailColor,
       hashFill: hashFill,
       hashOutline: hashOutline,
+      // MediaMesh rings: the hash colour when colouring by hash, else
+      // --mediamesh-path-color.
+      isMediaMesh: style === 'rings',
+      ringColor: style === 'rings' ? ((colorByHash && hash && window.HashColor) ? hashFill : mediaMesh.color) : null,
+      ringCap: style === 'rings' ? mediaMesh.cap : 0,
       onComplete: onComplete
     });
 
@@ -4621,6 +4754,9 @@
     activeGhosts.length = 0;
     isAnimating = false;
     isFading = false;
+    if (mediaMeshZoomMap) { try { mediaMeshZoomMap.off('zoomend', respaceMediaMeshRings); } catch (_) {} }
+    mediaMeshZoomMap = null;
+    mediaMeshRenderer = null;
     // #1514 S8 — tear down animation canvas + DPR listener BEFORE map.remove()
     // (Leaflet pane is still attached). Doing this after map.remove() would
     // call clearRect on a context whose backing pane is gone, and a late DPR
