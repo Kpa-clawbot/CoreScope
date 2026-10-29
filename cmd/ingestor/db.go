@@ -86,7 +86,8 @@ type Store struct {
 	stmtUpdateTxFirstSeen      *sql.Stmt
 	stmtBumpTxLastSeen         *sql.Stmt
 	stmtInsertObservation      *sql.Stmt
-	stmtInsertObservationRadio *sql.Stmt // #1869, sparse rx_radio_id
+	stmtInsertObservationRadio *sql.Stmt      // #1869, sparse rx_radio_id
+	mediaMeshHeard             mediaMeshHeard // debounces "heard sending on radio2" (mediamesh.go)
 	stmtInsertAdvertEvidence   *sql.Stmt
 	hopBackfillCancel          context.CancelFunc // stops the observation_hops backfill on Close
 	hopIndexDays               int                // retention.hopIndexDays; 0 = no hop index (see ConfigureObservationHops)
@@ -1244,7 +1245,12 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		log.Printf("[db] observation insert (non-fatal): %v", err)
 	} else {
 		s.Stats.ObservationsInserted.Add(1)
-		s.recordObservationRadio(obsID, data.RxRadioID)
+		radioID := data.RxRadioID
+		if radioID == "" {
+			radioID = data.TxRadioID
+		}
+		s.recordObservationRadio(obsID, radioID)
+		s.noteMediaMeshObservation(obsID, data, resolved)
 		// #1598: refresh last_seen from flood relay activity, not just ADVERTs.
 		// #2329: adjacency can resolve a path for display but cannot prove
 		// which colliding node transmitted. Use only unique prefixes for
@@ -2341,6 +2347,8 @@ type PacketData struct {
 	Foreign           bool   // true when ADVERT GPS lies outside configured geofilter (#730)
 	FromPubkey        string // pubkey of the originating node, for exact-match attribution (#1143)
 	RxRadioID         string // multi-radio observer: which of its radios heard it (#1869), "" otherwise
+	TxRadioID         string // the radio an observer sent it on, when tagged (MediaMesh: "radio2")
+	MediaMesh         bool   // carried on radio2, MediaMesh (`mediamesh: true`; mediamesh.go)
 }
 
 // nilIfEmpty returns nil for empty strings (for nullable DB columns).
@@ -2553,6 +2561,8 @@ type MQTTPacketMessage struct {
 	Region    string   `json:"region,omitempty"`      // optional region override (#788)
 	Timestamp string   `json:"timestamp,omitempty"`   // observer receive time, resolved by handler
 	RxRadioID string   `json:"rx_radio_id,omitempty"` // multi-radio observer: radio that heard it (#1869)
+	TxRadioID string   `json:"tx_radio_id,omitempty"` // the radio it was sent on (MediaMesh: "radio2")
+	MediaMesh bool     `json:"mediamesh,omitempty"`   // carried on radio2 (mediamesh.go)
 }
 
 // BuildPacketData constructs a PacketData from a decoded packet and MQTT message.
@@ -2600,6 +2610,8 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		PayloadVersion: decoded.Header.PayloadVersion,
 		PathJSON:       pathJSON,
 		RxRadioID:      msg.RxRadioID,
+		TxRadioID:      msg.TxRadioID,
+		MediaMesh:      msg.MediaMesh,
 		DecodedJSON:    PayloadJSON(&decoded.Payload),
 	}
 

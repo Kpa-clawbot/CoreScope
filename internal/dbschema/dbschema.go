@@ -120,6 +120,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureObserverNeighborReports(rw); err != nil {
 		return fmt.Errorf("ensure observer neighbor reports: %w", err)
 	}
+	if err := ensureMediaMesh(rw); err != nil {
+		return fmt.Errorf("ensure mediamesh: %w", err)
+	}
 	// Advert evidence is intentionally not required by AssertReady: a legacy
 	// read-only server reports unknown until this table/backfill is available,
 	// and re-probes absence instead of caching the startup race permanently.

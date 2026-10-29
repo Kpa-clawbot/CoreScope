@@ -54,6 +54,9 @@ const (
 	// observation, so they go before the observations they point at.
 	pruneObservationRadiosBatch = `DELETE FROM observation_radios WHERE observation_id IN (
 		SELECT id FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `))`
+	// Sparse MediaMesh marks (mediamesh.go), likewise keyed by the observation.
+	pruneObservationMediaMeshBatch = `DELETE FROM observation_mediamesh WHERE observation_id IN (
+		SELECT id FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `))`
 )
 
 // PruneOldPackets deletes transmissions (and their child observations)
@@ -90,6 +93,9 @@ func (s *Store) pruneOldPackets(days int, betweenBatches func()) (int64, error) 
 		err := s.WriterTx("prune_packets", func(tx *sql.Tx) error {
 			if _, err := tx.Exec(pruneObservationRadiosBatch, cutoff, pruneBatchTransmissions); err != nil {
 				return fmt.Errorf("prune observation radios: %w", err)
+			}
+			if _, err := tx.Exec(pruneObservationMediaMeshBatch, cutoff, pruneBatchTransmissions); err != nil {
+				return fmt.Errorf("prune observation mediamesh: %w", err)
 			}
 			if _, err := tx.Exec(pruneObservationsBatch, cutoff, pruneBatchTransmissions); err != nil {
 				return fmt.Errorf("prune observations: %w", err)
