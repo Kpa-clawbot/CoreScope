@@ -1175,6 +1175,7 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		Limit:              queryLimit(r, 50, s.cfg.ListLimits.PacketsMax),
 		Offset:             queryInt(r, "offset", 0),
 		Observer:           r.URL.Query().Get("observer"),
+		ExcludeTx:          r.URL.Query().Get("excludeTx") == "true",
 		Hash:               r.URL.Query().Get("hash"),
 		Since:              r.URL.Query().Get("since"),
 		Until:              r.URL.Query().Get("until"),

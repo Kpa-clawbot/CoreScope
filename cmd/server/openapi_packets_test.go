@@ -59,7 +59,7 @@ func TestOpenAPIPacketQueryParameters(t *testing.T) {
 		"hash": "string", "since": "string", "until": "string",
 		"region": "string", "node": "string", "nodes": "string",
 		"channel": "string", "area": "string", "expand": "string",
-		"radio": "string", "groupByHash": "boolean",
+		"radio": "string", "groupByHash": "boolean", "excludeTx": "boolean",
 	}
 	for name, typ := range want {
 		param, ok := params[name]
