@@ -71,4 +71,17 @@ assert.strictEqual(t.coverageReply(2, 2, 500, true), 'error');
 assert.ok(/coverageReply\(seq, drawSeq, r\.status, sentMine\)/.test(code),
   'fetchLayer must judge each reply with coverageReply');
 
-console.log('rx-coverage My coverage OK');
+// The headers can be newest while the body is still on its way: a newer
+// request started in between must win when the old body lands (#2326).
+(async function () {
+  let latest = 1;
+  let finish;
+  const late = t.freshBody(1, function () { return latest; }, new Promise(function (r) { finish = r; }));
+  latest = 2;
+  finish({ features: [1] });
+  assert.strictEqual(await late, null, 'a body that lands after a newer request must be dropped');
+  assert.deepStrictEqual(await t.freshBody(2, function () { return latest; }, Promise.resolve({ features: [2] })), { features: [2] });
+  assert.ok(/freshBody\(seq, function \(\) \{ return drawSeq; \}, r\.json\(\)\)/.test(code),
+    'fetchLayer must judge the body again when it lands');
+  console.log('rx-coverage My coverage OK');
+})().catch(function (e) { console.error(e); process.exit(1); });
