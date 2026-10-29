@@ -331,6 +331,14 @@ window.ObserverDetailNaiveBanner = {
           <div class="stat-label">Last Status Update</div>
           <div class="stat-value" style="font-size:0.85em">${obs.last_seen ? timeAgo(obs.last_seen) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_seen).toLocaleString() + '</span>' : '—'}</div>
         </div>
+        <div class="stat-card" data-testid="obs-stat-neighbors-report">
+          <div class="stat-label">Neighbors Report</div>
+          <div class="stat-value" style="font-size:0.85em">${obs.neighbors_report_at && window.ObserverNeighbors ? window.ObserverNeighbors.since(obs.neighbors_report_at, Date.now()) : '<span style="color:var(--text-muted)">never</span>'}</div>
+        </div>
+        <div class="stat-card" data-testid="obs-stat-neighbors-count">
+          <div class="stat-label">Neighbors</div>
+          <div class="stat-value">${obs.neighbors_count != null && isFinite(Number(obs.neighbors_count)) ? Number(obs.neighbors_count) : '—'}</div>
+        </div>
         <div class="stat-card">
           <div class="stat-label">Last Packet Observation</div>
           <div class="stat-value" style="font-size:0.85em">${obs.last_packet_at ? timeAgo(obs.last_packet_at) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_packet_at).toLocaleString() + '</span>' : '<span style="color:var(--text-muted)">never</span>'}</div>
@@ -341,6 +349,7 @@ window.ObserverDetailNaiveBanner = {
       </div>
       <div id="obsClockOffset" aria-busy="true"><div class="text-muted" role="status" style="margin-bottom:20px">Loading clock calibration…</div></div>
       ${window.ObserverDetailRadioHistory ? window.ObserverDetailRadioHistory.render(obs.radio_history) : ''}
+      ${window.ObserverNeighbors ? window.ObserverNeighbors.detailHtml(obs.neighbor_report) : ''}
       <div id="obsAnalytics" aria-busy="true"><div class="text-muted" role="status">Loading analytics…</div></div>`;
   }
 

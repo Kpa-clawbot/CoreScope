@@ -530,6 +530,21 @@ test('OBS-1 radio history: radio, radio_id and timestamps are escaped', () => {
   assertNoXss(html, 'OBS-1 radio history');
 });
 
+// #2270 / #2271: the neighbors report renders observer- and mesh-published
+// strings (node names, scopes, statuses, timestamps).
+test('ObserverNeighbors: cell and detail table escape every field', () => {
+  const window = {};
+  new Function('window', fs.readFileSync('public/observer-neighbors.js', 'utf8'))(window);
+  const evil = TAG_PAYLOAD + ATTR_PAYLOAD;
+  assertNoXss(window.ObserverNeighbors.cell({ neighbors_report_at: evil, neighbors_count: evil }), 'neighbors cell');
+  const html = window.ObserverNeighbors.detailHtml({
+    neighbor_count: evil, queried_neighbors: evil, self_scopes: evil, self_default_scope: evil, reported_at: evil,
+    neighbors: [{ pubkey: evil, name: evil, role: evil, snr: evil, heard_secs_ago: evil, status: evil, scopes: evil },
+                { pubkey: evil, status: evil }],
+  });
+  assertNoXss(html, 'neighbors table');
+});
+
 test('OBS-1 expanded: obs.iata payload is escaped', () => {
   const html = renderObsDetail({ id: 'obs-1', iata: TAG_PAYLOAD + ATTR_PAYLOAD });
   assertNoXss(html, 'OBS-1 obs.iata');

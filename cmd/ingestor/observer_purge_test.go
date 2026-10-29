@@ -220,3 +220,32 @@ func TestObserverPurgeDaysOrZero(t *testing.T) {
 		})
 	}
 }
+
+// #2330: a purged observer's /neighbors report goes with it; a kept
+// observer's report stays.
+func TestPurgeStaleObserversDeletesNeighborReport(t *testing.T) {
+	store := newTestStore(t)
+	staleObserver(t, store, "obs-gone")
+	if err := store.UpsertObserver("obs-live", "obs-live", "LAX", nil); err != nil {
+		t.Fatal(err)
+	}
+	msg := map[string]interface{}{"neighbors": []interface{}{}}
+	for _, id := range []string{"obs-gone", "obs-live"} {
+		if err := store.UpsertNeighborReport(id, msg, false, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if purged, err := store.PurgeStaleObservers(30); err != nil || purged != 1 {
+		t.Fatalf("purged=%d err=%v, want 1", purged, err)
+	}
+	for id, want := range map[string]int{"obs-gone": 0, "obs-live": 1} {
+		var n int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM observer_neighbor_reports WHERE observer_id = ?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != want {
+			t.Errorf("%s: %d neighbor report rows, want %d", id, n, want)
+		}
+	}
+}

@@ -1007,6 +1007,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	// does not apply.
 	if len(parts) >= 4 && parts[3] == "neighbors" {
 		handleNeighborsReport(store, tag, parts[2], msg)
+		// #2270/#2271: keep the report itself for the observer pages. A
+		// retained replay must not pose as a fresh report.
+		if err := store.UpsertNeighborReport(clampObserverField(parts[2], maxObserverIDLen), msg, m.Retained(), time.Now()); err != nil {
+			log.Printf("MQTT [%s] neighbors report store error: %v", tag, err)
+		}
 		return
 	}
 
