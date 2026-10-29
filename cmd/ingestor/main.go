@@ -27,6 +27,15 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// finishIngestStartup keeps required migrations ahead of ingestion, but lets
+// buffered writes use the writer gaps between packet-retention batches.
+// The sweep stays synchronous: this introduces no background shutdown owner.
+func finishIngestStartup(store *Store, ready func(), prunePackets func() (int64, error)) (int64, error) {
+	store.WaitForAsyncMigrations()
+	ready()
+	return prunePackets()
+}
+
 func main() {
 	// pprof profiling — off by default, enable with ENABLE_PPROF=true
 	if os.Getenv("ENABLE_PPROF") == "true" {
@@ -314,14 +323,8 @@ func main() {
 	// Packet (transmissions) retention: previously lived in cmd/server,
 	// moved to ingestor in #1283 to eliminate cross-process write
 	// contention (SQLITE_BUSY). 0 = disabled.
+	// The initial sweep runs after the ingestion gate opens below.
 	packetDays := cfg.PacketDaysOrZero()
-	if packetDays > 0 {
-		if n, err := store.PruneOldPackets(packetDays); err != nil {
-			log.Printf("[prune] error: %v", err)
-		} else if n > 0 {
-			log.Printf("[prune] startup pruned %d transmissions older than %d days", n, packetDays)
-		}
-	}
 
 	// Keep observation_hops bounded to its window (no-op when the index is off).
 	if n, err := store.TrimObservationHops(); err != nil {
@@ -391,12 +394,23 @@ func main() {
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
-	// Gate open: the synchronous startup writes above cannot return until the
-	// single SQLite writer is free, which means any blocking async migration
-	// (e.g. the CREATE INDEX) has finished. WaitForAsyncMigrations() makes that
-	// explicit. Now drain everything the subscription buffered during startup.
-	store.WaitForAsyncMigrations()
-	ingestBuffer.Ready()
+	// Keep all required startup work ahead of the gate. Packet retention is
+	// already chunked and yields the writer between batches; open ingestion
+	// first so buffered MQTT work can actually use those gaps (#2325).
+	if n, err := finishIngestStartup(store, func() {
+		ingestBuffer.Ready()
+		if d := ingestBuffer.Dropped(); d > 0 {
+			log.Printf("[ingest-buffer] write path ready; draining backlog (dropped %d during startup — consider raising ingestBufferSize)", d)
+		} else {
+			log.Printf("[ingest-buffer] write path ready; draining backlog (0 dropped)")
+		}
+	}, func() (int64, error) {
+		return store.PruneOldPackets(packetDays)
+	}); err != nil {
+		log.Printf("[prune] error: %v", err)
+	} else if n > 0 {
+		log.Printf("[prune] startup pruned %d transmissions older than %d days", n, packetDays)
+	}
 	// History recovery must not join the startup readiness wait above.
 	// Its known evidence is a lower bound: old UPSERTs erased some frames.
 	evidenceCtx, stopEvidenceBackfill := context.WithCancel(context.Background())
@@ -413,11 +427,6 @@ func main() {
 	// After the gate: ingest is live, the backfill yields to it between chunks.
 	// No-op when the index is off or already covers its window.
 	store.ScheduleObservationHopsBackfill()
-	if d := ingestBuffer.Dropped(); d > 0 {
-		log.Printf("[ingest-buffer] write path ready; draining backlog (dropped %d during startup — consider raising ingestBufferSize)", d)
-	} else {
-		log.Printf("[ingest-buffer] write path ready; draining backlog (0 dropped)")
-	}
 
 	// Daily ticker for node retention
 	retentionTicker := time.NewTicker(1 * time.Hour)
