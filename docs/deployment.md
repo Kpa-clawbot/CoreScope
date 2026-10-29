@@ -677,8 +677,10 @@ only after it is complete, nonempty, and passes SQLite's consistency check:
 ```
 
 The temporary-file template ends in `X` characters for both GNU and BSD/macOS
-`mktemp`. The 30-minute total download limit includes generating the snapshot and
-transferring it; increase `--max-time` for a large database or slow connection.
+`mktemp`. The 30-minute limit is curl's client-side ceiling for generating and
+downloading the snapshot. CoreScope separately sets a 60-second HTTP write
+timeout, which the backup handler does not override; reverse proxies can impose
+their own deadlines. Raising `--max-time` does not extend those server or proxy limits.
 Timeouts fail the script and remove the incomplete download without replacing a
 previous completed backup.
 
