@@ -51,6 +51,7 @@ func routeDescriptions() map[string]routeMeta {
 
 		// Admin / system
 		"GET /api/health":      {Summary: "Health check", Description: "Returns server health, uptime, and memory stats.", Tag: "admin"},
+		"GET /api/healthz":     {Summary: "Query readiness", Description: "Public readiness probe with no parameters. Returns 503 application/json with {ready:false,reason:\"loading\"} while initializing. Returns 200 with ready:true, loadedTx and loadedObs counts for the current in-memory store (not database totals), and from_pubkey_backfill progress. ingest_liveness is an optional map from source names to reported receipt/message-processing timestamps from the ingestor stats file; it is omitted when that data is unavailable or empty. ready:true does not establish MQTT freshness or completion of the from_pubkey backfill.", Tag: "admin", Response: schemaRef("ReadinessResponse")},
 		"GET /api/stats":       {Summary: "Network statistics", Description: "Returns aggregate stats (node counts, packet counts, observer counts). Cached for 10s.", Tag: "admin"},
 		"GET /api/perf":        {Summary: "Performance statistics", Description: "Returns per-endpoint request timing and slow query log.", Tag: "admin"},
 		"GET /api/mqtt/status": {Summary: "MQTT source status", Description: "Returns per-MQTT-source connection state and counters (lastConnectUnix, lastPacketUnix, packetsTotal, etc.). Broker URL passwords are masked. Sourced from the ingestor stats file; empty list when unavailable. (#1043)", Tag: "admin"},
@@ -258,13 +259,14 @@ func routeDescriptions() map[string]routeMeta {
 // openAPISchema is a typed OpenAPI schema object, for component schemas that
 // would otherwise be nested untyped map literals (AGENTS.md).
 type openAPISchema struct {
-	Type        string                   `json:"type"`
-	Description string                   `json:"description,omitempty"`
-	Nullable    bool                     `json:"nullable,omitempty"`
-	Enum        []string                 `json:"enum,omitempty"`
-	Items       *openAPISchema           `json:"items,omitempty"`
-	Properties  map[string]openAPISchema `json:"properties,omitempty"`
-	Required    []string                 `json:"required,omitempty"`
+	Type                 string                   `json:"type"`
+	Description          string                   `json:"description,omitempty"`
+	Nullable             bool                     `json:"nullable,omitempty"`
+	Enum                 []string                 `json:"enum,omitempty"`
+	Items                *openAPISchema           `json:"items,omitempty"`
+	Properties           map[string]openAPISchema `json:"properties,omitempty"`
+	Required             []string                 `json:"required,omitempty"`
+	AdditionalProperties *openAPISchema           `json:"additionalProperties,omitempty"`
 }
 
 // schemaRef returns an OpenAPI $ref pointing at a named component schema.
@@ -294,6 +296,32 @@ func componentSchemas() map[string]interface{} {
 		return m
 	}
 	return map[string]interface{}{
+		"ReadinessResponse": openAPISchema{
+			Type: "object", Required: []string{"ready", "loadedTx", "loadedObs", "from_pubkey_backfill"},
+			Properties: map[string]openAPISchema{
+				"ready":     {Type: "boolean", Description: "True in the 200 response; false with reason loading in the 503 response."},
+				"loadedTx":  {Type: "integer", Description: "Transmissions currently loaded in the in-memory store."},
+				"loadedObs": {Type: "integer", Description: "Observations currently loaded in the in-memory store."},
+				"from_pubkey_backfill": {
+					Type: "object", Required: []string{"total", "processed", "done"},
+					Properties: map[string]openAPISchema{
+						"total":     {Type: "integer", Description: "Total work reported for the legacy from_pubkey backfill."},
+						"processed": {Type: "integer", Description: "Processed work reported by that backfill."},
+						"done":      {Type: "boolean", Description: "Whether that backfill has completed; separate from query readiness."},
+					},
+				},
+				"ingest_liveness": {
+					Type: "object", Description: "Optional source-name map from the ingestor stats snapshot; not a broker connection-status check.",
+					AdditionalProperties: &openAPISchema{
+						Type: "object", Required: []string{"lastReceiptUnix", "lastMessageUnix"},
+						Properties: map[string]openAPISchema{
+							"lastReceiptUnix": {Type: "integer", Description: "Last reported MQTT receipt time in Unix seconds; 0 means never."},
+							"lastMessageUnix": {Type: "integer", Description: "Last reported message-processing time in Unix seconds; 0 means never."},
+						},
+					},
+				},
+			},
+		},
 		"NodeResolveResponse": openAPISchema{
 			Type: "object", Required: []string{"prefix", "ambiguous"},
 			Properties: map[string]openAPISchema{

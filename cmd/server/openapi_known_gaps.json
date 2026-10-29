@@ -10,7 +10,6 @@
     "/api/config/areas/polygons",
     "/api/docs",
     "/api/dropped-packets",
-    "/api/healthz",
     "/api/known-channels",
     "/api/nodes/{pubkey}/reach",
     "/api/nodes/{pubkey}/rx-coverage",
