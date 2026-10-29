@@ -41,7 +41,6 @@ func evInput() notifyInput {
 		Watches: []users.NotifyWatch{{UserID: evUser, Pubkey: evPkA}},
 		Nodes:   map[string]notifyNode{},
 		Heard:   map[string]time.Time{},
-		Relayed: map[string]time.Time{},
 	}
 }
 
@@ -110,24 +109,29 @@ func TestEvaluateOfflineAndBack(t *testing.T) {
 	}
 }
 
-func TestEvaluateRelayAwareInfra(t *testing.T) {
+// Liveness is last_seen or the store's certain last heard (#2260): a
+// repeater whose advert is days old but that certainly relayed an hour ago is
+// online; one with nothing certain inside the silent window is offline. There
+// is no separate relay input any more: last_relayed also counts 1-byte prefix
+// matches of other repeaters and kept a silent repeater online for days.
+func TestEvaluateCertainHeard(t *testing.T) {
 	cases := []struct {
 		name, role, lastSeen string
-		relayed              time.Duration
+		heard                time.Duration
 		want                 string
 	}{
-		{"repeater relaying", "repeater", evAgo(80 * time.Hour), time.Hour, users.NotifyGood},
-		{"room relaying, role case", "Room", evAgo(80 * time.Hour), time.Hour, users.NotifyGood},
+		{"repeater certainly relaying", "repeater", evAgo(80 * time.Hour), time.Hour, users.NotifyGood},
+		{"room certainly relaying, role case", "Room", evAgo(80 * time.Hour), time.Hour, users.NotifyGood},
 		{"repeater silent exactly 72 h", "repeater", evAgo(72 * time.Hour), 0, users.NotifyBad},
 		{"repeater 71 h", "repeater", evAgo(71 * time.Hour), 0, users.NotifyGood},
-		{"companion: relay time ignored", "companion", evAgo(30 * time.Hour), time.Hour, users.NotifyBad},
+		{"repeater last certain packet 73 h ago", "repeater", evAgo(80 * time.Hour), 73 * time.Hour, users.NotifyBad},
 		{"no timestamp at all", "repeater", "", 0, users.NotifyBad},
 	}
 	for _, c := range cases {
 		in := evInput()
 		in.Nodes[evPkA] = notifyNode{Pubkey: evPkA, Role: c.role, LastSeen: c.lastSeen}
-		if c.relayed > 0 {
-			in.Relayed[evPkA] = evNow.Add(-c.relayed)
+		if c.heard > 0 {
+			in.Heard[evPkA] = evNow.Add(-c.heard)
 		}
 		if got, _ := evState(evaluateNotifications(in), evUser, users.NotifyNodeOffline, evPkA); got != c.want {
 			t.Errorf("%s: %q; want %q", c.name, got, c.want)
@@ -306,7 +310,7 @@ func TestEvaluateChangesAreOrderedPerUser(t *testing.T) {
 // in the PR.
 func BenchmarkEvaluateNotifications(b *testing.B) {
 	in := notifyInput{Now: evNow, Health: (&Config{}).GetHealthThresholds(), LowMv: 3300,
-		Accounts: map[int64]users.User{}, Nodes: map[string]notifyNode{}, Heard: map[string]time.Time{}, Relayed: map[string]time.Time{}}
+		Accounts: map[int64]users.User{}, Nodes: map[string]notifyNode{}, Heard: map[string]time.Time{}}
 	for i := 0; i < 2000; i++ {
 		pk := fmt.Sprintf("%064x", i)
 		in.Nodes[pk] = notifyNode{Pubkey: pk, Role: "repeater", LastSeen: evAgo(time.Duration(i) * time.Minute), BatteryMv: evMv(3200 + i%300)}
@@ -548,5 +552,61 @@ func TestEvaluateGraceAfterIngestResumes(t *testing.T) {
 	}
 	if ch := res.Changes[evAdmin]; len(ch) != 1 || ch[0].Subject != "OBS2" || ch[0].To != users.NotifyGood {
 		t.Fatalf("observer heard after recovery = %+v; want Mast back online", ch)
+	}
+}
+
+func ownInput(events ...string) notifyInput {
+	in := evInput()
+	in.Watches = nil
+	in.Prefs = []users.NotifyPrefs{{UserID: evUser, Enabled: true, Events: events}}
+	in.Observers = []notifyObserver{
+		{ID: "obs1", Name: "Roof", LastSeen: evAgo(25 * time.Hour)},
+		{ID: "OBS2", Name: "Other", LastSeen: evAgo(25 * time.Hour)},
+	}
+	in.ObserverOwners = map[string]int64{"OBS1": evUser, "OBS2": evAdmin2}
+	in.States = []users.NotifyState{
+		evStateRow(evUser, users.NotifyObserverOfflineOwn, "obs1", users.NotifyGood),
+		evStateRow(evUser, users.NotifyObserverOfflineOwn, "OBS2", users.NotifyGood),
+	}
+	return in
+}
+
+func TestEvalOwnObserverOffline(t *testing.T) {
+	res := evaluateNotifications(ownInput(users.NotifyObserverOfflineOwn))
+	ch := res.Changes[evUser]
+	if len(ch) != 1 || ch[0].Subject != "obs1" || ch[0].Event != users.NotifyObserverOfflineOwn || ch[0].To != users.NotifyBad {
+		t.Fatalf("changes = %+v; want one bad change for obs1", ch)
+	}
+	if _, ok := evState(res, evUser, users.NotifyObserverOfflineOwn, "OBS2"); ok {
+		t.Fatal("someone else's observer was evaluated")
+	}
+}
+
+func TestEvalAdminWithBothGetsOneMail(t *testing.T) {
+	in := ownInput(users.NotifyObserverOffline, users.NotifyObserverOfflineOwn)
+	in.Prefs[0].UserID = evAdmin
+	in.ObserverOwners = map[string]int64{"OBS1": evAdmin}
+	in.States = []users.NotifyState{evStateRow(evAdmin, users.NotifyObserverOffline, "obs1", users.NotifyGood)}
+	res := evaluateNotifications(in)
+	n := 0
+	for _, c := range res.Changes[evAdmin] {
+		if c.Subject == "obs1" {
+			n++
+			if c.Event != users.NotifyObserverOffline {
+				t.Errorf("event = %q; want observer.offline", c.Event)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d changes for obs1, want 1: %+v", n, res.Changes[evAdmin])
+	}
+}
+
+func TestEvalOwnObserverIngestStaleNoChange(t *testing.T) {
+	in := ownInput(users.NotifyObserverOfflineOwn)
+	in.IngestStale = true
+	res := evaluateNotifications(in)
+	if len(res.Changes[evUser]) != 0 {
+		t.Fatalf("changes during stale ingest: %+v", res.Changes[evUser])
 	}
 }

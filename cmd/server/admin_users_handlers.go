@@ -186,6 +186,9 @@ func (s *Server) handleAdminDisable(w http.ResponseWriter, r *http.Request, acto
 		// anyway; keep going but leave a trace.
 		log.Printf("[users] disable: delete sessions for user #%d: %v", t.ID, err)
 	}
+	if s.auth.obsIdx != nil {
+		s.auth.obsIdx.setDisabled(t.ID, true)
+	}
 	s.auth.audit(idPtr(actor.ID), "user.disable", idPtr(t.ID), nil)
 	s.writeAdminRow(w, t.ID)
 }
@@ -203,6 +206,9 @@ func (s *Server) handleAdminEnable(w http.ResponseWriter, r *http.Request, actor
 		adminStoreFail(w, "enable", t.ID, err)
 		return
 	}
+	if s.auth.obsIdx != nil {
+		s.auth.obsIdx.setDisabled(t.ID, false)
+	}
 	s.auth.audit(idPtr(actor.ID), "user.enable", idPtr(t.ID), nil)
 	s.writeAdminRow(w, t.ID)
 }
@@ -215,6 +221,9 @@ func (s *Server) handleAdminDelete(w http.ResponseWriter, r *http.Request, actor
 	if err := s.auth.st.Delete(t.ID); err != nil {
 		adminStoreFail(w, "delete", t.ID, err)
 		return
+	}
+	if s.auth.obsIdx != nil {
+		s.auth.obsIdx.removeUser(t.ID)
 	}
 	s.auth.audit(idPtr(actor.ID), "user.delete", idPtr(t.ID), nil)
 	writeJSON(w, okResponse{OK: true})

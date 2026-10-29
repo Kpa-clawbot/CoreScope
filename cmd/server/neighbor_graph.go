@@ -20,7 +20,8 @@ const (
 	affinitySaturationCount = 100
 	// Time-decay half-life: 7 days.
 	affinityHalfLifeHours = 168.0
-	// Cache TTL for the built graph.
+	// Cache TTL for store.graph (path_inspect.go). Server.neighborGraph is
+	// rebuilt by the recompute tick instead and does not use it (#2221).
 	neighborGraphTTL = 5 * time.Minute
 	// Auto-resolve confidence: best must be >= this factor × second-best.
 	affinityConfidenceRatio = 3.0
@@ -276,10 +277,19 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 		}
 	}
 
+	// Snapshot what we need under lock: the packet list and each tx's
+	// Observations slice header. Ingest appends to tx.Observations under
+	// store.mu (#2237); appending never changes the elements a copied
+	// header covers.
+	type graphTx struct {
+		tx           *StoreTx
+		observations []*StoreObs
+	}
 	store.mu.RLock()
-	// Snapshot what we need under lock.
-	packets := make([]*StoreTx, len(store.packets))
-	copy(packets, store.packets)
+	packets := make([]graphTx, len(store.packets))
+	for i, tx := range store.packets {
+		packets[i] = graphTx{tx: tx, observations: tx.Observations}
+	}
 	store.mu.RUnlock()
 
 	// Build prefix map for candidate resolution.
@@ -300,7 +310,8 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 	lowerCache := make(map[string]string, 256)
 
 	// Phase 1: Extract edges from every transmission + observation.
-	for _, tx := range packets {
+	for _, p := range packets {
+		tx := p.tx
 		isAdvert := tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT
 		isAnonReq := tx.PayloadType != nil && *tx.PayloadType == PayloadANON_REQ
 		// #1777: ANON_REQ's ephemeralPubKey is a full Ed25519 pubkey — the
@@ -317,7 +328,10 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 			fromLower = cachedToLower(lowerCache, fromNode)
 		}
 
-		for _, obs := range tx.Observations {
+		for _, obs := range p.observations {
+			if obs.isOwnTransmission() {
+				continue
+			}
 			path := parsePathJSON(obs.PathJSON)
 			observerPK := cachedToLower(lowerCache, obs.ObserverID)
 

@@ -118,6 +118,50 @@ function realPathHashSize() {
 }
 
 // ===== APP.JS TESTS =====
+console.log('\n=== app.js: column resize handle positioning (#2217) ===');
+{
+  function resizeFixture(positions, saved) {
+    const ctx = makeSandbox();
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const ths = positions.map(position => ({
+      style: { position: '' }, dataset: {}, scrollWidth: 80,
+      computedPosition: position, children: [],
+      appendChild(handle) { this.children.push(handle); },
+    }));
+    const table = {
+      style: {}, dataset: {}, parentElement: { clientWidth: 400 },
+      querySelector: sel => sel === 'thead' ? { querySelectorAll: () => ths } : null,
+      querySelectorAll: () => ths,
+    };
+    ctx.document.querySelector = () => table;
+    ctx.document.createElement = () => ({ addEventListener: () => {} });
+    ctx.getComputedStyle = th => ({ position: th.style.position || th.computedPosition });
+    if (saved) ctx.localStorage.setItem('column-widths', JSON.stringify(ths.map(() => 100 / ths.length)));
+    return { ctx, table, ths };
+  }
+
+  for (const saved of [false, true]) {
+    test('static headers anchor handles with ' + (saved ? 'saved' : 'measured') + ' widths', () => {
+      const { ctx, ths } = resizeFixture(['static', 'static', 'static'], saved);
+      ctx.makeColumnsResizable('#table', 'column-widths');
+      assert.strictEqual(ths[0].style.position, 'relative', 'first handle needs its own header as containing block');
+      assert.strictEqual(ths[1].style.position, 'relative', 'each handle needs its own containing block');
+      assert.strictEqual(ths[2].style.position, '', 'last header has no handle and needs no change');
+      ctx.makeColumnsResizable('#table', 'column-widths');
+      assert.deepStrictEqual(ths.map(th => th.children.length), [1, 1, 0], 'repeated setup must not duplicate handles');
+    });
+
+    test('already positioned headers are preserved with ' + (saved ? 'saved' : 'measured') + ' widths', () => {
+      const { ctx, ths } = resizeFixture(['sticky', 'relative', 'absolute', 'fixed', 'static'], saved);
+      ctx.makeColumnsResizable('#table', 'column-widths');
+      assert.deepStrictEqual(ths.map(th => th.style.position), ['', '', '', '', ''],
+        'computed CSS positioning must not be overridden by an inline style');
+      assert.deepStrictEqual(ths.map(th => th.children.length), [1, 1, 1, 1, 0]);
+    });
+  }
+}
+
 console.log('\n=== app.js: timeAgo ===');
 {
   const ctx = makeSandbox();
@@ -415,6 +459,24 @@ console.log('\n=== nodes.js: getStatusTooltip / getStatusInfo (extracted) ===');
       const d = new Date(Date.now() - 48 * 3600000).toISOString();
       const info = gsi({ role: 'repeater', last_heard: d });
       assert.strictEqual(info.status, 'active');
+    });
+    // #2260 review: the newest timestamp is shown, not the first present. An
+    // older _lastHeard (a cached fetch) must not hide a fresher last_heard.
+    test('getStatusInfo: uncertain repeater says so and why (#2260)', () => {
+      const old = new Date(Date.now() - 84 * 3600000).toISOString();
+      const info = gsi({ role: 'repeater', last_seen: old, last_heard: old, last_relayed: new Date(Date.now() - 240000).toISOString() });
+      assert.strictEqual(info.status, 'uncertain');
+      assert.ok(info.statusLabel.includes('Uncertain'), info.statusLabel);
+      assert.ok(info.explanation.includes('shared hop prefix'), info.explanation);
+      assert.ok(info.statusTooltip.includes('another one'), info.statusTooltip);
+    });
+    test('getStatusInfo shows the newest of _lastHeard and last_heard', () => {
+      const fresh = new Date(Date.now() - 60000).toISOString();
+      const old = new Date(Date.now() - 96 * 3600000).toISOString();
+      const info = gsi({ role: 'repeater', _lastHeard: old, last_heard: fresh, last_seen: old });
+      assert.strictEqual(info.status, 'active');
+      assert.strictEqual(info.lastHeardMs, new Date(fresh).getTime());
+      assert.ok(!info.explanation.includes('Not heard'), info.explanation);
     });
   }
 
@@ -919,31 +981,51 @@ console.log('\n=== roles.js: getNodeStatus (#1598) ===');
     assert.strictEqual(getNodeStatus('repeater', undefined), 'stale'));
 
   // Node-object signature
-  test('node: backbone-repeater fixture — last_seen 25h, last_relayed 5min → active', () =>
+  // #1598: a relaying repeater with an old advert stays active. The server
+  // folds the relays that can only be this node into last_heard (#2260).
+  test('node: backbone-repeater fixture — last_seen 25h, certain relay 5min → active', () =>
     assert.strictEqual(getNodeStatus({
-      role: 'repeater', last_seen: iso(25 * H), last_relayed: iso(5 * 60000)
+      role: 'repeater', last_seen: iso(25 * H), last_heard: iso(5 * 60000)
     }), 'active'));
-  test('node: repeater advert-silent 151h but relayed 2min ago → active', () =>
+  test('node: repeater advert-silent 151h but certainly relayed 2min ago → active', () =>
     assert.strictEqual(getNodeStatus({
-      role: 'repeater', last_seen: iso(151 * H), last_relayed: iso(2 * 60000)
+      role: 'repeater', last_seen: iso(151 * H), last_heard: iso(2 * 60000)
     }), 'active'));
-  test('node: repeater with BOTH last_seen and last_relayed past 72h → stale', () =>
+  test('node: repeater with BOTH last_seen and last_heard past 72h → stale', () =>
     assert.strictEqual(getNodeStatus({
-      role: 'repeater', last_seen: iso(100 * H), last_relayed: iso(80 * H)
+      role: 'repeater', last_seen: iso(100 * H), last_heard: iso(80 * H)
     }), 'stale'));
-  test('node: room honors last_relayed like repeater', () =>
+  // #2260: last_relayed also counts 1-byte prefix matches of other repeaters.
+  // A repeater silent for days kept showing "Active, last relayed 4m ago".
+  // Without certain evidence but with its shared prefix still in paths it is
+  // 'uncertain': neither proof of life nor of an outage.
+  test('node: last_relayed alone makes a silent repeater uncertain, not active (#2260)', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(84 * H), last_heard: iso(84 * H), last_relayed: iso(4 * 60000)
+    }), 'uncertain'));
+  test('node: last_relayed alone makes a silent room uncertain (#2260)', () =>
     assert.strictEqual(getNodeStatus({
       role: 'room', last_seen: iso(90 * H), last_relayed: iso(10 * 60000)
-    }), 'active'));
-  test('node: companion does NOT get relay-based freshness', () =>
+    }), 'uncertain'));
+  test('node: an old last_relayed leaves a silent repeater stale (#2260)', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(90 * H), last_relayed: iso(80 * H)
+    }), 'stale'));
+  test('node: a companion is never uncertain, last_relayed means nothing for it', () =>
     assert.strictEqual(getNodeStatus({
       role: 'companion', last_seen: iso(30 * H), last_relayed: iso(5 * 60000)
     }), 'stale'));
-  test('node: repeater with no last_relayed falls back to advert freshness (stale at 80h)', () =>
+  test('node: certain evidence wins over uncertain', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(90 * H), last_heard: iso(60000), last_relayed: iso(30000)
+    }), 'active'));
+  test('legacy (role, ms) form never returns uncertain', () =>
+    assert.strictEqual(getNodeStatus('repeater', Date.now() - 80 * H), 'stale'));
+  test('node: repeater with only an advert falls back to advert freshness (stale at 80h)', () =>
     assert.strictEqual(getNodeStatus({
       role: 'repeater', last_seen: iso(80 * H)
     }), 'stale'));
-  test('node: repeater with fresh advert and no last_relayed → active', () =>
+  test('node: repeater with fresh advert → active', () =>
     assert.strictEqual(getNodeStatus({
       role: 'repeater', last_seen: iso(1 * H)
     }), 'active'));
@@ -1201,7 +1283,7 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     assert.ok(markers['rpt2']._staleDimmed === true, 'repeater at 96h should be dimmed');
   });
 
-  test('pruneStaleNodes: relay-aware — advert-silent repeater with fresh last_relayed stays active (#1598)', () => {
+  test('pruneStaleNodes: advert-silent repeater with a fresh certain relay stays active (#1598, #2260)', () => {
     const { ctx } = makeLiveSandbox();
     const prune = ctx.window._livePruneStaleNodes;
     const markers = ctx.window._liveNodeMarkers();
@@ -1212,7 +1294,7 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     data['bb1'] = {
       public_key: 'bb1', role: 'repeater',
       _liveSeen: Date.now() - 96 * 3600000,
-      last_relayed: new Date(Date.now() - 5 * 60000).toISOString()
+      last_heard: new Date(Date.now() - 5 * 60000).toISOString()
     };
 
     prune();
@@ -3193,9 +3275,10 @@ console.log('\n=== channels.js: encrypted channel without key shows lock message
 // ===== PACKETS.JS: savedTimeWindowMin default guard =====
 console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
 {
-  async function captureInitialPacketsRequest(storageValue, innerWidth) {
+  async function captureInitialPacketsRequest(storageValue, innerWidth, hash = '#/packets') {
     const ctx = makeSandbox();
     const apiCalls = [];
+    ctx.location.hash = hash;
     if (storageValue !== undefined) ctx.localStorage.setItem('meshcore-time-window', storageValue);
     ctx.window.localStorage = ctx.localStorage;
     ctx.window.innerWidth = innerWidth;
@@ -3234,7 +3317,7 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
     const firstPacketsCall = apiCalls.find(p => p.indexOf('/packets?') === 0);
     assert.ok(firstPacketsCall, 'packets API should be called during initial packets page load');
     const params = new URLSearchParams((firstPacketsCall.split('?')[1] || ''));
-    return { firstPacketsCall, params };
+    return { firstPacketsCall, params, storageValue: ctx.localStorage.getItem('meshcore-time-window') };
   }
 
   test('savedTimeWindowMin defaults to 15 when localStorage returns null', async () => {
@@ -3245,12 +3328,69 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
     assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
   });
 
-  test('savedTimeWindowMin defaults to 15 when localStorage returns "0"', async () => {
+  test('desktop preserves saved All time on the first request after reload (#2231)', async () => {
     const r = await captureInitialPacketsRequest('0', 1366);
-    const since = r.params.get('since');
-    assert.ok(since, 'initial packets request should include since parameter');
-    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
-    assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
+    assert.strictEqual(r.params.get('since'), null, 'All time must not apply a time cutoff');
+    assert.strictEqual(r.storageValue, '0');
+  });
+
+  test('desktop shared All time overrides storage and survives reload (#2231)', async () => {
+    for (const saved of [undefined, '60']) {
+      const shared = await captureInitialPacketsRequest(saved, 1366, '#/packets?timeWindow=0');
+      assert.strictEqual(shared.params.get('since'), null, 'a shared All time link must omit the cutoff');
+      assert.strictEqual(shared.storageValue, '0');
+      const reloaded = await captureInitialPacketsRequest(shared.storageValue, 1366);
+      assert.strictEqual(reloaded.params.get('since'), null, 'stored All time must survive a bare-page reload');
+    }
+  });
+
+  test('empty and non-finite storage keep the 15-minute default (#2231)', async () => {
+    for (const saved of ['', '  ', 'Infinity']) {
+      const r = await captureInitialPacketsRequest(saved, 1366);
+      const deltaMin = (Date.now() - Date.parse(r.params.get('since'))) / 60000;
+      assert.ok(deltaMin >= 15 && deltaMin < 16, `invalid storage ${JSON.stringify(saved)} must use 15 minutes`);
+    }
+  });
+
+  test('missing and malformed URL windows preserve the saved/default window (#2231)', async () => {
+    for (const saved of [undefined, '60']) {
+      for (const value of [undefined, '', '  ', 'abc', '-5', 'Infinity']) {
+        const hash = '#/packets' + (value === undefined ? '' : '?timeWindow=' + encodeURIComponent(value));
+        const r = await captureInitialPacketsRequest(saved, 1366, hash);
+        const expected = saved === undefined ? 15 : 60;
+        const deltaMin = (Date.now() - Date.parse(r.params.get('since'))) / 60000;
+        assert.ok(deltaMin >= expected && deltaMin < expected + 1,
+          `invalid/missing URL ${JSON.stringify(value)} must preserve ${expected} minutes`);
+      }
+    }
+  });
+
+  test('mobile shared windows retain the existing safety guard (#2231)', async () => {
+    for (const width of [375, 1024]) {
+      for (const value of ['0', '1440']) {
+        const r = await captureInitialPacketsRequest('60', width, '#/packets?timeWindow=' + value);
+        const deltaMin = (Date.now() - Date.parse(r.params.get('since'))) / 60000;
+        assert.ok(deltaMin >= 15 && deltaMin < 16, `mobile shared ${value} must use 15 minutes`);
+        assert.strictEqual(r.storageValue, '15');
+        assert.strictEqual(r.params.get('limit'), '1000');
+      }
+    }
+  });
+
+  test('mobile keeps a supported 180-minute shared window (#2231)', async () => {
+    const r = await captureInitialPacketsRequest(undefined, 375, '#/packets?timeWindow=180');
+    const deltaMin = (Date.now() - Date.parse(r.params.get('since'))) / 60000;
+    assert.ok(deltaMin >= 180 && deltaMin < 181);
+    assert.strictEqual(r.storageValue, '180');
+  });
+
+  test('a pinned older grouped packet still bypasses the mobile cutoff (#2231)', async () => {
+    const r = await captureInitialPacketsRequest(undefined, 375,
+      '#/packets?timeWindow=0&hash=deadbeef');
+    assert.strictEqual(r.params.get('hash'), 'deadbeef');
+    assert.strictEqual(r.params.get('groupByHash'), 'true');
+    assert.strictEqual(r.params.get('since'), null, 'explicit packet selection must ignore the time cutoff');
+    assert.strictEqual(r.params.get('limit'), '1000');
   });
 
   test('savedTimeWindowMin preserves valid value (60)', async () => {
@@ -4330,6 +4470,115 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
     const ctx = makeNodesSandbox();
     const text = ctx.window._nodesRenderNodeTimestampText(null);
     assert.strictEqual(text, '—');
+  });
+}
+
+// #2309: exercise the real side-panel renderer, not a copied formatter.
+console.log('\n=== nodes.js: preview metadata (#2309) ===');
+{
+  function renderPreview(overrides, relayActiveMs, now) {
+    const ctx = makeNodesSandbox();
+    if (relayActiveMs !== undefined) ctx.HEALTH_THRESHOLDS.relayActiveMs = relayActiveMs;
+    if (now !== undefined) ctx.Date = class extends Date { static now() { return now; } };
+    const source = fs.readFileSync('public/nodes.js', 'utf8');
+    vm.runInContext(source.replace('  // Test hooks',
+      '  window.testRenderNodeDetail = renderDetail;\n  // Test hooks'), ctx);
+    const node = {
+      public_key: 'abcdef01'.repeat(8), name: 'Preview fixture', role: 'repeater',
+      last_seen: '2020-01-01T00:00:00Z', hash_size: 2, ...overrides,
+    };
+    const panel = { innerHTML: '', querySelector: () => null };
+    ctx.window.testRenderNodeDetail(panel, { node, recentAdverts: [], healthData: { stats: {} } });
+    const value = label => {
+      const match = panel.innerHTML.match(new RegExp('<dt[^>]*>' + label + '(?: <span[\\s\\S]*?</span>)?</dt><dd[^>]*>([\\s\\S]*?)</dd>'));
+      return match ? match[1] : null;
+    };
+    return { value, html: panel.innerHTML, status: ctx.window._nodesGetStatusInfo(node).status };
+  }
+
+  for (const role of ['repeater', 'room']) {
+    test(role + ' preview preserves zero traffic score ahead of legacy fallback', () => {
+      const { value } = renderPreview({ role, traffic_share_score: 0, usefulness_score: 0.8 });
+      assert.match(value('Traffic share') || '', /0\.0%/);
+      assert.doesNotMatch(value('Traffic share'), /80\.0%/);
+    });
+  }
+  test('preview formats numeric strings and uses legacy score only when the new score is absent', () => {
+    assert.match(renderPreview({ traffic_share_score: '0.125' }).value('Traffic share') || '', /12\.5%/);
+    assert.match(renderPreview({ traffic_share_score: null, usefulness_score: '0.25' }).value('Traffic share') || '', /25\.0%/);
+  });
+  test('traffic-share help defines traffic and its Bridge distinction without stale planning claims', () => {
+    const { html } = renderPreview({ traffic_share_score: 0.5 });
+    assert.match(html, /non-advert mesh traffic/);
+    assert.match(html, /see Bridge score/);
+    assert.doesNotMatch(html, /others pending|planned scoring axes/);
+  });
+  test('missing and malformed scores do not become a measured zero', () => {
+    for (const raw of [undefined, null, '', ' ', 'bad', Infinity, -0.1, 1.1]) {
+      assert.strictEqual(renderPreview({ traffic_share_score: raw }).value('Traffic share'), null, String(raw));
+    }
+  });
+  test('companion preview omits relay metrics but retains its hash prefix', () => {
+    const { value } = renderPreview({ role: 'companion', traffic_share_score: 0.5, last_relayed: '2020-01-02T00:00:00Z' });
+    assert.strictEqual(value('Last Relayed'), null);
+    assert.strictEqual(value('Traffic share'), null);
+    assert.match(value('Hash Prefix') || '', /ABCD.*\(2-byte\)/);
+  });
+  test('relay attribution does not promote an uncertain node to alive or active', () => {
+    const { value, status } = renderPreview({ last_relayed: new Date().toISOString(), relay_active: true, relay_count_1h: 0, relay_count_24h: '7' });
+    assert.strictEqual(status, 'uncertain');
+    assert.match(value('Last Relayed') || '', /attributed relay/i);
+    assert.match(value('Last Relayed'), /0 relays\/hr, 7 relays\/24h/);
+    assert.doesNotMatch(value('Last Relayed'), /alive|actively relaying/i);
+    assert.match(value('Last Relayed'), /class="timestamp-text" title="[^"]+"/);
+  });
+  test('missing relay evidence stays missing and a missing count does not become zero', () => {
+    const { value } = renderPreview({ relay_count_24h: 0 });
+    assert.match(value('Last Relayed') || '', /never observed as relay hop/);
+    assert.match(value('Last Relayed'), /— relays\/hr, 0 relays\/24h/);
+    assert.doesNotMatch(value('Last Relayed'), /alive|actively relaying/i);
+  });
+  test('certain relay evidence restores the green mark for repeaters and rooms only', () => {
+    const now = Date.parse('2026-10-26T12:00:00Z');
+    for (const role of ['repeater', 'room']) {
+      const { value } = renderPreview({ role, last_certain_relay: '2026-10-26T11:59:00Z', relay_active: false }, undefined, now);
+      assert.match(value('Last Relayed'), /actively relaying/);
+      assert.match(value('Last Relayed'), /var\(--status-green-text\)/);
+      assert.doesNotMatch(value('Last Relayed'), /alive|idle|never observed as relay hop/i);
+    }
+    assert.strictEqual(renderPreview({ role: 'companion', last_certain_relay: '2026-10-26T11:59:00Z' }, undefined, now).value('Last Relayed'), null);
+  });
+  test('certain relay mark uses the existing configured window with an exclusive expiry boundary', () => {
+    const now = Date.parse('2026-10-26T12:00:00Z');
+    const hour = 3600000;
+    for (const [age, active] of [[0, true], [2 * hour - 1, true], [2 * hour, false], [3 * hour, false], [-1, false]]) {
+      const { value } = renderPreview({ last_certain_relay: new Date(now - age).toISOString(), relay_active: true }, 2 * hour, now);
+      assert.strictEqual(/actively relaying/.test(value('Last Relayed')), active, 'age=' + age);
+      assert.doesNotMatch(value('Last Relayed'), /alive|idle/i);
+    }
+    assert.match(renderPreview({ last_certain_relay: new Date(now - 23 * hour).toISOString() }, undefined, now).value('Last Relayed'), /actively relaying/);
+    assert.doesNotMatch(renderPreview({ last_certain_relay: new Date(now - 24 * hour).toISOString() }, undefined, now).value('Last Relayed'), /actively relaying/);
+  });
+  test('absent or invalid certainty never falls back to attributed relay activity', () => {
+    for (const evidence of [undefined, null, '', 'bad-date', 0, true, {}, '<img src=x onerror="bad()">']) {
+      const { value } = renderPreview({ last_certain_relay: evidence, last_relayed: new Date().toISOString(), relay_active: true });
+      assert.doesNotMatch(value('Last Relayed'), /alive|idle|actively relaying|<img|onerror=/i, String(evidence));
+      assert.match(value('Last Relayed'), /attributed relay observation/);
+    }
+  });
+  test('hash size strings format consistently, missing and malformed sizes stay unknown', () => {
+    assert.match(renderPreview({ hash_size: '2' }).value('Hash Prefix') || '', /ABCD.*\(2-byte\)/);
+    for (const size of [null, 0, -1, 1.5, '<img src=x>']) {
+      assert.strictEqual(renderPreview({ hash_size: size }).value('Hash Prefix'), 'Unknown');
+    }
+  });
+  test('relay counts and hash-size tooltip text cannot inject markup', () => {
+    const bad = '"><img src=x onerror="bad()">';
+    const { value } = renderPreview({ relay_count_1h: bad, hash_size_inconsistent: true, hash_sizes_seen: [1, bad] });
+    assert.ok(value('Last Relayed'), 'relay row is present');
+    assert.doesNotMatch(value('Last Relayed'), /<img|onerror=/);
+    assert.match(value('Hash Prefix') || '', /&quot;&gt;&lt;img/);
+    assert.doesNotMatch(value('Hash Prefix'), /<img/);
   });
 }
 
@@ -5422,8 +5671,8 @@ console.log('\n=== packets.js: buildPacketsQuery ===');
     test('buildPacketsQuery: timeWindow + region', () => {
       assert.strictEqual(buildPacketsQuery(30, 'US-SFO,US-LAX'), '?timeWindow=30&region=US-SFO%2CUS-LAX');
     });
-    test('buildPacketsQuery: timeWindow=0 treated as default', () => {
-      assert.strictEqual(buildPacketsQuery(0, ''), '');
+    test('buildPacketsQuery: All time is explicit in shared links (#2231)', () => {
+      assert.strictEqual(buildPacketsQuery(0, ''), '?timeWindow=0');
     });
   } else {
     console.log('  ⚠️ buildPacketsQuery not exposed — skipping');
@@ -7127,6 +7376,184 @@ console.log('\n=== roles.js: recent advert groups (#2073) ===');
   });
 }
 
+// ===== node-reach.js: retry a busy (429) reach report =====
+// The reach endpoint answers 429 + Retry-After while the server computes other
+// uncached reports. The reach page retries that; api() must not, because
+// login, signup and other rate-limited endpoints answer 429 too.
+console.log('\n=== node-reach.js: reachRetryDelayMs + api() 429 errors ===');
+{
+  const ctx = makeSandbox();
+  ctx.registerPage = () => {};
+  loadInCtx(ctx, 'public/app.js');
+  loadInCtx(ctx, 'public/node-reach.js');
+  const delay = ctx.__meshcoreReachInternals.reachRetryDelayMs;
+  const busy = (ra) => Object.assign(new Error('API 429: /x'), { status: 429, retryAfter: ra });
+
+  test('429 waits the Retry-After seconds', () => {
+    assert.strictEqual(delay(busy('2'), 0), 2000);
+    assert.strictEqual(delay(busy('5'), 0), 5000);
+  });
+
+  test('missing, zero, negative or HTTP-date Retry-After falls back to 2 s', () => {
+    assert.strictEqual(delay(busy(null), 0), 2000);
+    assert.strictEqual(delay(busy('0'), 0), 2000);
+    assert.strictEqual(delay(busy('-3'), 0), 2000);
+    assert.strictEqual(delay(busy('Wed, 21 Oct 2026 07:28:00 GMT'), 0), 2000);
+  });
+
+  test('a huge Retry-After is capped at 30 s', () => {
+    assert.strictEqual(delay(busy('120'), 0), 30000);
+    assert.strictEqual(delay(busy('30'), 0), 30000);
+  });
+
+  test('gives up after 5 retries', () => {
+    assert.strictEqual(delay(busy('2'), 4), 2000);
+    assert.strictEqual(delay(busy('2'), 5), -1);
+  });
+
+  test('anything other than 429 is not retried', () => {
+    for (const st of [400, 404, 500, 503]) {
+      assert.strictEqual(delay(Object.assign(new Error('API ' + st), { status: st, retryAfter: '2' }), 0), -1, 'status ' + st);
+    }
+    assert.strictEqual(delay(new Error('network down'), 0), -1);
+    assert.strictEqual(delay(undefined, 0), -1);
+  });
+
+  const respond = (status, headers) => ({
+    status, ok: status >= 200 && status < 300,
+    headers: { get: (k) => (headers || {})[k] !== undefined ? headers[k] : null },
+    json: async () => ({}),
+  });
+
+  test('api() puts status and Retry-After on the error and does not retry 429', async () => {
+    let calls = 0;
+    ctx.fetch = async () => { calls++; return respond(429, { 'Retry-After': '2' }); };
+    let err;
+    try { await ctx.api('/nodes/x/reach?days=7'); } catch (e) { err = e; }
+    assert.ok(err, 'api() must reject on 429');
+    assert.strictEqual(err.message, 'API 429: /nodes/x/reach?days=7');
+    assert.strictEqual(err.status, 429);
+    assert.strictEqual(err.retryAfter, '2');
+    assert.strictEqual(calls, 1, 'api() must not retry 429 itself');
+  });
+
+  test('a failed api() call leaves no unhandled rejection behind', async () => {
+    let unhandled = 0;
+    const onUnhandled = () => { unhandled++; };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      ctx.fetch = async () => respond(429, { 'Retry-After': '2' });
+      try { await ctx.api('/nodes/y/reach?days=7'); } catch (e) { /* the caller's copy */ }
+      await new Promise((r) => setTimeout(r, 20)); // let the cleanup chain settle
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+    assert.strictEqual(unhandled, 0, 'the _inflight cleanup chain must not reject unhandled');
+  });
+
+  test('api() errors without Retry-After carry null', async () => {
+    ctx.fetch = async () => respond(500);
+    let err;
+    try { await ctx.api('/boom'); } catch (e) { err = e; }
+    assert.strictEqual(err.status, 500);
+    assert.strictEqual(err.retryAfter, null);
+  });
+}
+
+// ===== Analytics Nodes: role counts use the filtered, paged node list (#2213) =====
+console.log('\n=== analytics.js: filtered role breakdown ===');
+{
+  const globalCounts = Object.freeze({ repeater: 9000, companion: 8000, room: 7000, sensor: 6000, observer: 5000, unknown: 4000 });
+  const zeroCounts = { repeater: 0, companion: 0, room: 0, sensor: 0, observer: 0, unknown: 0 };
+  const nodesFor = roles => roles.map((role, i) => ({ public_key: 'node-' + i, role }));
+
+  function nodesHarness() {
+    const ctx = makeSandbox();
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const selection = { region: 'SJC', area: '', nodes: [] };
+    const calls = [];
+    ctx.RegionFilter = { regionQueryString: () => selection.region ? '&region=' + selection.region : '' };
+    ctx.AreaFilter = { areaQueryString: () => selection.area ? '&area=' + selection.area : '' };
+    ctx.fetch = async url => {
+      calls.push(url);
+      const parsed = new URL(url, 'http://localhost');
+      assert.strictEqual(parsed.searchParams.get('region'), selection.region || null);
+      assert.strictEqual(parsed.searchParams.get('area'), selection.area || null);
+      let data;
+      if (parsed.pathname === '/api/nodes/bulk-health') data = [];
+      else {
+        assert.strictEqual(parsed.pathname, '/api/nodes');
+        const offset = Number(parsed.searchParams.get('offset'));
+        const limit = Number(parsed.searchParams.get('limit'));
+        const nodes = selection.nodes.slice(offset, offset + limit);
+        data = { nodes, total: nodes.length, counts: globalCounts, has_more: offset + limit < selection.nodes.length };
+      }
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => data };
+    };
+    // Expose the real renderer without copying its implementation or changing production exports.
+    const src = fs.readFileSync('public/analytics.js', 'utf8');
+    vm.runInContext(src.replace("  registerPage('analytics',", "  window.testNodesRenderer = renderNodesTab;\n  registerPage('analytics',"), ctx);
+    const el = { innerHTML: '' };
+    return { ctx, calls, selection, el, render: () => ctx.window.testNodesRenderer(el) };
+  }
+
+  function assertRoleCounts(html, expected, total) {
+    assert.ok(!html.includes('Failed to load'), html);
+    const breakdown = html.split('Role Breakdown</h3>')[1].split('</div>')[0];
+    const counts = Object.fromEntries([...breakdown.matchAll(/>([^<>]+): (\d+)<\/span>/g)]
+      .map(match => [match[1], Number(match[2])]));
+    assert.deepStrictEqual(counts, { ...zeroCounts, ...expected });
+    assert.strictEqual(Object.values(counts).reduce((sum, count) => sum + count, 0), total);
+    const cards = [...html.matchAll(/font-size:28px[^>]*>(\d+)<\/div>/g)].map(match => Number(match[1]));
+    assert.strictEqual(cards[3], total, 'role counts and Total Nodes must describe the same nodes');
+  }
+
+  test('role breakdown follows region and area changes without extra requests', async () => {
+    const h = nodesHarness();
+    const cases = [
+      { region: 'SJC', area: '', roles: ['repeater', 'repeater', 'companion'], counts: { repeater: 2, companion: 1 } },
+      { region: 'SJC', area: 'rooms', roles: ['room'], counts: { room: 1 } },
+      { region: 'SFO', area: '', roles: ['sensor', 'observer'], counts: { sensor: 1, observer: 1 } },
+      { region: '', area: '', roles: ['repeater', 'companion', 'room'], counts: { repeater: 1, companion: 1, room: 1 } },
+    ];
+    for (const entry of cases) {
+      Object.assign(h.selection, { region: entry.region, area: entry.area, nodes: nodesFor(entry.roles) });
+      const before = h.calls.length;
+      await h.render();
+      assertRoleCounts(h.el.innerHTML, entry.counts, entry.roles.length);
+      assert.strictEqual(h.calls.length - before, 2, 'only the node-list and bulk-health requests');
+    }
+    const response = await h.ctx.fetchAllNodes('&sortBy=lastSeen', { ttl: 90000 });
+    assert.strictEqual(response.counts, globalCounts, 'global API metadata remains available to other callers');
+  });
+
+  test('empty filtered results show zero roles despite nonzero global metadata', async () => {
+    const h = nodesHarness();
+    h.selection.area = 'empty';
+    await h.render();
+    assertRoleCounts(h.el.innerHTML, {}, 0);
+  });
+
+  test('missing and unfamiliar roles are counted as unknown', async () => {
+    const h = nodesHarness();
+    h.selection.nodes = nodesFor(['unknown', undefined, null, '', 'future-role', '__proto__', 'constructor', 'toString']);
+    await h.render();
+    assertRoleCounts(h.el.innerHTML, { unknown: 8 }, 8);
+  });
+
+  test('role breakdown includes every page returned by fetchAllNodes', async () => {
+    const h = nodesHarness();
+    h.selection.nodes = nodesFor([...Array(500).fill('repeater'), 'room']);
+    await h.render();
+    assertRoleCounts(h.el.innerHTML, { repeater: 500, room: 1 }, 501);
+    const offsets = h.calls.filter(url => url.startsWith('/api/nodes?'))
+      .map(url => Number(new URL(url, 'http://localhost').searchParams.get('offset')));
+    assert.deepStrictEqual(offsets, [0, 500]);
+    assert.strictEqual(h.calls.length, 3, 'two node pages and one bulk-health request');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
@@ -7293,33 +7720,29 @@ console.log('\n=== roles.js: getEffectiveHeardMs (#1845) ===');
     assert.strictEqual(r, new Date(iso(NOW - 1000)).getTime());
   });
 
-  test('infra: a recent relay beats a stale advert', () => {
-    const r = eff({ role: 'repeater', last_seen: iso(NOW - 9e7), last_relayed: iso(NOW - 1000) });
+  test('the newest timestamp wins, not the first present', () => {
+    // An old _liveSeen must not hide a fresh certain relay in last_heard.
+    const r = eff({ role: 'repeater', _liveSeen: NOW - 9e7, last_heard: iso(NOW - 1000), last_seen: iso(NOW - 9e8) });
     assert.strictEqual(r, new Date(iso(NOW - 1000)).getTime());
   });
 
-  test('infra: a stale relay does NOT drag a fresh advert backwards', () => {
+  test('a fresh certain relay (last_heard) beats a stale advert', () => {
+    const r = eff({ role: 'repeater', last_seen: iso(NOW - 9e7), last_heard: iso(NOW - 1000) });
+    assert.strictEqual(r, new Date(iso(NOW - 1000)).getTime());
+  });
+
+  test('an older last_heard does NOT drag a fresh advert backwards', () => {
     const fresh = iso(NOW - 1000);
-    const r = eff({ role: 'repeater', last_seen: fresh, last_relayed: iso(NOW - 9e7) });
+    const r = eff({ role: 'repeater', last_seen: fresh, last_heard: iso(NOW - 9e7) });
     assert.strictEqual(r, new Date(fresh).getTime());
   });
 
-  test('infra: relay alone is enough when nothing else is known', () => {
-    const r = eff({ role: 'repeater', last_relayed: iso(NOW - 1000) });
-    assert.strictEqual(r, new Date(iso(NOW - 1000)).getTime());
-  });
-
-  test('room counts as infra, companion does not', () => {
+  test('last_relayed is ignored for every role (#2260)', () => {
     const relayed = iso(NOW - 1000), old = iso(NOW - 9e7);
-    assert.strictEqual(eff({ role: 'room', last_seen: old, last_relayed: relayed }), new Date(relayed).getTime());
-    // A companion is not a relay, so last_relayed on one is meaningless and
-    // must not silently rescue it.
-    assert.strictEqual(eff({ role: 'companion', last_seen: old, last_relayed: relayed }), new Date(old).getTime());
-  });
-
-  test('role matching is case-insensitive', () => {
-    const relayed = iso(NOW - 1000);
-    assert.strictEqual(eff({ role: 'Repeater', last_seen: iso(NOW - 9e7), last_relayed: relayed }), new Date(relayed).getTime());
+    for (const role of ['repeater', 'Repeater', 'room', 'companion']) {
+      assert.strictEqual(eff({ role, last_seen: old, last_relayed: relayed }), new Date(old).getTime(), role);
+    }
+    assert.ok(Number.isNaN(eff({ role: 'repeater', last_relayed: relayed })), 'relay alone is no evidence');
   });
 
   // Regression: getNodeStatus was rewritten to call this helper. Its contract
@@ -7329,8 +7752,8 @@ console.log('\n=== roles.js: getEffectiveHeardMs (#1845) ===');
     assert.strictEqual(status('repeater', NOW - 4 * 86400000), 'stale');
   });
 
-  test('getNodeStatus is still relay-aware for infra', () => {
-    assert.strictEqual(status({ role: 'repeater', last_seen: iso(NOW - 9e7), last_relayed: iso(NOW - 1000) }), 'active');
+  test('getNodeStatus keeps a certainly-relaying repeater active', () => {
+    assert.strictEqual(status({ role: 'repeater', last_seen: iso(NOW - 4 * 86400000), last_heard: iso(NOW - 1000) }), 'active');
   });
 
   test('getNodeStatus still marks a truly silent repeater stale', () => {

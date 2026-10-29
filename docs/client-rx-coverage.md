@@ -122,7 +122,7 @@ Payload — meshcoretomqtt-compatible packet, plus a `gps` object:
 ### Region answers — `meshcore/client/{PUBLIC_KEY}/regions`
 
 CoreDrive RX can also ask a repeater it hears directly which regions it is configured to flood, and
-publishes the answer here. It is accepted under the same `clientRxCoverage.enabled` switch and lands
+publishes the answer here. It is accepted only when `clientRegions.enabled` is set (`cmd/ingestor/main.go`) and lands
 in `node_declared_regions`, which the Scope Audit page and the `autoRegionKeys` tier read alongside
 the observer `/neighbors` source (`nodes.configured_scope`). Newest answer per repeater wins across
 both, by the answer's own `timestamp`, so a buffered upload arriving late cannot overwrite a fresher
@@ -146,6 +146,67 @@ one.
   the 64th entry are dropped and the answer is flagged truncated.
 - The broker ACL must allow the client to publish to `/regions` as well as `/packets` and `/rf`.
   Explicit topic lists need `meshcore/client/+/regions` (or `meshcore/client/#`).
+
+### Node names: `meshcore/client/{PUBLIC_KEY}/names`
+
+When this instance has no name for a repeater the companion hears directly (`/api/nodes/resolve`
+answers without a `name`), CoreDrive RX v1.20.0 and later ask the repeater itself
+(`ANON_REQ_TYPE_OWNER`) and publish its answer here. Accepted only when `clientNodeNames.enabled` is
+set; it lands in `client_node_names`.
+
+```json
+{
+  "origin": "<companion name>",
+  "origin_id": "<companion pubkey hex>",
+  "timestamp": "2026-10-16T09:12:04.512Z",
+  "type": "NODE_NAME",
+  "target": "<repeater pubkey, 64 hex>",
+  "name": "<the repeater's node name>",
+  "repeater_clock": 1789000000,
+  "gps": { "lat": 51.05, "lon": 3.72, "acc_m": 8 }
+}
+```
+
+- `target` must be a full 64-hex pubkey. `name` is trimmed (spaces and NUL padding) and dropped when
+  it is empty, longer than 31 characters (the firmware's `node_name[32]`), not valid UTF-8, or holds
+  a control character. `gps` is optional. The owner info the repeater also sends is not published.
+- `/api/nodes/resolve` and the coverage tooltips use the newest name per repeater (by `timestamp`)
+  when `nodes` has no name for it, including a repeater with no `nodes` row at all. An advert name
+  always wins. A prefix that matches different pubkeys across `nodes` and `client_node_names` stays
+  ambiguous. The node blacklist and hidden name prefixes apply to these names too.
+- Any companion the broker lets publish can report a name for any repeater; the newest report wins.
+  `clientRxCoverage.requireLinkedCompanion` limits that to linked companions.
+- The broker ACL must allow `/names`. Explicit topic lists need `meshcore/client/+/names` (or
+  `meshcore/client/#`).
+
+#### Estimated positions
+
+A repeater known only from `/names` has no advert, so no position of its own. `GET
+/api/nodes/reported` lists every such repeater: no row in `nodes` or `inactive_nodes`, and at least
+one `discover` or `advert` reception keyed by its pubkey, so a name sent for a repeater nobody
+heard is not listed. The map draws an estimated position for the ones it can place. The **Estimated positions**
+toggle under Display shows or hides them (on by default). The endpoint answers 404 when
+`clientRxCoverage.enabled` is off.
+
+- **Which receptions count:** rows in `client_receptions` that certainly heard this repeater
+  directly. Those are `discover` and `advert` rows keyed by its full pubkey or 8-byte prefix, and
+  `rxlog` rows whose 2-3 byte path hash resolves uniquely to it. `geo` rows are left out.
+- **Spots:** receptions within 100 m of each other count as one spot, with the best SNR of that
+  spot, so a parked companion counts once.
+- **Estimate:** only from 3 spots at least 200 m apart. Below that the list still shows the
+  repeater, without a position. The position is the SNR-weighted centroid of the spots (weight
+  `10^(snr/20)`). The radius is the distance to the farthest spot, never below 500 m.
+- **On the map:** a hollow dashed marker with "≈", a dashed circle with that radius, and a popup
+  that says "Estimated position" and how it was made. It is never clustered with advert markers.
+- **Elsewhere in the UI:** every repeater from `/api/nodes/reported` is findable, with or without
+  an estimate. The Nodes page lists them in a "Self-reported repeaters" section under the table (All
+  and Repeaters tabs, filtered by the search box). `#/nodes/<pubkey>` shows a self-reported detail
+  view where it would otherwise say "Node not found". The header search returns them, tagged
+  "self-reported". `/api/nodes` and `/api/nodes/search` are unchanged: these repeaters have no
+  packets, and the packet filters and channel views that use those endpoints must not match them.
+- **Limitation:** this is a centroid of where companions drove, not trilateration. A repeater heard
+  from one side only is placed towards that side. The ingestor stores the receptions; the server
+  computes the estimate on request and caches it for 5 minutes.
 
 ## Capture HARD RULE — only what was heard directly
 

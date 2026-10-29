@@ -271,3 +271,18 @@ func TestWatchRoutesStoreLowercaseKeys(t *testing.T) {
 		t.Fatalf("watch-my-nodes stored %v", got)
 	}
 }
+
+func TestNotifyPutAllowsOwnEventForUser(t *testing.T) {
+	f := newNotifyFixture(t, defaultNotifySettings())
+	pat := f.registerAndActivate(t, "pat@example.org", "Pat", pw)
+	put := func(ev string) *httptest.ResponseRecorder {
+		return f.do("PUT", "/api/account/notifications", notifyPrefsRequest{Enabled: true, Events: []string{ev}}, as(pat))
+	}
+	w := put("observer.offline.own")
+	if got := decode[notifyAccountJSON](t, w); w.Code != 200 || !reflect.DeepEqual(got.Events, []string{"observer.offline.own"}) {
+		t.Fatalf("own event: %d %s", w.Code, w.Body.String())
+	}
+	if w := put("observer.offline"); w.Code != 403 {
+		t.Errorf("observer.offline by a user: %d", w.Code)
+	}
+}

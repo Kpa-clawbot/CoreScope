@@ -5,11 +5,15 @@
   let map = null;
   let routeLayer = null;
   let markerLayer = null;
+  // Estimated positions of repeaters known only from their reported name
+  // (map-estimated.js). A layer of its own: never clustered with real markers.
+  let estimatedLayer = null;
+  let reported = { nodes: [], method: null };
   let clusterGroup = null;
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scopeState: localStorage.getItem('meshcore-map-scope-filter') || 'all', scopeOverlay: localStorage.getItem('meshcore-map-scope-overlay') === 'true', regionScope: localStorage.getItem('meshcore-map-region-filter') || '' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scopeState: localStorage.getItem('meshcore-map-scope-filter') || 'all', scopeOverlay: localStorage.getItem('meshcore-map-scope-overlay') === 'true', estimated: localStorage.getItem('meshcore-map-estimated') !== 'false', regionScope: localStorage.getItem('meshcore-map-region-filter') || '' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -517,6 +521,7 @@
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
             <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
             <label for="mcScopeOverlay" title="Colour repeater markers by their region-scope configuration"><input type="checkbox" id="mcScopeOverlay"> Scope config colours</label>
+            <label for="mcEstimated" title="Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Follows the repeater role filter only, not the area, region or last-heard filters."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
             <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
           </fieldset>
           <div id="mapAreaFilter"></div>
@@ -525,6 +530,7 @@
             <div class="filter-group" id="mcStatusFilter">
               <button class="btn ${filters.statusFilter==='all'?'active':''}" data-status="all">All</button>
               <button class="btn ${filters.statusFilter==='active'?'active':''}" data-status="active">Active</button>
+              <button class="btn ${filters.statusFilter==='uncertain'?'active':''}" data-status="uncertain" title="Only a hop prefix shared with other repeaters still appears in paths (#2260)">Uncertain</button>
               <button class="btn ${filters.statusFilter==='stale'?'active':''}" data-status="stale">Stale</button>
             </div>
           </fieldset>
@@ -724,6 +730,7 @@
     });
 
     markerLayer = L.layerGroup().addTo(map);
+    estimatedLayer = L.layerGroup().addTo(map);
     clusterGroup = createClusterGroup();
     if (filters.clustering && clusterGroup) clusterGroup.addTo(map);
     routeLayer = L.layerGroup().addTo(map);
@@ -897,6 +904,11 @@
       scopeOverlayEl.checked = filters.scopeOverlay;
       scopeOverlayEl.addEventListener('change', e => { filters.scopeOverlay = e.target.checked; localStorage.setItem('meshcore-map-scope-overlay', e.target.checked); renderMarkers(); });
     }
+    const estimatedEl = document.getElementById('mcEstimated');
+    if (estimatedEl) {
+      estimatedEl.checked = filters.estimated;
+      estimatedEl.addEventListener('change', e => { filters.estimated = e.target.checked; localStorage.setItem('meshcore-map-estimated', e.target.checked); renderEstimated(); });
+    }
     document.getElementById('mcLastHeard').addEventListener('change', e => { filters.lastHeard = e.target.value; loadNodes(); });
 
     AreaFilter.init(document.getElementById('mapAreaFilter'));
@@ -1029,6 +1041,14 @@
     });
   }
 
+  // Route hops for a path whose hops were inferred (inferObservationPath),
+  // aligned with hopKeys. opts.inferredHops on either renderer takes this
+  // path instead of /api/resolve-hops, which resolves each prefix alone.
+  function inferredRouteHops(hopKeys, inferred) {
+    const roles = new Map((nodes || []).map(n => [n.public_key, n.role]));
+    return hopKeys.map((hop, i) => routeHopFromInferred(inferred[i].hop, inferred[i], roles.get(inferred[i].pubkey)));
+  }
+
   async function drawPacketRoute(hopKeys, origin, opts) {
     // Defensive: origin must be an object with pubkey/lat/lon/name. A bare
     // string slips through both branches at lines below and silently no-ops
@@ -1070,23 +1090,27 @@
       window.__mc_routeTrustControl = _trustMsg;
       return;
     }
+    const inferred = opts.inferredHops && opts.inferredHops.length === hopKeys.length ? opts.inferredHops : null;
     // #1422: use the backend's /api/resolve-hops for proper disambiguation
     // (unique_prefix vs multi-byte vs gps_preference vs affinity scoring).
     // Falls back to naive nodes.filter() scan if the API is unreachable.
     let serverResolved = null;
-    try {
-      const hopList = (hopKeys || []).join(',');
-      const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(hopList);
-      const resp = await fetch(apiUrl, { cache: 'no-cache' });
-      if (resp.ok) {
-        const json = await resp.json();
-        serverResolved = json && json.resolved ? json.resolved : null;
+    if (!inferred) {
+      try {
+        const hopList = (hopKeys || []).join(',');
+        const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(hopList);
+        const resp = await fetch(apiUrl, { cache: 'no-cache' });
+        if (resp.ok) {
+          const json = await resp.json();
+          serverResolved = json && json.resolved ? json.resolved : null;
+        }
+      } catch (e) {
+        console.warn('resolve-hops API call failed, falling back to local nodes scan', e);
       }
-    } catch (e) {
-      console.warn('resolve-hops API call failed, falling back to local nodes scan', e);
     }
     // Hide default markers so only the route is visible
     if (markerLayer) map.removeLayer(markerLayer);
+    if (estimatedLayer) map.removeLayer(estimatedLayer);
     if (clusterGroup) map.removeLayer(clusterGroup);
     if (heatLayer) map.removeLayer(heatLayer);
 
@@ -1101,6 +1125,7 @@
         L.DomEvent.preventDefault(e);
         routeLayer.clearLayers();
         if (markerLayer) map.addLayer(markerLayer);
+        if (estimatedLayer) map.addLayer(estimatedLayer);
         if (clusterGroup) map.addLayer(clusterGroup);
         map.removeControl(closeBtn);
         var container = map.getContainer();
@@ -1127,7 +1152,9 @@
     // prefix/pubkey but has no GPS coords, we still want its name/role/pubkey
     // for the sidebar — flag it as {resolved:false, gpsless:true} so the
     // renderer can label it "no GPS" instead of "unresolved prefix".
-    const raw = hopKeys.map(hop => {
+    const raw = inferred
+      ? inferredRouteHops(hopKeys, inferred).map((h, i) => Object.assign(h, { _hopHex: String(hopKeys[i]) }))
+      : hopKeys.map(hop => {
       const hopLower = String(hop).toLowerCase();
       // #1633 — tag the original hex token so MC_isVisibleHop can filter
       // 1-byte hops out of the polyline/sidebar when the customizer toggle
@@ -1333,18 +1360,23 @@
       }
     });
 
-    // Resolve canonical hops via /api/resolve-hops + naive fallback.
+    // Resolve canonical hops: the inferred hops when given, else
+    // /api/resolve-hops + naive fallback.
+    const inferred = opts.inferredHops && opts.inferredHops.length === canonicalPath.length ? opts.inferredHops : null;
+    const inferredRaw = inferred ? inferredRouteHops(canonicalPath, inferred) : null;
     let serverResolved = null;
-    try {
-      const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(canonicalPath.join(','));
-      const resp = await fetch(apiUrl, { cache: 'no-cache' });
-      if (resp.ok) {
-        const json = await resp.json();
-        serverResolved = json && json.resolved ? json.resolved : null;
-      }
-    } catch (e) {}
+    if (!inferred) {
+      try {
+        const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(canonicalPath.join(','));
+        const resp = await fetch(apiUrl, { cache: 'no-cache' });
+        if (resp.ok) {
+          const json = await resp.json();
+          serverResolved = json && json.resolved ? json.resolved : null;
+        }
+      } catch (e) {}
+    }
 
-    const raw = canonicalPath.map(hop => {
+    const raw = canonicalPath.map((hop, i) => {
       const hopLower = String(hop).toLowerCase();
       const srv = serverResolved && (serverResolved[hop] || serverResolved[hopLower] || serverResolved[hop.toUpperCase()]);
       // hopCounts is keyed on the SHORT prefix from observation paths (e.g. "37"),
@@ -1354,13 +1386,15 @@
       // contains an entry that is either an exact match OR a prefix of the hop's
       // full pubkey.
       let coverage = 0;
-      const hopFullKey = (srv && srv.pubkey) ? srv.pubkey.toLowerCase() : hopLower;
+      const hopFullKey = inferred ? String(inferred[i].pubkey || hop).toLowerCase()
+        : (srv && srv.pubkey) ? srv.pubkey.toLowerCase() : hopLower;
       paths.forEach(pth => {
         const phops = (pth.path || []).map(h => String(h).toLowerCase());
         const matches = phops.some(ph => ph === hopFullKey || hopFullKey.startsWith(ph) || ph.startsWith(hopFullKey));
         if (matches) coverage++;
       });
       const obsInfo = { observerCount: coverage || (hopCounts[hop] || 1), observerTotal: totalObservers };
+      if (inferredRaw) return Object.assign(inferredRaw[i], obsInfo);
       if (srv && srv.pubkey) {
         const c = srv.candidates && srv.candidates[0];
         if (c && c.lat != null && c.lon != null && !(c.lat === 0 && c.lon === 0)) {
@@ -1488,53 +1522,35 @@
       else if (decoded.srcHash) origin.pubkey = decoded.srcHash;
       if (decoded.adName || decoded.name) origin.name = decoded.adName || decoded.name;
       const destination = decoded.destHash ? { pubkey: decoded.destHash } : null;
-      // Resolve the chosen observation's hops (canonical path).
-      // Priority: 1) server-side `resolved_path` (authoritative, eyeball-
-      // validated against packet detail), 2) client-side HopResolver (used
-      // by packets.js — does observer-IATA-aware geographic disambiguation),
-      // 3) raw prefixes (worst case, leaves naive lookup to drawPacketRoute).
-      let chosenPath = [];
+      // Infer the chosen observation's hops as one path, anchored on the
+      // observer that heard it — the same inference as the packet detail pane
+      // (inferObservationPath), with the observation's resolved_path as a
+      // hint. The renderers draw these hops; an unlisted hop stays a
+      // placeholder instead of the nearest node sharing its prefix. Without
+      // the resolver, the raw prefixes go to the renderers' own lookup.
       let rawHops = [];
       try { rawHops = JSON.parse(chosen.path_json || '[]'); } catch (_) {}
-      let resolvedHops = null;
-      try {
-        if (chosen.resolved_path) {
-          resolvedHops = typeof chosen.resolved_path === 'string' ? JSON.parse(chosen.resolved_path) : chosen.resolved_path;
-        }
-      } catch (_) {}
-      if (Array.isArray(resolvedHops) && resolvedHops.length === rawHops.length) {
-        chosenPath = rawHops.map((h, i) => resolvedHops[i] || h);
-      } else if (window.HopResolver && typeof window.HopResolver.resolve === 'function' && rawHops.length) {
-        // Use the SAME resolver the packets page uses, so route view and
-        // packet detail agree on hop identities.
+      let inferredHops = null;
+      if (rawHops.length && window.HopResolver && window.inferObservationPath) {
         try {
-          // Sender + observer hints help disambiguation
-          const senderLat = decoded.lat || decoded.latitude || null;
-          const senderLon = decoded.lon || decoded.longitude || null;
-          let obsLat = null, obsLon = null;
-          // Try to find observer's coords for geographic affinity scoring
-          if (chosen.observer_id && Array.isArray(nodes)) {
-            const obs = nodes.find(n => (n.public_key || '').toLowerCase() === String(chosen.observer_id).toLowerCase());
-            if (obs && obs.lat != null && obs.lon != null) { obsLat = obs.lat; obsLon = obs.lon; }
+          if (!window.HopResolver.ready()) {
+            const coords = await api('/iata-coords', { ttl: 300000 }).catch(() => ({ coords: {} }));
+            window.HopResolver.init(nodes || [], { observers: observers, iataCoords: coords.coords || {} });
           }
-          // HopResolver.init may already have been done by packets.js; if not,
-          // do a minimal init from window data we have.
-          if (!window.HopResolver.ready || !window.HopResolver.ready()) {
-            try {
-              window.HopResolver.init(nodes || [], { observers: [], iataCoords: {} });
-            } catch (_) {}
-          }
-          const resolveResult = window.HopResolver.resolve(rawHops, senderLat, senderLon, obsLat, obsLon, chosen.observer_id);
-          chosenPath = rawHops.map(h => {
-            const r = resolveResult ? resolveResult[h] : null;
-            return r && r.pubkey ? r.pubkey : h;
-          });
-        } catch (_) {
-          chosenPath = rawHops;
+          await window.ensureHopAffinity();
+          const obsKey = String(chosen.observer_id || '').toLowerCase();
+          const ob = observers.find(o => String(o.id).toLowerCase() === obsKey) ||
+            (nodes || []).find(n => (n.public_key || '').toLowerCase() === obsKey);
+          const obsPos = ob && ob.lat != null && ob.lon != null ? { lat: ob.lat, lon: ob.lon } : null;
+          const senderLat = decoded.lat != null ? decoded.lat : decoded.latitude;
+          const senderLon = decoded.lon != null ? decoded.lon : decoded.longitude;
+          const originPos = senderLat != null && senderLon != null ? { lat: senderLat, lon: senderLon } : null;
+          inferredHops = inferObservationPath(chosen, obsPos, originPos);
+        } catch (e) {
+          console.warn('[deep-link] path inference failed', e);
         }
-      } else {
-        chosenPath = rawHops;
       }
+      const chosenPath = inferredHops ? rawHops.map((h, i) => inferredHops[i].pubkey || h) : rawHops;
       // All observation paths for multi-path stroke weighting
       const allPaths = observations.map(o => {
         let p = [];
@@ -1697,12 +1713,13 @@
         return;
       }
       if (allPaths.length === 1) {
-        drawPacketRoute(chosenPath, origin, { destination: destination, packetHash: packetHash, observationId: obsId, packetContext: pktCtx });
+        drawPacketRoute(chosenPath, origin, { destination: destination, packetHash: packetHash, observationId: obsId, packetContext: pktCtx, inferredHops: inferredHops });
       } else {
         drawPacketRouteMulti(allPaths, origin, {
           packetHash: packetHash,
           observationId: obsId,
           canonicalPath: chosenPath,
+          inferredHops: inferredHops,
           destination: destination,
           packetContext: pktCtx
         });
@@ -1734,12 +1751,21 @@
       if (map !== loadingMap) return;
       nodes = data.nodes || [];
       observers = obsData.observers || [];
-
       buildRoleChecks(data.counts || {});
       buildRegionFilter();
       buildJumpButtons();
 
       renderMarkers();
+      // Optional and not awaited: the real markers never wait for it. The same
+      // cached list as the nodes page (reported-nodes.js); it answers an empty
+      // list when the route is missing or gated off.
+      if (window.ReportedNodes) {
+        window.ReportedNodes.load().then(function (rep) {
+          if (map !== loadingMap) return;
+          reported = rep;
+          renderEstimated();
+        });
+      }
 
       // Keep the Important Links overlay in sync on a full node reload: re-fetch
       // the neighbor-graph edges (not just re-render the stale cache) so the
@@ -1818,11 +1844,11 @@
     // Count active/stale per role from loaded nodes
     const roleCounts = {};
     for (const role of roles) {
-      roleCounts[role] = { active: 0, stale: 0 };
+      roleCounts[role] = { active: 0, uncertain: 0, stale: 0 };
     }
     for (const n of nodes) {
       const role = (n.role || 'companion').toLowerCase();
-      if (!roleCounts[role]) roleCounts[role] = { active: 0, stale: 0 };
+      if (!roleCounts[role]) roleCounts[role] = { active: 0, uncertain: 0, stale: 0 };
       const status = getNodeStatus(n); // #1598: relay-aware for infra
       roleCounts[role][status]++;
     }
@@ -1836,17 +1862,21 @@
       if (role === 'observer') {
         countStr = `(${obsCount})`;
       } else {
-        const rc = roleCounts[role] || { active: 0, stale: 0 };
+        const rc = roleCounts[role] || { active: 0, uncertain: 0, stale: 0 };
         const isInfra = role === 'repeater' || role === 'room';
         const thresh = isInfra ? '72h' : '24h';
         const activeTip = 'Active \u2014 heard within the last ' + thresh;
         const staleTip = 'Stale \u2014 not heard for over ' + thresh;
-        countStr = `(<span title="${activeTip}">${rc.active} active</span>, <span title="${staleTip}">${rc.stale} stale</span>)`;
+        const uncertainTip = 'Uncertain \u2014 only a hop prefix shared with other repeaters still appears in paths';
+        countStr = `(<span title="${activeTip}">${rc.active} active</span>, ` +
+          (rc.uncertain ? `<span title="${uncertainTip}">${rc.uncertain} uncertain</span>, ` : '') +
+          `<span title="${staleTip}">${rc.stale} stale</span>)`;
       }
       lbl.innerHTML = `<input type="checkbox" id="${cbId}" data-role="${role}" ${filters[role] ? 'checked' : ''}> <span style="color:${ROLE_COLORS[role]};font-weight:600;" aria-hidden="true">${shape}</span> ${ROLE_LABELS[role]} <span style="color:var(--text-muted)">${countStr}</span>`;
       lbl.querySelector('input').addEventListener('change', e => {
         filters[e.target.dataset.role] = e.target.checked;
         renderMarkers();
+        renderEstimated();
       });
       el.appendChild(lbl);
     }
@@ -2048,6 +2078,14 @@
     }
   }
 
+  // renderEstimated draws the estimated positions, hidden with the toggle or
+  // when repeaters are filtered out (they are all repeaters).
+  function renderEstimated() {
+    if (!estimatedLayer || !window.MapEstimated) return;
+    estimatedLayer.clearLayers();
+    if (filters.estimated && filters.repeater) window.MapEstimated.addTo(estimatedLayer, L, reported.nodes, reported.method);
+  }
+
   function renderMarkers() {
     if (_renderingMarkers) return;
     _renderingMarkers = true;
@@ -2075,7 +2113,8 @@
 
     for (const node of filtered) {
       const lastSeenTime = node.last_heard || node.last_seen;
-      const isStale = getNodeStatus(node) === 'stale'; // #1598: relay-aware for infra
+      // #2260: uncertain is not proof of life either, so it dims like stale.
+      const isStale = getNodeStatus(node) !== 'active';
       const pk = (node.public_key || '').toLowerCase();
       const isAlsoObserver = _observerByPubkey.has(pk);
       const useLabel = node.role === 'repeater' && filters.hashLabels;
@@ -2444,6 +2483,8 @@
       map = null;
     }
     markerLayer = null;
+    estimatedLayer = null;
+    reported = { nodes: [], method: null };
     clusterGroup = null;
     _currentMarkerData = [];
     routeLayer = null;

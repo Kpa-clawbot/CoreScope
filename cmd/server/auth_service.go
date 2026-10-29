@@ -37,6 +37,15 @@ type authService struct {
 	// userManagement.notifications.enabled.
 	notify *notifier
 
+	// obsIdx answers the broker hooks; nil unless observerLogins.enabled
+	// (or when its load failed, see newAuthService).
+	obsIdx  *observerLoginIndex
+	touches authTouches
+	// sealbox seals and opens the stored observer passwords; nil when the
+	// feature is off or the key is unusable.
+	sealbox *users.SecretBox
+	now     func() time.Time
+
 	warnIndistinct sync.Once
 	stop           chan struct{}
 	stopOnce       sync.Once
@@ -54,8 +63,23 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 		settingsPut: newRateLimiter(60, time.Hour),
 		companion:   newRateLimiter(60, time.Hour),
 		stop:        make(chan struct{}),
+		now:         time.Now,
 	}
 	a.refreshApproved()
+	if set.observerLogins.enabled {
+		// No error return here: a failed load leaves obsIdx nil, the hook
+		// routes answer 503 and the broker falls back to its own users.
+		idx, err := newObserverLoginIndex(st, set.observerLogins.sharedUsernames)
+		if err != nil {
+			log.Printf("[observer-logins] load logins: %v", err)
+		} else {
+			a.obsIdx = idx
+		}
+		if a.sealbox, err = users.NewSecretBox(set.observerLogins.key); err != nil {
+			log.Printf("[observer-logins] secret box: %v", err)
+			a.sealbox = nil
+		}
+	}
 	return a
 }
 

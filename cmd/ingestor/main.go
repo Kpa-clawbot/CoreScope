@@ -27,6 +27,15 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// finishIngestStartup keeps required migrations ahead of ingestion, but lets
+// buffered writes use the writer gaps between packet-retention batches.
+// The sweep stays synchronous: this introduces no background shutdown owner.
+func finishIngestStartup(store *Store, ready func(), prunePackets func() (int64, error)) (int64, error) {
+	store.WaitForAsyncMigrations()
+	ready()
+	return prunePackets()
+}
+
 func main() {
 	// pprof profiling — off by default, enable with ENABLE_PPROF=true
 	if os.Getenv("ENABLE_PPROF") == "true" {
@@ -314,14 +323,8 @@ func main() {
 	// Packet (transmissions) retention: previously lived in cmd/server,
 	// moved to ingestor in #1283 to eliminate cross-process write
 	// contention (SQLITE_BUSY). 0 = disabled.
+	// The initial sweep runs after the ingestion gate opens below.
 	packetDays := cfg.PacketDaysOrZero()
-	if packetDays > 0 {
-		if n, err := store.PruneOldPackets(packetDays); err != nil {
-			log.Printf("[prune] error: %v", err)
-		} else if n > 0 {
-			log.Printf("[prune] startup pruned %d transmissions older than %d days", n, packetDays)
-		}
-	}
 
 	// Keep observation_hops bounded to its window (no-op when the index is off).
 	if n, err := store.TrimObservationHops(); err != nil {
@@ -377,15 +380,37 @@ func main() {
 		}
 	}
 
+	// Node-name retention: bounds the opt-in client_node_names table.
+	// 0 = disabled.
+	clientNodeNamesDays := cfg.ClientNodeNamesDaysOrZero()
+	if clientNodeNamesDays > 0 {
+		if n, err := store.PruneOldClientNodeNames(clientNodeNamesDays); err != nil {
+			log.Printf("[prune] client_node_names: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d client_node_names older than %d days", n, clientNodeNamesDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
-	// Gate open: the synchronous startup writes above cannot return until the
-	// single SQLite writer is free, which means any blocking async migration
-	// (e.g. the CREATE INDEX) has finished. WaitForAsyncMigrations() makes that
-	// explicit. Now drain everything the subscription buffered during startup.
-	store.WaitForAsyncMigrations()
-	ingestBuffer.Ready()
+	// Keep all required startup work ahead of the gate. Packet retention is
+	// already chunked and yields the writer between batches; open ingestion
+	// first so buffered MQTT work can actually use those gaps (#2325).
+	if n, err := finishIngestStartup(store, func() {
+		ingestBuffer.Ready()
+		if d := ingestBuffer.Dropped(); d > 0 {
+			log.Printf("[ingest-buffer] write path ready; draining backlog (dropped %d during startup — consider raising ingestBufferSize)", d)
+		} else {
+			log.Printf("[ingest-buffer] write path ready; draining backlog (0 dropped)")
+		}
+	}, func() (int64, error) {
+		return store.PruneOldPackets(packetDays)
+	}); err != nil {
+		log.Printf("[prune] error: %v", err)
+	} else if n > 0 {
+		log.Printf("[prune] startup pruned %d transmissions older than %d days", n, packetDays)
+	}
 	// History recovery must not join the startup readiness wait above.
 	// Its known evidence is a lower bound: old UPSERTs erased some frames.
 	evidenceCtx, stopEvidenceBackfill := context.WithCancel(context.Background())
@@ -402,11 +427,6 @@ func main() {
 	// After the gate: ingest is live, the backfill yields to it between chunks.
 	// No-op when the index is off or already covers its window.
 	store.ScheduleObservationHopsBackfill()
-	if d := ingestBuffer.Dropped(); d > 0 {
-		log.Printf("[ingest-buffer] write path ready; draining backlog (dropped %d during startup — consider raising ingestBufferSize)", d)
-	} else {
-		log.Printf("[ingest-buffer] write path ready; draining backlog (0 dropped)")
-	}
 
 	// Daily ticker for node retention
 	retentionTicker := time.NewTicker(1 * time.Hour)
@@ -475,7 +495,7 @@ func main() {
 	// node_declared_regions retention (Task 6) rather than starting a second
 	// ticker — the four flags are independent (0 disables each separately),
 	// so the ticker itself must run when any is set.
-	if clientRxDays > 0 || clientRxObsDays > 0 || clientRfDays > 0 || clientRegionsDays > 0 {
+	if clientRxDays > 0 || clientRxObsDays > 0 || clientRfDays > 0 || clientRegionsDays > 0 || clientNodeNamesDays > 0 {
 		clientRxRetentionTicker := time.NewTicker(24 * time.Hour)
 		go func() {
 			for range clientRxRetentionTicker.C {
@@ -507,6 +527,13 @@ func main() {
 						store.RunIncrementalVacuum(vacuumPages)
 					}
 				}
+				if clientNodeNamesDays > 0 {
+					if n, err := store.PruneOldClientNodeNames(clientNodeNamesDays); err != nil {
+						log.Printf("[prune] client_node_names: %v", err)
+					} else if n > 0 {
+						store.RunIncrementalVacuum(vacuumPages)
+					}
+				}
 			}
 		}()
 		if clientRxDays > 0 {
@@ -520,6 +547,9 @@ func main() {
 		}
 		if clientRegionsDays > 0 {
 			log.Printf("[prune] auto-prune enabled: node_declared_regions older than %d days will be removed daily", clientRegionsDays)
+		}
+		if clientNodeNamesDays > 0 {
+			log.Printf("[prune] auto-prune enabled: client_node_names older than %d days will be removed daily", clientNodeNamesDays)
 		}
 	}
 
@@ -893,7 +923,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 
 	// Mobile client topics: meshcore/client/{PUBLIC_KEY}/packets (RX coverage),
 	// meshcore/client/{PUBLIC_KEY}/rf (RF environment samples), and
-	// meshcore/client/{PUBLIC_KEY}/regions (declared-region answers). A
+	// meshcore/client/{PUBLIC_KEY}/regions (declared-region answers), and
+	// meshcore/client/{PUBLIC_KEY}/names (a repeater's own name). A
 	// roaming companion reports where it directly heard a node, its own
 	// radio's counters, or a repeater's declared region list; all three are
 	// handled in isolation from the observer/observations path. EMQX ACL
@@ -934,6 +965,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if cfg.ClientRegionsEnabled() {
 				handleClientRegions(store, cfg, tag, parts[2], msg)
 			}
+		case "names":
+			if cfg.ClientNodeNamesEnabled() {
+				handleClientNodeNames(store, tag, parts[2], msg)
+			}
 		}
 		return
 	}
@@ -972,6 +1007,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	// does not apply.
 	if len(parts) >= 4 && parts[3] == "neighbors" {
 		handleNeighborsReport(store, tag, parts[2], msg)
+		// #2270/#2271: keep the report itself for the observer pages. A
+		// retained replay must not pose as a fresh report.
+		if err := store.UpsertNeighborReport(clampObserverField(parts[2], maxObserverIDLen), msg, m.Retained(), time.Now()); err != nil {
+			log.Printf("MQTT [%s] neighbors report store error: %v", tag, err)
+		}
 		return
 	}
 
@@ -1007,6 +1047,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		// (which can be stale/skewed even when well-formed). See #1465.
 		if err := store.UpsertObserverAt(observerID, name, iata, meta, ""); err != nil {
 			log.Printf("MQTT [%s] observer status error: %v", tag, err)
+		}
+		if err := store.RecordObserverRadios(observerID, extractRadioReports(msg), time.Now()); err != nil {
+			log.Printf("MQTT [%s] observer radio history error: %v", tag, err)
 		}
 		// Insert metrics sample from status message
 		if meta != nil {
@@ -1135,6 +1178,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 		if v, ok := msg["origin"].(string); ok {
 			mqttMsg.Origin = v
+		}
+		if v, ok := msg["rx_radio_id"].(string); ok {
+			mqttMsg.RxRadioID = clampObserverField(strings.TrimSpace(v), maxRadioIDLen)
 		}
 
 		// For ADVERT packets with known coordinates, enforce geo_filter before

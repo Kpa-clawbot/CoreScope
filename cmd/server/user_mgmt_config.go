@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -25,6 +26,7 @@ type UserManagementConfig struct {
 	ChannelProposals *ChannelProposalsConfig `json:"channelProposals,omitempty"`
 	Notifications    *NotificationsConfig    `json:"notifications,omitempty"`
 	Backup           *UsersBackupConfig      `json:"backup,omitempty"`
+	ObserverLogins   *ObserverLoginsConfig   `json:"observerLogins,omitempty"`
 }
 
 // UserMailConfig is userManagement.mail.
@@ -92,6 +94,17 @@ type NotificationsConfig struct {
 	// ExternalAlerts feeds the node.external event (#2177). Absent: the
 	// event is not offered.
 	ExternalAlerts *ExternalAlertsConfig `json:"externalAlerts,omitempty"`
+	// AdaptiveOffline learns node.offline's threshold per node from its own
+	// certain traffic (#2260, adaptive_offline.go). Absent or not enabled:
+	// the fixed healthThresholds silent windows only.
+	AdaptiveOffline *AdaptiveOfflineConfig `json:"adaptiveOffline,omitempty"`
+}
+
+// AdaptiveOfflineConfig is userManagement.notifications.adaptiveOffline.
+type AdaptiveOfflineConfig struct {
+	Enabled      bool `json:"enabled"`
+	FloorMinutes int  `json:"floorMinutes,omitempty"` // shortest learned threshold, default 30
+	MinObservers int  `json:"minObservers,omitempty"` // fewer distinct observers keep the fixed window, default 3
 }
 
 // ExternalAlertsConfig is userManagement.notifications.externalAlerts: a
@@ -110,6 +123,30 @@ type notifySettings struct {
 	maxMailsPerDay    int           // notification mails per instance per 24 hours
 	maxWatchesPerUser int
 	external          externalAlertSettings
+	adaptive          adaptiveSettings
+}
+
+// adaptiveSettings is the resolved adaptiveOffline block; the zero value is
+// off.
+type adaptiveSettings struct {
+	enabled      bool
+	floor        time.Duration
+	minObservers int
+}
+
+const (
+	defaultAdaptiveFloorMinutes = 30
+	defaultAdaptiveMinObservers = 3
+)
+
+// resolveAdaptiveOffline fills the defaults; nil or not enabled is off.
+func resolveAdaptiveOffline(c *AdaptiveOfflineConfig) adaptiveSettings {
+	if c == nil || !c.Enabled {
+		return adaptiveSettings{}
+	}
+	return adaptiveSettings{enabled: true,
+		floor:        time.Duration(positiveOr(c.FloorMinutes, defaultAdaptiveFloorMinutes)) * time.Minute,
+		minObservers: positiveOr(c.MinObservers, defaultAdaptiveMinObservers)}
 }
 
 // externalAlertSettings is the resolved externalAlerts block; url "" means
@@ -165,6 +202,7 @@ func resolveNotifications(c *NotificationsConfig) notifySettings {
 		perUserPerDay:     positiveOr(c.PerUserPerDay, defaultNotifyPerUserPerDay),
 		maxMailsPerDay:    positiveOr(c.MaxMailsPerDay, defaultNotifyMaxMailsPerDay),
 		maxWatchesPerUser: positiveOr(c.MaxWatchesPerUser, defaultNotifyMaxWatches),
+		adaptive:          resolveAdaptiveOffline(c.AdaptiveOffline),
 	}
 }
 
@@ -203,6 +241,96 @@ func resolveBackup(c *UsersBackupConfig, dbPath string) backupSettings {
 	return b
 }
 
+// ObserverLoginsConfig is userManagement.observerLogins: personal MQTT logins
+// for observers. Off by default.
+type ObserverLoginsConfig struct {
+	Enabled       bool                 `json:"enabled"`
+	HookSecret    string               `json:"hookSecret,omitempty"`
+	EncryptionKey string               `json:"encryptionKey,omitempty"`
+	Broker        ObserverBrokerConfig `json:"broker"`
+	// SharedUsernames are the broker's own shared login names; the authz
+	// hook denies them a publish under a confirmed observer pubkey.
+	SharedUsernames []string `json:"sharedUsernames,omitempty"`
+}
+
+// ObserverBrokerConfig is the broker an observer connects to, as shown to
+// the user.
+type ObserverBrokerConfig struct {
+	Host      string `json:"host"`
+	Port      int    `json:"port,omitempty"`
+	Transport string `json:"transport,omitempty"`
+	TLS       bool   `json:"tls,omitempty"`
+}
+
+// observerLoginSettings is the resolved form; the zero value means off.
+type observerLoginSettings struct {
+	enabled    bool
+	hookSecret string
+	key        []byte // 32 bytes, for users.NewSecretBox
+	host       string
+	port       int
+	transport  string
+	tls        bool
+	// sharedUsernames is nil when none are configured.
+	sharedUsernames map[string]bool
+}
+
+const (
+	defaultObserverBrokerPort      = 1883
+	defaultObserverBrokerTransport = "tcp"
+)
+
+// resolveObserverLogins validates the block only when it is enabled. The
+// hook secret and key may come from the environment, which wins.
+func resolveObserverLogins(c *ObserverLoginsConfig, getenv func(string) string) (observerLoginSettings, error) {
+	if c == nil || !c.Enabled {
+		return observerLoginSettings{}, nil
+	}
+	o := observerLoginSettings{enabled: true, tls: c.Broker.TLS}
+	o.hookSecret = envOrValue(getenv, "CORESCOPE_OBSERVER_HOOK_SECRET", c.HookSecret)
+	if o.hookSecret == "" {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.hookSecret is required (or CORESCOPE_OBSERVER_HOOK_SECRET)")
+	}
+	if len(o.hookSecret) < 16 {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.hookSecret must be at least 16 characters")
+	}
+	rawKey := envOrValue(getenv, "CORESCOPE_OBSERVER_KEY", c.EncryptionKey)
+	if rawKey == "" {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.encryptionKey is required (or CORESCOPE_OBSERVER_KEY)")
+	}
+	key, err := base64.StdEncoding.DecodeString(rawKey)
+	if err != nil || len(key) != 32 {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.encryptionKey must be standard base64 of exactly 32 bytes")
+	}
+	o.key = key
+	o.host = strings.TrimSpace(c.Broker.Host)
+	if o.host == "" {
+		return observerLoginSettings{}, errors.New("userManagement.observerLogins.broker.host is required")
+	}
+	o.port = positiveOr(c.Broker.Port, defaultObserverBrokerPort)
+	o.transport = strings.TrimSpace(c.Broker.Transport)
+	if o.transport == "" {
+		o.transport = defaultObserverBrokerTransport
+	}
+	if o.transport != "tcp" && o.transport != "websockets" {
+		return observerLoginSettings{}, fmt.Errorf("userManagement.observerLogins.broker.transport %q is not supported (use \"tcp\" or \"websockets\")", o.transport)
+	}
+	for _, name := range c.SharedUsernames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if strings.HasPrefix(name, mqttUsernamePrefix) {
+			return observerLoginSettings{}, fmt.Errorf("userManagement.observerLogins.sharedUsernames: %q is a personal login name", name)
+		}
+		if o.sharedUsernames == nil {
+			o.sharedUsernames = map[string]bool{}
+		}
+		o.sharedUsernames[name] = true
+	}
+	return o, nil
+}
+
 // UserManagementEnabled reports whether optional accounts are on. Nil config
 // or absent section means off (the default).
 func (c *Config) UserManagementEnabled() bool {
@@ -227,6 +355,7 @@ type userMgmtSettings struct {
 	proposals      proposalSettings
 	notify         notifySettings
 	backup         backupSettings
+	observerLogins observerLoginSettings
 }
 
 const defaultSessionDays = 30
@@ -327,6 +456,9 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 		}
 	}
 	set.backup = resolveBackup(u.Backup, set.dbPath)
+	if set.observerLogins, err = resolveObserverLogins(u.ObserverLogins, getenv); err != nil {
+		return nil, err
+	}
 	return set, nil
 }
 

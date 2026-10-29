@@ -2,8 +2,9 @@
 'use strict';
 // RF noise-floor layer on the Mobile RX coverage page: the Signal/Noise toggle
 // exists only when clientRfSamples is on, switching draws /api/rf-noise cells
-// with the noise legend, the layer is deep-linkable, and an empty answer says
-// so instead of leaving a blank map.
+// with the noise legend, the layer is deep-linkable, an empty answer says
+// so instead of leaving a blank map, and the observer filter and "My coverage"
+// narrow the noise layer like the signal layer.
 const assert = require('assert');
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
@@ -20,15 +21,18 @@ async function step(name, fn) {
   catch (e) { failed++; console.log('  ✗ ' + name + ': ' + e.message); }
 }
 
-async function openPage(browser, { rfSamples, noiseFeatures, hash }) {
+async function openPage(browser, { rfSamples, noiseFeatures, hash, user }) {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   const noiseRequests = [];
   await page.route('**/api/config/client', async route => {
     const response = await route.fetch();
-    await route.fulfill({ json: { ...await response.json(), clientRxCoverage: true, clientRfSamples: rfSamples } });
+    const cfg = { ...await response.json(), clientRxCoverage: true, clientRfSamples: rfSamples };
+    if (user) cfg.userManagement = { enabled: true };
+    await route.fulfill({ json: cfg });
   });
+  if (user) await page.route('**/api/auth/me', route => route.fulfill({ json: user }));
   await page.route('**/api/config/map', route => route.fulfill({ json: { center: [51, 4], zoom: 9 } }));
   await page.route('**/api/rx-leaderboard?*', route => route.fulfill({ json: { observers: [] } }));
   await page.route('**/api/rx-coverage?*', route => route.fulfill({ json: { type: 'FeatureCollection', features: [] } }));
@@ -80,6 +84,28 @@ async function openPage(browser, { rfSamples, noiseFeatures, hash }) {
       }, null, { timeout: 10000 });
       assert.ok(noiseRequests.length >= 1, 'a ?layer=noise link must fetch the noise layer without a click');
       assert.ok(/No RF samples/.test(await page.locator('#rxNoiseEmpty').innerText()));
+      assert.deepStrictEqual(errors, []);
+      await page.close();
+    });
+
+    await step('the noise layer sends the observer filter and My coverage', async () => {
+      const rx = 'ab'.repeat(32);
+      const { page, errors, noiseRequests } = await openPage(browser, {
+        rfSamples: true, noiseFeatures: [], hash: '?layer=noise&rx=' + rx,
+        user: { id: 1, email: 'alice@example.org', displayName: 'Alice', role: 'user', csrfToken: 't' },
+      });
+      await page.waitForSelector('#rxMineBar button[data-mine]', { timeout: 10000 });
+      for (let i = 0; i < 50 && !noiseRequests.length; i++) await page.waitForTimeout(100);
+      assert.ok(noiseRequests.length >= 1, 'a ?layer=noise link must fetch the noise layer');
+      assert.strictEqual(new URL(noiseRequests[noiseRequests.length - 1]).searchParams.get('rx'), rx, 'rx is sent to /api/rf-noise');
+      const before = noiseRequests.length;
+      await page.click('#rxMineBar button[data-mine]');
+      await page.waitForFunction(() => /[?&]mine=1/.test(location.hash), null, { timeout: 10000 });
+      for (let i = 0; i < 50 && noiseRequests.length === before; i++) await page.waitForTimeout(100);
+      assert.ok(noiseRequests.length > before, 'toggling My coverage refetches the noise layer');
+      const last = new URL(noiseRequests[noiseRequests.length - 1]).searchParams;
+      assert.strictEqual(last.get('mine'), '1', 'mine=1 is sent to /api/rf-noise');
+      assert.strictEqual(last.get('rx'), rx, 'the observer filter stays on');
       assert.deepStrictEqual(errors, []);
       await page.close();
     });

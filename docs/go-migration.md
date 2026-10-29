@@ -1,4 +1,10 @@
-# Migrating from Node.js to Go Engine
+# Migrating from Node.js to Go Engine (Historical)
+
+> **Historical guide — July 2025.** These instructions describe the retired
+> Node.js-to-Go migration, including obsolete build recipes and Node.js rollback.
+> `Dockerfile.go` and `Dockerfile.node` have been removed. For current installation
+> and upgrades, follow [Deploy CoreScope](../DEPLOY.md); source builds use the
+> canonical [`Dockerfile`](../Dockerfile).
 
 Guide for existing CoreScope users switching from the Node.js Docker image to the Go version.
 

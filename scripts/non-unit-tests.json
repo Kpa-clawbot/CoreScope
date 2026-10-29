@@ -35,6 +35,7 @@
       "tests/e2e/test-gestures-1185-scroll-discriminator-e2e.js",
       "tests/e2e/test-health-status-e2e.js",
       "tests/e2e/test-home-coverage-e2e.js",
+      "tests/e2e/test-hop-path-inference-e2e.js",
       "tests/e2e/test-issue-1109-hamburger-dropdown-visible-e2e.js",
       "tests/e2e/test-issue-1122-packets-filter-ux-e2e.js",
       "tests/e2e/test-issue-1128-multi-viewport-e2e.js",
@@ -71,6 +72,7 @@
       "tests/e2e/test-issue-1268-rf-params-e2e.js",
       "tests/e2e/test-issue-1639-observers-sort-e2e.js",
       "tests/e2e/test-issue-748-node-analytics-coverage-e2e.js",
+      "tests/e2e/test-issue-2218-node-analytics-stale-e2e.js",
       "tests/e2e/test-issue-661-airtime-e2e.js",
       "tests/e2e/test-issue-1640-compare-discovery-e2e.js",
       "tests/e2e/test-issue-1648-m1-icons-e2e.js",
@@ -94,6 +96,8 @@
       "tests/e2e/test-logo-pulse-1173-e2e.js",
       "tests/e2e/test-logo-rebrand-e2e.js",
       "tests/e2e/test-logo-theme-e2e.js",
+      "tests/e2e/test-map-estimated-e2e.js",
+      "tests/e2e/test-reported-nodes-e2e.js",
       "tests/e2e/test-map-modal-fluid-e2e.js",
       "tests/e2e/test-map-nodes-pagination-e2e.js",
       "tests/e2e/test-nav-drawer-1064-e2e.js",
@@ -107,6 +111,7 @@
       "tests/e2e/test-node-reach-e2e.js",
       "tests/e2e/test-nodes-export-e2e.js",
       "tests/e2e/test-observer-iata-1188-e2e.js",
+      "tests/e2e/test-observer-detail-ownership-e2e.js",
       "tests/e2e/test-packets-compact-columns-e2e.js",
       "tests/e2e/test-packets-node-filter-e2e.js",
       "tests/e2e/test-packets-scope-column.js",
@@ -119,6 +124,7 @@
       "tests/e2e/test-slideover-1056-e2e.js",
       "tests/e2e/test-slideover-1168-munger-e2e.js",
       "tests/e2e/test-table-fluid-e2e.js",
+      "tests/e2e/test-theme-url-param-2236-e2e.js",
       "tests/e2e/test-touch-gestures-coverage-e2e.js",
       "tests/e2e/test-touch-targets.js",
       "tests/e2e/test-user-management-e2e.js"
@@ -128,6 +134,8 @@
     "reason": "Requires jsdom. The JS unit gate runs with no node_modules at all (its job has no npm install), so a suite needing a third-party module cannot live in test-all.sh. It runs in the E2E job, which does npm ci, and is invoked by its own deploy.yml line.",
     "files": [
       "tests/e2e/test-region-quick-picks.js",
+      "tests/e2e/test-radio-setting-1869-e2e.js",
+      "tests/e2e/test-observer-neighbors-2270-e2e.js",
       "tests/e2e/test-table-sort.js"
     ]
   },

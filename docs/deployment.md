@@ -639,39 +639,79 @@ docker stats corescope
 
 ### Backup
 
-All persistent data lives in `/app/data`. The critical file is the SQLite database:
+Use **`GET /api/backup`** for the telemetry database. It uses SQLite's
+[`VACUUM INTO`](https://www.sqlite.org/lang_vacuum.html) to produce a consistent
+snapshot while the ingestor is running, including committed data in the WAL.
+Do not copy the live `meshcore.db` file: a checkpoint followed by a file copy
+also races new writes. Allow room for a full snapshot in the server's temporary
+directory and at the download destination; large snapshots cost CPU and disk I/O.
+
+When accounts are enabled, sign in as an administrator and open `/api/backup`
+on the same site to download a snapshot. For command-line or scheduled backups,
+configure a strong `apiKey` in `config.json` (at least 16 characters). Create a
+private header file, `~/.config/corescope/backup.header`, containing one line:
+`X-API-Key: <your configured key>`. Set its permissions to `600`; keep the key out
+of shell history, URLs, and scripts checked into Git.
+
+On the backup host, install `curl` and the `sqlite3` CLI. Replace the example
+HTTPS origin below with your instance. The download is published as a `.db`
+only after it is complete, nonempty, and passes SQLite's consistency check:
 
 ```bash
-# Copy from the Docker volume
-docker cp corescope:/app/data/meshcore.db ./backup-$(date +%Y%m%d).db
-
-# Or if using a bind mount
-cp ./data/meshcore.db ./backup-$(date +%Y%m%d).db
+(
+  set -eu
+  umask 077
+  backup_dir="$HOME/corescope-backups"
+  mkdir -p "$backup_dir"
+  tmp=$(mktemp "$backup_dir/corescope-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX.part")
+  trap 'rm -f "$tmp"' EXIT
+  curl -q --fail --silent --show-error \
+    --header "@$HOME/.config/corescope/backup.header" \
+    --output "$tmp" https://corescope.example.org/api/backup
+  test -s "$tmp"
+  test "$(sqlite3 -readonly "$tmp" 'PRAGMA quick_check;')" = ok
+  mv "$tmp" "${tmp%.part}.db"
+)
 ```
 
-Optional files to back up:
-- `config.json` — custom configuration
-- `theme.json` — custom theme/branding
+This is a point-in-time telemetry snapshot, not continuous replication or a full
+instance backup. Keep protected copies off the CoreScope host, and also preserve:
+- `config.json`, `theme.json`, deployment settings, and any configured keys/secrets.
+- When accounts are enabled, **`users.db` separately**: use the
+  [account backup and restore guide](user-guide/accounts.md#backups), which covers
+  its own snapshot endpoint and scheduled backups. Do not copy that database live.
 
 ### Restore
 
-```bash
-# Stop the container
-docker stop corescope
+1. Verify the downloaded file is nonempty and run
+   `sqlite3 -readonly backup.db 'PRAGMA quick_check;'`; the result must be `ok`.
+   Keep an untouched copy of this snapshot.
+2. Stop **every server and ingestor using the target database**, including any
+   separate instances. For the single-container example, use `docker stop corescope`;
+   for `docker-compose.example.yml`, use
+   `docker compose -f docker-compose.example.yml stop corescope`.
+3. Locate the host directory or named volume mounted at `/app/data`. For the
+   example Compose file, this is `DATA_DIR` (default `./data`). While all database
+   users remain stopped, move the old `meshcore.db` **and any matching `-wal`,
+   `-shm`, and `-journal` files together** into a separate recovery directory.
+   Keep that set intact; never leave an old WAL beside the replacement database.
+4. Copy the checked snapshot into that data mount as `meshcore.db`. Preserve the
+   previous database's owner and permissions so the configured service user can
+   read and write it. Leave configuration, keys, and `users.db` in place.
+5. Start the stopped services (`docker start corescope`, or the matching Compose
+   `start corescope` command). Check the logs, `/api/healthz`, and expected historical
+   packets in the dashboard. Keep the recovery directory until these checks pass.
 
-# Replace the database
-docker cp ./backup.db corescope:/app/data/meshcore.db
-
-# Restart
-docker start corescope
-```
+To roll back, stop all database users again, move the replacement database and
+its sidecars aside, then restore the entire original file set before restarting.
 
 ### Automated backups
 
-```bash
-# cron: daily backup at 3 AM, keep 7 days
-0 3 * * * docker cp corescope:/app/data/meshcore.db /backups/corescope-$(date +\%Y\%m\%d).db && find /backups -name "corescope-*.db" -mtime +7 -delete
-```
+Run the checked-download block above from a private script using cron or a
+systemd timer. Use absolute paths and the backup user's protected header file;
+schedule one run at a time during quieter hours. Alert on nonzero exit status.
+Prune old **completed `.db` snapshots only after a new backup succeeds**, according
+to your retention policy, and periodically test a restore in an isolated instance.
 
 ---
 

@@ -157,7 +157,7 @@ func buildDirectHeardIndex(packets []*StoreTx, pm *prefixMap) directHeardIndex {
 	idx := make(directHeardIndex, 256)
 	for _, tx := range packets {
 		for _, obs := range tx.Observations {
-			if obs.ObserverID == "" {
+			if obs.ObserverID == "" || obs.isOwnTransmission() {
 				continue
 			}
 			pk := directHeardNode(tx, obs, pm)

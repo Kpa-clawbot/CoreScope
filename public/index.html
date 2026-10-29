@@ -29,13 +29,23 @@
        FOUC (light flash for users who chose dark). Matches keys used by app.js. -->
   <script>
     (function () {
+      // #2236: ?theme=dark|light in the hash query (e.g. #/map?embed=1&theme=dark)
+      // wins over the saved choice for this page load. app.js reads
+      // window.__themeOverride and never persists it.
+      try {
+        var q = new URLSearchParams(location.hash.split('?')[1] || '').get('theme');
+        window.__themeOverride = q === 'dark' || q === 'light' ? q : null;
+      } catch (_) { window.__themeOverride = null; }
       try {
         var saved = localStorage.getItem('meshcore-theme');
-        var t = saved === 'dark' || saved === 'light'
+        var t = window.__themeOverride || (saved === 'dark' || saved === 'light'
           ? saved
-          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
         document.documentElement.setAttribute('data-theme', t);
-      } catch (_) { /* localStorage may be blocked; CSS handles default */ }
+      } catch (_) {
+        /* localStorage may be blocked; CSS handles default */
+        if (window.__themeOverride) document.documentElement.setAttribute('data-theme', window.__themeOverride);
+      }
     })();
   </script>
   <link rel="stylesheet" href="style.css?v=__BUST__">
@@ -50,19 +60,23 @@
   <link rel="stylesheet" href="account.css?v=__BUST__">
   <link rel="stylesheet" href="admin.css?v=__BUST__">
   <link rel="stylesheet" href="nav-drawer.css?v=__BUST__">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  <!-- Leaflet, leaflet.heat and Chart.js are served from vendor/ (byte-identical
+       to the unpkg dist files, verified against these SRI hashes), not from
+       unpkg.com: no third-party request on every page view, and maps and
+       charts keep working where unpkg is blocked or down. -->
+  <link rel="stylesheet" href="vendor/leaflet-1.9.4/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin="anonymous">
   <link rel="stylesheet" href="vendor/MarkerCluster.css?v=__BUST__">
   <link rel="stylesheet" href="vendor/MarkerCluster.Default.css?v=__BUST__">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  <script src="vendor/leaflet-1.9.4/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin="anonymous"></script>
   <script src="vendor/leaflet.markercluster.js?v=__BUST__"></script>
-  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"
+  <script src="vendor/leaflet-heat-0.2.0.js"
     integrity="sha384-mFKkGiGvT5vo1fEyGCD3hshDdKmW3wzXW/x+fWriYJArD0R3gawT6lMvLboM22c0"
     crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/chart.js@4.5.1/dist/chart.umd.min.js"
+  <script src="vendor/chart-4.5.1.umd.min.js"
     integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
     crossorigin="anonymous"></script>
 </head>
@@ -215,6 +229,7 @@
   <script src="notifications.js?v=__BUST__"></script>
   <script src="packets.js?v=__BUST__"></script>
   <script src="geo-filter-overlay.js?v=__BUST__"></script>
+  <script src="map-estimated.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="map.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="route-render.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="route-view-utils.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
@@ -222,6 +237,7 @@
   <script src="channels.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="table-sort.js?v=__BUST__"></script>
   <script src="nodes-export.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script src="reported-nodes.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="rf-params.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="nodes.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="traces.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
@@ -233,6 +249,7 @@
   <script src="audio-lab.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="drag-manager.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="live.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script src="observer-neighbors.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="observers.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="mqtt-status-panel.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="observer-detail.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
@@ -250,6 +267,7 @@
   <script src="admin-audit.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="admin-overview.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="admin-proposals.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script src="admin-observer-logins.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="admin.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="mobile-page-actions.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
 </body>

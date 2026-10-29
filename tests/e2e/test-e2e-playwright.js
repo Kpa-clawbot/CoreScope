@@ -84,9 +84,11 @@ async function run() {
       });
       const pubkey = 'b'.repeat(64);
       const node = { public_key: pubkey, name: 'Packet count fixture', role: 'repeater',
-        last_seen: new Date().toISOString(), advert_count: 900 };
+        last_seen: new Date().toISOString(), advert_count: 900,
+        traffic_share_score: 0.25, bridge_score: 0.2 };
       const stats = { totalTransmissions: 233, totalPackets: 500, totalObservations: 12278 };
-      // Keep enough real detail content below the metric to scroll it to either edge.
+      // Score rows above Total Packets and adverts below it make both scroll
+      // edges reachable without depending on relay wording or platform fonts.
       const recentAdverts = Array.from({ length: 12 }, (_, i) => ({ hash: i.toString(16).padStart(64, '0'),
         timestamp: new Date(Date.now() - i * 60000).toISOString(), payload_type: 4, route_type: 1 }));
       await fixturePage.route('**/api/nodes**', async route => {
@@ -175,6 +177,7 @@ async function run() {
         }
 
         if (interaction === 'scroll edges') {
+          await fixturePage.evaluate(() => document.fonts.ready);
           const container = fixturePage.locator(full ? '#nodeFullBody' : '#nodesRight');
           for (const edge of ['top', 'bottom']) {
             await help.evaluate((el, edge) => {
@@ -565,12 +568,14 @@ async function run() {
     // Use page.click() to avoid detached-element race with WebSocket auto-refresh.
     await page.click('table tbody tr:not([id^=vscroll])');
     await page.waitForSelector('.node-detail');
-    // Find the Details link in the side panel
-    await page.waitForSelector('#nodesRight a.btn-primary[href^="#/nodes/"]');
-    const href = await page.$eval('#nodesRight a.btn-primary[href^="#/nodes/"]', el => el.getAttribute('href'));
-    assert(href, 'Details link not found in side panel');
-    // Click the Details link — this should navigate to the full detail page
-    await page.click('#nodesRight a.btn-primary[href^="#/nodes/"]');
+    // Find the Details button in the side panel. The a.btn-primary next to
+    // it is the Analytics link (#2218).
+    await page.waitForSelector('#nodesRight .node-detail-btn');
+    const pk = await page.$eval('#nodesRight .node-detail-btn', el => el.getAttribute('data-pubkey'));
+    assert(pk, 'Details button not found in side panel');
+    const href = '#/nodes/' + pk;
+    // Click the Details button — this should navigate to the full detail page
+    await page.click('#nodesRight .node-detail-btn');
     // Wait for navigation — the full detail page has sections like neighbors/packets
     await page.waitForFunction((expectedHash) => {
       return location.hash === expectedHash;
@@ -2690,6 +2695,95 @@ async function run() {
     assert(val === '60', `Expected timeWindow dropdown = 60, got: ${val}`);
     const url = page.url();
     assert(url.includes('timeWindow=60'), `URL should still contain timeWindow=60, got: ${url}`);
+  });
+
+  await test('#2231 All time survives selection, reload and fresh shared links', async () => {
+    const desktop = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const fresh = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const mobile = await browser.newContext({ viewport: { width: 375, height: 812 }, isMobile: true });
+    try {
+      const allTimePage = await desktop.newPage();
+      await allTimePage.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
+      await allTimePage.waitForSelector('#fTimeWindow');
+      assert(await allTimePage.inputValue('#fTimeWindow') === '15', 'new visitors must still default to 15 minutes');
+      const request = allTimePage.waitForRequest(req => {
+        const url = new URL(req.url());
+        return url.pathname === '/api/packets' && !url.searchParams.has('since');
+      });
+      await allTimePage.selectOption('#fTimeWindow', '0');
+      await request;
+      assert(new URLSearchParams(new URL(allTimePage.url()).hash.split('?')[1]).get('timeWindow') === '0',
+        'selecting All time must write timeWindow=0');
+      assert(await allTimePage.evaluate(() => localStorage.getItem('meshcore-time-window')) === '0',
+        'selecting All time must persist zero');
+      const sharedUrl = allTimePage.url();
+      await allTimePage.reload({ waitUntil: 'domcontentloaded' });
+      await allTimePage.waitForSelector('#fTimeWindow');
+      assert(await allTimePage.inputValue('#fTimeWindow') === '0', 'reload must retain All time');
+
+      const sharedPage = await fresh.newPage();
+      await sharedPage.goto(sharedUrl, { waitUntil: 'domcontentloaded' });
+      await sharedPage.waitForSelector('#fTimeWindow');
+      assert(await sharedPage.inputValue('#fTimeWindow') === '0', 'a fresh browser must restore shared All time');
+
+      // The #1486 fixture is deliberately older than the default window and
+      // carries multiple observations. Select it through the real grouped UI.
+      const hash = 'fae0c9e6d357a814';
+      const detail = await (await desktop.request.get(BASE + '/api/packets/' + hash)).json();
+      assert(detail.packet && detail.observations.length > 1, '#2231 requires the grouped-packet fixture');
+      assert(detail.observations.every(obs => Date.parse(obs.timestamp) < Date.now() - 15 * 60000),
+        'the selected grouped packet must be older than 15 minutes');
+      const filtered = allTimePage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/packets' && url.searchParams.get('hash') === hash;
+      });
+      await allTimePage.fill('#fHash', hash);
+      const filteredResponse = await filtered;
+      assert(filteredResponse.ok(), 'the debounced hash-filter request must succeed');
+      await filteredResponse.finished();
+      await allTimePage.waitForFunction(hash => {
+        const rows = document.querySelectorAll('#pktBody tr[data-hash]');
+        return rows.length === 1 && rows[0].dataset.hash === hash;
+      }, hash);
+      // Row centers can contain navigable hop links; use the group expand control.
+      await allTimePage.locator('#pktBody tr[data-hash="' + hash + '"][data-action="toggle-select"] > .col-expand').click();
+      await allTimePage.waitForSelector('#pktRight .detail-obs-row');
+      const obsId = String(detail.observations[1].id);
+      await allTimePage.locator('#pktRight .detail-obs-row[data-obs-id="' + obsId + '"]').click();
+      await allTimePage.waitForSelector('#pktRight .detail-obs-row.observation-current[data-obs-id="' + obsId + '"]');
+      const selectedUrl = allTimePage.url();
+      const selectedParams = new URLSearchParams(new URL(selectedUrl).hash.split('?')[1]);
+      assert(selectedParams.get('timeWindow') === '0', 'selecting an old group/observation must retain All time');
+      assert(selectedParams.get('obs') === obsId, 'the selected observation must remain in the shared URL');
+      await allTimePage.reload({ waitUntil: 'domcontentloaded' });
+      await allTimePage.waitForSelector('#pktRight .detail-obs-row.observation-current[data-obs-id="' + obsId + '"]');
+      assert(await allTimePage.inputValue('#fTimeWindow') === '0', 'selected group reload must retain All time');
+
+      await fresh.clearCookies();
+      await sharedPage.evaluate(() => localStorage.clear());
+      await sharedPage.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+      await sharedPage.goto(selectedUrl, { waitUntil: 'domcontentloaded' });
+      await sharedPage.reload({ waitUntil: 'domcontentloaded' });
+      await sharedPage.waitForSelector('#pktRight .detail-obs-row.observation-current[data-obs-id="' + obsId + '"]');
+      assert(await sharedPage.inputValue('#fTimeWindow') === '0', 'a fresh shared group link must retain All time');
+
+      const mobilePage = await mobile.newPage();
+      const mobileRequest = mobilePage.waitForRequest(req => new URL(req.url()).pathname === '/api/packets');
+      await mobilePage.goto(sharedUrl, { waitUntil: 'domcontentloaded' });
+      await mobilePage.locator('.filter-toggle-btn-mirror').click();
+      await mobilePage.waitForSelector('#fTimeWindow');
+      const mobileParams = new URL((await mobileRequest).url()).searchParams;
+      const mobileMinutes = (Date.now() - Date.parse(mobileParams.get('since'))) / 60000;
+      assert(await mobilePage.inputValue('#fTimeWindow') === '15', 'mobile must keep the safe 15-minute window');
+      assert(mobileMinutes >= 15 && mobileMinutes < 16 && mobileParams.get('limit') === '1000',
+        'mobile All time links must keep the request bounded');
+      assert(await mobilePage.locator('#fTimeWindow option[value="0"]').count() === 0,
+        'mobile must not offer All time');
+    } finally {
+      await desktop.close();
+      await fresh.close();
+      await mobile.close();
+    }
   });
 
   // Test: hash filter updates URL and is restored (#682)

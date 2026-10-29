@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime"
 	"time"
 
 	"github.com/meshcore-analyzer/dbschema"
@@ -49,6 +50,10 @@ const pruneAgedTransmissionIDs = `SELECT id FROM transmissions WHERE first_seen 
 const (
 	pruneObservationsBatch  = `DELETE FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `)`
 	pruneTransmissionsBatch = `DELETE FROM transmissions WHERE id IN (` + pruneAgedTransmissionIDs + `)`
+	// Sparse rx_radio_id rows of multi-radio observers (#1869), keyed by the
+	// observation, so they go before the observations they point at.
+	pruneObservationRadiosBatch = `DELETE FROM observation_radios WHERE observation_id IN (
+		SELECT id FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `))`
 )
 
 // PruneOldPackets deletes transmissions (and their child observations)
@@ -67,6 +72,12 @@ const (
 // returned alongside it — those rows are gone, so reporting 0 would be
 // wrong.
 func (s *Store) PruneOldPackets(days int) (int64, error) {
+	return s.pruneOldPackets(days, runtime.Gosched)
+}
+
+// The local scheduling action lets tests exercise ingestion at the committed
+// batch boundary without replacing a global scheduler or writer lock.
+func (s *Store) pruneOldPackets(days int, betweenBatches func()) (int64, error) {
 	if days <= 0 {
 		return 0, nil
 	}
@@ -77,6 +88,9 @@ func (s *Store) PruneOldPackets(days int) (int64, error) {
 		var batch int64
 		// Tagged for writer-perf visibility (#1340).
 		err := s.WriterTx("prune_packets", func(tx *sql.Tx) error {
+			if _, err := tx.Exec(pruneObservationRadiosBatch, cutoff, pruneBatchTransmissions); err != nil {
+				return fmt.Errorf("prune observation radios: %w", err)
+			}
 			if _, err := tx.Exec(pruneObservationsBatch, cutoff, pruneBatchTransmissions); err != nil {
 				return fmt.Errorf("prune observations: %w", err)
 			}
@@ -97,6 +111,11 @@ func (s *Store) PruneOldPackets(days int) (int64, error) {
 		if batch < pruneBatchTransmissions {
 			break
 		}
+		// A serial ingest consumer needs CPU to finish handling one packet and
+		// submit its next write. Yield after the commit and writer-lock release,
+		// before competing for another batch. This does not bound dense fanout
+		// inside a single transaction.
+		betweenBatches()
 	}
 	if total > 0 {
 		log.Printf("[prune] deleted %d transmissions older than %d days", total, days)
@@ -407,4 +426,33 @@ func extractPubkeyFromAnonReqJSON(s string) string {
 		return v
 	}
 	return ""
+}
+
+// PruneOldClientNodeNames deletes node-name observation rows
+// (client_node_names) older than `days` (by observed_at). 0 disables. Same
+// millisecond cutoff format as PruneOldClientDeclaredRegions.
+func (s *Store) PruneOldClientNodeNames(days int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	n, err := s.pruneOldClientNodeNamesAt(time.Now().UTC().AddDate(0, 0, -days))
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		log.Printf("[prune] deleted %d client_node_names older than %d days", n, days)
+	}
+	return n, nil
+}
+
+// pruneOldClientNodeNamesAt is the cutoff-instant seam behind
+// PruneOldClientNodeNames, so tests can pin the cutoff.
+func (s *Store) pruneOldClientNodeNamesAt(cutoffInstant time.Time) (int64, error) {
+	cutoff := cutoffInstant.Format(rxTimeMillisLayout)
+	res, err := s.db.Exec(`DELETE FROM client_node_names WHERE observed_at < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune client_node_names: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }

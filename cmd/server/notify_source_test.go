@@ -56,9 +56,9 @@ func TestDBNotifyNodesChunksLongLists(t *testing.T) {
 }
 
 func TestPacketStoreLastHeardMap(t *testing.T) {
-	s := &PacketStore{byNode: map[string][]*StoreTx{
-		evPkA: {{FirstSeen: "2026-10-07T10:00:00Z"}, {FirstSeen: "2026-10-07T11:30:00.000Z"}, nil, {FirstSeen: "2026-10-07T09:00:00Z"}},
-		evPkB: {{FirstSeen: "not a time"}},
+	s := &PacketStore{certainHeard: map[string]string{
+		evPkA: "2026-10-07T11:30:00.000Z",
+		evPkB: "not a time",
 	}}
 	got, lock := s.LastHeardMap([]string{evPkA, evPkB, evPkF})
 	if len(got) != 1 || !got[evPkA].Equal(time.Date(2026, 10, 7, 11, 30, 0, 0, time.UTC)) {
@@ -69,32 +69,19 @@ func TestPacketStoreLastHeardMap(t *testing.T) {
 	}
 }
 
-// 5,000 watched nodes with 20 packets each, the spec's upper figure. Quote
-// the result in the PR: this runs under the store's read lock.
+// 5,000 watched nodes, the spec's upper figure. Quote the result in the PR:
+// this runs under the store's read lock (one map lookup per node, #2260).
 func BenchmarkLastHeardMap(b *testing.B) {
-	s := &PacketStore{byNode: map[string][]*StoreTx{}}
+	s := &PacketStore{certainHeard: map[string]string{}}
 	keys := make([]string, 0, 5000)
 	for i := 0; i < 5000; i++ {
 		pk := fmt.Sprintf("%064x", i)
 		keys = append(keys, pk)
-		for j := 0; j < 20; j++ {
-			s.byNode[pk] = append(s.byNode[pk], &StoreTx{FirstSeen: evNow.Add(-time.Duration(j) * time.Minute).Format(time.RFC3339)})
-		}
+		s.certainHeard[pk] = evNow.Add(-time.Duration(i) * time.Minute).Format(time.RFC3339)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		s.LastHeardMap(keys)
-	}
-}
-
-func TestRelayTimes(t *testing.T) {
-	m := map[string]RepeaterRelayInfo{
-		evPkA: {LastRelayed: "2026-10-07T11:00:00Z"},
-		evPkB: {},
-	}
-	got := relayTimes(m, []string{evPkA, evPkB, evPkF})
-	if len(got) != 1 || !got[evPkA].Equal(time.Date(2026, 10, 7, 11, 0, 0, 0, time.UTC)) {
-		t.Fatalf("relayTimes = %v", got)
 	}
 }
 
@@ -108,7 +95,7 @@ func TestNotifyObserversFrom(t *testing.T) {
 
 func TestServerNotifySourceWithoutStore(t *testing.T) {
 	src := serverNotifySource{s: &Server{cfg: &Config{}}}
-	if heard, lock := src.lastHeard([]string{evPkA}); len(heard) != 0 || lock != 0 || len(src.lastRelayed([]string{evPkA})) != 0 {
+	if heard, lock := src.lastHeard([]string{evPkA}); len(heard) != 0 || lock != 0 {
 		t.Fatal("a server without a packet store reported times")
 	}
 	if src.lowBatteryMv() != 3300 || src.health().InfraSilentHours != 72 {

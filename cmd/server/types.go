@@ -50,6 +50,9 @@ type TimeBucket struct {
 	Label  *string `json:"label,omitempty"`
 	Count  int     `json:"count"`
 	Bucket *string `json:"bucket,omitempty"`
+	// Certain is the part of Count that can only be the node (#2260), on
+	// the node analytics timeline; absent elsewhere.
+	Certain *int `json:"certain,omitempty"`
 }
 
 // ─── Stats ─────────────────────────────────────────────────────────────────────
@@ -998,6 +1001,15 @@ type ObserverResp struct {
 	// field). UI tri-state badge renders nothing when nil so legacy
 	// rows don't masquerade as confirmed repeaters (PR #1624 MAJOR-2).
 	CanRelay *bool `json:"can_relay,omitempty"`
+	// RadioHistory is every setting the observer reported, oldest first
+	// (#1869). Only on GET /api/observers/{id}.
+	RadioHistory []RadioStint `json:"radio_history,omitempty"`
+	// Latest /neighbors report (#2270): when it arrived and how many
+	// neighbors it named; absent when the observer never sent one.
+	NeighborsReportAt *string `json:"neighbors_report_at,omitempty"`
+	NeighborsCount    *int    `json:"neighbors_count,omitempty"`
+	// The report itself, GET /api/observers/{id} only (#2271).
+	NeighborReport *ObserverNeighborReport `json:"neighbor_report,omitempty"`
 }
 
 type ObserverListResponse struct {
@@ -1116,6 +1128,7 @@ type ClientUserManagement struct {
 	ChannelProposals bool `json:"channelProposals,omitempty"`
 	Notifications    bool `json:"notifications,omitempty"`
 	CompanionLinking bool `json:"companionLinking,omitempty"`
+	ObserverLogins   bool `json:"observerLogins,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that

@@ -492,7 +492,8 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		return s.packets[i].FirstSeen < s.packets[j].FirstSeen
 	})
 	s.buildPathHopIndex()
-	s.buildDistanceIndex()
+	// Distance stays lazy, as in Load(): its first request builds the index
+	// and publishes the ready gate. An eager build here would be repeated.
 	if s.hotStartupHours > 0 {
 		s.oldestLoaded = hotCutoffStr
 	} else if len(s.packets) > 0 {
@@ -611,7 +612,9 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 			obsIDStr := nullStrVal(observerID)
 			obsPJ := nullStrVal(pathJSON)
 
-			if tx.hasObservation(obsIDStr, obsPJ) {
+			n := observedRelayHopHexLen(nullStrVal(obsRawHex), obsPJ)
+			if obs := tx.mergeObservationEvidence(obsIDStr, obsPJ, n); obs != nil {
+				s.noteCertainRelays(tx, obs, relayPM)
 				continue
 			}
 
@@ -626,16 +629,15 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				RSSI:           nullFloatPtr(rssi),
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
-				// Raw frames stay in SQLite; hash equality does not imply route
-				// equality. Only compact advert evidence is retained per tx.
-				// Packet-detail queries can read the original observation raw.
-				Timestamp: normalizeTimestamp(nullStrVal(obsTimestamp)),
+				// Keep only this frame's relay eligibility, not its raw bytes.
+				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
+				relayHopHexLen: n,
 			}
 
 			rpStr := nullStrVal(resolvedPathStr)
 			if rpStr != "" {
 				pks := resolvedPubkeysFromJSON(rpStr)
-				s.indexResolvedPathHops(tx, pks, hopsSeen)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM, obs)
 			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
 				// resolved_path is NULL on live (since #1287 relay data is
 				// persisted as neighbor_edges, not per-observation). Re-resolve
@@ -647,9 +649,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				// resolved_path/path-hop indexes must NOT be populated here.
 				// PR #1643 R1 munger #1: unique_prefix-only gate.
 				rp := resolvePathForObsColdLoad(obsPJ, obsIDStr, tx, relayPM, coldLoadAmbiguousHopsSkipped)
-				for _, pk := range extractResolvedPubkeys(rp) {
-					s.addToByNode(tx, pk)
-				}
+				s.indexColdLoadRelayHops(tx, extractResolvedPubkeys(rp), relayPM, obs)
 			}
 
 			tx.addObservation(obs)

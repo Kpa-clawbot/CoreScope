@@ -42,6 +42,9 @@ type Server struct {
 	commit    string
 	buildTime string
 
+	// reportedNodes caches /api/nodes/reported (reported_nodes.go).
+	reportedNodes reportedNodesCache
+
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
 	memStatsMu       sync.Mutex
 	memStatsCache    runtime.MemStats
@@ -88,9 +91,13 @@ type Server struct {
 	// can't race on the .tmp file or interleave disk/memory updates.
 	saveMu sync.Mutex
 
-	// Neighbor affinity graph (lazy-built, cached with TTL)
+	// Neighbor affinity graph: built on first use, then rebuilt on every
+	// neighbor-graph recompute tick (#2221)
 	neighborMu    sync.Mutex
 	neighborGraph *NeighborGraph
+	// neighborBuildMu serializes graph builds, so a startup request and the
+	// first recompute tick do not both build (#2221).
+	neighborBuildMu sync.Mutex
 
 	// Cached /api/scope-stats response — per-window, recomputed at most once every 30s
 	scopeStatsMu       sync.Mutex
@@ -349,6 +356,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// gated by requireClientRfSamples instead.
 	r.HandleFunc("/api/rf-noise", s.handleRfNoise).Methods("GET")
 	r.HandleFunc("/api/nodes/resolve", s.handleResolvePrefix).Methods("GET")
+	r.HandleFunc("/api/nodes/reported", s.handleReportedNodes).Methods("GET")
 	r.HandleFunc("/api/rx-coverage", s.handleRxCoverage).Methods("GET")
 	r.HandleFunc("/api/rx-leaderboard", s.handleRxLeaderboard).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}", s.handleNodeDetail).Methods("GET")
@@ -380,6 +388,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
+	r.HandleFunc("/api/radios", s.handleRadios).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
 	r.HandleFunc("/api/paths/inspect", s.handlePathInspect).Methods("POST")
 	r.HandleFunc("/api/iata-coords", s.handleIATACoords).Methods("GET")
@@ -560,7 +569,7 @@ func (s *Server) clientUserManagement() *ClientUserManagement {
 	if s.auth == nil {
 		return nil
 	}
-	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled, Notifications: s.auth.notify != nil, CompanionLinking: true}
+	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled, Notifications: s.auth.notify != nil, CompanionLinking: true, ObserverLogins: s.auth.set.observerLogins.enabled}
 }
 
 func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {
@@ -927,7 +936,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		// share a single 1s-cached snapshot to amortize ReadMemStats cost.
 		var storeDataMB float64
 		if s.store != nil {
+			s.store.mu.RLock()
 			storeDataMB = s.store.trackedMemoryMB()
+			s.store.mu.RUnlock()
 		}
 		mem := s.getMemorySnapshot(storeDataMB)
 
@@ -1164,6 +1175,7 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		Limit:              queryLimit(r, 50, s.cfg.ListLimits.PacketsMax),
 		Offset:             queryInt(r, "offset", 0),
 		Observer:           r.URL.Query().Get("observer"),
+		ExcludeTx:          r.URL.Query().Get("excludeTx") == "true",
 		Hash:               r.URL.Query().Get("hash"),
 		Since:              r.URL.Query().Get("since"),
 		Until:              r.URL.Query().Get("until"),
@@ -1171,6 +1183,7 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		Node:               r.URL.Query().Get("node"),
 		Channel:            r.URL.Query().Get("channel"),
 		Area:               r.URL.Query().Get("area"),
+		Radio:              canonicalRadio(r.URL.Query().Get("radio")),
 		Order:              "DESC",
 		ExpandObservations: r.URL.Query().Get("expand") == "observations",
 	}
@@ -1624,13 +1637,27 @@ func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 		maxUseful := maxFloat(usefulMap)
 		// #1879: which rule places each node for ?region=. Atomic snapshot.
 		placements := s.store.GetNodeRegionPlacements()
+		// #2260: last_heard is the newer of last_seen and the certain last
+		// heard. One read lock and a map lookup per node.
+		pageKeys := make([]string, 0, len(nodes))
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
+				pageKeys = append(pageKeys, pk)
+			}
+		}
+		heard, _ := s.store.LastHeardMap(pageKeys)
+		certainRelayed := s.store.LastCertainRelayMap(pageKeys)
+		for _, node := range nodes {
+			if pk, ok := node["public_key"].(string); ok {
+				node["last_heard"] = lastHeardValue(node["last_seen"], heard[pk])
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				mbEntry, _ := s.store.GetMultibyteCapFor(pk)
 				EnrichNodeWithMultiByte(node, mbEntry)
 				node["region_placement"] = RegionPlacementFor(placements, pk)
 				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+					if at := certainRelayed[pk]; !at.IsZero() {
+						node["last_certain_relay"] = at.UTC().Format(time.RFC3339Nano)
+					}
 					info, _ := lookupRelayInfo(relayMap, pk)
 					info.WindowHours = relayWindow
 					if info.LastRelayed != "" {
@@ -1761,6 +1788,21 @@ func (s *Server) handleNodeSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	// #2260: same last_heard as /api/nodes, not a copy of last_seen.
+	if s.store != nil && len(nodes) > 0 {
+		keys := make([]string, 0, len(nodes))
+		for _, node := range nodes {
+			if pk, ok := node["public_key"].(string); ok {
+				keys = append(keys, pk)
+			}
+		}
+		heard, _ := s.store.LastHeardMap(keys)
+		for _, node := range nodes {
+			if pk, ok := node["public_key"].(string); ok {
+				node["last_heard"] = lastHeardValue(node["last_seen"], heard[pk])
+			}
+		}
+	}
 	// Filter blacklisted nodes from search results
 	if len(s.cfg.NodeBlacklist) > 0 {
 		filtered := make([]map[string]interface{}, 0, len(nodes))
@@ -1837,7 +1879,12 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		mbEntry, _ := s.store.GetMultibyteCapFor(pubkey)
 		EnrichNodeWithMultiByte(node, mbEntry)
 		node["region_placement"] = RegionPlacementFor(s.store.GetNodeRegionPlacements(), pubkey)
+		heard, _ := s.store.LastHeardMap([]string{pubkey})
+		node["last_heard"] = lastHeardValue(node["last_seen"], heard[pubkey])
 		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+			if at := s.store.LastCertainRelayMap([]string{pubkey})[pubkey]; !at.IsZero() {
+				node["last_certain_relay"] = at.UTC().Format(time.RFC3339Nano)
+			}
 			ht := s.cfg.GetHealthThresholds()
 			info := s.store.GetRepeaterRelayInfo(pubkey, ht.RelayActiveHours)
 			if info.LastRelayed != "" {
@@ -2557,6 +2604,12 @@ func (s *Server) handleAnalyticsDistance(w http.ResponseWriter, r *http.Request)
 	region := r.URL.Query().Get("region")
 	area := r.URL.Query().Get("area")
 	if s.store != nil {
+		// A failed initial load cannot finish the lazy build. A completed hot
+		// window remains usable even if its later background fill fails.
+		if s.store.backgroundLoadDone.Load() && s.store.backgroundLoadFailed.Load() && !s.store.LoadComplete() {
+			writeError(w, http.StatusInternalServerError, "Distance analytics unavailable: initial packet load failed")
+			return
+		}
 		// Lazy build (#1011): distance index is not built at startup.
 		// First request triggers an async build and gets 202 +
 		// Retry-After; concurrent requests during the build window
@@ -3045,6 +3098,7 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 		observerIDs[i] = o.ID
 	}
 	nodeLocations := s.db.GetNodeLocationsByKeys(observerIDs)
+	neighborSummaries := s.db.GetObserverNeighborSummaries()
 
 	result := make([]ObserverResp, 0, len(observers))
 	nowTime := time.Now().UTC()
@@ -3077,6 +3131,10 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 			PacketsLastHour: plh,
 			Lat:             lat, Lon: lon, NodeRole: nodeRole,
 			CanRelay: o.CanRelay,
+		}
+		if ns, ok := neighborSummaries[o.ID]; ok {
+			at, count := ns.receivedAt, ns.count
+			resp.NeighborsReportAt, resp.NeighborsCount = &at, &count
 		}
 		applyObserverNaiveClock(&resp, o, nowTime)
 		result = append(result, resp)
@@ -3123,7 +3181,12 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 			PacketsLastHour: plh,
 			CanRelay:        obs.CanRelay,
 		}
+		if rep, err := s.db.GetObserverNeighborReport(obs.ID); err == nil && rep != nil {
+			at, count := rep.ReceivedAt, rep.NeighborCount
+			resp.NeighborsReportAt, resp.NeighborsCount, resp.NeighborReport = &at, &count, rep
+		}
 		applyObserverNaiveClock(&resp, obs, time.Now().UTC())
+		resp.RadioHistory = observerRadioStints(obs.ID)
 		return resp
 	}())
 }
@@ -3156,10 +3219,13 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	// used to via s.store.byTxID[...] and enrichObs() — races with those
 	// writers. Keyed by TransmissionID (not by observation index) since
 	// multiple observations can share one transmission.
+	// #2237: the values are copies (txAnalyticsFields), since the
+	// content-hash migration and the rewrite feed change tx.Hash and
+	// tx.DecodedJSON under the lock while the helpers below run without it.
 	txByID := make(map[int]*StoreTx, len(obsSnapshot))
 	for _, obs := range obsSnapshot {
 		if _, ok := txByID[obs.TransmissionID]; !ok {
-			txByID[obs.TransmissionID] = s.store.byTxID[obs.TransmissionID]
+			txByID[obs.TransmissionID] = txAnalyticsFields(s.store.byTxID[obs.TransmissionID])
 		}
 	}
 	s.store.mu.RUnlock()
@@ -3396,15 +3462,26 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 		}
 		s.store.mu.RUnlock()
 
+		// RawHex never changes once a tx is in the store, so the sort runs
+		// outside the lock.
 		for typeName, pkts := range byType {
 			sort.Slice(pkts, func(i, j int) bool {
 				return len(pkts[i].RawHex) < len(pkts[j].RawHex)
 			})
 			count := min(8, len(pkts))
-			picked := make([]AudioLabPacket, 0, count)
-			for i := 0; i < count; i++ {
-				idx := (i * len(pkts)) / count
-				tx := pkts[idx]
+			picks := make([]*StoreTx, count)
+			for i := range picks {
+				picks[i] = pkts[(i*len(pkts))/count]
+			}
+			byType[typeName] = picks
+		}
+
+		// Ingest and the rewrite feed change the picked packets' path,
+		// observer, count and decoded JSON under s.store.mu (#2237).
+		s.store.mu.RLock()
+		for typeName, picks := range byType {
+			picked := make([]AudioLabPacket, 0, len(picks))
+			for _, tx := range picks {
 				pt := 0
 				if tx.PayloadType != nil {
 					pt = *tx.PayloadType
@@ -3422,6 +3499,7 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 			}
 			buckets[typeName] = picked
 		}
+		s.store.mu.RUnlock()
 	}
 
 	writeJSON(w, AudioLabBucketsResponse{Buckets: buckets})

@@ -36,6 +36,18 @@
     return TIERS[TIERS.length - 1];
   }
 
+  // The server answers 429 + Retry-After while it is computing other uncached
+  // reports. Retry that here rather than in api(): login, signup and the other
+  // rate-limited endpoints also answer 429, and those must not auto-retry.
+  // Returns the wait in ms before the next attempt, or -1 to give up.
+  var BUSY_MAX_RETRIES = 5;
+  function reachRetryDelayMs(err, retriesSoFar) {
+    if (!err || err.status !== 429 || retriesSoFar >= BUSY_MAX_RETRIES) return -1;
+    var s = parseInt(err.retryAfter, 10); // an HTTP-date or a missing header → NaN
+    if (!(s > 0)) s = 2;
+    return Math.min(s, 30) * 1000;
+  }
+
   function statCard(label, value, descShort, descFull) {
     return '<div class="analytics-stat-card" title="' + escapeHtml(descFull) + '">' +
       '<div class="analytics-stat-label">' + escapeHtml(label) + '</div>' +
@@ -153,12 +165,21 @@
     }
 
     var d;
-    try {
-      d = await api('/nodes/' + encodeURIComponent(pubkey) + '/reach?days=' + days, { ttl: 30000 });
-    } catch (e) {
-      if (myGen !== loadGen) return; // superseded or destroyed mid-flight
-      container.innerHTML = '<div id="nq-report"><div class="nq-error">Failed to load reach: ' + escapeHtml(e.message) + '</div></div>';
-      return;
+    for (var retries = 0; ; retries++) {
+      try {
+        d = await api('/nodes/' + encodeURIComponent(pubkey) + '/reach?days=' + days, { ttl: 30000 });
+        break;
+      } catch (e) {
+        if (myGen !== loadGen) return; // superseded or destroyed mid-flight
+        var wait = reachRetryDelayMs(e, retries);
+        if (wait < 0) {
+          container.innerHTML = '<div id="nq-report"><div class="nq-error">Failed to load reach: ' + escapeHtml(e.message) + '</div></div>';
+          return;
+        }
+        container.innerHTML = '<div id="nq-report"><div class="nq-load nq-busy">Reach is busy computing other reports, retrying in ' + (wait / 1000) + ' s…</div></div>';
+        await new Promise(function (r) { setTimeout(r, wait); });
+        if (myGen !== loadGen) return; // navigated away or picked another window while waiting
+      }
     }
     if (myGen !== loadGen) return; // a newer load (or destroy) won the race
     current.data = d;
@@ -306,7 +327,7 @@
     // #1865: exposed so the helper tests can assert what the scope line RENDERS
     // rather than grepping this file, the same reason map.js exposes its label
     // builder (#1356/#1933).
-    window.__meshcoreReachInternals = { scopeLineHtml: scopeLineHtml };
+    window.__meshcoreReachInternals = { scopeLineHtml: scopeLineHtml, reachRetryDelayMs: reachRetryDelayMs };
   }
 
   registerPage('node-reach', { init: init, destroy: destroy });

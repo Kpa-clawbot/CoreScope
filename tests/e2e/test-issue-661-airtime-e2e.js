@@ -98,8 +98,8 @@ async function run() {
 
   await test('RF Health tiles show the TX 1h share with the warning', async () => {
     await page.goto(`${BASE}/#/analytics?tab=rf-health`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.rf-cell');
-    const over = await page.$eval(`.rf-cell[data-observer="${overId}"] [data-testid="rf-cell-airtime"]`,
+    // A theme refresh can replace the grid after its first tile appears.
+    const over = await page.locator(`.rf-cell[data-observer="${overId}"] [data-testid="rf-cell-airtime"]`).evaluate(
       (el) => ({ html: el.innerHTML, text: el.textContent.trim() }));
     assert(over.html.includes('airtime-over') && over.text === 'TX 1h: 12.5%', `tile: ${JSON.stringify(over)}`);
   });

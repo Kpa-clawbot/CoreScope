@@ -6,7 +6,7 @@
  * dismiss). This file drives the branches that the primary suite does not:
  *
  *   (cov1) onClickAction — trace button on a row overlay → URL updates to
- *          #/packets/<hash> and overlay dismisses.
+ *          #/packets/<hash>?timeWindow=<saved> and overlay dismisses.
  *   (cov2) onClickAction — filter button → URL updates to
  *          #/packets?hash=<hash> and overlay dismisses.
  *   (cov3) onClickAction — copy button populates navigator.clipboard
@@ -202,8 +202,10 @@ async function main() {
     fail('no packets row available — fixture/setup problem (cannot run row-action assertions)');
   }
 
-  // ── (cov1) row-action: Trace button → #/packets/<hash> ──
+  // ── (cov1) row-action: Trace button retains the starting time window ──
   if (r) {
+    const startingTimeWindow = await page.evaluate(() =>
+      new URLSearchParams(location.hash.split('?')[1]).get('timeWindow'));
     await clearOverlays(page);
     const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
     await synthSwipe(page, cx + 100, cy, cx - 100, cy);
@@ -223,11 +225,11 @@ async function main() {
         hash: location.hash,
         overlay: !!document.querySelector('.row-action-overlay.row-action-overlay-open'),
       }));
-      const expected = `#/packets/${encodeURIComponent(r.hash)}`;
-      if (state.hash === expected && !state.overlay) {
-        pass(`(cov1) trace button navigated to ${state.hash} and dismissed overlay`);
+      const expected = `#/packets/${encodeURIComponent(r.hash)}?timeWindow=${startingTimeWindow}`;
+      if (startingTimeWindow === '180' && state.hash === expected && !state.overlay) {
+        pass(`(cov1) trace button navigated to ${state.hash}, retained the starting time window, and dismissed overlay`);
       } else {
-        fail(`(cov1) trace button: hash=${state.hash} expected=${expected}, overlay=${state.overlay}`);
+        fail(`(cov1) trace button: startingTimeWindow=${startingTimeWindow} expected=180, hash=${state.hash} expected=${expected}, overlay=${state.overlay}`);
       }
     }
   }

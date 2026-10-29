@@ -98,7 +98,8 @@
     'node.offline': 'A watched node goes offline or comes back',
     'node.battery': 'A watched node reports a low battery or recovers',
     'foreign.new': 'A new foreign node appears (admin)',
-    'observer.offline': 'An observer goes offline or comes back (admin)'
+    'observer.offline': 'An observer goes offline or comes back (admin)',
+    'observer.offline.own': 'My observers go offline'
   };
 
   function eventLabel(e, data) {
@@ -107,7 +108,10 @@
   }
 
   function eventsHtml(data) {
-    return (data.availableEvents || []).map(function (e) {
+    var ownOn = !!(window.MC_USER_MGMT && window.MC_USER_MGMT.observerLogins);
+    return (data.availableEvents || []).filter(function (e) {
+      return e !== 'observer.offline.own' || ownOn;
+    }).map(function (e) {
       var id = 'notifyEv-' + e.replace(/\./g, '-');
       return '<label class="account-check" for="' + escapeHtml(id) + '"><input type="checkbox" id="' + escapeHtml(id) +
         '" data-notify-event="' + escapeHtml(e) + '"' + ((data.events || []).indexOf(e) !== -1 ? ' checked' : '') + '> ' +

@@ -8,13 +8,13 @@ import (
 
 // handleRfParams — GET /api/rf-params (issue #1268).
 //
-// Returns the radio settings the MeshCore map holds for the nodes this
+// Returns the radio settings the MeshCore map holds for the visible nodes this
 // instance knows, limited to adverts within maxAgeDays and not dated in the
 // future (rfAdvertFresh), plus the named presets and when the map was last
 // fetched. Served straight from the atomic snapshot; never waits on the
 // upstream fetch.
 func (s *Server) handleRfParams(w http.ResponseWriter, r *http.Request) {
-	resp := RfParamsResponse{Presets: []RfPreset{}, Nodes: map[string]RfParams{}}
+	resp := RfParamsResponse{Presets: []RfPreset{}, Nodes: map[string]RfParams{}, Deviations: map[string]RfDeviation{}}
 	if s.rfParams == nil {
 		writeJSON(w, resp)
 		return
@@ -45,6 +45,24 @@ func (s *Server) handleRfParams(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		resp.Nodes[pk] = p
+	}
+	deviations := s.rfParams.deviations.get(snap, time.Now(), func() map[string]RfDeviation {
+		return computeRfDeviations(resp.Nodes, nodes, s.rfParams.cfg.compareRadiusKm(), rfMinPeers)
+	})
+	// Keep the shared computation independent of visibility. Filter only the
+	// response maps so hiding or unhiding a node takes effect even on a cache hit.
+	for _, n := range nodes {
+		pk := strings.ToLower(n.PublicKey)
+		if _, fresh := resp.Nodes[pk]; !fresh {
+			continue
+		}
+		if s.cfg.IsBlacklisted(pk) || s.cfg.IsNameHidden(n.Name) {
+			delete(resp.Nodes, pk)
+			continue
+		}
+		if d, ok := deviations[pk]; ok {
+			resp.Deviations[pk] = d
+		}
 	}
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	writeJSON(w, resp)

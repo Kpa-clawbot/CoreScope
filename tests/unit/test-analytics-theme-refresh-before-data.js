@@ -38,7 +38,7 @@ const ctx = {
   location: { hash: '#/analytics' },
   addEventListener: (type, fn) => { listeners[type] = fn; },
   removeEventListener() {},
-  initTabBar() {}, CLIENT_TTL: {},
+  initTabBar() {}, CLIENT_TTL: {}, viewGeneration: () => 0,
   // The answers never land: the refresh below fires while they are pending.
   api: () => new Promise(() => {}),
   RegionFilter: { init() {}, onChange() {}, regionQueryString: () => '' },

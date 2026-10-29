@@ -882,7 +882,7 @@ img.brand-logo {
   color: var(--nav-text-muted); text-decoration: none;
   padding: 14px clamp(8px, 0.6vw + 4px, 14px); font-size: var(--fs-sm);
   font-weight: var(--fw-medium); /* #1668 M3 — 12-14px fluid + 500 floor */
-  border-bottom: 2px solid transparent; transition: all .15s;
+  border-bottom: 2px solid transparent; transition: color .15s, background-color .15s, border-color .15s;
   background: none; border-top: none; border-left: none; border-right: none;
   cursor: pointer; font-family: var(--font);
   white-space: nowrap; /* #1046: never wrap labels — wrapping makes the nav bar grow taller */
@@ -986,6 +986,15 @@ img.brand-logo {
 }
 .nav-stats .stat-val { color: var(--nav-text); font-weight: 600; transition: color 0.3s ease; }
 .nav-stats .stat-val.updated { color: var(--link-color); }
+
+/* Only compact when the measured desktop strip cannot fit its primary links. */
+.nav-hide-stats .nav-stats { display: none; }
+.nav-compact .brand-text { display: none; }
+.nav-compact .brand-logo { max-width: 80px; height: auto; max-height: 36px; }
+.nav-compact .nav-left { gap: var(--space-xs); }
+.nav-compact .nav-links .nav-link { padding-inline: 4px; }
+.nav-compact .nav-more-btn { padding-inline: 6px; }
+.nav-compact .nav-account-label { max-width: 5ch; }
 
 /* === Layout === */
 /* Default: body-scroll mode — content pushes beyond viewport, iOS status-bar
@@ -1449,6 +1458,10 @@ body.scroll-locked { overflow: hidden; }
   font-size: 10px; font-weight: 700; font-family: var(--mono);
   background: var(--nav-bg); color: var(--nav-text); letter-spacing: .5px;
 }
+/* #1268 M3 — LoRa settings differ from nearby same-band nodes */
+.badge-lora-diff { display: inline-block; margin-left: 4px; padding: 0 5px; border: 1px solid currentColor; border-radius: 4px; font-size: 10px; font-weight: 600; color: var(--status-yellow-text); cursor: help; }
+.lora-deviation { margin-top: 2px; font-size: 11px; color: var(--status-yellow-text); }
+
 /* Issue #1290: listener vs repeater badge on observers list + detail.
  * Driven by ObserverResp.can_relay (false = firmware reported repeat:off).
  * Server-side disambiguator excludes listener observers from path-hop
@@ -2306,8 +2319,8 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 /* === Hamburger (hidden on desktop) === */
 .hamburger { display: none; }
 /* "More" button (hidden on desktop) */
-.nav-more-wrap { display: none; position: relative; }
-.nav-more-btn { display: inline-flex; }
+.nav-more-wrap { display: none; position: relative; flex-shrink: 0; }
+.nav-more-btn { display: inline-flex; transition-property: color, background-color, border-color; }
 /* #1406: position:fixed (not absolute) so the dropdown escapes .nav-more-wrap's
    layout box. When absolute, the dropdown's content extents inflated
    .nav-more-wrap.scrollHeight → bubbled into .nav-left flex line-height calc
@@ -3132,6 +3145,9 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 
 /* Ambiguous hop indicator */
 .hop-ambiguous { border-bottom: 1px dashed var(--status-yellow, #f59e0b); }
+/* Unlisted hop: no known node with its prefix fits that point in the path */
+.hop-unlisted { font-family: var(--mono); color: var(--text-muted); }
+.hop-nogps { font-size: 0.85em; color: var(--text-muted); }
 .hop-warn { font-size: 0.7em; margin-left: 2px; vertical-align: super; color: var(--status-yellow, #f59e0b); }
 .hop-conflict-btn { background: var(--status-yellow, #f59e0b); color: #000; border: none; border-radius: 4px; font-size: 11px;
   font-weight: 700; padding: 1px 5px; cursor: pointer; vertical-align: middle; margin-left: 3px; line-height: 1.2; }
@@ -3511,11 +3527,9 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 @container (max-width: 480px) {
   .dumbbell-row, .dumbbell-axis { --relay-airtime-columns: 70px minmax(20px, 1fr) 90px; }
 }
-/* Constrain chart media inside the card (svg/canvas at any depth). The
-   `.analytics-chart-card svg, .analytics-chart-card canvas` descendant
-   selector is robust to wrapper elements (legends, tooltips, axis
-   groups) being added between the card and the chart media. */
-.analytics-chart-card svg,
+/* Constrain chart media at any depth, preserving inline Phosphor icons.
+   Descendant selectors allow wrappers between the card and chart media. */
+.analytics-chart-card svg:not(.ph-icon),
 .analytics-chart-card canvas { max-width: 100%; height: auto; display: block; }
 .analytics-chart-card h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin-bottom: 4px; }
 .analytics-chart-desc { font-size: 10px; color: var(--text-muted); margin-bottom: 8px; font-style: italic; }
@@ -5853,3 +5867,41 @@ body.embed #app.app-fixed {
 .role-swatch--room      { color: var(--role-room); }
 .role-swatch--sensor    { color: var(--role-sensor); }
 .role-swatch--observer  { color: var(--role-observer); }
+
+/* Estimated positions (map-estimated.js): hollow, dashed, marked with "≈" so
+   they never read as a node's own advert position. */
+.mc-est-marker { background: none; border: none; }
+.mc-est-ring { fill: var(--surface-1); fill-opacity: .85; stroke: var(--mc-role-repeater); stroke-width: 2; stroke-dasharray: 3 3; }
+.mc-est-glyph { fill: var(--mc-role-repeater); font: 700 15px/1 var(--mono, ui-monospace, monospace); }
+.leaflet-interactive.mc-est-area, path.mc-est-area { stroke: var(--mc-role-repeater); stroke-width: 1.5; stroke-dasharray: 6 6; fill: var(--mc-role-repeater); fill-opacity: .07; }
+.mc-est-legend { color: var(--mc-role-repeater); font-weight: 700; }
+.mc-est-popup { display: grid; gap: 4px; max-width: 280px; }
+.mc-est-badge { justify-self: start; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; border: 1px dashed var(--mc-role-repeater); color: var(--text); }
+.mc-est-name { font-weight: 700; font-size: 14px; }
+.mc-est-pk { color: var(--text-muted); font-size: 11px; }
+.mc-est-what, .mc-est-caveat { margin: 2px 0; font-size: 12px; }
+.mc-est-caveat { color: var(--text-muted); }
+.mc-est-facts { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; margin: 2px 0; font-size: 12px; }
+.mc-est-facts dt { color: var(--text-muted); }
+.mc-est-facts dd { margin: 0; }
+
+/* Self-reported repeaters (reported-nodes.js): no advert, name only. */
+.reported-section { margin-top: 16px; padding: 12px; border: 1px dashed var(--mc-role-repeater); border-radius: 6px; }
+.reported-section h3 { margin: 0 0 4px; font-size: 14px; }
+.reported-count { color: var(--text-muted); font-weight: 400; }
+.reported-intro { margin: 0 0 8px; font-size: 12px; color: var(--text-muted); max-width: 70ch; }
+.reported-pos-est { color: var(--text); }
+.reported-pos-none { color: var(--text-muted); }
+.reported-tag { font-size: 11px; color: var(--text-muted); border: 1px dashed var(--mc-role-repeater); border-radius: 3px; padding: 0 4px; }
+.reported-detail { padding: 16px; margin: 16px auto; max-width: 640px; display: grid; gap: 8px; }
+.reported-badge { justify-self: start; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; border: 1px dashed var(--mc-role-repeater); color: var(--text); }
+.reported-detail .node-detail-name { font-size: 20px; font-weight: 700; }
+.reported-detail .node-detail-key { font-size: 11px; word-break: break-all; color: var(--text-muted); }
+.reported-detail p { margin: 0; }
+.reported-caveat { font-size: 12px; color: var(--text-muted); }
+.reported-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.reported-facts dt { color: var(--text-muted); }
+.reported-facts dd { margin: 0; }
+.reported-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.reported-links .btn-primary { text-decoration: none; padding: 4px 10px; font-size: 12px; }
+.reported-table td { white-space: normal; }

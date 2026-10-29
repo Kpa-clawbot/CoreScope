@@ -163,6 +163,33 @@ async function run() {
     assert(valB === idB, 'compareObsB should be pre-selected to b=, got ' + valB);
   });
 
+  await step('Comparison excludes TX-only evidence but keeps shared receptions (#667)', async () => {
+    const comparisonPage = await ctx.newPage();
+    const requests = [];
+    // Both API rows may display a different observer's representative direction.
+    const txOnlyA = { hash: 'a-tx-b-rx', direction: 'rx', observer_id: idB, payload_type: 4, route_type: 1 };
+    const sharedRx = { hash: 'shared-rx', direction: 'tx', observer_id: idB, payload_type: 4, route_type: 1 };
+    await comparisonPage.route('**/api/packets?**', async route => {
+      const query = new URL(route.request().url()).searchParams;
+      if (![idA, idB].includes(query.get('observer'))) return route.continue();
+      requests.push(query);
+      const packets = query.get('observer') === idA && query.get('excludeTx') === 'true'
+        ? [sharedRx] : [txOnlyA, sharedRx];
+      await route.fulfill({ json: { packets, total: packets.length, limit: 10000, offset: 0 } });
+    });
+    try {
+      await comparisonPage.goto(BASE + '/#/compare?a=' + encodeURIComponent(idA) + '&b=' + encodeURIComponent(idB), { waitUntil: 'domcontentloaded' });
+      await comparisonPage.waitForSelector('.compare-summary-text');
+      const summary = await comparisonPage.locator('.compare-summary-text').innerText();
+      assert(/saw 1 unique packets and .* saw 2 unique packets/.test(summary), 'expected reception totals 1 and 2, got: ' + summary);
+      assert(/1 \(50\.0%\) were seen by both observers/.test(summary), 'TX-only evidence must not count as a shared reception: ' + summary);
+      assert(!/Perfect overlap/.test(summary), 'TX-only evidence must not produce perfect overlap');
+      assert(requests.length === 2 && requests.every(q => q.get('excludeTx') === 'true'), 'comparison must use exactly two receive-only bulk requests');
+    } finally {
+      await comparisonPage.close();
+    }
+  });
+
   await browser.close();
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   if (failed) process.exit(1);
