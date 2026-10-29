@@ -168,6 +168,11 @@ func TestCertainEvidenceAcrossLoadPaths(t *testing.T) {
 					if got := !heard[lpRelay].IsZero(); got != c.want {
 						t.Errorf("LastHeardMap evidence = %v; want %v", got, c.want)
 					}
+					wantRelay := ""
+					if c.want {
+						wantRelay = at
+					}
+					assertCertainRelay(t, s, lpRelay, wantRelay)
 					_, pm := s.getCachedNodesAndPM()
 					if got := certainFor(tx, lpRelay, pm); got != c.want {
 						t.Errorf("certainFor = %v; want %v", got, c.want)
@@ -309,6 +314,7 @@ func TestCertainEvidenceSurvivesObservationDedup(t *testing.T) {
 				if heard[lpRelay].IsZero() || !certainFor(tx, lpRelay, pm) {
 					t.Fatal("dedup discarded the genuine flood observation")
 				}
+				assertCertainRelay(t, s, lpRelay, at)
 			})
 		}
 	}
@@ -400,6 +406,7 @@ func TestCertainEvidenceConcurrentLateDedup(t *testing.T) {
 				s.mu.RUnlock()
 				s.CertainActivity([]string{lpRelay}, time.Now())
 				s.LastHeardMap([]string{lpRelay})
+				s.LastCertainRelayMap([]string{lpRelay})
 			}
 		}()
 	}

@@ -67,6 +67,10 @@ async function previewMetadata(browser) {
     { label: 'missing', name: null, role: 'repeater', hash_size: null, relay_count_24h: 0 },
     { label: 'companion', role: 'companion', traffic_share_score: 0.5, last_relayed: relayed },
     { label: 'escaped', name: bad, role: 'repeater', traffic_share_score: bad, relay_count_1h: bad, hash_size_inconsistent: true, hash_sizes_seen: [1, bad] },
+    { label: 'certain', role: 'repeater', last_certain_relay: relayed, last_heard: relayed, expectActive: true, relay_active: false },
+    { label: 'certain-room', role: 'room', last_certain_relay: relayed, last_heard: relayed, expectActive: true },
+    { label: 'expired-certain', role: 'repeater', last_certain_relay: new Date(Date.now() - 3 * 3600000).toISOString(), relay_active: true },
+    { label: 'invalid-certain', role: 'room', last_certain_relay: 'not-a-date', relay_active: true },
   ].map((c, i) => ({ public_key: (i + 1).toString(16).repeat(64), name: 'Preview ' + c.label,
     advert_count: 1, first_seen: '2020-01-01T00:00:00Z', last_seen: '2020-01-02T00:00:00Z', hash_size: '2', ...c }));
   const byKey = new Map(cases.map(n => [n.public_key, n]));
@@ -99,6 +103,13 @@ async function previewMetadata(browser) {
       return r.fulfill({ json: data });
     });
     await p.route('**/api/rf-params', r => r.fulfill({ json: { enabled: false } }));
+    // Use the actual config response while exercising a non-default relay window.
+    await p.route('**/api/config/client', async r => {
+      const response = await r.fetch();
+      const config = await response.json();
+      config.healthThresholds = { ...config.healthThresholds, relayActiveMs: 2 * 3600000 };
+      await r.fulfill({ json: config });
+    });
     try {
       for (const n of cases) {
         await step(`#2309 ${theme} ${layout.name}: ${n.label} metadata`, async () => {
@@ -124,6 +135,7 @@ async function previewMetadata(browser) {
                 text: value ? value.textContent.trim() : '', title: label.title,
                 stampText: stamp && stamp.textContent, stampTitle: stamp && stamp.title,
                 variation: value && value.querySelector('[title^="Seen:"]')?.title,
+                certainStyle: value && value.querySelector('[data-certain-relay-active]')?.getAttribute('style'),
               }];
             })));
           if (layout.name === 'tablet') {
@@ -145,13 +157,16 @@ async function previewMetadata(browser) {
           else {
             assert(relay, 'Last Relayed is missing');
             assert(/shared|ambiguous/i.test(relay.title), 'relay tooltip must explain attribution ambiguity');
-            assert(!/alive|actively relaying/i.test(relay.text), 'relay attribution must not claim liveness: ' + relay.text);
+            assert(!/alive|idle/i.test(relay.text), 'relay evidence must not infer idle/alive: ' + relay.text);
+            assert(/actively relaying/i.test(relay.text) === !!n.expectActive, 'only recent certain relay evidence may show the mark: ' + relay.text);
+            if (n.expectActive) assert(relay.certainStyle.includes('var(--status-green-text)'), 'certain relay mark must use the shared theme text token');
             if (n.last_relayed) {
               assert(/attributed relay/i.test(relay.text), 'timestamp needs neutral attribution wording');
               assert(relay.stampText && relay.stampTitle && relay.stampTitle.includes(relayed.slice(0, 10)), 'absolute timestamp tooltip missing');
               assert(relay.text.includes('0 relays/hr, 7 relays/24h'), 'zero and string relay counts must be preserved');
               if (layout.name !== 'tablet') assert((await p.locator(layout.ready).first().innerText()).includes('Uncertain'), 'ambiguous relay must leave status uncertain');
-            } else assert(relay.text.includes('never observed as relay hop'), 'missing relay timestamp changed meaning');
+            } else if (n.last_certain_relay && Number.isFinite(Date.parse(n.last_certain_relay))) assert(relay.text.includes('no attributed non-advert relay'), 'certain forwarded adverts must not be called never observed');
+            else assert(relay.text.includes('never observed as relay hop'), 'missing relay timestamp changed meaning');
           }
           if (n.label === 'escaped') {
             assert(hash.variation === 'Seen: 1, ' + bad + '-byte', 'hash tooltip must preserve escaped text');
@@ -172,6 +187,10 @@ async function previewMetadata(browser) {
               fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
               await root.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `node-preview-${layout.name}-${theme}.png`) });
             }
+          }
+          if (n.expectActive && process.env.SCREENSHOT_DIR) {
+            fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+            await root.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `certain-relay-${n.label}-${layout.name}-${theme}.png`) });
           }
         });
       }
