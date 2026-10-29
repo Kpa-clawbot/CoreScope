@@ -1220,11 +1220,13 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	// 1-byte prefix collisions are disambiguated via NeighborGraph
 	// adjacency (anchored on from_pubkey for ADVERTs, previous hop
 	// otherwise). Empty resolved JSON → NULL via nilIfEmpty.
+	hops := parsePathArray(data.PathJSON)
+	prefixIdx := s.prefixIdx.load()
 	resolved := resolvePathWithContext(
-		parsePathArray(data.PathJSON),
+		hops,
 		strings.ToLower(data.FromPubkey),
 		s.neighborGraph.load(),
-		s.prefixIdx.load(),
+		prefixIdx,
 	)
 	resolvedJSON := marshalResolvedPath(resolved)
 
@@ -1243,12 +1245,12 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	} else {
 		s.Stats.ObservationsInserted.Add(1)
 		s.recordObservationRadio(obsID, data.RxRadioID)
-		// #1598: a resolved hop proves the node was forwarding traffic at
-		// rxTime. Refresh its last_seen so staleness/eviction logic sees
-		// relay activity, not just ADVERTs. Only flood paths are that
-		// proof; see pathHopsTransmitted.
+		// #1598: refresh last_seen from flood relay activity, not just ADVERTs.
+		// #2329: adjacency can resolve a path for display but cannot prove
+		// which colliding node transmitted. Use only unique prefixes for
+		// liveness, with the same prefix snapshot as the stored path.
 		if pathHopsTransmitted(data) {
-			s.touchRelayNodesLocked(resolvedPubkeys(resolved), rxTime)
+			s.touchRelayNodesLocked(resolvedPubkeys(resolvePath(hops, prefixIdx)), rxTime)
 		}
 		// #1690: bump transmissions.last_seen so cold-load can filter on
 		// effective recency. Conditional `last_seen < ?` so we never go
@@ -2107,10 +2109,9 @@ func pathHopsTransmitted(data *PacketData) bool {
 // failing on every call since that refactor and is removed in this change.
 // cmd/server/readonly_invariant_test.go now guards against reintroduction.
 //
-// Callers pass the resolved pubkeys already computed for
-// observations.resolved_path (#1547/#1560) — only unambiguously resolved
-// hops reach this function, so a 1-byte prefix collision cannot keep a
-// silent node alive. resolvedPubkeys already dedups, so no second pass here.
+// Callers pass only unique-prefix results from resolvePath, deduplicated by
+// resolvedPubkeys. Contextual resolution for observations.resolved_path must
+// not refresh liveness for a colliding prefix.
 //
 // Never inserts: the UPDATE matches an existing row or does nothing.
 // Never rewinds: the last_seen guard makes out-of-order ingest a no-op.
