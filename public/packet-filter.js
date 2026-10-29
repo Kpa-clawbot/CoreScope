@@ -292,6 +292,9 @@
     // by the server from the observer's radio history (#1869). The parts are
     // fields of their own so `sf == 8` works without spelling out the rest.
     if (field === 'radio') return packet.radio || '';
+    // Carried on MediaMesh (radio2): set by the server per observation, and on
+    // a grouped row when any observation was.
+    if (field === 'mediamesh') return packet.mediamesh === true;
     if (field === 'freq' || field === 'bw' || field === 'sf' || field === 'cr') {
       var rp = String(packet.radio || '').split(',');
       if (rp.length !== 4) return null;
@@ -509,6 +512,7 @@
     { name: 'bw',            desc: 'Bandwidth heard on (kHz)' },
     { name: 'sf',            desc: 'Spreading factor heard on' },
     { name: 'cr',            desc: 'Coding rate heard on (5-8 = 4/5-4/8)' },
+    { name: 'mediamesh',     desc: 'true if carried on MediaMesh (radio2), the photo/voice radio profile' },
     { name: 'path',          desc: 'Hop path as 1-byte prefixes joined (e.g. a3→7f). For pubkey search use routed_through.' },
     { name: 'path_prefixes', desc: 'Alias of path (1-byte hop prefixes joined with arrows)' },
     { name: 'routed_through', desc: 'Match packets routed through a node by pubkey (full or prefix)' },

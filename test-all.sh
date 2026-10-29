@@ -174,6 +174,7 @@ node tests/unit/test-live-region-filter.js
 node tests/unit/test-live.js
 node tests/unit/test-map-clustering.js
 node tests/unit/test-map-estimated.js
+node tests/unit/test-mediamesh-nodes.js
 node tests/unit/test-mqtt-status-panel.js
 node tests/unit/test-my-repeaters-dashboard.js
 node tests/unit/test-naive-banner-tone.js

@@ -1397,6 +1397,7 @@
           <ul class="legend-list">
             <li><span class="live-ring live-ring--repeater" aria-hidden="true"></span> Bright white ring — repeater</li>
             <li><span class="live-ring live-ring--other" aria-hidden="true"></span> Faded ring — companion / sensor / room</li>
+            <li><span class="mm-dot mm-dot--rxtx" aria-hidden="true"></span> Fuchsia ring — MediaMesh; badge filled sends, hollow listens</li>
           </ul>
           <h3 class="legend-title" style="margin-top:8px">PATH STYLES</h3>
           <ul class="legend-list">
@@ -2680,6 +2681,7 @@
           <table style="font-size:12px;width:100%;border-collapse:collapse;">
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Last Seen</td><td>${lastSeen}</td></tr>
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Adverts</td><td>${n.advert_count || 0}</td></tr>
+            ${window.MediaMesh && window.MediaMesh.info(n) ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">MediaMesh</td><td><span class="mm-dot mm-dot--${window.MediaMesh.info(n).mode}" aria-hidden="true"></span>${escapeHtml(window.MediaMesh.describe(n))}</td></tr>` : ''}
             ${'configured_scope' in n && n.configured_scope !== null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;" title="Region scopes this node has configured, confirmed via an observer /neighbors report (status=responded) — concrete evidence (#1865).${n.configured_scope_at ? ' Last confirmed ' + escapeHtml(String(n.configured_scope_at)) + '.' : ''}">Configured scope <span style="color:var(--status-green-text)" role="img" aria-label="confirmed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg></span></td><td>${n.configured_scope === '' ? '<span style="color:var(--text-muted)">none configured</span>' : `<code style="color:var(--link-color)">${escapeHtml(n.configured_scope)}</code>`}</td></tr>` : ''}
             ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Scope</td><td>${n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
   : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
@@ -3112,7 +3114,7 @@
 
     const icon = L.divIcon({
       html: svgHtml,
-      className: 'live-node-marker live-node-' + (n.role || 'unknown'),
+      className: 'live-node-marker live-node-' + (n.role || 'unknown') + (window.MediaMesh ? window.MediaMesh.markerClass(n) : ''),
       iconSize: [sizePx, sizePx],
       iconAnchor: [sizePx / 2, sizePx / 2],
       popupAnchor: [0, -sizePx / 2]

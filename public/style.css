@@ -5913,3 +5913,39 @@ body.embed #app.app-fixed {
 .reported-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .reported-links .btn-primary { text-decoration: none; padding: 4px 10px; font-size: 12px; }
 .reported-table td { white-space: normal; }
+
+/* MediaMesh (radio2) nodes (mediamesh.js): a ring round the marker and a
+ * badge, filled when the node sends on radio2 (rxtx), hollow when it only
+ * listens (rx). On the marker's container so re-rendered SVG keeps them. */
+.mm-node::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--mediamesh-node-color);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.mm-node::after {
+  content: '';
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--mediamesh-node-color);
+  background: transparent;
+  pointer-events: none;
+}
+.mm-node--rxtx::after { background: var(--mediamesh-node-color); }
+.meshcore-label-marker.mm-node::before { border-radius: 6px; }
+.mm-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--mediamesh-node-color);
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.mm-dot--rxtx { background: var(--mediamesh-node-color); }
