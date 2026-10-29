@@ -326,6 +326,8 @@ func (p *Poller) Start() {
 				// Radio history first (#1869): a retune or the radio id of a
 				// new observation must be known before it is broadcast.
 				refreshRadioHistory(p.db.conn, false)
+				// MediaMesh marks likewise (radio2; mediamesh.go).
+				refreshMediaMesh(p.db.conn, false)
 				// Ingest new transmissions into in-memory store and broadcast
 				newTxs, newMax := p.store.IngestNewFromDB(lastID, 100)
 				if newMax > lastID {

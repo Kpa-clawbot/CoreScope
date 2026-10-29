@@ -451,6 +451,11 @@ func main() {
 	runRadioHistory(rhCtx, database.conn)
 	defer stopRadioHistory()
 
+	// MediaMesh (radio2) observations and nodes; see mediamesh.go.
+	mmCtx, stopMediaMesh := context.WithCancel(context.Background())
+	runMediaMesh(mmCtx, database.conn)
+	defer stopMediaMesh()
+
 	// LoRa RF parameters from the MeshCore map (issue #1268). OPT-IN, like
 	// the known-channels catalogue: without rfParams.nodesUrl nothing is
 	// fetched and /api/rf-params reports enabled=false.
