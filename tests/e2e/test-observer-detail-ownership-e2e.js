@@ -222,6 +222,81 @@ test('dispose-and-controls', async h => {
   assert.strictEqual((await h.snapshot()).charts.length, 0);
 });
 
+test('charts-fit-and-resize', async h => {
+  await h.open('A');
+  await h.release('A', 7);
+  await h.current('A', 7);
+  const originalViewport = h.page.viewportSize();
+  await h.page.evaluate(() => {
+    window.__observerChartLayout = () => {
+      const box = element => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, width: rect.width, height: rect.height };
+      };
+      const grid = document.querySelector('.obs-charts');
+      return {
+        documentWidth: document.documentElement.scrollWidth,
+        grid: box(grid),
+        cards: [...grid.children].map(box),
+        charts: [...grid.querySelectorAll('canvas')].map(canvas => {
+          const chart = Chart.getChart(canvas);
+          const parent = canvas.parentElement;
+          const style = getComputedStyle(parent);
+          return { id: canvas.id, ...box(canvas), connected: canvas.isConnected,
+            responsive: chart.options.responsive, chartWidth: chart.width,
+            parent: box(parent), contentWidth: parent.getBoundingClientRect().width
+              - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+              - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth) };
+        }),
+      };
+    };
+  });
+  async function checkLayout(width, columns) {
+    await h.page.setViewportSize({ width, height: originalViewport.height });
+    // Chart.js may need several ResizeObserver deliveries to finish a resize.
+    // Wait for real canvas dimensions, without changing the charts ourselves.
+    await h.page.waitForFunction(() => {
+      const layout = window.__observerChartLayout();
+      return layout.charts.length === 4 && layout.charts.every(chart =>
+        Math.abs(chart.width - chart.contentWidth) <= 1 && Math.abs(chart.chartWidth - chart.width) <= 1);
+    });
+    const layout = await h.page.evaluate(() => window.__observerChartLayout());
+    assert.ok(layout.documentWidth <= width, 'observer charts must not widen the document at ' + width
+      + 'px: got ' + layout.documentWidth + 'px');
+    assert.strictEqual(layout.cards.length, 4);
+    assert.strictEqual(layout.charts.length, 4);
+    assert.strictEqual(layout.cards.filter(card => Math.abs(card.top - layout.cards[0].top) < 1).length,
+      columns, 'fluid column count at ' + width + 'px');
+    for (const card of layout.cards) {
+      assert.ok(card.width > 0 && card.left >= layout.grid.left - 1 && card.right <= layout.grid.right + 1,
+        'chart card must fit its grid at ' + width + 'px');
+    }
+    for (const chart of layout.charts) {
+      assert.ok(chart.connected && chart.responsive && chart.width > 0 && chart.height > 0,
+        chart.id + ' must remain a live responsive chart');
+      assert.ok(chart.left >= chart.parent.left - 1 && chart.right <= chart.parent.right + 1,
+        chart.id + ' canvas must fit its parent at ' + width + 'px');
+      assert.ok(Math.abs(chart.width - chart.contentWidth) <= 1 && Math.abs(chart.chartWidth - chart.width) <= 1,
+        chart.id + ' must resize to its available content width at ' + width + 'px');
+    }
+  }
+  const initialRequests = h.network.filter(url => url.includes('/analytics?')).length;
+  for (const [width, columns] of [[320, 1], [375, 1], [390, 1], [847, 1], [848, 2], [1400, 3], [390, 1]]) {
+    await checkLayout(width, columns);
+  }
+  assert.strictEqual(h.network.filter(url => url.includes('/analytics?')).length, initialRequests,
+    'viewport resizing must not fetch analytics again');
+  await h.page.selectOption('#obsDaysSelect', '30');
+  await h.release('A', 30);
+  await h.current('A', 30);
+  await checkLayout(390, 1);
+  assert.strictEqual(h.network.filter(url => url.includes('/analytics?')).length, initialRequests + 1,
+    'time-range reload keeps one analytics request per selection');
+  await h.page.locator('a[title="Back to Observers"]').click();
+  await h.page.waitForSelector('#obsTable tbody tr[data-value]');
+  assert.strictEqual((await h.snapshot()).charts.length, 0, 'leaving the resized detail destroys its charts');
+});
+
 (async () => {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined,
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
