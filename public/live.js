@@ -103,6 +103,8 @@
   let realisticPropagation = localStorage.getItem('live-realistic-propagation') === 'true';
   let showOnlyFavorites = localStorage.getItem('live-favorites-only') === 'true';
   let multibyteOnly = localStorage.getItem('live-multibyte-only') === 'true';
+  // "MediaMesh only": just the packets carried on radio2 (mediamesh.go).
+  let mediaMeshOnly = localStorage.getItem('live-mediamesh-only') === 'true';
   let matrixMode = localStorage.getItem('live-matrix-mode') === 'true';
   let matrixRain = localStorage.getItem('live-matrix-rain') === 'true';
   let colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
@@ -143,6 +145,12 @@
   // local helper for now (live.js and packets.js are separate IIFEs with no
   // shared module). TODO: extract `obsIataBadge` into shared packet-helpers.js
   // and have both surfaces import it.
+  // MediaMesh (radio2): a fuchsia badge on feed rows carried on radio2.
+  function mediaMeshFeedBadgeHtml(pkt) {
+    if (!pkt || pkt.mediamesh !== true) return '';
+    return '<span class="badge-mediamesh" title="Carried on MediaMesh (radio2)">MediaMesh</span>';
+  }
+
   function obsIataBadgeHtml(pkt) {
     if (!pkt) return '';
     var iata = pkt.observer_iata;
@@ -1229,6 +1237,13 @@
           localStorage.setItem('live-multibyte-only', multibyteOnly);
           rebuildFeedList();
         } },
+      { id: 'liveMediaMeshToggle',
+        restore: () => mediaMeshOnly,
+        onChange: (v) => {
+          mediaMeshOnly = v;
+          localStorage.setItem('live-mediamesh-only', mediaMeshOnly);
+          rebuildFeedList();
+        } },
       { id: 'liveMatrixToggle',
         restore: () => matrixMode,
         onChange: (v) => {
@@ -1341,6 +1356,8 @@
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
             <label><input type="checkbox" id="liveMultibyteToggle" aria-describedby="multibyteDesc"> Multibyte only</label>
             <span id="multibyteDesc" class="sr-only">Show only multibyte (≥2-byte path-hash) packets; hide unreliable single-byte traffic</span>
+            <label class="live-mediamesh-toggle"><input type="checkbox" id="liveMediaMeshToggle" aria-describedby="mediaMeshDesc"> MediaMesh only</label>
+            <span id="mediaMeshDesc" class="sr-only">Show only packets carried on MediaMesh (radio2), the photo and voice radio profile</span>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             </div>
             <div class="live-toggles">
@@ -3020,7 +3037,11 @@
 
     for (const group of sorted) {
       if (multibyteOnly && !groupIsMultibyte(group.packets)) continue;
-      const pkt = Object.assign({}, group.latestPkt, { observation_count: group.count });
+      if (mediaMeshOnly && !groupIsMediaMesh(group.packets)) continue;
+      const pkt = Object.assign({}, group.latestPkt, {
+        observation_count: group.count,
+        mediamesh: groupIsMediaMesh(group.packets)
+      });
       const decoded = pkt.decoded || {};
       const header = decoded.header || {};
       const payload = decoded.payload || {};
@@ -3060,7 +3081,7 @@
       item.innerHTML = `
         <span class="feed-icon" style="color:${color}">${icon}</span>
         <span class="feed-type" style="color:${color}">${typeName}</span>
-        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}
+        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}${mediaMeshFeedBadgeHtml(pkt)}
         <span class="feed-text">${escapeHtml(preview)}</span>
         <span class="feed-time" data-ts="${group.latestTs || Date.now()}">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
@@ -3420,6 +3441,15 @@
     return false;
   }
 
+  // A packet group is MediaMesh when any observation was carried on radio2.
+  function groupIsMediaMesh(packets) {
+    if (!packets) return false;
+    for (var i = 0; i < packets.length; i++) {
+      if (packets[i] && packets[i].mediamesh === true) return true;
+    }
+    return false;
+  }
+
   // === UNIFIED PACKET RENDERER ===
   // ONE function for all rendering: WS arrival, DB load, replay button, VCR playback.
   // Takes an array of observations (same hash) and renders the complete path tree.
@@ -3429,6 +3459,8 @@
     // entire live view (feed, map, rain, counter — live AND replay). Placed
     // above the counter so livePktCount reflects multibyte-only traffic.
     if (multibyteOnly && !groupIsMultibyte(packets)) return;
+    // "MediaMesh only": the same, for packets not carried on radio2.
+    if (mediaMeshOnly && !groupIsMediaMesh(packets)) return;
     const first = packets[0];
     const decoded = first.decoded || {};
     const header = decoded.header || {};
@@ -3483,7 +3515,11 @@
     const _el2 = document.getElementById('liveNodeCount'); if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
 
     // --- Build consolidated packet for feed + audio ---
-    const consolidated = Object.assign({}, first, { observation_count: obsCount });
+    const consolidated = Object.assign({}, first, {
+      observation_count: obsCount,
+      // MediaMesh if any observation of it was carried on radio2.
+      mediamesh: packets.some(function (p) { return p && p.mediamesh === true; })
+    });
 
     // --- Audio: sonify with correct observation count for multi-voice ---
     if (window.MeshAudio) MeshAudio.sonifyPacket(consolidated);
@@ -4568,7 +4604,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}${anomalyIcon}
+      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}${mediaMeshFeedBadgeHtml(pkt)}${anomalyIcon}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
@@ -4609,6 +4645,12 @@
           if (ref) ref.after(badge); else entry.element.appendChild(badge);
         }
         badge.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + entry.count;
+        // A later observation on radio2 marks the row MediaMesh.
+        if (pkt.mediamesh === true && !entry.element.querySelector('.badge-mediamesh')) {
+          const textEl = entry.element.querySelector('.feed-text');
+          if (textEl) textEl.insertAdjacentHTML('beforebegin', mediaMeshFeedBadgeHtml(pkt));
+          entry.pkt.mediamesh = true;
+        }
         // Flash + move to top
         entry.element.classList.remove('live-feed-enter');
         void entry.element.offsetWidth; // force reflow
@@ -4656,7 +4698,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}
+      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}${mediaMeshFeedBadgeHtml(pkt)}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;

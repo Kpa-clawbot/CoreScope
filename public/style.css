@@ -5949,3 +5949,45 @@ body.embed #app.app-fixed {
   vertical-align: middle;
 }
 .mm-dot--rxtx { background: var(--mediamesh-node-color); }
+
+/* MediaMesh (radio2) on Analytics: the radio2 part of a payload bar, the
+ * radio2 airtime ring on the relay-airtime chart, and the MediaMesh cards. */
+.mm-bar-segment {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--mediamesh-path-color);
+}
+.mm-value { color: var(--mediamesh-path-color); font-weight: 600; }
+.mm-legend { font-size: 11px; margin-top: 6px; }
+.mm-legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--mediamesh-path-color);
+  vertical-align: middle;
+}
+.dumbbell-dot-mediamesh {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--mediamesh-path-color);
+  background: transparent;
+  transform: translate(-50%, -50%);
+}
+.mm-legend-ring {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--mediamesh-path-color);
+  vertical-align: middle;
+}
+.stat-card-mediamesh { border-top: 3px solid var(--mediamesh-path-color); }
+a.stat-card-mediamesh { color: inherit; text-decoration: none; }
+.stat-card-mediamesh .stat-label { color: var(--mediamesh-path-color); }
+.mm-chart rect { fill: var(--mediamesh-path-color); }

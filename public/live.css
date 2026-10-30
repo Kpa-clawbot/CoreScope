@@ -417,6 +417,21 @@
     radial-gradient(circle at 4px 4px, transparent 2.2px, var(--mediamesh-path-color) 2.4px, var(--mediamesh-path-color) 3.6px, transparent 3.8px)
     0 0 / 9px 8px repeat-x;
 }
+/* "MediaMesh only" toggle: its label in the MediaMesh colour. */
+.live-mediamesh-toggle { color: var(--mediamesh-path-color); }
+
+/* Live feed row carried on MediaMesh (radio2). */
+.badge-mediamesh {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 8px;
+  color: var(--mediamesh-path-color);
+  border: 1px solid var(--mediamesh-path-color);
+}
 .lc-path-mediamesh {
   font-size: 11px;
   color: var(--mediamesh-path-color);
