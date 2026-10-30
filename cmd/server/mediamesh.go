@@ -73,6 +73,11 @@ func txMediaMesh(tx *StoreTx) bool {
 	if len(mediaMeshObs) == 0 {
 		return false
 	}
+	return txMediaMeshLocked(tx)
+}
+
+// txMediaMeshLocked is txMediaMesh for a caller that holds mediaMeshMu.
+func txMediaMeshLocked(tx *StoreTx) bool {
 	for _, o := range tx.Observations {
 		if _, ok := mediaMeshObs[o.ID]; ok {
 			return true

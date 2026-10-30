@@ -220,6 +220,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/analytics/topology":        {Summary: "Network topology", Description: "Hop-count distribution and route analysis.", Tag: "analytics"},
 		"GET /api/analytics/channels":        {Summary: "Channel analytics", Description: "Message counts and activity per channel.", Tag: "analytics"},
 		"GET /api/analytics/distance":        {Summary: "Distance analytics", Description: "Geographic distance calculations between nodes.", Tag: "analytics"},
+		"GET /api/analytics/mediamesh":       {Summary: "MediaMesh analytics", Description: "Transmissions carried on MediaMesh (radio2): share, per payload type and per hour, the observers that heard them, and the nodes that run radio2. Optional region and window.", Tag: "analytics"},
 		"GET /api/analytics/hash-sizes":      {Summary: "Hash size analysis", Description: "Distribution of hash prefix sizes across the network.", Tag: "analytics"},
 		"GET /api/analytics/hash-collisions": {Summary: "Hash collision detection", Description: "Identifies nodes sharing hash prefixes.", Tag: "analytics"},
 		"GET /api/analytics/subpaths":        {Summary: "Subpath analysis", Description: "Common routing subpaths through the mesh.", Tag: "analytics"},

@@ -144,6 +144,10 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 	type bucket struct {
 		count int
 		score int64 // sum of ToA(payload) × relays, in nanoseconds
+		// The part carried on MediaMesh (radio2): transmissions with an
+		// observation on it, and their score (mediamesh.go).
+		mmCount int
+		mmScore int64
 	}
 	// The additional key has four possible values, all for ADVERT.
 	type bucketKey struct {
@@ -187,7 +191,10 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		}
 	}
 	totalCount := 0
-	var totalScore int64
+	var totalScore, totalMMScore int64
+	mediaMeshMu.RLock()
+	defer mediaMeshMu.RUnlock()
+	anyMM := len(mediaMeshObs) > 0
 	for _, tx := range selected {
 		if tx.Hash != "" {
 			if seenHash[tx.Hash]&128 != 0 {
@@ -221,6 +228,11 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		score := int64(toa) * int64(relays)
 		b.score += score
 		totalScore += score
+		if anyMM && txMediaMeshLocked(tx) {
+			b.mmCount++
+			b.mmScore += score
+			totalMMScore += score
+		}
 	}
 
 	rows := make([]map[string]interface{}, 0, len(buckets))
@@ -247,6 +259,14 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		}
 		if key.advertKind != "" {
 			row["advert_kind"] = key.advertKind
+		}
+		// MediaMesh: only when some of this type went over radio2, so the
+		// rows of a mesh without it are unchanged.
+		if b.mmCount > 0 {
+			row["mediamesh_count"] = b.mmCount
+			if totalScore > 0 {
+				row["mediamesh_airtime_pct"] = float64(b.mmScore) / float64(totalScore) * 100.0
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -279,12 +299,13 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		label = window.Label
 	}
 	return map[string]interface{}{
-		"rows":        rows,
-		"total_count": totalCount,
-		"total_score": totalScore,
-		"preset":      presetJSON(preset),
-		"window":      label,
-		"cached":      false,
+		"rows":            rows,
+		"total_count":     totalCount,
+		"total_score":     totalScore,
+		"mediamesh_score": totalMMScore,
+		"preset":          presetJSON(preset),
+		"window":          label,
+		"cached":          false,
 	}
 }
 
