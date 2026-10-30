@@ -94,8 +94,8 @@ func TestReadinessDocumentedResponses(t *testing.T) {
 				t.Fatalf("unexpected loaded-store response: status=%d body=%s", w.Code, w.Body.String())
 			}
 			backfill := asMap(t, body["from_pubkey_backfill"], "backfill")
-			if _, ok := backfill["done"].(bool); !ok || len(backfill) != 3 {
-				t.Errorf("unexpected backfill shape: %v", backfill)
+			if !reflect.DeepEqual(backfill, map[string]interface{}{"total": float64(0), "processed": float64(0), "done": true}) {
+				t.Errorf("unexpected backfill compatibility values: %v", backfill)
 			}
 			if (body["ingest_liveness"] != nil) != withSources {
 				t.Fatalf("liveness optionality does not match available stats: %s", w.Body.String())
