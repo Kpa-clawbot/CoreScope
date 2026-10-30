@@ -148,7 +148,7 @@ func mediaMeshFromNeighbors(originID string, msg map[string]interface{}) []Media
 }
 
 // mediaMeshSender is the node that transmitted a MediaMesh packet the
-// observer received:
+// observer reported. For one it received:
 //   - a flood packet with an empty path: its originator, heard straight;
 //   - a flood packet with a path: the last hop, the forwarder the observer
 //     heard. Only an unambiguously resolved hop counts (a 1-byte prefix
@@ -158,9 +158,14 @@ func mediaMeshFromNeighbors(originID string, msg map[string]interface{}) []Media
 //
 // Any other direct-route packet gives nothing: its path is the route still
 // to travel, and an empty one can mean the last repeater on it sent it.
+//
+// A packet the observer sent itself (direction "tx") was sent by the
+// observer: a repeater that publishes its own radio2 transmissions runs
+// MediaMesh, sending as well as listening. Serial observers report them once
+// the firmware prints the sent frame ahead of its TX line.
 func mediaMeshSender(data *PacketData, resolved []*string) string {
 	if data.Direction != nil && strings.EqualFold(*data.Direction, "tx") {
-		return ""
+		return strings.ToLower(data.ObserverID)
 	}
 	if !packetpath.PathBytesAreHops(byte(data.PayloadType)) {
 		return ""

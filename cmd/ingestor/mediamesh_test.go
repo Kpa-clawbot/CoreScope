@@ -101,11 +101,13 @@ func TestHandleMessageWithoutMediaMeshWritesNothing(t *testing.T) {
 	}
 }
 
-// A packet this observer sent on radio2 is MediaMesh; it names no other sender.
-func TestHandleMessageMediaMeshTxKeepsTxRadioID(t *testing.T) {
+// A packet the observer sent on radio2 is MediaMesh, and the observer runs
+// MediaMesh both ways: it sent on radio2.
+func TestHandleMessageMediaMeshTxMarksObserver(t *testing.T) {
 	store, source := newTestContext(t)
+	obs := strings.Repeat("d", 64)
 	msg := &mockMessage{
-		topic: "meshcore/SEA/obs1/packets",
+		topic: "meshcore/SEA/" + strings.ToUpper(obs) + "/packets",
 		payload: []byte(`{"raw":"` + mediaMeshAdvertHex + `","direction":"tx",` +
 			`"tx_radio_id":"radio2","mediamesh":true}`),
 	}
@@ -116,8 +118,30 @@ func TestHandleMessageMediaMeshTxKeepsTxRadioID(t *testing.T) {
 	if n := mmCountRows(t, store, `SELECT COUNT(*) FROM observation_radios WHERE radio_id = 'radio2'`); n != 1 {
 		t.Fatalf("tx_radio_id not kept")
 	}
+	var mode, src string
+	err := store.db.QueryRow(`SELECT mode, source FROM node_mediamesh WHERE public_key = ?`, obs).Scan(&mode, &src)
+	if err != nil || mode != "rxtx" || src != "heard" {
+		t.Fatalf("observer node_mediamesh = %q/%q (%v), want rxtx/heard", mode, src, err)
+	}
+	if n := mmCountRows(t, store, `SELECT COUNT(*) FROM node_mediamesh`); n != 1 {
+		t.Errorf("node_mediamesh rows = %d, want only the observer", n)
+	}
+}
+
+// An observer id that is not a public key names nobody.
+func TestHandleMessageMediaMeshTxNonKeyObserver(t *testing.T) {
+	store, source := newTestContext(t)
+	msg := &mockMessage{
+		topic: "meshcore/SEA/obs1/packets",
+		payload: []byte(`{"raw":"` + mediaMeshAdvertHex + `","direction":"tx",` +
+			`"tx_radio_id":"radio2","mediamesh":true}`),
+	}
+	handleMessage(store, "test", source, msg, nil, nil, &Config{})
+	if n := mmCountRows(t, store, `SELECT COUNT(*) FROM observation_mediamesh`); n != 1 {
+		t.Fatalf("observation_mediamesh rows = %d, want 1", n)
+	}
 	if n := mmCountRows(t, store, `SELECT COUNT(*) FROM node_mediamesh`); n != 0 {
-		t.Errorf("a TX names no sender, node_mediamesh rows = %d", n)
+		t.Errorf("node_mediamesh rows = %d, want 0", n)
 	}
 }
 
@@ -148,9 +172,9 @@ func TestMediaMeshSender(t *testing.T) {
 	if got := mediaMeshSender(direct, []*string{&a}); got != "" {
 		t.Errorf("direct route: sender %q, want none", got)
 	}
-	sent := &PacketData{PayloadType: 4, RouteType: 1, PathJSON: `["aa"]`, Direction: &tx}
-	if got := mediaMeshSender(sent, []*string{&a}); got != "" {
-		t.Errorf("tx: sender %q, want none", got)
+	sent := &PacketData{PayloadType: 4, RouteType: 1, PathJSON: `["aa"]`, Direction: &tx, ObserverID: strings.ToUpper(b)}
+	if got := mediaMeshSender(sent, []*string{&a}); got != b {
+		t.Errorf("tx: sender %q, want the observer itself", got)
 	}
 }
 

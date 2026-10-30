@@ -143,12 +143,19 @@ func (s *PacketStore) computeMediaMeshAnalytics(region string, window TimeWindow
 				continue
 			}
 			inScope = true
-			a := observers[o.ObserverID]
-			if a == nil {
-				a = &obsAgg{name: o.ObserverName, iata: o.ObserverIATA}
-				observers[o.ObserverID] = a
+			// The observer table is about what observers hear: an
+			// observer's own transmission still makes the packet MediaMesh,
+			// but is not something it heard.
+			heard := !o.isOwnTransmission()
+			var a *obsAgg
+			if heard {
+				a = observers[o.ObserverID]
+				if a == nil {
+					a = &obsAgg{name: o.ObserverName, iata: o.ObserverIATA}
+					observers[o.ObserverID] = a
+				}
+				a.total++
 			}
-			a.total++
 			if !anyMM {
 				continue
 			}
@@ -156,9 +163,11 @@ func (s *PacketStore) computeMediaMeshAnalytics(region string, window TimeWindow
 				continue
 			}
 			mm = true
-			a.mm++
-			if o.Timestamp > a.last {
-				a.last = o.Timestamp
+			if heard {
+				a.mm++
+				if o.Timestamp > a.last {
+					a.last = o.Timestamp
+				}
 			}
 			if firstMM == "" || (o.Timestamp != "" && o.Timestamp < firstMM) {
 				firstMM = o.Timestamp

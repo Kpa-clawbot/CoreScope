@@ -50,6 +50,31 @@ func TestMediaMeshAnalytics(t *testing.T) {
 	}
 }
 
+// A packet an observer sent on radio2 is MediaMesh traffic, but the observer
+// table lists what observers hear, so its own transmission is not counted.
+func TestMediaMeshAnalyticsOwnTransmission(t *testing.T) {
+	srv, router := setupTestServer(t)
+	srv.store.mu.Lock()
+	for _, tx := range srv.store.packets {
+		for _, o := range tx.Observations {
+			if o.ID == 2 {
+				o.Direction = "tx"
+			}
+		}
+	}
+	srv.store.mu.Unlock()
+	seedMediaMesh(t, srv, `INSERT INTO observation_mediamesh (observation_id) VALUES (2)`)
+
+	var got MediaMeshAnalytics
+	getJSON(t, router, "/api/analytics/mediamesh", &got)
+	if got.MediaMeshTransmissions != 1 {
+		t.Errorf("mediamesh transmissions = %d, want 1 (sent on radio2)", got.MediaMeshTransmissions)
+	}
+	if len(got.Observers) != 0 {
+		t.Errorf("observers = %+v, want none: nobody heard it on radio2", got.Observers)
+	}
+}
+
 // A mesh without MediaMesh gets zeros and empty lists, never nulls.
 func TestMediaMeshAnalyticsEmpty(t *testing.T) {
 	srv, router := setupTestServer(t)
