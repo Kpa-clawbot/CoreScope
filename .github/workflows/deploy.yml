@@ -721,6 +721,7 @@ jobs:
           suite 1 test-touch-targets.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-live-dedup.js BASE_URL=$B
           suite 1 test-nodes-export-e2e.js BASE_URL=$B
+          suite 1 test-node-quick-actions-e2e.js BASE_URL=$B
           suite 2 test-show-neighbors.js BASE_URL=$B
           suite 3 test-user-management-e2e.js BASE_URL=http://localhost:13582 BASE_URL_OFF=$B
 

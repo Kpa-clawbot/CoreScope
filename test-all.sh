@@ -183,6 +183,7 @@ node tests/unit/test-node-reach-coverage.js
 node tests/unit/test-nodes-export-wiring.js
 node tests/unit/test-nav-drawer-version-footer.js
 node tests/unit/test-nodes-export.js
+node tests/unit/test-node-quick-actions.js
 node tests/unit/test-notifications-ui.js
 node tests/unit/test-observer-iata-1188.js
 node tests/unit/test-observer-menu-interactions.js

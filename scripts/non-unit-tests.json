@@ -107,6 +107,7 @@
       "tests/e2e/test-nav-priority-1311-e2e.js",
       "tests/e2e/test-nav-priority-1391-e2e.js",
       "tests/e2e/test-neighbor-map-btn-clip-e2e.js",
+      "tests/e2e/test-node-quick-actions-e2e.js",
       "tests/e2e/test-node-reach-coverage-e2e.js",
       "tests/e2e/test-node-reach-e2e.js",
       "tests/e2e/test-nodes-export-e2e.js",
