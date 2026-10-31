@@ -154,6 +154,8 @@ type Config struct {
 	// CORSAllowedOrigins is the list of origins permitted to make cross-origin
 	// requests. When empty (default), no Access-Control-* headers are sent,
 	// so browsers enforce same-origin policy. Set to ["*"] to allow all origins.
+	// An entry may use one wildcard label, "https://*.myproject.pages.dev"
+	// (see originMatches); LoadConfig drops wildcard entries that are unsafe.
 	CORSAllowedOrigins []string `json:"corsAllowedOrigins,omitempty"`
 
 	// WebSocket carries the /ws transport limits from #1794. Omitted entirely
@@ -530,12 +532,14 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		cfg.migrateDeprecatedConfig()
 		cfg.applyListLimitsDefaults()
 		applyCORSEnv(cfg)
+		cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
 		return cfg, nil
 	}
 	cfg.NormalizeTimestampConfig()
 	cfg.migrateDeprecatedConfig()
 	cfg.applyListLimitsDefaults()
 	applyCORSEnv(cfg)
+	cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
 	return cfg, nil // defaults
 }
 

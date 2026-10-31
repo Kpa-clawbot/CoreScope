@@ -17,13 +17,14 @@ type Hub struct {
 	mu             sync.RWMutex
 	clients        map[*Client]bool
 	upgrader       websocket.Upgrader
-	allowedOrigins []string   // exact-match allowlist for /ws CheckOrigin (see SetAllowedOrigins)
+	allowedOrigins []string   // allowlist for /ws CheckOrigin (see SetAllowedOrigins)
 	limits         *wsLimiter // #1794: per-IP caps and deny list; nil allows everything
 	pingInterval   time.Duration
 }
 
-// SetAllowedOrigins configures the exact-match origin allowlist consulted by
-// the WebSocket upgrader's CheckOrigin. The "*" wildcard is deliberately NOT
+// SetAllowedOrigins configures the origin allowlist consulted by the
+// WebSocket upgrader's CheckOrigin: exact origins, or one wildcard label
+// scoped to a project (originMatches). The "*" wildcard is deliberately NOT
 // honored here (it IS honored by the HTTP CORS middleware): OWASP's
 // WebSocket Security Cheat Sheet recommends an explicit allowlist for CSWSH
 // defense. If "*" appears in the slice, it is ignored and a startup WARN is
@@ -46,7 +47,8 @@ func (h *Hub) SetAllowedOrigins(origins []string) {
 //   - empty Origin header → allow (non-browser client; rate-limit / IP gate
 //     is handled separately, see #1794).
 //   - Origin host == request Host (same-origin) → allow.
-//   - Origin in allowedOrigins by exact case-insensitive match → allow.
+//   - Origin matches an allowedOrigins entry → allow (originMatches: exact
+//     and case-insensitive, or one wildcard label).
 //   - "*" in allowedOrigins is ignored (see SetAllowedOrigins).
 //   - anything else → reject (gorilla returns 403).
 func (h *Hub) checkOrigin(r *http.Request) bool {
@@ -68,7 +70,7 @@ func (h *Hub) checkOrigin(r *http.Request) bool {
 		if o == "*" {
 			continue // deliberately not honored — see SetAllowedOrigins
 		}
-		if strings.EqualFold(o, origin) {
+		if originMatches(o, origin) {
 			return true
 		}
 	}
