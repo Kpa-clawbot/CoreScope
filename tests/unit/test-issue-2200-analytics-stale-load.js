@@ -63,8 +63,9 @@ function load(hash) {
   vm.createContext(ctx);
   vm.runInContext(SRC, ctx);
   const content = () => els.analyticsContent.innerHTML;
-  // The six requests of bulk load k (0-based).
-  const batch = (k) => calls.slice(k * 6, k * 6 + 6);
+  // The seven requests of bulk load k (0-based): the six analytics loads
+  // plus the MediaMesh (radio2) summary for the Overview.
+  const batch = (k) => calls.slice(k * 7, k * 7 + 7);
   function answer(k, total) {
     for (const c of batch(k)) {
       if (c.url.startsWith('/analytics/hash-sizes')) c.resolve({ distribution: { 1: total }, total, hourly: [], topHops: [], multiByteNodes: [] });
@@ -86,7 +87,7 @@ function load(hash) {
     const t = load();
     await t.page.init(el());
     t.changeWindow('7d');
-    assert(t.batch(1).length === 6 && t.batch(1)[1].url.includes('window=7d'), 'the window change starts a second bulk load');
+    assert(t.batch(1).length === 7 && t.batch(1)[1].url.includes('window=7d'), 'the window change starts a second bulk load');
     t.answer(1, 222);
     await flush();
     assert(t.content().includes('222 packets'), 'the newer selection renders when it lands first');
@@ -168,7 +169,7 @@ function load(hash) {
 
   // A tab that loads its own data (here the Prefix Tool) is not the bulk
   // load's to render: it draws at once and stays when the bulk load lands.
-  const BULK = /^\/analytics\/(hash-sizes|rf|topology|channels|hash-collisions|relay-airtime-share)\b/;
+  const BULK = /^\/analytics\/(hash-sizes|rf|topology|channels|hash-collisions|relay-airtime-share|mediamesh)\b/;
   const bulkCalls = (t) => t.calls.filter((c) => BULK.test(c.url));
   const ownCalls = (t) => t.calls.filter((c) => !BULK.test(c.url));
   const answerBulk = (t, total) => {

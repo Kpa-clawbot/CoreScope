@@ -184,6 +184,7 @@
                  inside this tab) and before Prefix Tool (utility tabs trail). -->
             <button class="tab-btn" data-tab="roles">Roles</button>
             <button class="tab-btn" data-tab="scopes">Scopes</button>
+            <button class="tab-btn" data-tab="mediamesh">MediaMesh</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
         </div>
@@ -358,16 +359,20 @@
       // channels: region + window (no area per original PR intent)
       const chanQS = (rqs + tws).slice(1);
       const sepChan = chanQS ? '?' + chanQS : '';
-      const [hashData, rfData, topoData, chanData, collisionData, airtimeData] = await Promise.all([
+      // MediaMesh (radio2): region + window, like channels.
+      const mmQS = (rqs + tws).slice(1);
+      const sepMM = mmQS ? '?' + mmQS : '';
+      const [hashData, rfData, topoData, chanData, collisionData, airtimeData, mediaMeshData] = await Promise.all([
         api('/analytics/hash-sizes' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/rf' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/topology' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/channels' + sepChan, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/hash-collisions' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/relay-airtime-share' + sepWin, { ttl: CLIENT_TTL.analyticsRF }).catch(() => ({ rows: [] })),
+        api('/analytics/mediamesh' + sepMM, { ttl: CLIENT_TTL.analyticsRF }).catch(() => null),
       ]);
       if (!isCurrent()) return;
-      _analyticsData = { hashData, rfData, topoData, chanData, collisionData, airtimeData, window: twVal };
+      _analyticsData = { hashData, rfData, topoData, chanData, collisionData, airtimeData, mediaMeshData, window: twVal };
       // A tab that loads its own data is left alone (#2200).
       if (BULK_TABS.has(_currentTab)) renderTab(_currentTab);
     } catch (e) {
@@ -405,6 +410,7 @@
       case 'roles': await renderRolesTab(el); break;
       case 'prefix-tool': await renderPrefixTool(el); break;
       case 'scopes': await renderScopesTab(el); break;
+      case 'mediamesh': await renderMediaMeshTab(el); break;
     }
     // Auto-apply column resizing to all analytics tables
     requestAnimationFrame(() => {
@@ -479,6 +485,7 @@
           <div class="stat-value">${((rf.timeSpanHours || 1)).toFixed(1)}h</div>
           <div class="stat-label">Data Span</div>
         </div>
+        ${mediaMeshStatCard(d.mediaMeshData)}
       </div>
 
       <div class="analytics-row">
@@ -488,7 +495,7 @@
       <div class="analytics-row">
         <div class="analytics-card flex-1">
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Payload Type Mix</h3>
-          ${renderPayloadPie(rf.payloadTypes)}
+          ${renderPayloadPie(rf.payloadTypes, d.mediaMeshData)}
         </div>
         <div class="analytics-card flex-1">
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Hop Count Distribution</h3>
@@ -537,20 +544,137 @@
     }
   }
 
-  function renderPayloadPie(types) {
+  function renderPayloadPie(types, mediaMesh) {
     const total = types.reduce((s, t) => s + t.count, 0);
     const colors = ['#ef4444','#f59e0b','#22c55e','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#64748b','#f97316','#06b6d4','#84cc16'];
+    // MediaMesh (radio2): the share of each type carried on radio2, drawn as
+    // a fuchsia segment at the start of its bar. Absent without radio2 data.
+    const mm = mediaMeshTypeShares(mediaMesh);
     let html = '<div class="payload-bars">';
     types.forEach((t, i) => {
       const pct = (t.count / total * 100).toFixed(1);
       const w = Math.max(t.count / total * 100, 1);
+      const share = mm[t.name] || 0;
+      const mmSeg = share > 0
+        ? `<div class="hash-bar-fill mm-bar-segment" style="width:${(w * share).toFixed(2)}%" title="${escapeHtml(t.name)}: ${(share * 100).toFixed(1)}% on MediaMesh (radio2)"></div>`
+        : '';
+      const mmText = share > 0 ? ` <span class="mm-value">· ${(share * 100).toFixed(0)}% radio2</span>` : '';
       html += `<div class="payload-bar-row">
         <div class="payload-bar-label"><span class="legend-dot" style="background:${colors[i]}"></span>${escapeHtml(t.name)}</div>
-        <div class="hash-bar-track"><div class="hash-bar-fill" style="width:${w}%;background:${colors[i]}"></div></div>
-        <div class="payload-bar-value">${t.count} <span class="text-muted">(${pct}%)</span></div>
+        <div class="hash-bar-track" style="position:relative"><div class="hash-bar-fill" style="width:${w}%;background:${colors[i]}"></div>${mmSeg}</div>
+        <div class="payload-bar-value">${t.count} <span class="text-muted">(${pct}%)</span>${mmText}</div>
       </div>`;
     });
+    if (Object.keys(mm).length) {
+      html += '<div class="mm-legend text-muted"><span class="mm-legend-swatch" aria-hidden="true"></span> part carried on MediaMesh (radio2)</div>';
+    }
     return html + '</div>';
+  }
+
+  // ===================== MEDIAMESH (radio2) =====================
+  // name → fraction (0..1) of that payload type's transmissions on radio2.
+  function mediaMeshTypeShares(mm) {
+    const out = {};
+    if (!mm || !Array.isArray(mm.by_type)) return out;
+    mm.by_type.forEach((t) => {
+      if (t && t.count > 0 && t.mediamesh > 0) out[t.name] = t.mediamesh / t.count;
+    });
+    return out;
+  }
+
+  // Overview card; empty on a mesh with no MediaMesh traffic or repeaters.
+  function mediaMeshStatCard(mm) {
+    if (!mm) return '';
+    const n = Number(mm.mediamesh_transmissions || 0);
+    const reps = Array.isArray(mm.repeaters) ? mm.repeaters.length : 0;
+    if (n === 0 && reps === 0) return '';
+    return `<a class="stat-card stat-card-mediamesh" href="#/analytics?tab=mediamesh" title="Transmissions carried on MediaMesh (radio2)">
+          <div class="stat-value">${n.toLocaleString()}</div>
+          <div class="stat-label">MediaMesh (radio2)</div>
+          <div class="stat-detail">${sf(mm.share_pct || 0, 1)}% of transmissions · ${reps} repeater${reps === 1 ? '' : 's'}</div>
+        </a>`;
+  }
+
+  function mediaMeshRadioText(radio) {
+    if (window.MediaMesh && typeof window.MediaMesh.describeRadio === 'function') {
+      const d = window.MediaMesh.describeRadio(radio);
+      if (d) return d;
+    }
+    return radio || '—';
+  }
+
+  async function renderMediaMeshTab(el) {
+    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading MediaMesh…</div>';
+    const rqs = RegionFilter.regionQueryString();
+    const twEl = document.getElementById('analyticsTimeWindow');
+    const twVal = twEl ? twEl.value : '';
+    const qs = (rqs + (twVal ? '&window=' + encodeURIComponent(twVal) : '')).slice(1);
+    let mm;
+    try {
+      mm = await api('/analytics/mediamesh' + (qs ? '?' + qs : ''), { ttl: CLIENT_TTL.analyticsRF });
+    } catch (e) {
+      el.innerHTML = loadErrorHtml(e.message);
+      return;
+    }
+    if (_currentTab !== 'mediamesh') return;
+    el.innerHTML = renderMediaMeshTabHtml(mm, twVal);
+  }
+
+  function renderMediaMeshTabHtml(mm, windowVal) {
+    mm = mm || {};
+    const reps = Array.isArray(mm.repeaters) ? mm.repeaters : [];
+    const obs = Array.isArray(mm.observers) ? mm.observers : [];
+    const hours = Array.isArray(mm.per_hour) ? mm.per_hour : [];
+    const n = Number(mm.mediamesh_transmissions || 0);
+    const intro = '<p class="text-muted" style="margin:0 0 12px">MediaMesh is the second LoRa profile (radio2) that Keymind Cascade repeaters, Wadamesh TAK standalones and MeshCore Open TAK use for photos and voice. A transmission counts here when an observer heard it on radio2.</p>';
+    if (n === 0 && reps.length === 0) {
+      return intro + '<div class="text-center text-muted" style="padding:40px">No MediaMesh traffic or repeaters in this period. Observers need firmware that tags radio2.</div>';
+    }
+    const repRows = reps.map((r) => {
+      const name = r.name || (r.public_key || '').slice(0, 8);
+      const mode = r.mode === 'rxtx' ? 'listens and sends' : 'listens';
+      const how = { status: 'reported by the node', neighbor: 'reported by a neighbour', heard: 'heard sending on radio2' }[r.source] || esc(r.source || '');
+      const seen = r.last_seen && typeof timeAgo === 'function' ? timeAgo(r.last_seen) : esc(r.last_seen || '');
+      return `<tr>
+        <td><span class="mm-dot mm-dot--${r.mode === 'rxtx' ? 'rxtx' : 'rx'}" aria-hidden="true"></span><a href="#/nodes/${encodeURIComponent(r.public_key || '')}">${esc(name)}</a></td>
+        <td>${esc(r.role || '—')}</td>
+        <td>${mode}</td>
+        <td>${esc(mediaMeshRadioText(r.radio))}</td>
+        <td>${how}</td>
+        <td>${seen}</td>
+      </tr>`;
+    }).join('');
+    const obsRows = obs.map((o) => {
+      const seen = o.last_heard && typeof timeAgo === 'function' ? timeAgo(o.last_heard) : esc(o.last_heard || '');
+      return `<tr>
+        <td><a href="#/observers/${encodeURIComponent(o.id || '')}">${esc(o.name || o.id || '?')}</a></td>
+        <td>${esc(o.iata || '—')}</td>
+        <td>${Number(o.mediamesh_observations || 0).toLocaleString()}</td>
+        <td>${sf(o.share_pct || 0, 1)}%</td>
+        <td>${seen}</td>
+      </tr>`;
+    }).join('');
+    const pph = hours.map((h) => ({ hour: h.hour, count: h.count }));
+    const chart = packetsPerHourCard(pph, { window: windowVal });
+    return intro + `
+      <div class="stats-grid">
+        <div class="stat-card stat-card-mediamesh"><div class="stat-value">${n.toLocaleString()}</div><div class="stat-label">radio2 transmissions</div><div class="stat-detail">${sf(mm.share_pct || 0, 1)}% of ${Number(mm.total_transmissions || 0).toLocaleString()}</div></div>
+        <div class="stat-card stat-card-mediamesh"><div class="stat-value">${reps.length}</div><div class="stat-label">MediaMesh repeaters</div><div class="stat-detail">${reps.filter((r) => r.mode === 'rxtx').length} send, ${reps.filter((r) => r.mode !== 'rxtx').length} listen only</div></div>
+        <div class="stat-card stat-card-mediamesh"><div class="stat-value">${obs.length}</div><div class="stat-label">Observers hearing radio2</div></div>
+      </div>
+      <div class="analytics-row"><div class="analytics-card flex-1 mm-chart">${chart.html.replace('Packets /', 'radio2 packets /')}</div></div>
+      <div class="analytics-row">
+        <div class="analytics-card flex-1">
+          <h3>MediaMesh repeaters</h3>
+          ${reps.length ? `<table class="analytics-table"><thead><tr><th>Node</th><th>Role</th><th>Mode</th><th>radio2 setting</th><th>Known from</th><th>Last seen</th></tr></thead><tbody>${repRows}</tbody></table>` : '<p class="text-muted">None known yet.</p>'}
+        </div>
+      </div>
+      <div class="analytics-row">
+        <div class="analytics-card flex-1">
+          <h3>Observers hearing radio2</h3>
+          ${obs.length ? `<table class="analytics-table"><thead><tr><th>Observer</th><th>Region</th><th>radio2 observations</th><th>Share of its observations</th><th>Last heard</th></tr></thead><tbody>${obsRows}</tbody></table>` : '<p class="text-muted">None in this period.</p>'}
+        </div>
+      </div>`;
   }
 
   // === Relay Airtime Share — dumbbell chart (#1359) ===
@@ -592,7 +716,10 @@
     }
     // Layout: per row → label | track 0..100% | values
     var palette = ['#ef4444','#f59e0b','#22c55e','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#64748b','#f97316','#06b6d4','#84cc16'];
-    var html = '<div class="dumbbell-chart" style="display:flex;flex-direction:column;gap:8px;padding:8px 4px">';
+    // MediaMesh (radio2) adds an "r2" value per row: give that column room.
+    var anyMM = rows.some(function (r) { return r.mediamesh_count; });
+    var html = '<div class="dumbbell-chart" style="display:flex;flex-direction:column;gap:8px;padding:8px 4px' +
+      (anyMM ? ';--relay-airtime-columns:80px 1fr 250px' : '') + '">';
     if (presetCaption) html += presetCaption;
     if (rows.some(function (r) { return r.payload_type === 'ADVERT'; })) {
       html += '<div class="dumbbell-evidence-note text-muted" style="font-size:11px">Known route evidence: Mixed adverts were observed as both flood and direct with an empty remaining path. An empty path does not prove an original zero-hop send. Other adverts have no classified evidence yet. Background backfill improves classification automatically. Available history is a lower bound; older overwritten observations cannot be recovered, and failed evidence writes may leave gaps.</div>';
@@ -610,6 +737,11 @@
       var apct = Number(r.airtime_pct || 0);
       var score = Number(r.score || 0);
       var color = palette[i % palette.length];
+      // MediaMesh (radio2): this type's airtime carried on radio2, as a
+      // hollow fuchsia ring on the same 0–100% axis. Only when present.
+      var mmPct = Number(r.mediamesh_airtime_pct || 0);
+      var mmRing = r.mediamesh_count ? '<div class="dumbbell-dot dumbbell-dot-mediamesh" style="left:' + mmPct.toFixed(3) + '%" aria-label="airtime on MediaMesh (radio2)"></div>' : '';
+      var mmVal = r.mediamesh_count ? ' &nbsp;·&nbsp; <span class="mm-value">r2 ' + mmPct.toFixed(1) + '%</span>' : '';
       var loPct = Math.min(cpct, apct);
       var hiPct = Math.max(cpct, apct);
       // Tooltip per row — payload_type, count %, count N, airtime %, raw score, caveat.
@@ -631,11 +763,13 @@
           '<div class="dumbbell-connector" style="position:absolute;top:50%;left:' + loPct.toFixed(3) + '%;width:' + (hiPct - loPct).toFixed(3) + '%;height:2px;background:var(--text-muted,#888);transform:translateY(-50%);opacity:0.5"></div>' +
           '<div class="dumbbell-dot dumbbell-dot-count" style="position:absolute;top:50%;left:' + cpct.toFixed(3) + '%;width:10px;height:10px;border-radius:50%;background:var(--text-muted,#888);transform:translate(-50%,-50%);border:1px solid var(--bg,#fff)" aria-label="count share"></div>' +
           '<div class="dumbbell-dot dumbbell-dot-airtime" style="position:absolute;top:50%;left:' + apct.toFixed(3) + '%;width:12px;height:12px;border-radius:50%;background:' + color + ';transform:translate(-50%,-50%);border:1px solid var(--bg,#fff)" aria-label="airtime share"></div>' +
+          mmRing +
         '</div>' +
         '<div class="dumbbell-values" style="text-align:right;color:var(--text-muted);font-variant-numeric:tabular-nums">' +
           '<span style="color:var(--text-muted)">cnt ' + cpct.toFixed(1) + '%</span>' +
           ' &nbsp;·&nbsp; ' +
           '<span style="display:inline-flex;align-items:center;gap:4px;color:var(--text);font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + '" aria-hidden="true"></span>air ' + apct.toFixed(1) + '%</span>' +
+          mmVal +
         '</div>' +
       '</div>';
     });
@@ -645,7 +779,8 @@
       '<div style="display:flex;justify-content:space-between"><span>0%</span><span>50%</span><span>100%</span></div>' +
       '<div></div>' +
     '</div>';
-    html += '<div class="dumbbell-legend" style="display:flex;gap:14px;font-size:11px;color:var(--text-muted);padding:4px 0 0 84px"><span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-muted,#888);vertical-align:middle"></span> count %</span><span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent,#3b82f6);vertical-align:middle"></span> airtime %</span></div>';
+    html += '<div class="dumbbell-legend" style="display:flex;gap:14px;font-size:11px;color:var(--text-muted);padding:4px 0 0 84px"><span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-muted,#888);vertical-align:middle"></span> count %</span><span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent,#3b82f6);vertical-align:middle"></span> airtime %</span>' +
+      (anyMM ? '<span><span class="mm-legend-ring" aria-hidden="true"></span> airtime on MediaMesh (radio2)</span>' : '') + '</div>';
     html += '</div>';
     return html;
   }

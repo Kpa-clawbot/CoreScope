@@ -81,6 +81,7 @@ const ROUTES = [
   '/analytics?tab=prefix-tool',
   '/analytics?tab=my-repeaters',
   '/analytics?tab=repeater-metrics',
+  '/analytics?tab=mediamesh',
   '/audio-lab',
 ];
 
@@ -96,7 +97,7 @@ const REGISTERED_ANALYTICS_TABS = [
   'overview', 'rf', 'topology', 'channels', 'hashsizes', 'collisions',
   'subpaths', 'nodes', 'distance', 'neighbor-graph', 'rf-health',
   'clock-health', 'roles', 'prefix-tool', 'scopes', 'my-repeaters',
-  'repeater-metrics',
+  'repeater-metrics', 'mediamesh',
 ];
 
 const THEMES = ['dark', 'light'];

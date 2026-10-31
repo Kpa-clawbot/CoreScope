@@ -2286,6 +2286,7 @@ type groupedRow struct {
 	snr, rssi                              *float64
 	scopeName                              *string
 	radio                                  string      // header observation's setting (#1869)
+	mediamesh                              bool        // any observation carried on radio2
 	observations                           []*StoreObs // slice header only, see snapshotGroupedRow
 }
 
@@ -2333,6 +2334,7 @@ func snapshotGroupedRow(tx *StoreTx) groupedRow {
 		rssi:             tx.RSSI,
 		scopeName:        tx.ScopeName,
 		radio:            txRadio(tx),
+		mediamesh:        txMediaMesh(tx),
 		observations:     tx.Observations,
 	}
 }
@@ -2368,6 +2370,7 @@ func groupedRowsToPage(rows []groupedRow, total int) *PacketResult {
 			"scope_name":        strPtrOrNil(r.scopeName),
 			"radio":             strOrNil(r.radio),
 		}
+		markMediaMesh(m, r.mediamesh)
 		// resolved_path omitted for grouped view (cold path, not worth SQL round-trip)
 		packets[i] = m
 	}
@@ -3362,6 +3365,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				"scope_name":        strPtrOrNil(tx.ScopeName),
 				"radio":             strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 			}
+			markMediaMesh(pkt, observationMediaMesh(obs.ID))
 			// Use decode-window resolved path for broadcast (never from struct)
 			if broadcastRP != nil {
 				if rp, ok := broadcastRP[obs.ID]; ok && rp != nil {
@@ -3628,6 +3632,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			"scope_name":        strPtrOrNil(tx.ScopeName),
 			"radio":             strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 		}
+		markMediaMesh(pkt, observationMediaMesh(obs.ID))
 		// Use decode-window resolved path for broadcast
 		if obsRPMap != nil {
 			if rp, ok := obsRPMap[obs.ID]; ok && rp != nil {
@@ -4312,6 +4317,7 @@ func enrichObsFields(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 		"path_json":     strOrNil(obs.PathJSON),
 		"radio":         strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 	}
+	markMediaMesh(m, observationMediaMesh(obs.ID))
 
 	if tx != nil {
 		m["hash"] = strOrNil(tx.Hash)
@@ -4351,6 +4357,7 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 		"scope_name":        strPtrOrNil(tx.ScopeName),
 		"radio":             strOrNil(txRadio(tx)),
 	}
+	markMediaMesh(m, txMediaMesh(tx))
 	// Include parsed path array to match Node.js output shape
 	if hops := txGetParsedPath(tx); len(hops) > 0 {
 		m["_parsedPath"] = hops
@@ -4373,6 +4380,7 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 				"direction":     strOrNil(o.Direction),
 				"radio":         strOrNil(observationRadio(o.ID, o.ObserverID, o.Timestamp)),
 			}
+			markMediaMesh(om, observationMediaMesh(o.ID))
 			obs = append(obs, om)
 		}
 		m["observations"] = obs

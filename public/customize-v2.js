@@ -54,6 +54,7 @@
     sectionBg: '--section-bg',
     cardBg: '--card-bg', contentBg: '--content-bg', detailBg: '--detail-bg',
     inputBg: '--input-bg', rowStripe: '--row-stripe', rowHover: '--row-hover', selectedBg: '--selected-bg',
+    mediaMeshPath: '--mediamesh-path-color', mediaMeshNode: '--mediamesh-node-color',
     font: '--font', mono: '--mono'
   };
 
@@ -305,6 +306,7 @@
     surface1: 'Cards', surface2: 'Panels', surface3: 'Tertiary Surface', sectionBg: 'Section Header', cardBg: 'Card Fill', contentBg: 'Content Area',
     detailBg: 'Detail Panels', inputBg: 'Inputs', rowStripe: 'Table Stripe',
     rowHover: 'Row Hover', selectedBg: 'Selected',
+    mediaMeshPath: 'MediaMesh Paths', mediaMeshNode: 'MediaMesh Repeaters',
     font: 'Body Font', mono: 'Mono Font'
   };
 
@@ -322,6 +324,8 @@
     cardBg: 'Detail panels, modals', contentBg: 'Content area behind cards',
     detailBg: 'Modal, packet detail, side panels', inputBg: 'Text inputs, dropdowns',
     rowStripe: 'Alternating table rows', rowHover: 'Table row hover', selectedBg: 'Selected/active rows',
+    mediaMeshPath: 'Hollow-ring paths of radio2 (MediaMesh) packets on Live, when not colouring by hash',
+    mediaMeshNode: 'Ring and badge on repeaters that run radio2 (MediaMesh)',
     font: 'System font stack for body text', mono: 'Monospace font for hex, code, hashes'
   };
 
@@ -383,7 +387,7 @@
   }
 
   var BASIC_KEYS = ['accent', 'navBg', 'navText', 'background', 'text', 'statusGreen', 'statusYellow', 'statusRed'];
-  var ADVANCED_KEYS = ['accentHover', 'navBg2', 'navTextMuted', 'navActiveBg', 'textMuted', 'border', 'surface1', 'surface2', 'cardBg', 'contentBg', 'detailBg', 'inputBg', 'rowStripe', 'rowHover', 'selectedBg'];
+  var ADVANCED_KEYS = ['accentHover', 'navBg2', 'navTextMuted', 'navActiveBg', 'textMuted', 'border', 'surface1', 'surface2', 'cardBg', 'contentBg', 'detailBg', 'inputBg', 'rowStripe', 'rowHover', 'selectedBg', 'mediaMeshPath', 'mediaMeshNode'];
   var FONT_KEYS = ['font', 'mono'];
 
   // ── Validation helpers ──

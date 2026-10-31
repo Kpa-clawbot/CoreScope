@@ -334,6 +334,23 @@ test('#1800: path_prefixes alias resolves like path', () => {
   assert(PF.compile('path_prefixes contains "a3"').filter(prefixPkt));
 });
 
+// MediaMesh (radio2): the server's per-observation flag.
+test('mediamesh == true matches only packets carried on radio2', () => {
+  const c = PF.compile('mediamesh == true');
+  assert(!c.error, c.error);
+  assert(c.filter({ ...pkt, mediamesh: true }));
+  assert(!c.filter({ ...pkt, mediamesh: false }));
+  assert(!c.filter(pkt), 'no flag (older servers) is not MediaMesh');
+});
+test('mediamesh works bare and negated', () => {
+  assert(PF.compile('mediamesh').filter({ ...pkt, mediamesh: true }));
+  assert(!PF.compile('mediamesh').filter(pkt));
+  assert(PF.compile('!mediamesh && type == GRP_TXT').filter(pkt));
+});
+test('mediamesh is listed for autocomplete', () => {
+  assert(PF.FIELDS.some(f => f.name === 'mediamesh'));
+});
+
 // #1869: radio setting the observation was heard on, and its parts.
 const euPkt = { ...pkt, radio: '869.618,62.5,8,8' };
 const czPkt = { ...pkt, radio: '869.432,62.5,7,5' };

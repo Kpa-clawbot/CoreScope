@@ -13,7 +13,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scopeState: localStorage.getItem('meshcore-map-scope-filter') || 'all', scopeOverlay: localStorage.getItem('meshcore-map-scope-overlay') === 'true', estimated: localStorage.getItem('meshcore-map-estimated') !== 'false', regionScope: localStorage.getItem('meshcore-map-region-filter') || '' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scopeState: localStorage.getItem('meshcore-map-scope-filter') || 'all', scopeOverlay: localStorage.getItem('meshcore-map-scope-overlay') === 'true', estimated: localStorage.getItem('meshcore-map-estimated') !== 'false', mediaMeshOnly: localStorage.getItem('meshcore-map-mediamesh-only') === 'true', regionScope: localStorage.getItem('meshcore-map-region-filter') || '' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -202,7 +202,7 @@
   // non-forwarding roles is active. The observer layer stands down while it
   // is (see observerLayerShown).
   function nodeFiltersNarrowed(f) {
-    return (!!f.scopeState && f.scopeState !== 'all') || !!f.regionScope;
+    return (!!f.scopeState && f.scopeState !== 'all') || !!f.regionScope || !!f.mediaMeshOnly;
   }
 
   // observerLayerShown decides whether _renderMarkersInner draws the plain
@@ -249,6 +249,8 @@
     // applies to every role, so non-forwarding nodes drop out while a region
     // is picked.
     if (!regionFilterAccepts(n, f.regionScope)) return false;
+    // MediaMesh only: nodes that run radio2 (mediamesh.js), every role.
+    if (f.mediaMeshOnly && !(window.MediaMesh && window.MediaMesh.filterAccepts(n, true))) return false;
     // Status filter
     if (f.statusFilter !== 'all') {
       const status = getNodeStatus(n); // #1598: relay-aware for infra
@@ -345,7 +347,7 @@
     return out;
   }
 
-  function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride) {
+  function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride, extraClass) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
     // #1438: default fill resolves through the live CSS var so existing
     // mounted SVG markers recolor when cb-preset switches or the
@@ -414,7 +416,7 @@
     const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${path}${obsOverlay}</svg>`;
     return L.divIcon({
       html: svg,
-      className: 'meshcore-marker' + (isStale ? ' marker-stale' : ''),
+      className: 'meshcore-marker' + (isStale ? ' marker-stale' : '') + (extraClass || ''),
       iconSize: [size, size],
       iconAnchor: [c, c],
       popupAnchor: [0, -c],
@@ -422,6 +424,7 @@
   }
 
   function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) {
+    var mmClass = window.MediaMesh ? window.MediaMesh.markerClass(node) : '';
     // Show the short mesh hash ID (first N bytes of pubkey, uppercased). When
     // the width is unobserved the label falls back to one byte — it has to draw
     // something — but says so instead of asserting a 1-byte config.
@@ -468,7 +471,7 @@
       '<span aria-hidden="true">' + visible + '</span>' + obsIndicator + '</div>';
     return L.divIcon({
       html: html,
-      className: 'meshcore-marker meshcore-label-marker' + (isStale ? ' marker-stale' : ''),
+      className: 'meshcore-marker meshcore-label-marker' + (isStale ? ' marker-stale' : '') + mmClass,
       iconSize: null,
       iconAnchor: [14, 12],
       popupAnchor: [0, -12],
@@ -521,6 +524,7 @@
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
             <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
             <label for="mcScopeOverlay" title="Colour repeater markers by their region-scope configuration"><input type="checkbox" id="mcScopeOverlay"> Scope config colours</label>
+            <label for="mcMediaMeshOnly" title="Only nodes that run MediaMesh (radio2), the second radio profile for photos and voice. Ringed in fuchsia; the badge is filled when it sends, hollow when it only listens."><input type="checkbox" id="mcMediaMeshOnly"> MediaMesh only <span class="mm-dot mm-dot--rxtx" aria-hidden="true"></span></label>
             <label for="mcEstimated" title="Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Follows the repeater role filter only, not the area, region or last-heard filters."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
             <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
           </fieldset>
@@ -903,6 +907,11 @@
     if (scopeOverlayEl) {
       scopeOverlayEl.checked = filters.scopeOverlay;
       scopeOverlayEl.addEventListener('change', e => { filters.scopeOverlay = e.target.checked; localStorage.setItem('meshcore-map-scope-overlay', e.target.checked); renderMarkers(); });
+    }
+    const mediaMeshEl = document.getElementById('mcMediaMeshOnly');
+    if (mediaMeshEl) {
+      mediaMeshEl.checked = filters.mediaMeshOnly;
+      mediaMeshEl.addEventListener('change', e => { filters.mediaMeshOnly = e.target.checked; localStorage.setItem('meshcore-map-mediamesh-only', e.target.checked); renderMarkers(); });
     }
     const estimatedEl = document.getElementById('mcEstimated');
     if (estimatedEl) {
@@ -2134,7 +2143,7 @@
       // scope overlay stands down rather than the two fighting over the fill.
       var scopeState = (scopeTintEnabled(filters.scopeOverlay, filters.scopeState) && !mbColor) ? (node.scope_config_state || null) : null;
       var scopeColor = scopeState ? scopeTint(node) : null;
-      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor);
+      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor, window.MediaMesh ? window.MediaMesh.markerClass(node) : '');
       const latLng = L.latLng(node.lat, node.lon);
       // The scope state has to leave the fill and reach the DOM, or a dot marker
       // is colour and nothing else — which on the achromat preset is six greys
@@ -2145,7 +2154,8 @@
       // produced. The popup carries it too, for the pointerless case.
       var scopeLabel = scopeState ? scopeStateLabel(scopeState) : '';
       var markerAlt = (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' +
-        (scopeLabel ? ', scope config ' + scopeLabel : '');
+        (scopeLabel ? ', scope config ' + scopeLabel : '') +
+        (window.MediaMesh && window.MediaMesh.info(node) ? ', MediaMesh' : '');
       allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: markerAlt, title: scopeLabel ? markerAlt : '' });
     }
 
@@ -2312,6 +2322,12 @@
         '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--mc-scope-' + scopeMeta.key + ');margin-right:5px;"></span>' +
         safeEsc(scopeMeta.label) + '</dd>';
     }
+    // MediaMesh (radio2): mode, setting and how it is known (mediamesh.js).
+    var mmRow = (window.MediaMesh && window.MediaMesh.info(node))
+      ? '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">MediaMesh</dt>' +
+        '<dd style="margin-left:88px;padding:2px 0;font-size:12px;"><span class="mm-dot mm-dot--' + window.MediaMesh.info(node).mode + '" aria-hidden="true"></span>' +
+        safeEsc(window.MediaMesh.describe(node)) + '</dd>'
+      : '';
     // Multi-byte support indicator for repeaters
     var mbRow = '';
     if (node.role === 'repeater' && node.multi_byte_status) {
@@ -2328,6 +2344,7 @@
         <dl style="margin-top:8px;font-size:12px;">
           ${hashPrefixRow}
           ${mbRow}
+          ${mmRow}
           ${scopeRow}
           ${regionsPopupRowsHtml(node)}
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Key</dt>
@@ -2874,6 +2891,7 @@
       // #1356: exposed so the a11y test can assert what the label RENDERS
       // instead of grepping map.js for where two identifiers sit.
       makeRepeaterLabelIcon: makeRepeaterLabelIcon,
+      makeMarkerIcon: makeMarkerIcon,
     };
   }
 })();

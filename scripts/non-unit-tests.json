@@ -145,7 +145,10 @@
       "tests/e2e/test-issue-1522-trace-url-sync-e2e.js",
       "tests/e2e/test-marker-outline-weight.js",
       "tests/e2e/test-path-inspector-e2e.js",
-      "tests/e2e/test-pr-1490-live-map-gpu-animations-e2e.js"
+      "tests/e2e/test-pr-1490-live-map-gpu-animations-e2e.js",
+      "tests/e2e/test-live-mediamesh-rings-e2e.js",
+      "tests/e2e/test-map-mediamesh-e2e.js",
+      "tests/e2e/test-analytics-mediamesh-e2e.js"
     ]
   }
 }

@@ -845,6 +845,7 @@
         <table class="node-stats-table" id="node-stats">
           <tr><td>Status</td><td><span title="${si.statusTooltip}">${statusLabel}</span> <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
           <tr><td>Last Heard</td><td>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</td></tr>
+          ${window.MediaMesh && window.MediaMesh.info(n) ? `<tr><td>MediaMesh</td><td><span class="mm-dot mm-dot--${window.MediaMesh.info(n).mode}" aria-hidden="true"></span>${escapeHtml(window.MediaMesh.describe(n))}</td></tr>` : ''}
           ${renderLastRelayed(n, true)}
           ${renderTrafficShare(n, true)}
           ${(n.role === 'repeater' || n.role === 'room') && n.bridge_score != null ? (() => {
@@ -1963,6 +1964,7 @@
           <h4>Overview</h4>
           <dl class="detail-meta">
             <dt>Last Heard</dt><dd>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</dd>
+            ${window.MediaMesh && window.MediaMesh.info(n) ? `<dt>MediaMesh</dt><dd><span class="mm-dot mm-dot--${window.MediaMesh.info(n).mode}" aria-hidden="true"></span>${escapeHtml(window.MediaMesh.describe(n))}</dd>` : ''}
             ${renderLastRelayed(n)}
             ${renderTrafficShare(n)}
             <dt>First Seen</dt><dd>${renderNodeTimestampHtml(n.first_seen)}</dd>

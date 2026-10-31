@@ -319,6 +319,9 @@ func main() {
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
 	store.PruneDroppedPackets(metricsDays)
+	if _, err := store.PruneMediaMeshNodes(time.Now()); err != nil {
+		log.Printf("[prune] mediamesh nodes: %v", err)
+	}
 
 	// Packet (transmissions) retention: previously lived in cmd/server,
 	// moved to ingestor in #1283 to eliminate cross-process write
@@ -457,6 +460,9 @@ func main() {
 		for range metricsRetentionTicker.C {
 			store.PruneOldMetrics(metricsDays)
 			store.PruneDroppedPackets(metricsDays)
+			if _, err := store.PruneMediaMeshNodes(time.Now()); err != nil {
+				log.Printf("[prune] mediamesh nodes: %v", err)
+			}
 			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
@@ -1051,6 +1057,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		if err := store.RecordObserverRadios(observerID, extractRadioReports(msg), time.Now()); err != nil {
 			log.Printf("MQTT [%s] observer radio history error: %v", tag, err)
 		}
+		if r, ok := mediaMeshFromStatus(observerID, msg); ok {
+			if err := store.RecordMediaMesh(r, time.Now()); err != nil {
+				log.Printf("MQTT [%s] observer mediamesh error: %v", tag, err)
+			}
+		}
 		// Insert metrics sample from status message
 		if meta != nil {
 			metricsData := &MetricsData{
@@ -1182,6 +1193,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		if v, ok := msg["rx_radio_id"].(string); ok {
 			mqttMsg.RxRadioID = clampObserverField(strings.TrimSpace(v), maxRadioIDLen)
 		}
+		if v, ok := msg["tx_radio_id"].(string); ok {
+			mqttMsg.TxRadioID = clampObserverField(strings.TrimSpace(v), maxRadioIDLen)
+		}
+		mqttMsg.MediaMesh = mediaMeshFlag(msg)
 
 		// For ADVERT packets with known coordinates, enforce geo_filter before
 		// storing anything — drop the entire message if outside the area.
@@ -2007,6 +2022,14 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 			if err := store.UpdateNodeConfiguredScope(originID, sc, reportedAt); err != nil {
 				log.Printf("MQTT [%s] neighbors self scope error: %v", tag, err)
 			}
+		}
+	}
+
+	// radio2 (MediaMesh): this node's own and each neighbour's, whatever the
+	// scope query's status (the profile comes from the discover reply).
+	for _, r := range mediaMeshFromNeighbors(originID, msg) {
+		if err := store.RecordMediaMesh(r, time.Now()); err != nil {
+			log.Printf("MQTT [%s] neighbors mediamesh error for %.8s: %v", tag, r.PubKey, err)
 		}
 	}
 

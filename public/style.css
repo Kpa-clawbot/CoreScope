@@ -373,6 +373,10 @@
    * light theme. Dark theme override is set in both dark-mode blocks below. */
   --shadow: rgba(0,0,0,0.3);
   --trace-ghost-color: #94a3b8;
+  /* MediaMesh (radio2): ring paths on Live, and MediaMesh repeaters. Fuchsia,
+   * as MeshCore Open TAK and Wadamesh TAK mark them. */
+  --mediamesh-path-color: #d946ef;
+  --mediamesh-node-color: #d946ef;
 
   /* #1128: documented z-index scale. Use these custom props for any new
    * stacking context decision. Existing legacy z-index values that work are
@@ -456,6 +460,8 @@
     --hover-bg: rgba(255,255,255, 0.06);
     --shadow: rgba(0,0,0,0.5);
     --trace-ghost-color: #94a3b8;
+    --mediamesh-path-color: #e879f9;
+    --mediamesh-node-color: #e879f9;
     --section-bg: #1e1e34;
   }
 }
@@ -516,6 +522,8 @@
   --hover-bg: rgba(255,255,255, 0.06);
   --shadow: rgba(0,0,0,0.5);
   --trace-ghost-color: #94a3b8;
+  --mediamesh-path-color: #e879f9;
+  --mediamesh-node-color: #e879f9;
   --section-bg: #1e1e34;
 }
 
@@ -5905,3 +5913,81 @@ body.embed #app.app-fixed {
 .reported-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .reported-links .btn-primary { text-decoration: none; padding: 4px 10px; font-size: 12px; }
 .reported-table td { white-space: normal; }
+
+/* MediaMesh (radio2) nodes (mediamesh.js): a ring round the marker and a
+ * badge, filled when the node sends on radio2 (rxtx), hollow when it only
+ * listens (rx). On the marker's container so re-rendered SVG keeps them. */
+.mm-node::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--mediamesh-node-color);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.mm-node::after {
+  content: '';
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--mediamesh-node-color);
+  background: transparent;
+  pointer-events: none;
+}
+.mm-node--rxtx::after { background: var(--mediamesh-node-color); }
+.meshcore-label-marker.mm-node::before { border-radius: 6px; }
+.mm-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--mediamesh-node-color);
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.mm-dot--rxtx { background: var(--mediamesh-node-color); }
+
+/* MediaMesh (radio2) on Analytics: the radio2 part of a payload bar, the
+ * radio2 airtime ring on the relay-airtime chart, and the MediaMesh cards. */
+.mm-bar-segment {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--mediamesh-path-color);
+}
+.mm-value { color: var(--mediamesh-path-color); font-weight: 600; }
+.mm-legend { font-size: 11px; margin-top: 6px; }
+.mm-legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--mediamesh-path-color);
+  vertical-align: middle;
+}
+.dumbbell-dot-mediamesh {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--mediamesh-path-color);
+  background: transparent;
+  transform: translate(-50%, -50%);
+}
+.mm-legend-ring {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--mediamesh-path-color);
+  vertical-align: middle;
+}
+.stat-card-mediamesh { border-top: 3px solid var(--mediamesh-path-color); }
+a.stat-card-mediamesh { color: inherit; text-decoration: none; }
+.stat-card-mediamesh .stat-label { color: var(--mediamesh-path-color); }
+.mm-chart rect { fill: var(--mediamesh-path-color); }
