@@ -24,7 +24,10 @@ Comprehensive guide to deploying and operating CoreScope. For a quick start, see
 | Disk | 500 MB (image + DB) | 2 GB+ for long-term data |
 | CPU | 1 core | 2+ cores |
 | Architecture | `linux/amd64`, `linux/arm64` | — |
-| Docker | 20.10+ | Latest stable |
+| Docker (run the published image) | 20.10+ | Latest stable |
+| Docker (build the image yourself) | 23.0+, or 20.10+ with `DOCKER_BUILDKIT=1` | Latest stable |
+
+The Dockerfile uses BuildKit features (`# syntax=` and `RUN --mount`). BuildKit is the default builder from Docker 23.0; on 20.10 to 22.x the legacy builder is used unless `DOCKER_BUILDKIT=1` is set, and it rejects `RUN --mount`.
 
 CoreScope runs well on Raspberry Pi 4/5 (ARM64). The Go server uses ~300 MB RAM for 56K+ packets.
 
