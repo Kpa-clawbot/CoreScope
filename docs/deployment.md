@@ -648,8 +648,9 @@ directory and at the download destination; large snapshots cost CPU and disk I/O
 
 When accounts are enabled, sign in as an administrator and open `/api/backup`
 on the same site to download a snapshot. For command-line or scheduled backups,
-configure a strong `apiKey` in `config.json` (at least 16 characters). Create a
-private header file, `~/.config/corescope/backup.header`, containing one line:
+configure a randomly generated `apiKey` in `config.json` (at least 16 characters).
+Known weak/default keys are rejected even when they meet the length requirement.
+Create a private header file, `~/.config/corescope/backup.header`, containing one line:
 `X-API-Key: <your configured key>`. Set its permissions to `600`; keep the key out
 of shell history, URLs, and scripts checked into Git.
 
@@ -663,16 +664,25 @@ only after it is complete, nonempty, and passes SQLite's consistency check:
   umask 077
   backup_dir="$HOME/corescope-backups"
   mkdir -p "$backup_dir"
-  tmp=$(mktemp "$backup_dir/corescope-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX.part")
+  tmp=$(mktemp "$backup_dir/corescope-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")
   trap 'rm -f "$tmp"' EXIT
   curl -q --fail --silent --show-error \
+    --connect-timeout 30 --max-time 1800 \
     --header "@$HOME/.config/corescope/backup.header" \
     --output "$tmp" https://corescope.example.org/api/backup
   test -s "$tmp"
   test "$(sqlite3 -readonly "$tmp" 'PRAGMA quick_check;')" = ok
-  mv "$tmp" "${tmp%.part}.db"
+  mv "$tmp" "$tmp.db"
 )
 ```
+
+The temporary-file template ends in `X` characters for both GNU and BSD/macOS
+`mktemp`. The 30-minute limit is curl's client-side ceiling for generating and
+downloading the snapshot. CoreScope separately sets a 60-second HTTP write
+timeout, which the backup handler does not override; reverse proxies can impose
+their own deadlines. Raising `--max-time` does not extend those server or proxy limits.
+Timeouts fail the script and remove the incomplete download without replacing a
+previous completed backup.
 
 This is a point-in-time telemetry snapshot, not continuous replication or a full
 instance backup. Keep protected copies off the CoreScope host, and also preserve:
