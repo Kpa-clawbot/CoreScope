@@ -2236,6 +2236,7 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	for i, tx := range results {
 		txs[i] = groupedEntry{tx: tx, latest: tx.LatestSeen}
 	}
+	evictionGeneration := atomic.LoadInt64(&s.evicted)
 	s.mu.RUnlock()
 
 	total := len(txs)
@@ -2246,14 +2247,22 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	})
 
 	// Cache the sorted entries (not maps) — lightweight and reusable for any page.
-	s.groupedCacheMu.Lock()
-	s.groupedCacheTxs = txs
-	s.groupedCacheTotal = total
-	s.groupedCacheKey = cacheKey
-	s.groupedCacheExp = time.Now().Add(3 * time.Second)
-	s.groupedCacheMu.Unlock()
+	s.cacheGroupedPackets(txs, cacheKey, evictionGeneration)
 
 	return s.groupedPage(txs, total, q.Offset, q.Limit)
+}
+
+func (s *PacketStore) cacheGroupedPackets(txs []groupedEntry, cacheKey string, evictionGeneration int64) {
+	s.groupedCacheMu.Lock()
+	defer s.groupedCacheMu.Unlock()
+	// Eviction may have invalidated the cache while this snapshot was sorted.
+	// Do not publish its retired packet pointers after that invalidation.
+	if evictionGeneration == atomic.LoadInt64(&s.evicted) {
+		s.groupedCacheTxs = txs
+		s.groupedCacheTotal = len(txs)
+		s.groupedCacheKey = cacheKey
+		s.groupedCacheExp = time.Now().Add(3 * time.Second)
+	}
 }
 
 // pagePacketResult returns a window of a PacketResult without re-allocating the slice.
@@ -2655,6 +2664,10 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 		s.channelsCacheMu.Lock()
 		s.channelsCacheRes = nil
 		s.channelsCacheMu.Unlock()
+		s.groupedCacheMu.Lock()
+		s.groupedCacheTxs = nil
+		s.groupedCacheTotal = 0
+		s.groupedCacheMu.Unlock()
 		s.lastInvalidated = time.Now()
 		s.pendingInv = nil
 		return
@@ -4891,7 +4904,7 @@ func removeTxFromSlice(idx map[string][]*StoreTx, key string, tx *StoreTx) {
 	list := idx[key]
 	for i, t := range list {
 		if t.ID == tx.ID {
-			idx[key] = append(list[:i], list[i+1:]...)
+			idx[key] = slices.Delete(list, i, i+1)
 			break
 		}
 	}
@@ -4910,22 +4923,10 @@ func (s *PacketStore) updateDistanceIndexForTxs(txs []*StoreTx) {
 	for _, tx := range txs {
 		removeSet[tx] = true
 	}
-	n := 0
-	for _, r := range s.distHops {
-		if !removeSet[r.tx] {
-			s.distHops[n] = r
-			n++
-		}
-	}
-	s.distHops = s.distHops[:n]
-	n = 0
-	for _, r := range s.distPaths {
-		if !removeSet[r.tx] {
-			s.distPaths[n] = r
-			n++
-		}
-	}
-	s.distPaths = s.distPaths[:n]
+	// Distance readers borrow these arrays after releasing s.mu. Copy here,
+	// once per changed-path batch, so their O(1) snapshots remain immutable.
+	s.distHops = slices.DeleteFunc(slices.Clone(s.distHops), func(r distHopRecord) bool { return removeSet[r.tx] })
+	s.distPaths = slices.DeleteFunc(slices.Clone(s.distPaths), func(r distPathRecord) bool { return removeSet[r.tx] })
 
 	// Build lookup maps once.
 	allNodes, pm := s.getCachedNodesAndPM()
@@ -5188,70 +5189,17 @@ func (s *PacketStore) trackedMemoryMB() float64 {
 	return float64(s.trackedBytes) / 1048576.0
 }
 
-// EvictStale removes packets older than the retention window and/or exceeding
-// the memory cap. Must be called with s.mu held (Lock). Returns the number of
-// packets evicted.
-// evictionCandidateTxIDs determines which tx IDs would be evicted and returns them.
-// Must be called under s.mu.Lock (or RLock). Does NOT modify any state.
-func (s *PacketStore) evictionCandidateTxIDs() []int {
-	if s.retentionHours <= 0 && s.maxMemoryMB <= 0 {
-		return nil
-	}
-	cutoffIdx := 0
-	if s.retentionHours > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour))).Format(time.RFC3339)
-		for cutoffIdx < len(s.packets) && s.packets[cutoffIdx].FirstSeen < cutoff {
-			cutoffIdx++
-		}
-	}
-	if s.maxMemoryMB > 0 {
-		highWatermark := int64(s.maxMemoryMB) * 1048576
-		lowWatermark := int64(float64(highWatermark) * 0.85)
-		if s.trackedBytes > highWatermark && len(s.packets) > 0 {
-			var bytesToEvict int64
-			memCutoff := cutoffIdx
-			for memCutoff < len(s.packets) && (s.trackedBytes-bytesToEvict) > lowWatermark {
-				tx := s.packets[memCutoff]
-				bytesToEvict += tx.accountedBytes
-				for _, obs := range tx.Observations {
-					bytesToEvict += estimateStoreObsBytes(obs)
-				}
-				memCutoff++
-			}
-			maxEvict := len(s.packets) / 4
-			if maxEvict < 1 {
-				maxEvict = 1
-			}
-			if memCutoff > maxEvict {
-				memCutoff = maxEvict
-			}
-			if memCutoff > cutoffIdx {
-				cutoffIdx = memCutoff
-			}
-		}
-	}
-	if cutoffIdx == 0 || cutoffIdx > len(s.packets) {
-		return nil
-	}
-	ids := make([]int, cutoffIdx)
-	for i := 0; i < cutoffIdx; i++ {
-		ids[i] = s.packets[i].ID
-	}
-	return ids
-}
-
-// EvictStaleWithRP runs eviction using pre-fetched resolved pubkeys.
-// rpBatch may be nil (in which case resolved pubkey cleanup for byNode/nodeHashes is skipped).
+// EvictStaleWithRP retains the old entry point for callers with a prefetched
+// batch. Cleanup uses actual in-memory membership; SQL paths may differ from it.
 // Must be called under s.mu.Lock.
-func (s *PacketStore) EvictStaleWithRP(rpBatch map[int][]string) int {
-	return s.evictStaleInternal(rpBatch)
+func (s *PacketStore) EvictStaleWithRP(_ map[int][]string) int {
+	return s.evictStaleInternal()
 }
 
-// EvictStale runs eviction, fetching resolved pubkeys inline (SQL under lock).
-// Prefer RunEviction() which batches the SQL outside the lock.
+// EvictStale removes expired packets and their in-memory memberships without SQL.
 // Must be called under s.mu.Lock.
 func (s *PacketStore) EvictStale() int {
-	return s.evictStaleInternal(nil)
+	return s.evictStaleInternal()
 }
 
 // mergeChunkIntoPackets merges a background chunk into the packet slice while
@@ -5295,7 +5243,7 @@ func mergeChunkIntoPackets(chunk, existing []*StoreTx) []*StoreTx {
 	return out
 }
 
-func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
+func (s *PacketStore) evictStaleInternal() int {
 	if s.retentionHours <= 0 && s.maxMemoryMB <= 0 {
 		return 0
 	}
@@ -5359,7 +5307,6 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	// Track which observer IDs and payload types need filtering
 	affectedObservers := make(map[string]struct{})
 	affectedPayloadTypes := make(map[int]struct{})
-	affectedNodes := make(map[string]struct{})
 
 	// First pass: remove from primary indexes (byHash, byTxID, byObsID),
 	// collect IDs for batch secondary index cleanup, and handle non-index work
@@ -5390,45 +5337,6 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 			affectedPayloadTypes[*tx.PayloadType] = struct{}{}
 		}
 
-		// Remove from nodeHashes and collect affected node keys.
-		// Must mirror indexByNode: process decoded JSON fields AND resolved_path pubkeys.
-		evictedFromNode := make(map[string]bool)
-		if tx.DecodedJSON != "" {
-			if decoded := tx.ParsedDecoded(); decoded != nil {
-				for _, field := range []string{"pubKey", "destPubKey", "srcPubKey"} {
-					if v, ok := decoded[field].(string); ok && v != "" {
-						if hashes, ok := s.nodeHashes[v]; ok {
-							delete(hashes, tx.ID)
-							if len(hashes) == 0 {
-								delete(s.nodeHashes, v)
-							}
-						}
-						affectedNodes[v] = struct{}{}
-						evictedFromNode[v] = true
-					}
-				}
-			}
-		}
-		// Clean up resolved_path pubkeys from byNode/nodeHashes.
-		// Uses pre-fetched batch data when available (no SQL under lock).
-		var rpPubkeys []string
-		if rpBatch != nil {
-			rpPubkeys = rpBatch[tx.ID]
-		}
-		for _, pk := range rpPubkeys {
-			if pk == "" || evictedFromNode[pk] {
-				continue
-			}
-			if hashes, ok := s.nodeHashes[pk]; ok {
-				delete(hashes, tx.ID)
-				if len(hashes) == 0 {
-					delete(s.nodeHashes, pk)
-				}
-			}
-			affectedNodes[pk] = struct{}{}
-			evictedFromNode[pk] = true
-		}
-
 		// Remove from resolved pubkey index
 		s.removeFromResolvedPubkeyIndex(tx.ID)
 	}
@@ -5454,12 +5362,10 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	// Batch-remove from byObserver: single pass per affected observer slice
 	for obsID := range affectedObservers {
 		obsList := s.byObserver[obsID]
-		filtered := obsList[:0]
-		for _, o := range obsList {
-			if _, evicted := evictedObsIDs[o.ID]; !evicted {
-				filtered = append(filtered, o)
-			}
-		}
+		filtered := slices.DeleteFunc(obsList, func(o *StoreObs) bool {
+			_, evicted := evictedObsIDs[o.ID]
+			return evicted
+		})
 		if len(filtered) == 0 {
 			delete(s.byObserver, obsID)
 		} else {
@@ -5470,12 +5376,10 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	// Batch-remove from byPayloadType: single pass per affected type slice
 	for pt := range affectedPayloadTypes {
 		ptList := s.byPayloadType[pt]
-		filtered := ptList[:0]
-		for _, t := range ptList {
-			if _, evicted := evictedTxIDs[t.ID]; !evicted {
-				filtered = append(filtered, t)
-			}
-		}
+		filtered := slices.DeleteFunc(ptList, func(t *StoreTx) bool {
+			_, evicted := evictedTxIDs[t.ID]
+			return evicted
+		})
 		if len(filtered) == 0 {
 			delete(s.byPayloadType, pt)
 		} else {
@@ -5483,17 +5387,21 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		}
 	}
 
-	// Batch-remove from byNode: single pass per affected node slice
-	for nodeKey := range affectedNodes {
-		nodeList := s.byNode[nodeKey]
-		filtered := nodeList[:0]
-		for _, t := range nodeList {
-			if _, evicted := evictedTxIDs[t.ID]; !evicted {
-				filtered = append(filtered, t)
+	// Sweep actual memberships once per batch, as for byPathHop. Server-side
+	// resolution can differ from persisted paths or have no persisted path at
+	// all. Reconstructing keys from SQL leaves uncharged packet graphs alive.
+	// Readers either hold s.mu or copy these buckets before releasing it.
+	for nodeKey, nodeList := range s.byNode {
+		filtered := slices.DeleteFunc(nodeList, func(t *StoreTx) bool {
+			_, evicted := evictedTxIDs[t.ID]
+			if evicted {
+				delete(s.nodeHashes[nodeKey], t.ID)
 			}
-		}
+			return evicted
+		})
 		if len(filtered) == 0 {
 			delete(s.byNode, nodeKey)
+			delete(s.nodeHashes, nodeKey)
 			delete(s.certainHeard, nodeKey)
 			delete(s.certainRelayed, nodeKey)
 		} else {
@@ -5506,24 +5414,14 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	for _, tx := range evicting {
 		evictedTxSet[tx] = true
 	}
-	newDistHops := s.distHops[:0]
-	for i := range s.distHops {
-		if !evictedTxSet[s.distHops[i].tx] {
-			newDistHops = append(newDistHops, s.distHops[i])
-		}
-	}
-	s.distHops = newDistHops
-
-	newDistPaths := s.distPaths[:0]
-	for i := range s.distPaths {
-		if !evictedTxSet[s.distPaths[i].tx] {
-			newDistPaths = append(newDistPaths, s.distPaths[i])
-		}
-	}
-	s.distPaths = newDistPaths
+	// Preserve arrays borrowed by unlocked analytics readers. The new arrays
+	// clear retired pointers; old snapshots are released when readers finish.
+	s.distHops = slices.DeleteFunc(slices.Clone(s.distHops), func(r distHopRecord) bool { return evictedTxSet[r.tx] })
+	s.distPaths = slices.DeleteFunc(slices.Clone(s.distPaths), func(r distPathRecord) bool { return evictedTxSet[r.tx] })
 
 	// Trim packets slice
 	n := copy(s.packets, s.packets[cutoffIdx:])
+	clear(s.packets[n:])
 	s.packets = s.packets[:n]
 	s.totalObs -= evictedObs
 
@@ -5553,25 +5451,10 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 
 // RunEviction acquires the write lock and runs eviction. Safe to call from
 // a goroutine. Returns evicted count.
-// Uses a two-phase approach: determines eviction candidates under lock,
-// releases lock for batch SQL fetch of resolved pubkeys, then re-acquires
-// lock for the actual eviction pass.
 func (s *PacketStore) RunEviction() int {
-	// Phase 1: determine candidates under lock
-	s.mu.Lock()
-	txIDs := s.evictionCandidateTxIDs()
-	s.mu.Unlock()
-
-	// Phase 2: batch-fetch resolved pubkeys from SQL (no lock held)
-	var rpBatch map[int][]string
-	if len(txIDs) > 0 {
-		rpBatch = s.resolvedPubkeysForEvictionBatch(txIDs)
-	}
-
-	// Phase 3: actual eviction under write lock, using pre-fetched data
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.EvictStaleWithRP(rpBatch)
+	return s.EvictStale()
 }
 
 // StartEvictionTicker starts a background goroutine that runs eviction every
@@ -8411,6 +8294,13 @@ func (s *PacketStore) GetAnalyticsDistance(region, area string) map[string]inter
 	return result
 }
 
+// snapshotDistanceIndexLocked borrows immutable record arrays for an unlocked
+// reader. Path updates and eviction filter copies; appends stay beyond the
+// captured length. Hop-detail slices are immutable too. Caller holds s.mu.
+func (s *PacketStore) snapshotDistanceIndexLocked() ([]distHopRecord, []distPathRecord) {
+	return s.distHops, s.distPaths
+}
+
 func (s *PacketStore) computeAnalyticsDistance(region, area string) map[string]interface{} {
 	// #1239: hold s.mu.RLock() only long enough to (a) snapshot the
 	// distHops/distPaths slice headers and (b) build the region match
@@ -8419,14 +8309,9 @@ func (s *PacketStore) computeAnalyticsDistance(region, area string) map[string]i
 	// and category stats run on locally-captured slices OUTSIDE the
 	// lock so concurrent ingest writers are not blocked by readers.
 	//
-	// Safety: snapshot slice headers are O(1). distHops/distPaths are
-	// append-only via re-slice in buildDistanceIndex / updateDistanceIndexForTxs
-	// under s.mu.Lock; if the backing array is reallocated after we
-	// release the RLock, our snapshot still points at the prior backing
-	// array (kept alive by GC) and observes the consistent length we
-	// captured. The distHopRecord / distPathRecord values themselves
-	// are value types (not pointers to live records) so we cannot read
-	// torn writes from them post-release.
+	// Safety: snapshot slice headers are O(1). Ingest appends beyond the
+	// captured length; path updates and eviction filter copies, never mutate
+	// these borrowed backing arrays. Hop-detail slices are immutable too.
 	var regionObs map[string]bool
 	if region != "" {
 		// resolveRegionObservers uses its own mutex (regionObsMu)
@@ -8439,8 +8324,7 @@ func (s *PacketStore) computeAnalyticsDistance(region, area string) map[string]i
 	}
 
 	s.mu.RLock()
-	hopsSnap := s.distHops
-	pathsSnap := s.distPaths
+	hopsSnap, pathsSnap := s.snapshotDistanceIndexLocked()
 
 	// Build region match set INSIDE the lock — touches tx.Observations
 	// (slice header mutated by ingest). For non-region calls (the common
@@ -8497,8 +8381,8 @@ func (s *PacketStore) computeAnalyticsDistance(region, area string) map[string]i
 	} else if areaNodes != nil {
 		// No region filter but area filter: build matchSet from area nodes
 		matchSet = make(map[*StoreTx]bool)
-		for i := range s.distHops {
-			tx := s.distHops[i].tx
+		for i := range hopsSnap {
+			tx := hopsSnap[i].tx
 			if matchSet[tx] {
 				continue
 			}
@@ -8511,8 +8395,8 @@ func (s *PacketStore) computeAnalyticsDistance(region, area string) map[string]i
 				matchSet[tx] = true
 			}
 		}
-		for i := range s.distPaths {
-			tx := s.distPaths[i].tx
+		for i := range pathsSnap {
+			tx := pathsSnap[i].tx
 			if matchSet[tx] {
 				continue
 			}
