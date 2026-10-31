@@ -51,6 +51,7 @@ func routeDescriptions() map[string]routeMeta {
 
 		// Admin / system
 		"GET /api/health":      {Summary: "Health check", Description: "Returns server health, uptime, and memory stats.", Tag: "admin"},
+		"GET /api/healthz":     {Summary: "Query readiness", Description: "Public readiness probe with no parameters. Returns 503 application/json with {ready:false,reason:\"loading\"} while initializing. Returns 200 with ready:true, loadedTx and loadedObs counts for the current in-memory store (not database totals), and the fixed from_pubkey_backfill compatibility values {total:0,processed:0,done:true}; these do not report actual ingestor migration progress. ingest_liveness is an optional map from source names to reported receipt and handler-entry timestamps from the ingestor stats file; it is omitted when that data is unavailable or empty. The handler-entry clock resets to 0 on MQTT connection/reconnection, while the receipt clock is retained for the current source state. ready:true does not establish MQTT freshness or successful database writes.", Tag: "admin", Response: schemaRef("ReadinessResponse")},
 		"GET /api/stats":       {Summary: "Network statistics", Description: "Returns aggregate stats (node counts, packet counts, observer counts). Cached for 10s.", Tag: "admin"},
 		"GET /api/perf":        {Summary: "Performance statistics", Description: "Returns per-endpoint request timing and slow query log.", Tag: "admin"},
 		"GET /api/mqtt/status": {Summary: "MQTT source status", Description: "Returns per-MQTT-source connection state and counters (lastConnectUnix, lastPacketUnix, packetsTotal, etc.). Broker URL passwords are masked. Sourced from the ingestor stats file; empty list when unavailable. (#1043)", Tag: "admin"},
@@ -260,13 +261,14 @@ func routeDescriptions() map[string]routeMeta {
 // openAPISchema is a typed OpenAPI schema object, for component schemas that
 // would otherwise be nested untyped map literals (AGENTS.md).
 type openAPISchema struct {
-	Type        string                   `json:"type"`
-	Description string                   `json:"description,omitempty"`
-	Nullable    bool                     `json:"nullable,omitempty"`
-	Enum        []string                 `json:"enum,omitempty"`
-	Items       *openAPISchema           `json:"items,omitempty"`
-	Properties  map[string]openAPISchema `json:"properties,omitempty"`
-	Required    []string                 `json:"required,omitempty"`
+	Type                 string                   `json:"type"`
+	Description          string                   `json:"description,omitempty"`
+	Nullable             bool                     `json:"nullable,omitempty"`
+	Enum                 []string                 `json:"enum,omitempty"`
+	Items                *openAPISchema           `json:"items,omitempty"`
+	Properties           map[string]openAPISchema `json:"properties,omitempty"`
+	Required             []string                 `json:"required,omitempty"`
+	AdditionalProperties *openAPISchema           `json:"additionalProperties,omitempty"`
 }
 
 // schemaRef returns an OpenAPI $ref pointing at a named component schema.
@@ -296,6 +298,32 @@ func componentSchemas() map[string]interface{} {
 		return m
 	}
 	return map[string]interface{}{
+		"ReadinessResponse": openAPISchema{
+			Type: "object", Required: []string{"ready", "loadedTx", "loadedObs", "from_pubkey_backfill"},
+			Properties: map[string]openAPISchema{
+				"ready":     {Type: "boolean", Description: "True in the 200 response; false with reason loading in the 503 response."},
+				"loadedTx":  {Type: "integer", Description: "Transmissions currently loaded in the in-memory store."},
+				"loadedObs": {Type: "integer", Description: "Observations currently loaded in the in-memory store."},
+				"from_pubkey_backfill": {
+					Type: "object", Description: "Fixed compatibility placeholder, not actual ingestor migration progress.", Required: []string{"total", "processed", "done"},
+					Properties: map[string]openAPISchema{
+						"total":     {Type: "integer", Description: "Compatibility value: always 0."},
+						"processed": {Type: "integer", Description: "Compatibility value: always 0."},
+						"done":      {Type: "boolean", Description: "Compatibility value: always true; does not establish ingestor migration completion."},
+					},
+				},
+				"ingest_liveness": {
+					Type: "object", Description: "Optional source-name map from the ingestor stats snapshot; not a broker connection-status check.",
+					AdditionalProperties: &openAPISchema{
+						Type: "object", Required: []string{"lastReceiptUnix", "lastMessageUnix"},
+						Properties: map[string]openAPISchema{
+							"lastReceiptUnix": {Type: "integer", Description: "Last reported MQTT callback receipt time in Unix seconds for the current ingestor source state; retained across reconnects. 0 means no receipt has been recorded in that state."},
+							"lastMessageUnix": {Type: "integer", Description: "Last reported message-handler entry time in Unix seconds, before decoding or database writes. Reset to 0 on each MQTT connection/reconnection; 0 means no entry has been recorded since initialization or the latest connection reset, even if older traffic exists."},
+						},
+					},
+				},
+			},
+		},
 		"NodeResolveResponse": openAPISchema{
 			Type: "object", Required: []string{"prefix", "ambiguous"},
 			Properties: map[string]openAPISchema{
