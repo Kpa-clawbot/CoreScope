@@ -5,10 +5,11 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-function harness() {
+function harness(failChartAt = 0) {
   const elements = new Map();
   const requests = [];
   const charts = [];
+  let chartAttempts = 0;
   let page;
   function element(id) {
     const children = [];
@@ -36,7 +37,12 @@ function harness() {
   const app = element('app');
   class Chart {
     static defaults = {};
-    constructor(canvas, config) { this.config = config; this.destroyed = false; charts.push(this); }
+    constructor(canvas, config) {
+      if (++chartAttempts === failChartAt) throw new Error('<chart construction failure>');
+      this.config = config;
+      this.destroyed = false;
+      charts.push(this);
+    }
     destroy() { this.destroyed = true; }
   }
   const context = vm.createContext({
@@ -144,6 +150,28 @@ async function test(name, fn) {
       assert.strictEqual(h.elements.get('obsAnalytics')?.firstChild.textContent, 'Error: <analytics failure>');
       assert.doesNotMatch(h.snapshot().html, /<analytics failure>/, 'error uses textContent');
       assert.strictEqual(h.snapshot().charts.length, 0);
+    });
+  }
+
+  for (const failedChart of [2, 4]) {
+    await test('chart construction failure ' + failedChart + ' cleans up partial analytics and permits retry', async () => {
+      const h = harness(failedChart);
+      complete(h.visit('A'), 'A');
+      await settled();
+      assert.strictEqual(h.charts.length, failedChart - 1, 'failure follows successful chart construction');
+      assert.ok(h.charts.every(chart => chart.destroyed), 'already constructed charts must be destroyed');
+      assert.strictEqual(h.snapshot().charts.length, 0, 'failed analytics must retain no active charts');
+      assert.strictEqual(h.snapshot().title, 'A');
+      assert.match(h.snapshot().html, /Test radio/);
+      assert.match(h.snapshot().html, /2 seconds/);
+      assert.strictEqual(h.elements.get('obsAnalytics').firstChild.textContent, 'Error: <chart construction failure>');
+      assert.doesNotMatch(h.snapshot().html, /<chart construction failure>/, 'construction error uses textContent');
+
+      complete(h.days(1), 'A', 'retry');
+      await settled();
+      assert.strictEqual(h.snapshot().charts.length, 4, 'a later load can construct its own charts');
+      assert.ok(h.charts.slice(0, failedChart - 1).every(chart => chart.destroyed), 'retry cannot revive failed charts');
+      assert.strictEqual(h.requests.length, 6, 'only the requested retry fetches again');
     });
   }
 
