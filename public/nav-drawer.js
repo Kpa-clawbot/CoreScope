@@ -112,7 +112,7 @@
   var versionPromise = null;
   function fetchVersion() {
     if (versionPromise) return versionPromise;
-    versionPromise = fetch('/api/health', { headers: { Accept: 'application/json' } })
+    versionPromise = CSApi.fetch('/api/health', { headers: { Accept: 'application/json' } })
       .then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; });
     return versionPromise;

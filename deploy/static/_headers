@@ -1,0 +1,12 @@
+# Copied into the static build by scripts/static/build.sh. Cloudflare Pages
+# and Netlify read it; other hosts ignore it and need the same rules in their
+# own config (the web container's are in docker/web/Caddyfile). These three
+# files change on every deploy without a ?v= buster, so a browser must always
+# revalidate them. Everything index.html loads carries ?v=<commit> and may use
+# the host's default caching.
+/
+  Cache-Control: no-cache, no-store, must-revalidate
+/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+/deployment.js
+  Cache-Control: no-cache, no-store, must-revalidate

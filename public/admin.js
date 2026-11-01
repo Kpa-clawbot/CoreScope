@@ -68,6 +68,7 @@
       history.replaceState(null, '', legacy);
       routeParam = null;
     }
+    if (CSApi.anonymous) { app.innerHTML = page('<h2>Admin</h2>' + CSBeta.classicOnlyHtml('Administration')); return Promise.resolve(); }
     app.innerHTML = page('<p>Loading…</p>');
     var ready = window.CSAuth ? CSAuth.ready() : Promise.resolve();
     return ready.then(function () {

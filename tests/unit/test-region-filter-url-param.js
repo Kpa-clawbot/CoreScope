@@ -15,6 +15,7 @@
 'use strict';
 const REPO_ROOT = require('node:path').resolve(__dirname, '..', '..');
 const vm = require('node:vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('node:fs');
 const assert = require('node:assert');
 
@@ -42,6 +43,7 @@ function buildCtx(hash, initialStorage) {
   };
   ctx.window = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync(REPO_ROOT + '/public/region-filter.js', 'utf8'), ctx);
   return { rf: ctx.window.RegionFilter, storage, location: ctx.location };
 }

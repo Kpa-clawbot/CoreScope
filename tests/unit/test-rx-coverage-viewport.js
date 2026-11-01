@@ -1,5 +1,6 @@
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 // #2032: exercise the registered RX page, with the real shared URL parser.
 const assert = require('assert');
 const fs = require('fs');
@@ -48,7 +49,8 @@ function harness(options = {}) {
       tileLayer: () => ({ addTo() {} }), layerGroup: () => ({ addTo() { return this; }, clearLayers() {} })
     }
   };
-  vm.runInNewContext(parser + '\n' + source, context);
+  loadApiBase(context);
+  vm.runInContext(parser + '\n' + source, context);
   return { page, maps, requests, timers, storage, location, init: async () => { page.init({ innerHTML: '' }); await flush(); } };
 }
 (async () => {

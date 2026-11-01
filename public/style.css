@@ -265,6 +265,9 @@
   /* Green status words in the admin/user tables: green-700 is 4.48:1 on the
      row-hover tint #eef2ff, green-800 is 6.4:1 there. Dark keeps the bright hue. */
   --status-green-tint-text: var(--palette-green-800, #166534);
+  /* Channel badge of a static build (beta-ui.js): amber, 6.85:1 white on yellow-800. */
+  --beta-badge-bg: var(--palette-yellow-800, #854d0e);
+  --beta-badge-text: #ffffff;
   /* Text-only yellow/red for surfaces that print status words on light cards
      (user-management chips): yellow-800 #854d0e is 6.85:1 on #fff and 6.13:1 on the row-hover tint #eef2ff (yellow-700 #a16207 was 4.4:1 there); red-700 #b91c1c
      is 6.47:1 on #fff. Dark theme keeps the bright hues, like green-text. */
@@ -403,6 +406,8 @@
     /* #1996: dark already passes at 6.48:1 — keep the bright hue. */
     --sa-chip-observed-fg: #22c55e;
     --status-green-tint-text: #22c55e;
+    --beta-badge-bg: #eab308;
+    --beta-badge-text: #1c1917;
     /* #1719 — keep --skew-badge-no-clock-bg dark enough for #fff text. */
     --skew-badge-no-clock-bg: var(--palette-gray-600, #4b5563);
     --status-yellow-text: #eab308;
@@ -473,6 +478,8 @@
   /* #1996: dark already passes at 6.48:1 — keep the bright hue. */
   --sa-chip-observed-fg: #22c55e;
   --status-green-tint-text: #22c55e;
+  --beta-badge-bg: #eab308;
+  --beta-badge-text: #1c1917;
   --skew-badge-no-clock-bg: var(--palette-gray-600, #4b5563);
   --status-yellow-text: #eab308;
   --status-red-text: var(--palette-red-400, #f87171);
@@ -781,6 +788,12 @@ input[type="radio"] {
 /* #1403: removed overflow:hidden — was clipping flex children offscreen (vertical) AND clipping the More dropdown contents. The original purpose was to prevent horizontal overflow during Priority+ measurement (#1066) — that purpose is served by .top-nav itself which still has overflow:hidden. */
 .nav-left { display: flex; align-items: center; gap: var(--space-lg); min-width: 0; flex-shrink: 1; }
 .nav-brand { display: flex; align-items: center; gap: var(--space-sm); text-decoration: none; color: var(--nav-text); font-weight: 700; font-size: var(--fs-md); }
+/* Static builds only (beta-ui.js): channel badge and classic link after the brand. */
+.cs-channel-wrap { display: inline-flex; align-items: center; gap: 6px; margin-right: var(--space-sm); flex-shrink: 0; }
+.cs-channel-badge { background: var(--beta-badge-bg); color: var(--beta-badge-text); border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; text-decoration: none; }
+.cs-channel-badge:hover, .cs-channel-badge:focus-visible { filter: brightness(1.1); }
+.cs-classic-nav-link { color: var(--nav-text-muted); font-size: 12px; text-decoration: underline; }
+.cs-classic-only { color: var(--text-muted); font-size: 13px; }
 .brand-icon { font-size: 20px; }
 /* #1450 — split .brand-logo by element type:
    - Inline default wordmark (<svg>) keeps the 125x36 pin tuned to its

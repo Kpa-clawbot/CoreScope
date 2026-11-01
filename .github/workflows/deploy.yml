@@ -553,6 +553,25 @@ jobs:
             sleep 1
           done
 
+      - name: Start split frontend (static build + API-only server)
+        # The anonymous static build on :8788 against a stock server on :13591
+        # that lists that origin in CORS_ALLOWED_ORIGINS, the way a static
+        # frontend (Cloudflare Pages) calls the containers. -public on a missing
+        # directory is API-only mode, so nothing is served same-origin.
+        if: matrix.shard == 1
+        run: |
+          CHANNEL=dev COMMIT=e2e API_BASE=http://localhost:13591 AUTH=false CLASSIC_URL=http://localhost:13591 bash scripts/static/build.sh
+          fuser -k 13591/tcp 8788/tcp 2>/dev/null || true
+          CORS_ALLOWED_ORIGINS=http://localhost:8788 ./corescope-server -port 13591 -db test-fixtures/e2e-fixture.db -public /nonexistent &
+          echo $! > .server-split.pid
+          node scripts/dev-static.mjs --root dist/web --port 8788 &
+          echo $! > .static-split.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:13591/api/healthz > /dev/null 2>&1 && curl -sf -o /dev/null http://localhost:8788/; then echo "split frontend ready after ${i}s"; break; fi
+            if [ "$i" -eq 30 ]; then echo "split frontend failed to start within 30s"; exit 1; fi
+            sleep 1
+          done
+
       - name: Run Playwright E2E tests (fail-fast)
         env:
           # On master pushes every suite records the frontend coverage of the
@@ -587,6 +606,8 @@ jobs:
           # Allowlist: tests/a11y-allowlist.yaml (0 entries — hard pass policy).
           # Per-viewport summary printed at the end; any net>0 fails the build.
           suite 1 test-a11y-axe-1668.js BASE_URL=$B AXE_SCREENSHOT_DIR=/tmp/axe-1668
+          # The static build on another origin than the API (scripts/static/build.sh).
+          suite 1 test-split-anonymous-e2e.js SPLIT_URL=http://localhost:8788 API_URL=http://localhost:13591
           suite 2 test-filter-ux-e2e.js BASE_URL=$B
           suite 2 test-radio-setting-1869-e2e.js BASE_URL=$B
           suite 2 test-observer-neighbors-2270-e2e.js BASE_URL=$B
@@ -783,6 +804,9 @@ jobs:
             kill $(cat .server-um.pid) 2>/dev/null || true
             rm -f .server-um.pid
           fi
+          for f in .server-split.pid .static-split.pid; do
+            if [ -f "$f" ]; then kill $(cat "$f") 2>/dev/null || true; rm -f "$f"; fi
+          done
 
       - name: Upload shard results
         if: success()

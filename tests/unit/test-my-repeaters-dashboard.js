@@ -13,6 +13,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 
 const fs = require('fs');
 const path = require('path');
@@ -60,6 +61,7 @@ const CLIENT_TTL = { nodeList: 0, analyticsRF: 0 };
 // same thresholds as the browser uses.
 const rolesCtx = { window: {}, console, Date, Infinity, document: { readyState: 'complete', createElement: () => ({ id: '' }), head: { appendChild: () => {} }, getElementById: () => null, addEventListener: () => {} }, fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }) };
 require('vm').createContext(rolesCtx);
+loadApiBase(rolesCtx);
 require('vm').runInContext(fs.readFileSync(path.join(REPO_ROOT, 'public', 'roles.js'), 'utf8'), rolesCtx);
 for (const k of Object.keys(rolesCtx.window)) rolesCtx[k] = rolesCtx.window[k];
 const getHealthStatus = rolesCtx.window.getHealthStatus;

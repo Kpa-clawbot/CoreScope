@@ -223,7 +223,7 @@
   // The optional `opts.fetchImpl` lets tests inject a fake fetch.
   function mount(container, opts) {
     opts = opts || {};
-    var fetchImpl = opts.fetchImpl || (typeof window !== 'undefined' && window.fetch ? window.fetch.bind(window) : null);
+    var fetchImpl = opts.fetchImpl || (typeof window !== 'undefined' && window.CSApi ? window.CSApi.fetch : null);
     if (!fetchImpl) return function noop() {};
     var stopped = false;
 

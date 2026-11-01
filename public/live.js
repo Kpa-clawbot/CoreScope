@@ -470,7 +470,7 @@
     loadNodes(targetTs);
 
     // Fetch packets from scrub point forward (ASC order, no limit clipping from the wrong end)
-    fetch(`/api/packets?limit=10000&grouped=false&expand=observations&since=${encodeURIComponent(fetchFrom)}&order=asc`)
+    CSApi.fetch(`/api/packets?limit=10000&grouped=false&expand=observations&since=${encodeURIComponent(fetchFrom)}&order=asc`)
       .then(r => r.json())
       .then(data => {
         const pkts = data.packets || [];
@@ -531,7 +531,7 @@
     // Fetch packets from DB for the time window
     const now = Date.now();
     const from = new Date(now - ms).toISOString();
-    fetch(`/api/packets?limit=${window.LIVE_MAP_MAX_NODES}&grouped=false&expand=observations&since=${encodeURIComponent(from)}`)
+    CSApi.fetch(`/api/packets?limit=${window.LIVE_MAP_MAX_NODES}&grouped=false&expand=observations&since=${encodeURIComponent(from)}`)
       .then(r => r.json())
       .then(data => {
         const pkts = (data.packets || []).reverse(); // oldest first
@@ -605,7 +605,7 @@
     if (!last) return Promise.resolve(false);
     var gen = VCR.replayGen;
     const since = new Date(last.ts + 1).toISOString(); // +1ms to avoid dupe
-    return fetch(`/api/packets?limit=10000&grouped=false&expand=observations&since=${encodeURIComponent(since)}&order=asc`)
+    return CSApi.fetch(`/api/packets?limit=10000&grouped=false&expand=observations&since=${encodeURIComponent(since)}&order=asc`)
       .then(r => r.json())
       .then(data => {
         const pkts = data.packets || [];
@@ -996,7 +996,7 @@
     if (scopeMs === VCR.timelineFetchedScope) return;
     const since = new Date(Date.now() - scopeMs).toISOString();
     try {
-      const resp = await fetch(`/api/packets/timestamps?since=${encodeURIComponent(since)}`);
+      const resp = await CSApi.fetch(`/api/packets/timestamps?since=${encodeURIComponent(since)}`);
       if (resp.ok) {
         const timestamps = await resp.json(); // array of ISO strings
         VCR.timelineTimestamps = timestamps.map(t => new Date(t).getTime());
@@ -1400,7 +1400,7 @@
     let mapCenter = [37.45, -122.0];
     let mapZoom = 9;
     try {
-      const mapCfg = await (await fetch('/api/config/map')).json();
+      const mapCfg = await (await CSApi.fetch('/api/config/map')).json();
       if (Array.isArray(mapCfg.center) && mapCfg.center.length === 2) mapCenter = mapCfg.center;
       if (typeof mapCfg.zoom === 'number') mapZoom = mapCfg.zoom;
     } catch { }
@@ -1732,7 +1732,7 @@
       // (cmd/server/types.go ObserverListResponse) — NOT a top-level array.
       // Bug #1136: previously parsed as array → map empty → region filter
       // dropped every packet.
-      fetch('/api/observers').then(function(r) { return r.json(); }).then(function(data) {
+      CSApi.fetch('/api/observers').then(function(r) { return r.json(); }).then(function(data) {
         setObserverIataMap(buildObserverIataMap(data));
       }).catch(function() { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
@@ -1827,7 +1827,7 @@
         if (!nodeFilterDropdown) return;
         if (!q || q.length < 1) { hideDropdown(); return; }
         try {
-          const resp = await fetch('/api/nodes/search?q=' + encodeURIComponent(q));
+          const resp = await CSApi.fetch('/api/nodes/search?q=' + encodeURIComponent(q));
           if (!resp.ok) { hideDropdown(); return; }
           const data = await resp.json();
           const nodes = (data && data.nodes) || [];
@@ -2816,7 +2816,7 @@
 
   async function fetchAffinityData() {
     try {
-      const resp = await fetch('/api/analytics/neighbor-graph');
+      const resp = await CSApi.fetch('/api/analytics/neighbor-graph');
       const graph = await resp.json();
       if (window.HopResolver && HopResolver.setAffinity) {
         HopResolver.setAffinity(graph);
@@ -3280,7 +3280,7 @@
   async function replayRecent() {
     try {
       // Single bulk fetch with expand=observations — no N+1 calls
-      const resp = await fetch('/api/packets?limit=8&expand=observations');
+      const resp = await CSApi.fetch('/api/packets?limit=8&expand=observations');
       const data = await resp.json();
       const groups = (data.packets || []).reverse();
 

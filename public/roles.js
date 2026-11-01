@@ -606,7 +606,7 @@
   };
 
   // ─── Fetch server overrides ───
-  window.MeshConfigReady = fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
+  window.MeshConfigReady = CSApi.fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
     window.MC_CLIENT_RX_COVERAGE = cfg.clientRxCoverage === true;
     window.MC_CLIENT_RF_SAMPLES = cfg.clientRfSamples === true;
     // Coverage is opt-in: the nav link is NOT in static HTML (so the default-off
@@ -680,7 +680,12 @@
       ? { disabledTabs: Array.isArray(cfg.customizer.disabledTabs) ? cfg.customizer.disabledTabs : [] }
       : { disabledTabs: [] };
     // Optional user management: present only when the server enables it.
-    window.MC_USER_MGMT = (cfg.userManagement && cfg.userManagement.enabled) ? { enabled: true, channelProposals: !!cfg.userManagement.channelProposals, notifications: !!cfg.userManagement.notifications, observerLogins: !!cfg.userManagement.observerLogins } : null;
+    // An anonymous static build (CSApi.anonymous) sends no cookies, so it
+    // cannot log anyone in: every account feature stays off there, and
+    // MC_ACCOUNTS_ON_CLASSIC tells the nav to link to classic instead.
+    var userMgmt = (cfg.userManagement && cfg.userManagement.enabled) ? { enabled: true, channelProposals: !!cfg.userManagement.channelProposals, notifications: !!cfg.userManagement.notifications, observerLogins: !!cfg.userManagement.observerLogins } : null;
+    window.MC_USER_MGMT = CSApi.anonymous ? null : userMgmt;
+    window.MC_ACCOUNTS_ON_CLASSIC = !!(CSApi.anonymous && userMgmt);
     // #1574 — operator-configurable cap on /live map node count.
     if (cfg.liveMapMaxNodes != null) window.LIVE_MAP_MAX_NODES = cfg.liveMapMaxNodes;
     // #1784 — path trust threshold: minimum hash bytes for mapping evidence.

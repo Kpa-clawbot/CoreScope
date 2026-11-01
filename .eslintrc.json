@@ -12,12 +12,14 @@
     "CACHE_INVALIDATE_MS": "readonly",
     "CLIENT_CONFIG": "readonly",
     "CLIENT_TTL": "readonly",
+    "CSApi": "readonly",
     "CSAuth": "readonly",
     "ChannelColorPicker": "readonly",
     "ChannelColors": "readonly",
     "ChannelDecrypt": "readonly",
     "ChannelQR": "readonly",
     "Chart": "readonly",
+    "CSBeta": "readonly",
     "DIST_THRESHOLDS": "readonly",
     "DragManager": "readonly",
     "EXTERNAL_URLS": "readonly",
@@ -296,6 +298,33 @@
       {
         "argsIgnorePattern": "^_",
         "varsIgnorePattern": "^_"
+      }
+    ],
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "CallExpression[callee.name='fetch'][arguments.0.type='Literal'][arguments.0.value=/^\\/api/]",
+        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+      },
+      {
+        "selector": "CallExpression[callee.name='fetch'][arguments.0.type='TemplateLiteral'][arguments.0.quasis.0.value.raw=/^\\/api/]",
+        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+      },
+      {
+        "selector": "CallExpression[callee.name='fetch'][arguments.0.type='BinaryExpression'][arguments.0.left.value=/^\\/api/]",
+        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+      },
+      {
+        "selector": "CallExpression[callee.property.name='fetch'][callee.object.name='window'][arguments.0.value=/^\\/api/]",
+        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+      },
+      {
+        "selector": "NewExpression[callee.name='WebSocket']:not([arguments.0.callee.property.name='wsUrl'])",
+        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+      },
+      {
+        "selector": "Literal[value=/href=\\\"\\/api\\//]",
+        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
       }
     ]
   }

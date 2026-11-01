@@ -34,7 +34,7 @@
   /** Fetch the configured quick picks. A failure only means no quick picks. */
   async function fetchQuickPicks() {
     try {
-      var data = await fetch('/api/config/region-quick-picks').then(function (r) { return r.json(); });
+      var data = await CSApi.fetch('/api/config/region-quick-picks').then(function (r) { return r.json(); });
       _picks = (data && Array.isArray(data.quickPicks)) ? data.quickPicks : [];
     } catch (e) {
       // Offline or an older server without the endpoint: the region filter
@@ -48,7 +48,7 @@
     if (_loaded) return _regions;
     var picksLoaded = fetchQuickPicks();
     try {
-      var data = await fetch('/api/config/regions').then(function (r) { return r.json(); });
+      var data = await CSApi.fetch('/api/config/regions').then(function (r) { return r.json(); });
       _regions = data || {};
       _loaded = true;
       // If stored selection has codes no longer valid, clean up

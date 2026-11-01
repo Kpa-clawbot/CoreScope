@@ -2276,11 +2276,7 @@
         if (toFetch.length > 0) {
           const hashes = toFetch.map(p => p.hash);
           try {
-            const resp = await fetch('/api/packets/observations', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({hashes})
-            });
+            const resp = await CSApi.postJSON('/api/packets/observations', {hashes});
             if (resp.ok) {
               const data = await resp.json();
               const results = data.results || {};
@@ -2408,7 +2404,7 @@
         return;
       }
       try {
-        const resp = await fetch('/api/nodes/search?q=' + encodeURIComponent(q));
+        const resp = await CSApi.fetch('/api/nodes/search?q=' + encodeURIComponent(q));
         const data = await resp.json();
         if (seq !== nodeSearchSeq) return;
         const nodes = data.nodes || [];
@@ -4297,10 +4293,7 @@
       if (!/^[0-9a-fA-F]+$/.test(hex)) { result.innerHTML = '<p class="byop-err" role="alert">Invalid hex — only 0-9 and A-F allowed</p>'; return; }
       result.innerHTML = '<p class="text-muted">Decoding...</p>';
       try {
-        const res = await fetch('/api/decode', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hex })
-        });
+        const res = await CSApi.postJSON('/api/decode', { hex });
         const data = await res.json();
         if (data.error) throw new Error(data.error);
         result.innerHTML = renderDecodedPacket(data.decoded, hex);

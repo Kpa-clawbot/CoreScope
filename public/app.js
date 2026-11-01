@@ -130,11 +130,49 @@ const CLIENT_TTL = {
   nodeAnalytics: 60000, nodeSearch: 10000
 };
 // Fetch server cache config and use as client TTLs (server values are in seconds)
-fetch('/api/config/cache').then(r => r.json()).then(cfg => {
+CSApi.fetch('/api/config/cache').then(r => r.json()).then(cfg => {
   for (const [k, v] of Object.entries(cfg)) {
     if (k in CLIENT_TTL && typeof v === 'number') CLIENT_TTL[k] = v * 1000;
   }
 }).catch(() => {});
+// A static build that calls the API on another origin can fail in two ways
+// the embedded UI never sees, and both would otherwise leave pages silently
+// empty. A blocked CORS request (the server does not list this origin)
+// rejects with a TypeError and no status: that becomes code
+// 'network_or_cors'. A wrong API base answers with the static host's HTML:
+// that becomes code 'not_json'. Each shows one toast a minute at most.
+const _apiProblemShownAt = {};
+function apiProblem(code, message, cause) {
+  const err = new Error(message);
+  err.code = code;
+  if (cause) err.cause = cause;
+  const now = Date.now();
+  if (!_apiProblemShownAt[code] || now - _apiProblemShownAt[code] > 60000) {
+    _apiProblemShownAt[code] = now;
+    if (window.CSAuth && typeof window.CSAuth.notify === 'function') window.CSAuth.notify(message);
+  }
+  return err;
+}
+async function apiFetchOrExplain(path) {
+  try {
+    return await CSApi.fetch('/api' + path);
+  } catch (e) {
+    if (CSApi.crossOrigin && e instanceof TypeError) throw apiProblem('network_or_cors', "Can't reach the CoreScope API", e);
+    throw e;
+  }
+}
+async function jsonOrExplain(res, path) {
+  const ct = res.headers && typeof res.headers.get === 'function' ? res.headers.get('Content-Type') : null;
+  // Only HTML is refused: an /api answer is never a page, while some JSON
+  // handlers leave Content-Type to Go's sniffing (text/plain).
+  if (ct && /^text\/html/i.test(ct)) {
+    const err = apiProblem('not_json', 'Server returned an unexpected response');
+    err.status = res.status;
+    err.path = path;
+    throw err;
+  }
+  return res.json();
+}
 async function api(path, { ttl = 0, bust = false } = {}) {
   const t0 = performance.now();
   if (!bust && ttl > 0) {
@@ -169,7 +207,7 @@ async function api(path, { ttl = 0, bust = false } = {}) {
     let notified = false;
     try {
       while (true) {
-        const res = await fetch('/api' + path);
+        const res = await apiFetchOrExplain(path);
         if (res.status === 503 && attempt < maxAttempts) {
           const ra = parseInt(res.headers.get('Retry-After'), 10);
           const wait = isFinite(ra) && ra > 0 ? ra * 1000 : delay;
@@ -187,7 +225,7 @@ async function api(path, { ttl = 0, bust = false } = {}) {
           err.retryAfter = res.headers.get('Retry-After');
           throw err;
         }
-        const data = await res.json();
+        const data = await jsonOrExplain(res, path);
         const ms = performance.now() - t0;
         _apiPerf.calls++;
         _apiPerf.totalMs += ms;
@@ -873,8 +911,7 @@ function connectWS() {
   clearTimeout(wsReconnectTimer);
   wsReconnectTimer = null;
   dropWS();
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const sock = new WebSocket(`${proto}//${location.host}`);
+  const sock = new WebSocket(CSApi.wsUrl('/ws'));
   ws = sock;
   // Measured from creation, so a handshake that never completes is caught too.
   wsLastMessageAt = Date.now();
@@ -1846,9 +1883,9 @@ window.addEventListener('DOMContentLoaded', () => {
     searchTimeout = setTimeout(async () => {
       try {
         const [packets, nodes, channels, reported] = await Promise.all([
-          fetch('/api/packets?limit=5&hash=' + encodeURIComponent(q)).then(r => r.json()).catch(() => ({ packets: [] })),
-          fetch('/api/nodes?search=' + encodeURIComponent(q)).then(r => r.json()).catch(() => []),
-          fetch('/api/channels').then(r => r.json()).catch(() => []),
+          CSApi.fetch('/api/packets?limit=5&hash=' + encodeURIComponent(q)).then(r => r.json()).catch(() => ({ packets: [] })),
+          CSApi.fetch('/api/nodes?search=' + encodeURIComponent(q)).then(r => r.json()).catch(() => []),
+          CSApi.fetch('/api/channels').then(r => r.json()).catch(() => []),
           // Repeaters known only from their reported name are not in /api/nodes.
           window.ReportedNodes ? window.ReportedNodes.load() : Promise.resolve({ nodes: [] })
         ]);
@@ -1943,7 +1980,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // --- Theme Customization ---
   // Fetch theme config and apply via customizer v2 pipeline
-  fetch('/api/config/theme', { cache: 'no-store' }).then(r => r.json()).then(cfg => {
+  CSApi.fetch('/api/config/theme', { cache: 'no-store' }).then(r => r.json()).then(cfg => {
     // Normalize timestamp defaults
     cfg = cfg || {};
     if (!cfg.timestamps) cfg.timestamps = {};

@@ -253,7 +253,7 @@
   // mine=1 was refused (the toggle is then cleared and the map redrawn).
   function fetchLayer(path, bbox, extra, seq) {
     var sentMine = mineSent();
-    return fetch(coverageUrl(path, bbox, map.getZoom(), days, selectedRx, sentMine) + extra).then(function (r) {
+    return CSApi.fetch(coverageUrl(path, bbox, map.getZoom(), days, selectedRx, sentMine) + extra).then(function (r) {
       var verdict = coverageReply(seq, drawSeq, r.status, sentMine);
       if (verdict === 'ignore') return null;
       if (verdict === 'mine-refused') {
@@ -435,7 +435,7 @@
   function fitToObserver() {
     if (!map || !selectedRx) { drawCoverage(); return; }
     var url = '/api/rx-coverage?bbox=-90,-180,90,180&z=' + Math.max(8, map.getZoom()) + '&days=' + days + '&rx=' + encodeURIComponent(selectedRx);
-    fetch(url).then(function (r) { return r.json(); }).then(function (fc) {
+    CSApi.fetch(url).then(function (r) { return r.json(); }).then(function (fc) {
       if (destroyed || !map) return;
       var minLat = 90, minLon = 180, maxLat = -90, maxLon = -180, any = false;
       (fc.features || []).forEach(function (f) {
@@ -452,7 +452,7 @@
   }
 
   function loadBoard() {
-    fetch('/api/rx-leaderboard?days=' + days + '&limit=25').then(function (r) { return r.json(); })
+    CSApi.fetch('/api/rx-leaderboard?days=' + days + '&limit=25').then(function (r) { return r.json(); })
       .then(function (d) { if (destroyed) return; boardCache = d.observers || []; renderBoard(); })
       .catch(function (e) {
         console.warn('rx-coverage: leaderboard fetch failed', e);
@@ -551,7 +551,7 @@
     if (!viewport) {
       viewport = { lat: 37.6, lon: -122.1, zoom: 9 };
       try {
-        var response = await fetch('/api/config/map');
+        var response = await CSApi.fetch('/api/config/map');
         var cfg = await response.json();
         if (cfg && Array.isArray(cfg.center) && cfg.center.length === 2) {
           viewport = parseViewportHash(new URLSearchParams({ lat: cfg.center[0], lon: cfg.center[1], zoom: cfg.zoom == null ? 9 : cfg.zoom }).toString()) || viewport;

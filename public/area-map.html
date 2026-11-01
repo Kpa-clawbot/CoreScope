@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Area Map</title>
 <link rel="stylesheet" href="vendor/leaflet-1.9.4/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="/>
+<script src="deployment.js"></script>
+<script src="api-base.js"></script>
 <script src="vendor/leaflet-1.9.4/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -142,7 +144,7 @@ function setStatus(msg, isErr) {
 
 // ---- load from server ----
 async function load() {
-  baseUrl = document.getElementById('base-url').value.replace(/\/$/, '');
+  baseUrl = (document.getElementById('base-url').value || window.CSApi.base).replace(/\/$/, '');
   setStatus('Loading…');
 
   Object.values(areaLayers).forEach(g => { map.removeLayer(g.poly); map.removeLayer(g.nodes); });
