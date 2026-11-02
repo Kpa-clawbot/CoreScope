@@ -140,6 +140,19 @@ func main() {
 	// set grows. Built here so the approved-channels refresh can kick it;
 	// started below, once the write path is ready.
 	keyBackfill := newKeyBackfiller(store, keySet, regionSet)
+
+	// #2107: catalogue names that stored traffic confirms, as the lowest key
+	// tier. Promoted keys are put in force before ingest starts, so they do
+	// not depend on the catalogue being reachable; the fetch and the gates
+	// run later in the background.
+	var catalogKeys *catalogKeyWorker
+	if cfg.CatalogKeysEnabled() {
+		catalogKeys = newCatalogKeyWorker(store, cfg.CatalogKeysSettings(), keySet, regionSet, keyBackfill.Kick)
+		if err := catalogKeys.apply(context.Background()); err != nil {
+			log.Printf("[catalog] loading promoted keys: %v", err)
+		}
+		log.Printf("[catalog] catalogue key tier enabled: %s, refreshing every %v", cfg.CatalogKeysSettings().url, cfg.CatalogKeysSettings().refresh)
+	}
 	if cfg.ApprovedChannelsEnabled() {
 		go func() {
 			t := time.NewTicker(approvedChannelsRefresh)
@@ -424,6 +437,9 @@ func main() {
 	keyBackfillCtx, stopKeyBackfill := context.WithCancel(context.Background())
 	defer stopKeyBackfill()
 	keyBackfillDone := keyBackfill.Start(keyBackfillCtx)
+	if catalogKeys != nil {
+		catalogKeys.Start(keyBackfillCtx)
+	}
 	// After the gate: ingest is live, the backfill yields to it between chunks.
 	// No-op when the index is off or already covers its window.
 	store.ScheduleObservationHopsBackfill()

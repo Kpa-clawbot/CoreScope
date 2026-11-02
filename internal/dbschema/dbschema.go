@@ -114,6 +114,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureKeyBackfill(rw); err != nil {
 		return fmt.Errorf("ensure key backfill: %w", err)
 	}
+	if err := ensureCatalogKeys(rw); err != nil {
+		return fmt.Errorf("ensure catalog keys: %w", err)
+	}
 	if err := ensureObserverRadios(rw, logf); err != nil {
 		return fmt.Errorf("ensure observer radios: %w", err)
 	}
