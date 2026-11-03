@@ -3333,7 +3333,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	if err := row.Scan(
 		&resp.Summary.TransportTotal,
 		&resp.Summary.Scoped,
-		&resp.Summary.Unscoped,
+		&resp.Summary.UnscopedTransport,
 		&resp.Summary.UnknownScope,
 	); err != nil {
 		return nil, fmt.Errorf("scope summary query: %w", err)
@@ -3343,14 +3343,19 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	// transport_code_1 per MeshCore protocol, so they are inherently unscoped.
 	// Fold their count into Summary.Unscoped so the analytics denominator
 	// reflects total-observed-transmissions rather than only transport-eligible.
-	var nonTransportUnscoped int
+	// #2364: keep the per-route split and report Total so the summary adds up.
+	// Same single scan as before; the CASE split costs nothing extra.
 	if err := db.conn.QueryRow(`
-		SELECT COUNT(*) FROM transmissions
+		SELECT
+			COALESCE(SUM(CASE WHEN route_type = 1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN route_type = 2 THEN 1 ELSE 0 END), 0)
+		FROM transmissions
 		WHERE `+routeTypeNonTransportSQL+` AND first_seen >= ?
-	`, since).Scan(&nonTransportUnscoped); err != nil {
+	`, since).Scan(&resp.Summary.UnscopedFlood, &resp.Summary.UnscopedDirect); err != nil {
 		return nil, fmt.Errorf("scope non-transport count query: %w", err)
 	}
-	resp.Summary.Unscoped += nonTransportUnscoped
+	resp.Summary.Unscoped = resp.Summary.UnscopedTransport + resp.Summary.UnscopedFlood + resp.Summary.UnscopedDirect
+	resp.Summary.Total = resp.Summary.Scoped + resp.Summary.Unscoped
 
 	// Per-region counts (named regions only)
 	rows, err := db.conn.Query(scopeStatsByRegionQuery, since)

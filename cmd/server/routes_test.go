@@ -4358,6 +4358,14 @@ func TestHandleScopeStats(t *testing.T) {
 	if resp.Summary.UnknownScope != 1 {
 		t.Errorf("unknownScope = %d, want 1", resp.Summary.UnknownScope)
 	}
+	// #2364: the summary adds up again.
+	if resp.Summary.Total != 6 {
+		t.Errorf("total = %d, want 6", resp.Summary.Total)
+	}
+	if resp.Summary.UnscopedTransport != 1 || resp.Summary.UnscopedFlood != 1 || resp.Summary.UnscopedDirect != 1 {
+		t.Errorf("unscoped split = %d/%d/%d, want 1/1/1",
+			resp.Summary.UnscopedTransport, resp.Summary.UnscopedFlood, resp.Summary.UnscopedDirect)
+	}
 	if len(resp.ByRegion) != 1 || resp.ByRegion[0].Name != "#belgium" || resp.ByRegion[0].Count != 2 {
 		t.Errorf("byRegion = %v, want [{#belgium 2}]", resp.ByRegion)
 	}

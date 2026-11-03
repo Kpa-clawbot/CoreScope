@@ -5095,8 +5095,15 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       // #1838: denominator = transport-carrying transmissions (route_type 0,3).
       // Unscoped now includes non-transport routes (1,2) which are inherently
       // unscoped by MeshCore protocol, so unscoped can exceed transportTotal.
+      // #2364: the server reports `total` (= scoped + unscoped) and splits
+      // unscoped by route; fall back for older servers.
       var total = s.transportTotal || 0;
-      var overall = (s.scoped || 0) + (s.unscoped || 0);
+      var overall = s.total != null ? s.total : (s.scoped || 0) + (s.unscoped || 0);
+      var unscopedNote = pct(s.unscoped, overall) + ' of all traffic';
+      if (s.unscopedFlood != null && s.unscopedDirect != null) {
+        unscopedNote += ' · ' + (s.unscopedTransport || 0).toLocaleString() + ' transport, ' +
+          s.unscopedFlood.toLocaleString() + ' flood, ' + s.unscopedDirect.toLocaleString() + ' direct';
+      }
 
       // Summary cards
       var cardsEl = document.getElementById('scopes-cards');
@@ -5104,7 +5111,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         cardsEl.innerHTML = [
           { label: 'Transport Total', value: total.toLocaleString(), note: 'routes 0,3 (carry scope)' },
           { label: 'Scoped', value: s.scoped.toLocaleString(), note: pct(s.scoped, overall) + ' of all traffic' },
-          { label: 'Unscoped', value: s.unscoped.toLocaleString(), note: pct(s.unscoped, overall) + ' of all traffic' },
+          { label: 'Unscoped', value: s.unscoped.toLocaleString(), note: unscopedNote },
           { label: 'Unknown Scope', value: s.unknownScope.toLocaleString(), note: pct(s.unknownScope, s.scoped) + ' of scoped' },
         ].map(function(c) {
           return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
