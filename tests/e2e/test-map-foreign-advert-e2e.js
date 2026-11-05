@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
 const keys = ['aa', 'bb', 'cc', 'dd'].map(prefix => prefix + '0'.repeat(62));
 const explanation = 'An advert from this node was flagged outside the configured area at ingestion.';
+const limitation = 'This historical flag does not indicate its current location.';
 let passed = 0, failed = 0;
 async function step(name, fn) {
   try { await fn(); passed++; console.log('  ✓ ' + name); }
@@ -41,6 +42,7 @@ async function checkFlags(page, expected) {
     if (expected[i]) {
       assert.match(actual.title, /historical flag/i);
       assert.match(actual.title, /current location/i);
+      assert.ok(actual.title.includes(limitation), 'marker title explicitly denies a current-location inference');
     }
   }
   assert.equal(await page.getByRole('button', { name: /Foreign advert flag/ }).count(), expected.filter(Boolean).length, 'flagged markers have accessible names');
@@ -67,6 +69,7 @@ async function scenario(browser, width, theme) {
     scope_config_state: 'full', multi_byte_status: 'confirmed',
     ...(i === 2 ? {} : { foreign: i !== 1 }),
   }));
+  let includeObserver = true;
   let socket;
   await page.routeWebSocket('**', ws => { socket = ws; });
   await page.addInitScript(() => {
@@ -84,9 +87,9 @@ async function scenario(browser, width, theme) {
     const json = body => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
     if (url.pathname === '/api/nodes') return json({ nodes, total: nodes.length, has_more: false, counts: { repeaters: nodes.length } });
     // Let a WS advert exercise loadNodes immediately, without the normal list TTL.
-    if (url.pathname === '/api/config/cache') return json({ nodeList: 0 });
+    if (url.pathname === '/api/config/cache') return json({ nodeList: 0, observers: 0 });
     if (url.pathname === '/api/stats') return json({ totalPackets: 0, totalNodes: nodes.length, totalObservers: 1 });
-    if (url.pathname === '/api/observers') return json({ observers: [{ id: keys[0], name: 'Fixture observer', lat: 51, lon: 5 }] });
+    if (url.pathname === '/api/observers') return json({ observers: includeObserver ? [{ id: keys[0], name: 'Fixture observer', lat: 51, lon: 5 }] : [] });
     if (url.pathname === '/api/config/map') return json({ center: [51, 5], zoom: 16 });
     return json({});
   });
@@ -110,7 +113,7 @@ async function scenario(browser, width, theme) {
   const refresh = async () => {
     const previous = requests.filter(p => p === '/api/nodes').length;
     socket.send(JSON.stringify({ type: 'packet', data: { decoded: { header: { payloadTypeName: 'ADVERT' } } } }));
-    await page.waitForFunction(expected => window.__mc_nodes[0].foreign === expected[0] && window.__mc_nodes[1].foreign === expected[1], [nodes[0].foreign, nodes[1].foreign]);
+    await page.waitForFunction(expected => JSON.stringify(window.__mc_nodes) === expected, JSON.stringify(nodes));
     assert.equal(requests.filter(p => p === '/api/nodes').length, previous + 1, 'one bulk node fetch per live refresh');
   };
 
@@ -133,6 +136,7 @@ async function scenario(browser, width, theme) {
       assert.match(await popup.innerText(), /Foreign advert flag/);
       assert.ok((await popup.innerText()).includes(explanation));
       assert.match(await popup.innerText(), /historical flag.*current location/i);
+      assert.ok((await popup.innerText()).includes(limitation), 'popup explicitly denies a current-location inference');
       assert.equal(await popup.locator('h3').innerText(), nodes[0].name);
       assert.equal(await popup.locator('h3 b').count(), 0, 'node name is text, not HTML');
       const obscured = await popup.evaluate(el => {
@@ -147,6 +151,7 @@ async function scenario(browser, width, theme) {
       });
       assert.equal(obscured, false, 'the note must not widen the popup underneath the map controls');
       if (labels) assert.ok((await marker.locator('[role="img"]').getAttribute('aria-label')).includes(explanation), 'label accessible name includes the flag meaning');
+      if (labels) assert.ok((await marker.locator('[role="img"]').getAttribute('aria-label')).includes(limitation), 'label accessible name explicitly denies a current-location inference');
       await page.evaluate(() => window.__mc_map.closePopup());
       await popup.waitFor({ state: 'detached' }); // Leaflet fades the old popup out.
       const unflagged = await markerElement(page, keys[1]);
@@ -161,6 +166,7 @@ async function scenario(browser, width, theme) {
       if (labels) {
         assert.equal(await scopeMarker.locator('.scope-full').count(), 1);
         assert.ok((await scopeMarker.locator('.mc-mb-label').getAttribute('title')).includes(explanation), 'scope title also preserves the foreign-advert explanation');
+        assert.ok((await scopeMarker.locator('.mc-mb-label').getAttribute('title')).includes(limitation), 'scope title explicitly denies a current-location inference');
       }
       else assert.equal(await scopeMarker.locator('svg > [fill]').first().getAttribute('fill'), 'var(--mc-scope-full)');
       await toggle(page, 'mcMultiByte', true);
@@ -221,6 +227,83 @@ async function scenario(browser, width, theme) {
     await toggle(page, 'mcRole_repeater', true);
     await checkFlags(page, [true, false, false]);
   });
+  if (width === 1280 && theme === 'light') {
+    await page.evaluate(() => document.fonts.ready);
+    // The first case was separate before the warning added 17px to the label;
+    // the second covers a nearby combined node/observer at the review's spacing.
+    for (const fixture of [
+      { name: 'colocated-two-byte', hashSize: 2, longitudes: [5, 5, 0], observer: false },
+      { name: 'nearby-observer', hashSize: 1, longitudes: [5, 5.00112, 5.00224], observer: true },
+    ]) {
+      includeObserver = fixture.observer;
+      for (let i = 0; i < 3; i++) {
+        nodes[i].lat = fixture.longitudes[i] ? 51 : 0;
+        nodes[i].lon = fixture.longitudes[i];
+        nodes[i].hash_size = fixture.hashSize;
+      }
+      await refresh();
+      for (const labels of [true, false]) for (const overlay of ['off', 'scope', 'multi-byte']) {
+        const name = fixture.name + '-' + (labels ? 'labels' : 'dots') + '-' + overlay;
+        await toggle(page, 'mcHashLabels', labels);
+        await toggle(page, 'mcScopeOverlay', overlay !== 'off');
+        await toggle(page, 'mcMultiByte', overlay === 'multi-byte');
+        const checkWarning = async () => {
+          const result = await page.evaluate(({ keys, labels }) => {
+            const marker = window.fixtureMarker(keys[0]).getElement();
+            const a = marker.querySelector('.map-foreign-indicator').getBoundingClientRect();
+            const coveredBy = keys.slice(1, 3).filter(key => {
+              const el = window.fixtureMarker(key)?.getElement();
+              if (!el) return false;
+              const b = (labels ? el.querySelector('.mc-mb-label') : el).getBoundingClientRect();
+              return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+            });
+            // The warning must remain associated with its own clickable node,
+            // including its edges, not merely exist in the DOM underneath it.
+            const hits = [0.15, 0.5, 0.85].flatMap(x => [0.15, 0.5, 0.85].map(y => {
+              const hit = document.elementFromPoint(a.left + a.width * x, a.top + a.height * y);
+              return hit?.closest('.meshcore-marker') === marker;
+            }));
+            return { coveredBy, hits, warning: { x: a.x, y: a.y, width: a.width, height: a.height } };
+          }, { keys, labels });
+          assert.deepEqual(result.coveredBy, [], name + ': neighboring marker covers warning: ' + JSON.stringify(result));
+          assert.ok(result.hits.every(Boolean), name + ': warning hit-test resolves to another node: ' + JSON.stringify(result));
+        };
+        await step(name + ': neighboring markers do not cover or intercept the warning', async () => {
+          if (process.env.SCREENSHOT_DIR && labels && overlay === 'off') {
+            await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, name + '.png') });
+          }
+          await checkWarning();
+        });
+        if (labels && overlay === 'off') {
+          // Watch the existing marker update, without replacing its positioning
+          // logic or sleeping through the zoom/resize debounce.
+          const watchReposition = () => page.evaluate(key => {
+            window.fixtureRepositioned = false;
+            const marker = window.fixtureMarker(key);
+            const original = marker.setLatLng;
+            marker.setLatLng = function () {
+              marker.setLatLng = original;
+              window.fixtureRepositioned = true;
+              return original.apply(this, arguments);
+            };
+          }, keys[0]);
+          for (const zoom of [17, 16]) {
+            await watchReposition();
+            await page.evaluate(zoom => window.__mc_map.setZoom(zoom, { animate: false }), zoom);
+            await page.waitForFunction(() => window.fixtureRepositioned);
+            await step(name + ': warning stays clear after zoom ' + zoom, checkWarning);
+          }
+          await watchReposition();
+          await page.setViewportSize({ width: 1200, height: 900 });
+          await page.waitForFunction(() => window.fixtureRepositioned);
+          await step(name + ': warning stays clear after resize', checkWarning);
+          await watchReposition();
+          await page.setViewportSize({ width: 1280, height: 900 });
+          await page.waitForFunction(() => window.fixtureRepositioned);
+        }
+      }
+    }
+  }
   await step(width + 'px ' + theme + ': no per-node requests or page errors', async () => {
     assert.equal(requests.filter(p => /^\/api\/nodes\/[a-f0-9]{64}/.test(p)).length, 0);
     assert.deepEqual(errors, []);
