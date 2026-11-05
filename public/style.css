@@ -3496,6 +3496,28 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 }
 
 .meshcore-marker { background: none !important; border: none !important; }
+.map-foreign-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 3px;
+  border-radius: 2px;
+  background: var(--card-bg);
+  color: var(--warning);
+  font-size: 14px;
+  vertical-align: middle;
+}
+/* Keep the observer star at the top right unobscured in dot mode. */
+.meshcore-marker:not(.meshcore-label-marker) .map-foreign-indicator {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  margin-left: 0;
+}
+/* Preserve the compact popup width so the note stays clear of mobile controls. */
+.map-foreign-notice { max-width: 200px; margin: 6px 0; color: var(--warning); font-size: 12px; }
 .marker-stale { opacity: 0.7; filter: grayscale(90%) brightness(0.8); }
 .last-seen-active { color: var(--status-green); }
 .last-seen-stale { color: var(--text-muted); }

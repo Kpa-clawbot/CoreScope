@@ -38,6 +38,10 @@
     return s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   };
 
+  // The stored flag is sticky; it is not a current location or bridge finding.
+  const FOREIGN_ADVERT_DESCRIPTION = 'An advert from this node was flagged outside the configured area at ingestion. This historical flag does not indicate its current location.';
+  const FOREIGN_ADVERT_INDICATOR = '<span class="map-foreign-indicator" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>';
+
   // Roles loaded from shared roles.js (ROLE_STYLE, ROLE_LABELS, ROLE_COLORS globals)
 
   // ── #1356 a11y constants — letter prefix + glyph + neutral fill carriers ──
@@ -345,7 +349,7 @@
     return out;
   }
 
-  function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride) {
+  function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride, isForeign) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
     // #1438: default fill resolves through the live CSS var so existing
     // mounted SVG markers recolor when cb-preset switches or the
@@ -413,7 +417,7 @@
     }
     const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${path}${obsOverlay}</svg>`;
     return L.divIcon({
-      html: svg,
+      html: svg + (isForeign ? FOREIGN_ADVERT_INDICATOR : ''),
       className: 'meshcore-marker' + (isStale ? ' marker-stale' : ''),
       iconSize: [size, size],
       iconAnchor: [c, c],
@@ -454,9 +458,15 @@
     }
     var scopeClass = scopeMeta ? (' scope-' + scopeMeta.key) : '';
     var scopeAria = scopeMeta ? (', scope config ' + scopeMeta.label) : '';
-    var scopeTitle = scopeMeta ? (' title="' + scopeMeta.label + ' — ' + scopeMeta.title.replace(/"/g, '&quot;') + '"') : '';
+    var labelTitle = scopeMeta ? (scopeMeta.label + ' — ' + scopeMeta.title) : '';
     var ariaStatus = status ? ('multi-byte ' + status + ', hash ' + shortHash + ariaWidth + scopeAria)
                             : ('repeater hash ' + shortHash + ariaWidth + scopeAria);
+    var isForeign = node.foreign === true;
+    if (isForeign) {
+      var foreignTitle = 'Foreign advert flag: ' + FOREIGN_ADVERT_DESCRIPTION;
+      ariaStatus += ', ' + foreignTitle;
+      labelTitle += (labelTitle ? ' — ' : '') + foreignTitle;
+    }
     // Observer indicator stays a star — it is an orthogonal signal, not a status color.
     var obsIndicator = isAlsoObserver
       ? ' <span aria-hidden="true" style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span>'
@@ -464,8 +474,8 @@
     // Glyph + thin-space (U+2009) + hash. Visible content is aria-hidden so AT
     // reads the aria-label only (avoids "check mark 3 E" literal announcements).
     var visible = (glyph ? glyph + '\u2009' : '') + shortHash;
-    var html = '<div class="mc-mb-label' + statusClass + scopeClass + unknownWidth + '" role="img" aria-label="' + ariaStatus + '"' + scopeTitle + '>' +
-      '<span aria-hidden="true">' + visible + '</span>' + obsIndicator + '</div>';
+    var html = '<div class="mc-mb-label' + statusClass + scopeClass + unknownWidth + '" role="img" aria-label="' + ariaStatus + '"' + (labelTitle ? ' title="' + safeEsc(labelTitle) + '"' : '') + '>' +
+      '<span aria-hidden="true">' + visible + '</span>' + obsIndicator + (isForeign ? FOREIGN_ADVERT_INDICATOR : '') + '</div>';
     return L.divIcon({
       html: html,
       className: 'meshcore-marker meshcore-label-marker' + (isStale ? ' marker-stale' : ''),
@@ -2134,7 +2144,8 @@
       // scope overlay stands down rather than the two fighting over the fill.
       var scopeState = (scopeTintEnabled(filters.scopeOverlay, filters.scopeState) && !mbColor) ? (node.scope_config_state || null) : null;
       var scopeColor = scopeState ? scopeTint(node) : null;
-      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor);
+      const isForeign = node.foreign === true;
+      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor, isForeign);
       const latLng = L.latLng(node.lat, node.lon);
       // The scope state has to leave the fill and reach the DOM, or a dot marker
       // is colour and nothing else — which on the achromat preset is six greys
@@ -2145,8 +2156,9 @@
       // produced. The popup carries it too, for the pointerless case.
       var scopeLabel = scopeState ? scopeStateLabel(scopeState) : '';
       var markerAlt = (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' +
-        (scopeLabel ? ', scope config ' + scopeLabel : '');
-      allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: markerAlt, title: scopeLabel ? markerAlt : '' });
+        (scopeLabel ? ', scope config ' + scopeLabel : '') +
+        (isForeign ? ', Foreign advert flag: ' + FOREIGN_ADVERT_DESCRIPTION : '');
+      allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: markerAlt, title: scopeLabel || isForeign ? markerAlt : '' });
     }
 
     // Add observer markers (skip observers already represented as a node marker)
@@ -2325,6 +2337,7 @@
       <div class="map-popup" style="font-family:var(--font);min-width:180px;">
         <h3 style="font-weight:700;font-size:14px;margin:0 0 4px;">${safeEsc(node.name || 'Unknown')}</h3>
         ${roleBadge}${obsBadge}
+        ${node.foreign === true ? '<p class="map-foreign-notice"><strong>Foreign advert flag</strong><br>' + FOREIGN_ADVERT_DESCRIPTION + '</p>' : ''}
         <dl style="margin-top:8px;font-size:12px;">
           ${hashPrefixRow}
           ${mbRow}

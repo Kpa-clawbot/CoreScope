@@ -43,6 +43,7 @@ async function checkFlags(page, expected) {
       assert.match(actual.title, /current location/i);
     }
   }
+  assert.equal(await page.getByRole('button', { name: /Foreign advert flag/ }).count(), expected.filter(Boolean).length, 'flagged markers have accessible names');
   assert.equal(await page.evaluate(key => !!window.fixtureMarker(key), keys[3]), false, 'a flagged node without GPS must not acquire a marker');
 }
 
@@ -73,6 +74,10 @@ async function scenario(browser, width, theme) {
     localStorage.setItem('meshcore-map-estimated', 'false');
     window.addEventListener('theme-refresh', () => { window.fixtureThemeReady = true; });
   });
+  // Map tiles are unrelated to the flag and must not require an external API key.
+  await page.route('https://*.basemaps.cartocdn.com/**', route => route.fulfill({
+    contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"/>',
+  }));
   await page.route('**/api/**', route => {
     const url = new URL(route.request().url());
     requests.push(url.pathname);
@@ -80,6 +85,7 @@ async function scenario(browser, width, theme) {
     if (url.pathname === '/api/nodes') return json({ nodes, total: nodes.length, has_more: false, counts: { repeaters: nodes.length } });
     // Let a WS advert exercise loadNodes immediately, without the normal list TTL.
     if (url.pathname === '/api/config/cache') return json({ nodeList: 0 });
+    if (url.pathname === '/api/stats') return json({ totalPackets: 0, totalNodes: nodes.length, totalObservers: 1 });
     if (url.pathname === '/api/observers') return json({ observers: [{ id: keys[0], name: 'Fixture observer', lat: 51, lon: 5 }] });
     if (url.pathname === '/api/config/map') return json({ center: [51, 5], zoom: 16 });
     return json({});
@@ -114,30 +120,48 @@ async function scenario(browser, width, theme) {
     await step(label + ': true warns, false/missing and no-GPS do not', () => checkFlags(page, [true, false, false]));
     await step(label + ': keyboard popup explains the historical flag and escapes the node name', async () => {
       const marker = await markerElement(page, keys[0]);
+      await marker.hover();
       await marker.focus();
       await marker.press('Enter');
       const popup = page.locator('.map-popup');
       await popup.waitFor();
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.leaflet-popup')).opacity === '1');
+      if (process.env.SCREENSHOT_DIR) {
+        fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'map-foreign-' + width + '-' + theme + '-' + (labels ? 'labels' : 'dots') + '.png') });
+      }
       assert.match(await popup.innerText(), /Foreign advert flag/);
       assert.ok((await popup.innerText()).includes(explanation));
       assert.match(await popup.innerText(), /historical flag.*current location/i);
       assert.equal(await popup.locator('h3').innerText(), nodes[0].name);
       assert.equal(await popup.locator('h3 b').count(), 0, 'node name is text, not HTML');
+      const obscured = await popup.evaluate(el => {
+        const controls = Array.from(document.querySelectorAll('.leaflet-control-zoom, .leaflet-control-layers'));
+        return Array.from(el.querySelectorAll('h3, .map-foreign-notice')).some(content => {
+          const a = content.getBoundingClientRect();
+          return controls.some(control => {
+            const b = control.getBoundingClientRect();
+            return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+          });
+        });
+      });
+      assert.equal(obscured, false, 'the note must not widen the popup underneath the map controls');
       if (labels) assert.ok((await marker.locator('[role="img"]').getAttribute('aria-label')).includes(explanation), 'label accessible name includes the flag meaning');
-      if (process.env.SCREENSHOT_DIR) {
-        fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
-        await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'map-foreign-' + width + '-' + theme + '-' + (labels ? 'labels' : 'dots') + '.png') });
-      }
       await page.evaluate(() => window.__mc_map.closePopup());
+      await popup.waitFor({ state: 'detached' }); // Leaflet fades the old popup out.
       const unflagged = await markerElement(page, keys[1]);
       await unflagged.press('Enter');
       assert.ok(!(await popup.innerText()).includes('Foreign advert flag'), 'unflagged popup has no warning');
       await page.evaluate(() => window.__mc_map.closePopup());
+      await popup.waitFor({ state: 'detached' });
     });
     await step(label + ': warning uses the theme token and coexists with observer/scope/multi-byte markers', async () => {
       await toggle(page, 'mcScopeOverlay', true);
       const scopeMarker = await markerElement(page, keys[0]);
-      if (labels) assert.equal(await scopeMarker.locator('.scope-full').count(), 1);
+      if (labels) {
+        assert.equal(await scopeMarker.locator('.scope-full').count(), 1);
+        assert.ok((await scopeMarker.locator('.mc-mb-label').getAttribute('title')).includes(explanation), 'scope title also preserves the foreign-advert explanation');
+      }
       else assert.equal(await scopeMarker.locator('svg > [fill]').first().getAttribute('fill'), 'var(--mc-scope-full)');
       await toggle(page, 'mcMultiByte', true);
       await checkFlags(page, [true, false, false]);
