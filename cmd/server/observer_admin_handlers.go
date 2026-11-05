@@ -27,6 +27,9 @@ type adminObserverBindingJSON struct {
 	UserID  *int64 `json:"userId"`
 	BoundAt string `json:"boundAt"`
 	BoundBy string `json:"boundBy"`
+	// ConfirmedAt is null until the owner's login has published under the
+	// pubkey, and for an orphan (the index never treats one as confirmed).
+	ConfirmedAt *string `json:"confirmedAt"`
 }
 
 type adminObserverLoginsResponse struct {
@@ -73,7 +76,12 @@ func (s *Server) handleAdminObserverLogins(w http.ResponseWriter, _ *http.Reques
 		if b.UserID != nil {
 			owned[*b.UserID] = append(owned[*b.UserID], b.Pubkey)
 		}
-		out.Bindings = append(out.Bindings, adminObserverBindingJSON{Pubkey: b.Pubkey, UserID: b.UserID, BoundAt: rfc3339(b.BoundAt), BoundBy: b.BoundBy})
+		j := adminObserverBindingJSON{Pubkey: b.Pubkey, UserID: b.UserID, BoundAt: rfc3339(b.BoundAt), BoundBy: b.BoundBy}
+		if b.UserID != nil && b.ConfirmedAt != nil {
+			ts := rfc3339(*b.ConfirmedAt)
+			j.ConfirmedAt = &ts
+		}
+		out.Bindings = append(out.Bindings, j)
 	}
 	for _, l := range logins {
 		u := accounts[l.UserID]

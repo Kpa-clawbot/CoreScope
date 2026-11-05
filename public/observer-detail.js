@@ -181,20 +181,42 @@ window.ObserverDetailNaiveBanner = {
     const days = currentDays;
     try {
       destroyCharts();
-      chartDefaults();
-      const [obs, analytics, obsSkewArr] = await Promise.all([
-        api('/observers/' + encodeURIComponent(observerId)),
-        api('/observers/' + encodeURIComponent(observerId) + '/analytics?days=' + days),
-        api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; }),
-      ]);
+      // Start all requests together, but only identity gates the first render.
+      // Capture analytics errors immediately, even if identity is still pending.
+      const observerRequest = api('/observers/' + encodeURIComponent(observerId));
+      const analyticsRequest = api('/observers/' + encodeURIComponent(observerId) + '/analytics?days=' + days)
+        .then(data => ({ data }), error => ({ error }));
+      const skewRequest = api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; });
+      const obs = await observerRequest;
       // Only the latest load of the current visit owns the detail view.
       if (generation !== detailGeneration) return;
-      // Find this observer's calibration data.
-      var obsSkew = null;
-      (Array.isArray(obsSkewArr) ? obsSkewArr : []).forEach(function(s) {
-        if (s && s.observerID === observerId) obsSkew = s;
+      renderDetail(obs);
+      analyticsRequest.then(result => {
+        if (generation !== detailGeneration) return;
+        const el = document.getElementById('obsAnalytics');
+        if (!el) return;
+        try {
+          if (result.error) throw result.error;
+          renderAnalytics(result.data);
+        } catch (error) {
+          destroyCharts();
+          el.innerHTML = '<div class="text-muted" role="status"></div>';
+          el.firstChild.textContent = 'Error: ' + error.message;
+        }
+        el.setAttribute('aria-busy', 'false');
       });
-      renderDetail(obs, analytics, obsSkew);
+      skewRequest.then(obsSkewArr => {
+        if (generation !== detailGeneration) return;
+        // Preserve the last matching calibration from the bulk response.
+        var obsSkew = null;
+        (Array.isArray(obsSkewArr) ? obsSkewArr : []).forEach(function(s) {
+          if (s && s.observerID === observerId) obsSkew = s;
+        });
+        renderClockOffset(obsSkew);
+      }).catch(() => {
+        if (generation !== detailGeneration) return;
+        renderClockOffset(null);
+      });
     } catch (e) {
       if (generation !== detailGeneration) return;
       // SECURITY (OBS-2, PR #1539): use textContent for error messages.
@@ -209,7 +231,7 @@ window.ObserverDetailNaiveBanner = {
     }
   }
 
-  function renderDetail(obs, analytics, obsSkew) {
+  function renderDetail(obs) {
     const el = document.getElementById('obsDetailContent');
     if (!el) return;
 
@@ -309,6 +331,14 @@ window.ObserverDetailNaiveBanner = {
           <div class="stat-label">Last Status Update</div>
           <div class="stat-value" style="font-size:0.85em">${obs.last_seen ? timeAgo(obs.last_seen) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_seen).toLocaleString() + '</span>' : '—'}</div>
         </div>
+        <div class="stat-card" data-testid="obs-stat-neighbors-report">
+          <div class="stat-label">Neighbors Report</div>
+          <div class="stat-value" style="font-size:0.85em">${obs.neighbors_report_at && window.ObserverNeighbors ? window.ObserverNeighbors.since(obs.neighbors_report_at, Date.now()) : '<span style="color:var(--text-muted)">never</span>'}</div>
+        </div>
+        <div class="stat-card" data-testid="obs-stat-neighbors-count">
+          <div class="stat-label">Neighbors</div>
+          <div class="stat-value">${obs.neighbors_count != null && isFinite(Number(obs.neighbors_count)) ? Number(obs.neighbors_count) : '—'}</div>
+        </div>
         <div class="stat-card">
           <div class="stat-label">Last Packet Observation</div>
           <div class="stat-value" style="font-size:0.85em">${obs.last_packet_at ? timeAgo(obs.last_packet_at) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_packet_at).toLocaleString() + '</span>' : '<span style="color:var(--text-muted)">never</span>'}</div>
@@ -317,7 +347,16 @@ window.ObserverDetailNaiveBanner = {
       <div class="mono" style="font-size:0.75em;color:var(--text-muted);margin-bottom:20px;word-break:break-all">
         ID: ${escapeHtml(obs.id)}
       </div>
-      ${obsSkew && obsSkew.samples > 0 ? `
+      <div id="obsClockOffset" aria-busy="true"><div class="text-muted" role="status" style="margin-bottom:20px">Loading clock calibration…</div></div>
+      ${window.ObserverDetailRadioHistory ? window.ObserverDetailRadioHistory.render(obs.radio_history) : ''}
+      ${window.ObserverNeighbors ? window.ObserverNeighbors.detailHtml(obs.neighbor_report) : ''}
+      <div id="obsAnalytics" aria-busy="true"><div class="text-muted" role="status">Loading analytics…</div></div>`;
+  }
+
+  function renderClockOffset(obsSkew) {
+    const el = document.getElementById('obsClockOffset');
+    if (!el) return;
+    el.innerHTML = obsSkew && obsSkew.samples > 0 ? `
       <div class="node-full-card skew-detail-section" style="margin-bottom:20px;padding:12px">
         <h4 style="margin:0 0 6px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Clock Offset</h4>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -328,8 +367,15 @@ window.ObserverDetailNaiveBanner = {
         <div style="font-size:12px;color:var(--text-muted);margin-top:8px;max-width:600px">
           <strong>How this is computed:</strong> when this observer and another observer see the same packet, we compare their receive timestamps. The median deviation across all multi-observer packets is this observer's offset.
         </div>
-      </div>` : ''}
-      ${window.ObserverDetailRadioHistory ? window.ObserverDetailRadioHistory.render(obs.radio_history) : ''}
+      </div>` : '';
+    el.setAttribute('aria-busy', 'false');
+  }
+
+  function renderAnalytics(analytics) {
+    const el = document.getElementById('obsAnalytics');
+    if (!el) return;
+    chartDefaults();
+    el.innerHTML = `
       <div class="obs-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px">
         <div class="chart-card" style="padding:12px">
           <h3 style="margin:0 0 8px;font-size:0.95em">Packets Over Time</h3>

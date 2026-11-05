@@ -270,6 +270,26 @@ test('#2091: list query builder never inherits detail observation', () => {
   assert.strictEqual(s.buildPacketsQuery(60, 'region +&=', false), '?timeWindow=60&region=region%20%2B%26%3D');
 });
 
+for (const route of ['#/nodes', '#/nodes/example?section=neighbors', '#/packet/42', '#/packets-extra']) {
+  test('a late packets URL update preserves navigation to ' + route, () => {
+    const s = setup('#/packets?timeWindow=0');
+    // location.hash changes before the queued hashchange handler destroys
+    // the packets view. An in-flight response can render in that gap.
+    s.location.hash = route;
+    s.updatePacketsUrl();
+    assert.strictEqual(s.location.hash, route, 'the packets view replaced the requested route');
+  });
+}
+
+test('packets URL updates still work after returning from another route', () => {
+  const s = setup();
+  s.location.hash = '#/nodes';
+  s.updatePacketsUrl();
+  s.location.hash = '#/packets/aabbccddeeff0011?obs=123';
+  s.pickObserver('obsA');
+  assert.strictEqual(s.location.hash, '#/packets/aabbccddeeff0011?observer=obsA&obs=123');
+});
+
 test('#2091: init restores obs from the hash after router strips the query', () => {
   const readInitialObservation = new Function('location', 'routeParam',
     'let directObsId = "stale", directPacketId = null, directPacketHash = null; ' +

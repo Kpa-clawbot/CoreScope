@@ -47,7 +47,7 @@ func newOAFixture(t *testing.T) *oaFixture {
 	a := f.srv.auth
 	a.set.observerLogins = observerLoginSettings{enabled: true, hookSecret: hkSecret, key: oaKey,
 		host: "mqtt.example.org", port: 8883, transport: "tcp", tls: true}
-	idx, err := newObserverLoginIndex(a.st)
+	idx, err := newObserverLoginIndex(a.st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

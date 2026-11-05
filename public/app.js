@@ -1536,6 +1536,10 @@ window.addEventListener('DOMContentLoaded', () => {
     var overflowQueue = buildOverflowQueue();
 
     function rebuildMoreMenu() {
+      // Removing a focused clone drops focus onto the body. Keep its
+      // destination whether the next fit leaves it in More or moves it inline.
+      const focused = navMoreMenu.contains(document.activeElement) ? document.activeElement : null;
+      let focusTarget = focused && allLinks.find(link => link.getAttribute('href') === focused.getAttribute('href'));
       navMoreMenu.innerHTML = '';
       const hidden = allLinks.filter(a => a.classList.contains('is-overflow'));
       hidden.forEach(function(link) {
@@ -1551,14 +1555,17 @@ window.addEventListener('DOMContentLoaded', () => {
         clone.addEventListener('click', closeNav);
         clone.addEventListener('click', closeMoreMenu);
         navMoreMenu.appendChild(clone);
+        if (link === focusTarget) focusTarget = clone;
       });
       // If nothing overflows, hide the More button entirely so wide
       // viewports don't show a useless dropdown trigger.
       navMoreWrap.classList.toggle('is-hidden', hidden.length === 0);
+      if (hidden.length === 0) closeMoreMenu();
       // Refresh active state on the More button (a hidden active link
       // means the More menu currently "is" the active section).
       var hasActiveMore = navMoreMenu.querySelector('.nav-link.active');
       navMoreBtn.classList.toggle('active', !!hasActiveMore);
+      if (focusTarget) focusTarget.focus();
     }
 
     function applyNavPriority() {

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/meshcore-analyzer/users"
 )
@@ -79,13 +80,83 @@ func TestObserverAdmin_ListShowsLoginsAndBindings(t *testing.T) {
 		got.Logins[0].Username != "obs_aaaaaaaaaaaa" || len(got.Logins[0].Observers) != 2 || got.Logins[0].Revoked {
 		t.Fatalf("logins = %+v", got.Logins)
 	}
-	if len(got.Bindings) != 2 || got.Bindings[0].UserID == nil || got.Bindings[0].BoundBy != "auto" {
+	if len(got.Bindings) != 2 || got.Bindings[0].UserID == nil || got.Bindings[0].BoundBy != "auto" || got.Bindings[0].ConfirmedAt == nil {
 		t.Fatalf("bindings = %+v", got.Bindings)
 	}
 	for _, bad := range []string{"pw-a", olHash("pw-a"), `"enc"`} {
 		if strings.Contains(w.Body.String(), bad) {
 			t.Fatalf("list leaks %q", bad)
 		}
+	}
+}
+
+func TestObserverAdmin_ConfirmedAtFollowsOwnerPublish(t *testing.T) {
+	f := newOadmFixture(t)
+	f.idx.shared = map[string]bool{"meshcore_shared": true}
+	a := f.addLogin(t, "a@example.org", "obs_aaaaaaaaaaaa", "pw-a")
+	b := f.addLogin(t, "b@example.org", "obs_bbbbbbbbbbbb", "pw-b")
+	confirmedAt := func() *string {
+		t.Helper()
+		w := f.do("GET", oadmList, nil, as(f.admin))
+		expectStatus(t, w, 200)
+		got := decode[adminObserverLoginsResponse](t, w)
+		if len(got.Bindings) != 1 {
+			t.Fatalf("bindings = %+v", got.Bindings)
+		}
+		return got.Bindings[0].ConfirmedAt
+	}
+	path := "/api/admin/observer-bindings/" + hkPK
+	expectStatus(t, f.do("PUT", path, observerBindingRequest{UserID: &a}, as(f.admin)), 200)
+	if c := confirmedAt(); c != nil {
+		t.Fatalf("admin assignment confirmed: %v", *c)
+	}
+	if !strings.Contains(f.do("GET", oadmList, nil, as(f.admin)).Body.String(), `"confirmedAt":null`) {
+		t.Fatal("confirmedAt not serialised as null")
+	}
+	if f.authz(t, "meshcore_shared", hkTopic(hkPK), "publish") != hookIgnore {
+		t.Fatal("shared login not ignored before confirmation")
+	}
+	if f.authz(t, "obs_aaaaaaaaaaaa", hkTopic(hkPK), "publish") != hookAllow {
+		t.Fatal("owner publish not allowed")
+	}
+	c := confirmedAt()
+	if c == nil {
+		t.Fatal("owner publish did not confirm")
+	}
+	if _, err := time.Parse(time.RFC3339, *c); err != nil {
+		t.Fatalf("confirmedAt %q: %v", *c, err)
+	}
+	if f.authz(t, "meshcore_shared", hkTopic(hkPK), "publish") != hookDeny {
+		t.Fatal("shared login not denied after confirmation")
+	}
+	if f.authz(t, "meshcore_shared", "meshcore/#", "subscribe") != hookIgnore {
+		t.Fatal("shared login subscribe not ignored")
+	}
+	// Reassign to the same owner keeps it, to another owner clears it.
+	expectStatus(t, f.do("PUT", path, observerBindingRequest{UserID: &a}, as(f.admin)), 200)
+	if confirmedAt() == nil || f.authz(t, "meshcore_shared", hkTopic(hkPK), "publish") != hookDeny {
+		t.Fatal("same-owner reassign cleared the confirmation")
+	}
+	expectStatus(t, f.do("PUT", path, observerBindingRequest{UserID: &b}, as(f.admin)), 200)
+	if confirmedAt() != nil || f.authz(t, "meshcore_shared", hkTopic(hkPK), "publish") != hookIgnore {
+		t.Fatal("reassign to another owner kept the confirmation")
+	}
+}
+
+func TestObserverAdmin_OrphanHasNoConfirmedAt(t *testing.T) {
+	f := newOadmFixture(t)
+	a := f.addLogin(t, "a@example.org", "obs_aaaaaaaaaaaa", "pw-a")
+	if _, _, err := f.st.BindObserver(hkPK, a, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.Delete(a); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do("GET", oadmList, nil, as(f.admin))
+	expectStatus(t, w, 200)
+	got := decode[adminObserverLoginsResponse](t, w)
+	if len(got.Bindings) != 1 || got.Bindings[0].UserID != nil || got.Bindings[0].ConfirmedAt != nil {
+		t.Fatalf("bindings = %+v", got.Bindings)
 	}
 }
 
@@ -294,7 +365,7 @@ func TestIndexLoadMarksDisabledUsers(t *testing.T) {
 	if err := f.st.SetStatus(a, users.StatusDisabled); err != nil {
 		t.Fatal(err)
 	}
-	ix, err := newObserverLoginIndex(f.st)
+	ix, err := newObserverLoginIndex(f.st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
