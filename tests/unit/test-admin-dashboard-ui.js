@@ -593,6 +593,25 @@ test('joinObservers matches bindings case-insensitively and keeps bindings witho
   assert.strictEqual(rows[0].name, 'Roof');
 });
 
+test('joinObservers carries confirmedAt from the binding, null otherwise', () => {
+  const rows = obsT().joinObservers([{ id: PKB, name: 'Shed' }],
+    [{ pubkey: PKA, userId: 7, confirmedAt: '2026-10-28T09:00:00Z' }, { pubkey: PKC, userId: 7, confirmedAt: null }]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(rows.map((r) => [r.pubkey, r.confirmedAt]))),
+    [[PKB, null], [PKA.toUpperCase(), '2026-10-28T09:00:00Z'], [PKC, null]]);
+});
+
+test('observer rows: the Confirmed cell shows the date, "not yet" while unconfirmed, a dash without a binding', () => {
+  const t = obsT();
+  const by = { 7: LOGIN() };
+  const when = '2026-10-28T09:00:00Z';
+  const yes = t.observerRowHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: true, userId: 7, confirmedAt: when }, by);
+  assert(yes.indexOf('<td class="um-col-optional obs-confirmed">' + new Date(when).toLocaleString() + '</td>') !== -1, yes);
+  const notYet = t.observerRowHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: true, userId: 7, confirmedAt: null }, by);
+  assert(notYet.indexOf('<td class="um-col-optional obs-confirmed">not yet</td>') !== -1, notYet);
+  const open = t.observerRowHtml({ pubkey: PKB, name: 'Shed', lastSeen: null, bound: false, userId: null, confirmedAt: null }, by);
+  assert(open.indexOf('<td class="um-col-optional obs-confirmed">—</td>') !== -1, open);
+});
+
 test('ownerLabel: owner name, user #id for an unknown login, orphaned, not migrated', () => {
   const t = obsT();
   const by = { 7: LOGIN() };
@@ -727,6 +746,22 @@ test('a saved owner PUTs the user id or null and updates only that row and the s
     [['/api/admin/observer-bindings/' + PKB, { userId: 7 }], ['/api/admin/observer-bindings/' + PKB, { userId: null }]]);
   assert.strictEqual(env.els.obsAdminMsg.textContent, PKB.slice(0, 12) + '…: unbound');
   assert(tr.innerHTML.indexOf('not migrated') !== -1, tr.innerHTML);
+});
+
+test('a reassign keeps confirmedAt for the same owner and clears it for another owner or an unbind', async () => {
+  const when = '2026-10-28T09:00:00Z';
+  const env = obsEnv(OBS_ROUTES([LOGIN(), LOGIN({ userId: 8, username: 'obs_b' })],
+    [{ pubkey: PKB, userId: 7, confirmedAt: when }], [{ id: PKB, name: 'Shed' }]));
+  await env.ctx.CSAdminObserverLogins.mount({ innerHTML: '' });
+  const t = env.ctx.CSAdminObserverLogins._test;
+  await t.onChange({ target: { value: '7', disabled: false, getAttribute: () => PKB } });
+  assert.strictEqual(t.state.byKey[PKB].confirmedAt, when, 'same owner cleared it');
+  await t.onChange({ target: { value: '8', disabled: false, getAttribute: () => PKB } });
+  assert.strictEqual(t.state.byKey[PKB].confirmedAt, null, 'new owner kept it');
+  assert(env.els[rowKey(PKB)].innerHTML.indexOf('obs-confirmed">not yet</td>') !== -1, env.els[rowKey(PKB)].innerHTML);
+  t.state.byKey[PKB].confirmedAt = when;
+  await t.onChange({ target: { value: '', disabled: false, getAttribute: () => PKB } });
+  assert.strictEqual(t.state.byKey[PKB].confirmedAt, null, 'unbind kept it');
 });
 
 test('a refused owner change shows the error and puts the saved value back', async () => {

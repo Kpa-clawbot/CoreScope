@@ -135,6 +135,7 @@
     "files": [
       "tests/e2e/test-region-quick-picks.js",
       "tests/e2e/test-radio-setting-1869-e2e.js",
+      "tests/e2e/test-observer-neighbors-2270-e2e.js",
       "tests/e2e/test-table-sort.js"
     ]
   },

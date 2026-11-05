@@ -564,6 +564,8 @@ async function until(fn, label) {
     const orow = admin.locator('#obsAdminObservers tr[data-pubkey="' + obs.pubkey + '"]');
     await orow.waitFor();
     assert((await orow.locator('td').nth(2).textContent()) === 'E2E Observer', 'bound observer does not show its owner');
+    const confirmed = await orow.locator('td.obs-confirmed').textContent();
+    assert(confirmed !== 'not yet' && confirmed !== '—' && /\d/.test(confirmed), 'auto-bound observer not shown as confirmed: ' + confirmed);
     assert(await orow.locator('select').count() === 0, 'a select rendered before Reassign');
     assert((await admin.textContent('#obsAdminObservers')).indexOf('not migrated') !== -1, 'unbound observers not marked');
     await noPasswordShown(admin, obs.password);

@@ -163,6 +163,13 @@ var migrations = [][]string{
 		)`,
 		`CREATE INDEX observer_bindings_user ON observer_bindings(user_id)`,
 	},
+	// v8: confirmed_at is set once the owner's own personal login has
+	// published under the bound pubkey; 'auto' bindings are born from that
+	// login, so they count as confirmed at bound_at.
+	{
+		`ALTER TABLE observer_bindings ADD COLUMN confirmed_at INTEGER`,
+		`UPDATE observer_bindings SET confirmed_at = bound_at WHERE bound_by = 'auto'`,
+	},
 }
 
 func (s *Store) migrate() error {

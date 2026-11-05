@@ -895,6 +895,28 @@ Returned when the node is unknown or blacklisted.
 { "error": "Not found" }
 ```
 
+### Response `429`
+
+At most 2 uncached reports compute at once, with up to 8 distinct cold build
+leaders waiting for a slot for up to 3 s. A further distinct cold leader gets
+429 immediately when the queue is full; an admitted leader gets 429 if no
+slot frees before its wait expires. Waiting holds no database connection.
+These are fixed internal defaults, with no operator or customizer setting.
+
+Cached answers never wait. Concurrent requests for the same node and `days`
+share one computation and one queue admission, so the eight-leader cap does
+not bound all existing singleflight followers. When the request that started
+a shared computation disconnects first, the others sharing it also get 429.
+Nothing is cached for a 429; retry after `Retry-After` seconds.
+
+```
+Retry-After: 2
+```
+
+```json
+{ "error": "reach is busy computing other reports", "retryAfter": 2 }
+```
+
 ---
 
 ## GET /api/packets
@@ -911,6 +933,7 @@ Paginated packet (transmission) list with filtering.
 | `route`      | string | —       | Filter by route type                               |
 | `region`     | string | —       | Filter by region (IATA code substring)             |
 | `observer`   | string | —       | Filter by observer ID                              |
+| `excludeTx`  | boolean | `false` | Set exactly `true` to exclude TX-only evidence for the selected observer(s) |
 | `hash`       | string | —       | Filter by packet hash                              |
 | `since`      | string | —       | ISO timestamp lower bound                          |
 | `until`      | string | —       | ISO timestamp upper bound                          |
@@ -919,6 +942,14 @@ Paginated packet (transmission) list with filtering.
 | `order`      | string | `DESC`  | Sort direction: `asc` or `desc`                    |
 | `groupByHash`| string | —       | Set to `"true"` for grouped response               |
 | `expand`     | string | —       | Set to `"observations"` to include observation arrays |
+
+With `excludeTx=true`, a transmission must have at least one observation whose
+direction is not `tx`. When `observer` is set, that same observation must belong
+to one of its comma-separated IDs; without it, any observer can qualify.
+Missing/empty directions remain eligible for legacy data. This filters membership,
+including totals and grouped results; displayed direction and signal values still
+come from the transmission's representative observation. Multi-node mode (`nodes`)
+ignores this option, as it does the other ordinary packet filters.
 
 ### Response `200` (default)
 

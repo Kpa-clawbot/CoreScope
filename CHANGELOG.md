@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [3.16.0] - 2026-10-29
+
+See [docs/release-notes/v3.16.0.md](docs/release-notes/v3.16.0.md) for the full notes. 47 commits since v3.15.0: 23 fix, 9 feat, 6 docs, 2 test, 2 perf, 2 ci, 1 ui, 1 deps, 1 chore.
+
+### Highlights
+- **Relay hops refresh Last Heard only when they can be one node alone** (#2334, #2308, #2298) - the ingestor now uses the same rule as the server, and only flood hops count. On a 1-byte mesh relay hops practically stop refreshing Last Heard (0 of 506,545 one-byte hop instances in a production sample had a unique prefix). "Actively relaying" needs certain evidence (#2336). **Operator awareness required.**
+- **`users.db` migrates to schema v8 with user accounts on** (#2306, #2348) - a v3.15.x binary refuses it afterwards, so keep the pre-upgrade backup for a rollback.
+- **Go 1.26 to build from source, runtime image on Alpine 3.24** (#2297) - dependency updates for security advisories.
+- **Optional personal MQTT logins for observers** (#2306, #2347, #2348, #2349) - per-user broker logins through EMQX hooks, a credentials mail per uploader, and a lock-out of the shared login for moved observers.
+- **Observer neighbour reports and the radio setting per observation** (#2300, #2292) - created automatically; Leaflet and Chart.js are served from `vendor/` instead of unpkg.com (#2299).
+
+No manual migration step: three new analyzer tables are created at the first start.
+
 ## [3.15.0] - 2026-10-22
 
 See [docs/release-notes/v3.15.0.md](docs/release-notes/v3.15.0.md) for the full notes. 77 commits since v3.14.0: 27 fix, 23 perf, 19 feat, 3 test, 2 ci, 2 docs, 1 chore.

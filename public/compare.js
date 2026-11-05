@@ -271,8 +271,8 @@ if (typeof window !== 'undefined') {
     try {
       var since24h = sinceISO(24);
       var results = await Promise.all([
-        api('/packets?observer=' + encodeURIComponent(selA) + '&limit=' + MAX_PACKETS + '&since=' + encodeURIComponent(since24h)),
-        api('/packets?observer=' + encodeURIComponent(selB) + '&limit=' + MAX_PACKETS + '&since=' + encodeURIComponent(since24h))
+        api('/packets?observer=' + encodeURIComponent(selA) + '&excludeTx=true&limit=' + MAX_PACKETS + '&since=' + encodeURIComponent(since24h)),
+        api('/packets?observer=' + encodeURIComponent(selB) + '&excludeTx=true&limit=' + MAX_PACKETS + '&since=' + encodeURIComponent(since24h))
       ]);
 
       packetsA = results[0].packets || [];
