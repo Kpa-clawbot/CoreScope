@@ -422,10 +422,11 @@
       iconSize: [size, size],
       iconAnchor: [c, c],
       popupAnchor: [0, -c],
+      collisionBounds: { x: -c, y: -c, w: size + (isForeign ? 7 : 0), h: size + (isForeign ? 7 : 0) },
     });
   }
 
-  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) {
+  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState, metrics) {
     // Show the short mesh hash ID (first N bytes of pubkey, uppercased). When
     // the width is unobserved the label falls back to one byte — it has to draw
     // something — but says so instead of asserting a 1-byte config.
@@ -482,7 +483,37 @@
       iconSize: null,
       iconAnchor: [14, 12],
       popupAnchor: [0, -12],
+      collisionBounds: metrics ? {
+        x: -14, y: -12,
+        w: Math.ceil(metrics.textWidth(visible) + metrics.padding + (isAlsoObserver ? metrics.observer : 0) + (isForeign ? 17 : 0)),
+        h: metrics.height,
+      } : null,
     });
+  }
+
+  // Read the label font once per render, outside the marker/placement loops.
+  // Canvas measures short text without forcing a DOM layout for each node.
+  function markerLabelMetrics() {
+    const probe = document.createElement('div');
+    probe.className = 'mc-mb-label';
+    probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none';
+    probe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(probe);
+    try {
+      const style = getComputedStyle(probe);
+      const context = document.createElement('canvas').getContext('2d');
+      context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
+      const spacing = parseFloat(style.letterSpacing) || 0;
+      const textWidth = text => context.measureText(text).width + text.length * spacing;
+      return {
+        textWidth,
+        padding: parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth),
+        observer: textWidth(' ') + 16, // .ph-icon is 16px, including in the observer span.
+        height: Math.ceil(Math.max(24, parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 4)),
+      };
+    } finally {
+      probe.remove();
+    }
   }
 
   async function init(container) {
@@ -2005,16 +2036,20 @@
 
     for (var i = 0; i < markers.length; i++) {
       var m = markers[i];
-      var w = m.isLabel ? 38 : 20;
-      var h = m.isLabel ? 24 : 20;
+      // Callers without bounds retain the old placement (including route labels).
+      var bounds = m.collisionBounds;
+      var w = bounds ? bounds.w : (m.isLabel ? 38 : 20);
+      var h = bounds ? bounds.h : (m.isLabel ? 24 : 20);
+      var left = bounds ? bounds.x : -w / 2;
+      var top = bounds ? bounds.y : -h / 2;
       var pt = mapRef.latLngToLayerPoint(m.latLng);
       var bestPt = pt;
-      var box = { x: pt.x - w / 2, y: pt.y - h / 2, w: w, h: h };
+      var box = { x: pt.x + left, y: pt.y + top, w: w, h: h };
 
       if (overlaps(box)) {
         for (var j = 0; j < offsets.length; j++) {
           var tryPt = L.point(pt.x + offsets[j][0], pt.y + offsets[j][1]);
-          var tryBox = { x: tryPt.x - w / 2, y: tryPt.y - h / 2, w: w, h: h };
+          var tryBox = { x: tryPt.x + left, y: tryPt.y + top, w: w, h: h };
           if (!overlaps(tryBox)) {
             bestPt = tryPt;
             box = tryBox;
@@ -2112,6 +2147,10 @@
 
     const filterCtx = { selectedReferenceNode, neighborPubkeys };
     const filtered = nodes.filter(n => nodePassesMapFilters(n, filters, filterCtx));
+    // A warning and its neighbors need their full footprints. Keep the ordinary
+    // map's placement unchanged when no warning is present; clusters place themselves.
+    const sizeWarnings = !filters.clustering && filtered.some(n => n.foreign === true);
+    const labelMetrics = sizeWarnings && filters.hashLabels ? markerLabelMetrics() : null;
 
     const allMarkers = [];
 
@@ -2145,7 +2184,7 @@
       var scopeState = (scopeTintEnabled(filters.scopeOverlay, filters.scopeState) && !mbColor) ? (node.scope_config_state || null) : null;
       var scopeColor = scopeState ? scopeTint(node) : null;
       const isForeign = node.foreign === true;
-      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor, isForeign);
+      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState, labelMetrics) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor, isForeign);
       const latLng = L.latLng(node.lat, node.lon);
       // The scope state has to leave the fill and reach the DOM, or a dot marker
       // is colour and nothing else — which on the achromat preset is six greys
@@ -2158,7 +2197,7 @@
       var markerAlt = (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' +
         (scopeLabel ? ', scope config ' + scopeLabel : '') +
         (isForeign ? ', Foreign advert flag: ' + FOREIGN_ADVERT_DESCRIPTION : '');
-      allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: markerAlt, title: scopeLabel || isForeign ? markerAlt : '' });
+      allMarkers.push({ latLng, node, icon, isLabel: useLabel, collisionBounds: sizeWarnings ? icon.options.collisionBounds : null, popupFn: function() { return buildPopup(node); }, alt: markerAlt, title: scopeLabel || isForeign ? markerAlt : '' });
     }
 
     // Add observer markers (skip observers already represented as a node marker)
@@ -2173,7 +2212,7 @@
         if (obs.id && displayedNodePubkeys.has(obs.id.toLowerCase())) continue;
         const icon = makeMarkerIcon('observer');
         const latLng = L.latLng(obs.lat, obs.lon);
-        allMarkers.push({ latLng, node: obs, icon, isLabel: false, popupFn: function() { return buildObserverPopup(obs); }, alt: (obs.name || obs.id || 'Unknown') + ' (observer)' });
+        allMarkers.push({ latLng, node: obs, icon, isLabel: false, collisionBounds: sizeWarnings ? icon.options.collisionBounds : null, popupFn: function() { return buildObserverPopup(obs); }, alt: (obs.name || obs.id || 'Unknown') + ' (observer)' });
       }
     }
 
