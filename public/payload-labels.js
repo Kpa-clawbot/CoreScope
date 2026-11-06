@@ -128,7 +128,10 @@
     TYPE_ALIASES: TYPE_ALIASES,
     shortById: function (id) { return SHORT_BY_ID[id]; },
     longById: function (id) { return (BY_ID[id] && BY_ID[id].long) || ''; },
-    enumNameById: function (id) { return FW_PAYLOAD_TYPES[id]; }
+    enumNameById: function (id) { return FW_PAYLOAD_TYPES[id]; },
+    // Short label for display; ids the firmware does not define read
+    // "Type N" so an unexpected byte stays visible instead of vanishing.
+    displayName: function (id) { return SHORT_BY_ID[id] || ('Type ' + id); }
   };
   var ns = {
     enums: PAYLOAD_LABELS,

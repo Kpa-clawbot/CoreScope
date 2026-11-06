@@ -201,6 +201,7 @@ node tests/unit/test-panel-corner.js
 node tests/unit/test-path-inspector.js
 node tests/unit/test-payload-labels-content.js
 node tests/unit/test-payload-labels-namespace.js
+node tests/unit/test-payload-labels-surfaces.js
 node tests/unit/test-perf-anomaly.js
 node tests/unit/test-perf-disk-io-1120.js
 node tests/unit/test-perf-go-runtime.js
