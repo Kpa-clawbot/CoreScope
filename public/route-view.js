@@ -80,6 +80,7 @@
   var escapeHtml = _MC_RT_U.escapeHtml;
   var buildPacketContextBlock = _MC_RT_U.buildPacketContextBlock;
   var buildSnrSparkline = _MC_RT_U.buildSnrSparkline;
+  var pathGroupKey = _MC_RT_U.pathGroupKey;
 
   // Polish review (carmack #1423): bound _detailCache (was unbounded plain
   // object; every distinct pubkey ever clicked was retained for the tab's
@@ -342,23 +343,13 @@
     // flow without packetContext).
     var pktCtx = (opts && opts.packetContext) || null;
     var contextBlock = buildPacketContextBlock(pktCtx);
+    // #1633 — collapse paths whose only difference is 1-byte hops when
+    // the customizer toggle is ON: grouping uses the FILTERED hop list so
+    // the picker count reflects the surviving distinct routes.
+    var filterHops = (typeof window !== 'undefined') ? window.MC_filterPathHops : null;
     var uniquePathsCount = (opts && opts.allPaths) ? (function () {
       var seen = {};
-      opts.allPaths.forEach(function (p) {
-        // #1633 — collapse paths whose only difference is 1-byte hops when
-        // the customizer toggle is ON. Aggregation uses the FILTERED hop
-        // list so the picker count reflects the surviving distinct routes.
-        // #1689 r1 (adv #1): if the filter strips EVERY hop the key becomes
-        // an empty string and distinct all-1-byte routes collide into one
-        // bucket. Fall back to the raw key with an `__all1byte__::` prefix
-        // so they stay distinct while still being marked as filtered.
-        var rawHops = (p.path || []);
-        var hops = (typeof window !== 'undefined' && window.MC_filterPathHops)
-          ? window.MC_filterPathHops(rawHops)
-          : rawHops;
-        var key = hops.length ? hops.join('-') : ('__all1byte__::' + rawHops.join('-'));
-        seen[key] = true;
-      });
+      opts.allPaths.forEach(function (p) { seen[pathGroupKey(p.path, filterHops)] = true; });
       return Object.keys(seen).length;
     })() : 1;
     var multiPathChip = '';
@@ -373,14 +364,9 @@
       var pathGroups = {};
       (opts.allPaths || []).forEach(function (p) {
         var rawHops = p.path || [];
-        // #1633 — same render-time filter as the count above.
-        // #1689 r1 (adv #1): empty filtered result must NOT collide with
-        // other all-1-byte paths. Use a sentinel that includes the rawHops
-        // signature so distinct routes stay separate buckets in the picker.
-        var hops = (typeof window !== 'undefined' && window.MC_filterPathHops)
-          ? window.MC_filterPathHops(rawHops)
-          : rawHops;
-        var k = hops.length ? hops.join('→') : ('⟨all-1byte⟩::' + rawHops.join('→'));
+        // #1633 — same render-time grouping as the count above.
+        var hops = typeof filterHops === 'function' ? filterHops(rawHops) : rawHops;
+        var k = pathGroupKey(rawHops, filterHops);
         var _bt = false;
         // #1784 — trust threshold: if any raw hop is below the configured
         // minimum hash bytes, mark for speculative display treatment.
@@ -1033,6 +1019,19 @@
         restoreAllPaths();
       });
     }
+    // Deep-link initial view (?paths=all / ?observer=, see map.js
+    // loadRouteFromDeepLink): the same handlers as the operator's click.
+    sidebar._applyPathView = function (view) {
+      if (!view) return;
+      if (view.mode === 'all') {
+        if (clearBtn) clearBtn.click();
+      } else if (view.mode === 'path') {
+        var key = pathGroupKey(view.path, filterHops);
+        for (var ri = 0; ri < pathRows.length; ri++) {
+          if (pathRows[ri].dataset.pathKey === key) { pathRows[ri].click(); return; }
+        }
+      }
+    };
 
     // Sparkline interactivity
     var sparkDots = sidebar.querySelectorAll('.mc-rt-spark-dot');
@@ -1543,6 +1542,10 @@
           window.__mc_routeResizeObserver = ro;
         }
       } catch (e) { console.warn('[route-view] ResizeObserver attach:', e); }
+    }
+    // Queued after the initial refit so the deep-linked view's own fit wins.
+    if (opts.initialPathView && sidebar._applyPathView) {
+      requestAnimationFrame(function () { sidebar._applyPathView(opts.initialPathView); });
     }
   }
 
