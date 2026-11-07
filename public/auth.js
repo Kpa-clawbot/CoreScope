@@ -175,6 +175,8 @@
     if (!window.MC_USER_MGMT || !window.MC_USER_MGMT.enabled) return null;
     state.enabled = true;
     renderControl();
+    // Header layout changes even if the session request stalls or fails.
+    window.dispatchEvent(new CustomEvent('cs-auth-control-added'));
     return refreshMe();
   }).catch(function () { return null; });
 

@@ -67,3 +67,23 @@ func TestClientConfigAnnouncesCompanionLinking(t *testing.T) {
 		t.Fatalf("companionLinking missing with user management on: %s", get())
 	}
 }
+
+// The account page shows the observer-login section only when the server
+// has the routes.
+func TestClientConfigAnnouncesObserverLogins(t *testing.T) {
+	srv, router := setupTestServer(t)
+	get := func() string {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest("GET", "/api/config/client", nil))
+		return w.Body.String()
+	}
+	a, _ := newTestAuthService(t)
+	srv.auth = a
+	if strings.Contains(get(), "observerLogins") {
+		t.Fatal("observerLogins present with the feature off")
+	}
+	a.set.observerLogins.enabled = true
+	if !strings.Contains(get(), `"observerLogins":true`) {
+		t.Fatalf("observerLogins missing with the feature on: %s", get())
+	}
+}

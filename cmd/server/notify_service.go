@@ -192,6 +192,16 @@ func (n *notifier) tick(ctx context.Context) {
 		log.Printf("[notify] read nodes: %v", err)
 		return
 	}
+	var owners map[string]int64
+	if n.a.obsIdx != nil {
+		for _, p := range prefs {
+			if p.Has(users.NotifyObserverOfflineOwn) {
+				wantObservers = true
+				owners = n.a.obsIdx.ownersSnapshot()
+				break
+			}
+		}
+	}
 	var observers []notifyObserver
 	if wantObservers {
 		if observers, err = n.src.observers(); err != nil {
@@ -212,7 +222,7 @@ func (n *notifier) tick(ctx context.Context) {
 	}
 	res := evaluateNotifications(notifyInput{Now: now, Health: n.src.health(), LowMv: n.src.lowBatteryMv(),
 		Accounts: accounts, Prefs: prefs, Watches: watches, States: states, Nodes: nodes,
-		Heard: heard, SharedSeen: n.src.sharedPrefixSeen(infra), OfflineAfter: n.offlineWindows(pubkeys, now), NewestPacket: n.src.newestPacket(), Observers: observers, IngestStale: stale, IngestResumedAt: n.ingestResumedAt, External: external})
+		Heard: heard, SharedSeen: n.src.sharedPrefixSeen(infra), OfflineAfter: n.offlineWindows(pubkeys, now), NewestPacket: n.src.newestPacket(), Observers: observers, ObserverOwners: owners, IngestStale: stale, IngestResumedAt: n.ingestResumedAt, External: external})
 	if err := st.DeleteNotifyStates(res.Drop); err != nil {
 		log.Printf("[notify] delete dropped states, nothing mailed this time: %v", err)
 		return
@@ -393,7 +403,7 @@ func notifyChangeText(c notifyChange, label string) string {
 		}
 	case users.NotifyForeignNew:
 		what = "new foreign node"
-	case users.NotifyObserverOffline:
+	case users.NotifyObserverOffline, users.NotifyObserverOfflineOwn:
 		what = "observer back online"
 		if bad {
 			what = "observer offline"
@@ -406,7 +416,7 @@ func notifyChangeText(c notifyChange, label string) string {
 // external alert to the link the feed gave it.
 func notifySubjectURL(base string, c notifyChange) string {
 	switch c.Event {
-	case users.NotifyObserverOffline:
+	case users.NotifyObserverOffline, users.NotifyObserverOfflineOwn:
 		return base + "/#/observers/" + url.PathEscape(c.Subject)
 	case users.NotifyNodeExternal:
 		if c.URL != "" {

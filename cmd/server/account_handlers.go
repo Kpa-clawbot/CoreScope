@@ -220,6 +220,9 @@ func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request, u *
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	if a.obsIdx != nil {
+		a.obsIdx.removeUser(u.ID)
+	}
 	a.audit(idPtr(u.ID), "user.delete.self", idPtr(u.ID), nil)
 	a.clearSessionCookie(w)
 	writeJSON(w, okResponse{OK: true, Message: "Your account was deleted."})

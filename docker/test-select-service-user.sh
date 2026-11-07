@@ -6,7 +6,7 @@
 # addgroup, deluser, delgroup, id, chown, find and stat are replaced by stubs
 # on PATH, and the mount table is a fixture file. The account stubs read and
 # write a passwd/group pair of files seeded with the accounts the real image
-# has (verified against alpine:3.20 with mosquitto, supervisor and caddy
+# has (verified against alpine:3.24 with mosquitto, supervisor and caddy
 # installed, plus the Dockerfile's corescope), so an account created mid-run is
 # visible to the lookups that follow it. chown and find record their arguments
 # rather than touching the filesystem, which is what lets the ownership

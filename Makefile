@@ -109,7 +109,7 @@ vet:
 	bash scripts/allmod.sh vet ./...
 
 fmt-check:
-	@unformatted=$$(gofmt -l $$(git ls-files '*.go' | grep -vi 'Dockerfile.go')); \
+	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
 	if [ -n "$$unformatted" ]; then echo "gofmt required on:"; echo "$$unformatted"; exit 1; fi; \
 	echo "gofmt: clean"
 

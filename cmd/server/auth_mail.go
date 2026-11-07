@@ -18,11 +18,17 @@ import (
 // the URL on their own lines in plain text.
 type mailLine struct{ text, url string }
 
+// mailBlock is a titled preformatted block: the title and the note as a
+// heading and a paragraph, the body verbatim in text and escaped in <pre> in
+// HTML.
+type mailBlock struct{ title, note, body string }
+
 type mailContent struct {
 	subject     string
 	greeting    string
 	paragraphs  []string
-	lines       []mailLine // after the paragraphs
+	pre         []mailBlock // after the paragraphs
+	lines       []mailLine  // after the paragraphs
 	actionLabel string
 	actionURL   string
 	footer      *mailLine // replaces the default footer when set
@@ -55,6 +61,11 @@ func (a *authService) render(to, toName, tag string, c mailContent) mailer.Messa
 	for _, p := range c.paragraphs {
 		text.WriteString(p + "\n\n")
 		h.WriteString("<p>" + html.EscapeString(p) + "</p>")
+	}
+	for _, b := range c.pre {
+		text.WriteString("=== " + b.title + " ===\n" + b.note + "\n\n" + b.body + "\n\n")
+		h.WriteString("<h3>" + html.EscapeString(b.title) + "</h3><p>" + html.EscapeString(b.note) + "</p><pre>" +
+			html.EscapeString(b.body) + "</pre>")
 	}
 	if len(c.lines) > 0 {
 		h.WriteString("<ul>")

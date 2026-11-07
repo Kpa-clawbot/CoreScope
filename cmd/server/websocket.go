@@ -323,6 +323,9 @@ func (p *Poller) Start() {
 		select {
 		case <-ticker.C:
 			if p.store != nil {
+				// Radio history first (#1869): a retune or the radio id of a
+				// new observation must be known before it is broadcast.
+				refreshRadioHistory(p.db.conn, false)
 				// Ingest new transmissions into in-memory store and broadcast
 				newTxs, newMax := p.store.IngestNewFromDB(lastID, 100)
 				if newMax > lastID {

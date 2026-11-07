@@ -22,13 +22,17 @@ func chStoreWithPM() *PacketStore {
 func TestCertainFor(t *testing.T) {
 	pm := chPM()
 	at := time.Date(2026, 10, 18, 16, 0, 0, 0, time.UTC)
-	// Zero-hop advert: certain only through its sender. (certainFor assumes
-	// tx is in byNode[pk]; a flood packet with chC's unique prefix would
-	// rightly count as chC relaying it.)
+	// Own packets are certain without relay evidence; relay cases below
+	// carry an actual observed path, independent of the broad byNode index.
 	advert := chTx(1, 2, 4, 1, at)
 	advert.DecodedJSON = fmt.Sprintf(`{"pubKey":%q}`, chA)
 	anon := chTx(2, 2, 7, 1, at) // direct route, but the sender is certain
 	anon.DecodedJSON = fmt.Sprintf(`{"srcPubKey":%q}`, chA)
+	relay := func(id, route, payload, size int, pk string) *StoreTx {
+		tx := chTx(id, route, payload, size, at)
+		chObservation(tx, pk)
+		return tx
+	}
 	cases := []struct {
 		name string
 		tx   *StoreTx
@@ -37,11 +41,11 @@ func TestCertainFor(t *testing.T) {
 	}{
 		{"own advert", advert, chA, true},
 		{"own anon request, direct route", anon, chA, true},
-		{"2-byte flood hop, unique", chTx(3, 1, 5, 2, at), chA, true},
-		{"1-byte flood hop shared with chB", chTx(4, 1, 5, 1, at), chA, false},
-		{"1-byte flood hop, unique first byte", chTx(5, 1, 5, 1, at), chC, true},
-		{"direct-route hop", chTx(6, 2, 5, 2, at), chA, false},
-		{"TRACE", chTx(7, 1, packetpathTrace, 2, at), chA, false},
+		{"2-byte flood hop, unique", relay(3, 1, 5, 2, chA), chA, true},
+		{"1-byte flood hop shared with chB", relay(4, 1, 5, 1, chA), chA, false},
+		{"1-byte flood hop, unique first byte", relay(5, 1, 5, 1, chC), chC, true},
+		{"direct-route hop", relay(6, 2, 5, 2, chA), chA, false},
+		{"TRACE", relay(7, 1, packetpathTrace, 2, chA), chA, false},
 		{"someone else's advert", advert, chC, false},
 		{"nil tx", nil, chA, false},
 	}
@@ -197,13 +201,13 @@ func TestCertainActivityEndsAtLastCertainPacket(t *testing.T) {
 			id++
 			tx := chTx(id, 1, 5, 2, at.Add(-time.Duration(k)*time.Minute))
 			tx.Observations = []*StoreObs{{ObserverID: fmt.Sprintf("obs%d", k)}}
-			s.indexResolvedPathHops(tx, []string{chA}, hopsSeen, s.nodePM)
+			chIndexResolved(s, tx, []string{chA}, hopsSeen, s.nodePM)
 		}
 	}
 	// After the outage only the shared 1-byte prefix: attributed, not certain.
 	for h := 1; h < 60; h++ {
 		id++
-		s.indexResolvedPathHops(chTx(id, 1, 5, 1, lastCertain.Add(time.Duration(h)*time.Hour)), []string{chA}, hopsSeen, s.nodePM)
+		chIndexResolved(s, chTx(id, 1, 5, 1, lastCertain.Add(time.Duration(h)*time.Hour)), []string{chA}, hopsSeen, s.nodePM)
 	}
 
 	a := s.CertainActivity([]string{chA, chC}, now)[chA]
@@ -320,7 +324,7 @@ func TestNodeAnalyticsCertainTimeline(t *testing.T) {
 
 	hour := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Hour)
 	srv.store.mu.Lock()
-	srv.store.indexResolvedPathHops(chTx(900001, 1, 5, 1, hour.Add(10*time.Minute)), []string{pk}, map[string]bool{}, nil)
+	chIndexResolved(srv.store, chTx(900001, 1, 5, 1, hour.Add(10*time.Minute)), []string{pk}, map[string]bool{}, nil)
 	srv.store.mu.Unlock()
 
 	w := httptest.NewRecorder()
@@ -354,19 +358,23 @@ func BenchmarkCertainActivity(b *testing.B) {
 	s := chStoreWithPM()
 	end := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	keys := make([]string, 0, 50)
+	nodes := make([]nodeInfo, 0, 50)
 	s.certainHeard = map[string]string{}
 	id := 0
 	for n := 0; n < 50; n++ {
-		pk := fmt.Sprintf("%064x", n+1)
+		pk := fmt.Sprintf("%04x%060x", n+1, n+1)
 		keys = append(keys, pk)
+		nodes = append(nodes, nodeInfo{PublicKey: pk, Role: "repeater"})
 		for i := 0; i < 6000; i++ {
 			id++
 			tx := chTx(id, 1, 5, 2, end.Add(-time.Duration(i)*100*time.Second))
 			tx.Observations = []*StoreObs{{ObserverID: "obs1"}, {ObserverID: "obs2"}}
+			chObservation(tx, pk)
 			s.byNode[pk] = append(s.byNode[pk], tx)
 		}
 		s.certainHeard[pk] = end.Format(time.RFC3339)
 	}
+	s.nodePM = buildPrefixMap(nodes)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -432,7 +440,7 @@ func TestCertainActivityUTCBoundsAndLegacyTimestamps(t *testing.T) {
 	lastCertain := time.Date(2026, 10, 22, 21, 10, 0, 0, time.UTC)
 	hopsSeen := map[string]bool{}
 	for h := 0; h < 28; h++ {
-		s.indexResolvedPathHops(chTx(h+1, 1, 5, 2, lastCertain.Add(-time.Duration(h)*time.Hour)), []string{chA}, hopsSeen, s.nodePM)
+		chIndexResolved(s, chTx(h+1, 1, 5, 2, lastCertain.Add(-time.Duration(h)*time.Hour)), []string{chA}, hopsSeen, s.nodePM)
 	}
 	// Local now just after midnight (+02:00): the UTC date is a day earlier.
 	now := time.Date(2026, 10, 23, 0, 30, 0, 0, time.FixedZone("CEST", 2*3600))
@@ -442,6 +450,7 @@ func TestCertainActivityUTCBoundsAndLegacyTimestamps(t *testing.T) {
 	}
 	firstHour := a.From
 	legacy := chTx(999, 1, 5, 2, firstHour)
+	chObservation(legacy, chA)
 	legacy.FirstSeen = firstHour.Add(20 * time.Minute).Format("2006-01-02 15:04:05")
 	s.mu.Lock()
 	s.byNode[chA] = append(s.byNode[chA], legacy)

@@ -706,6 +706,7 @@ type PacketQuery struct {
 	Type               *int
 	Route              *int
 	Observer           string
+	ExcludeTx          bool // require a non-TX observation from the selected observer(s), or any observer if unscoped
 	Hash               string
 	Since              string
 	Until              string
@@ -713,6 +714,7 @@ type PacketQuery struct {
 	Area               string // area key; filters by transmitting node's GPS position
 	Node               string
 	Channel            string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
+	Radio              string // canonical "MHz,kHz,SF,CR": some observation heard on it (#1869; in-memory store only)
 	Order              string // ASC or DESC
 	ExpandObservations bool   // when true, include observation sub-maps in txToMap output
 }
@@ -1014,18 +1016,24 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 		where = append(where, "t.channel_hash = ?")
 		args = append(args, q.Channel)
 	}
+	directionFilter := ""
+	if q.ExcludeTx {
+		directionFilter = " AND oi.direction IS NOT 'tx'"
+	}
 	if q.Observer != "" {
 		ids := strings.Split(q.Observer, ",")
 		placeholders := strings.Repeat("?,", len(ids))
 		placeholders = placeholders[:len(placeholders)-1]
 		if db.isV3 {
-			where = append(where, "EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.id IN ("+placeholders+"))")
+			where = append(where, "EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.id IN ("+placeholders+")"+directionFilter+")")
 		} else {
-			where = append(where, "EXISTS (SELECT 1 FROM observations oi WHERE oi.transmission_id = t.id AND oi.observer_id IN ("+placeholders+"))")
+			where = append(where, "EXISTS (SELECT 1 FROM observations oi WHERE oi.transmission_id = t.id AND oi.observer_id IN ("+placeholders+")"+directionFilter+")")
 		}
 		for _, id := range ids {
 			args = append(args, strings.TrimSpace(id))
 		}
+	} else if q.ExcludeTx {
+		where = append(where, "EXISTS (SELECT 1 FROM observations oi WHERE oi.transmission_id = t.id"+directionFilter+")")
 	}
 	if q.Region != "" {
 		if db.isV3 {

@@ -734,6 +734,9 @@
   let selectedId = null;
   function _isColorByHash() { return localStorage.getItem('meshcore-color-packets-by-hash') !== 'false'; }
   function _currentTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
+  // HB cell. Route type comes from this raw_hex's own header, not the transmission's
+  // route_type: the same packet can be heard as FLOOD and as TRANSPORT_FLOOD.
+  function hashBytesText(rawHex) { return pathHashSize(rawHex) || '—'; }
   function _hashStripeStyle(hash) { return _isColorByHash() && hash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(hash, _currentTheme()) + ';' : ''; }
   let groupByHash = true;
   let filters = {};
@@ -808,8 +811,11 @@
     // Preserve any subpath after /packets (e.g. #/packets/<hash>).
     var cur = String(location.hash || '');
     var subpath = '';
-    var m = cur.match(/^#\/packets(\/[^?]*)?/);
-    if (m && m[1]) subpath = m[1];
+    // A response may render after the hash changes but before hashchange
+    // destroys this view. Its filters must not replace the requested route.
+    var m = cur.match(/^#\/packets(\/[^?]*)?(?:\?|$)/);
+    if (!m) return;
+    if (m[1]) subpath = m[1];
     // Don't double-encode filters.hash when it's already the path segment.
     var skipHash = !!(filters.hash && subpath === '/' + filters.hash);
     var query = buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam(), skipHash);
@@ -910,6 +916,7 @@
       var layout = panel.closest('.split-layout');
       if (layout) layout.classList.add('detail-collapsed');
       selectedId = null;
+      if (window.setRouteTitle) window.setRouteTitle('packets');
       renderTableRows();
     }
   }
@@ -1558,6 +1565,7 @@
                 payload_type: p.payload_type,
                 raw_hex: p.raw_hex,
                 decoded_json: p.decoded_json,
+                radio: p.radio, // #1869: the filter's radio/sf fields read it
               };
               packets.unshift(newGroup);
               if (h) hashIndex.set(h, newGroup);
@@ -2589,12 +2597,11 @@
     const groupTypeName = payloadTypeName(p.payload_type);
     const groupTypeClass = payloadTypeColor(p.payload_type);
     const groupSize = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
-    const _grpPlOff = getPathLenOffset(p.route_type);
     // #1849: TRACE (payload_type=9) header path bytes are per-hop SNR readings,
     // not truncated hop hashes (see internal/packetpath/route.go PathBytesAreHops).
     // The (>>6)+1 derivation is meaningless for TRACE — render — with a tooltip.
     const _grpIsTrace = p.payload_type === 9;
-    const groupHashBytes = _grpIsTrace ? '—' : (((parseInt(p.raw_hex?.slice(_grpPlOff * 2, _grpPlOff * 2 + 2), 16) || 0) >> 6) + 1);
+    const groupHashBytes = _grpIsTrace ? '—' : hashBytesText(p.raw_hex);
     const _grpHashSizeTitle = _grpIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
     const isSingle = p.count <= 1;
     // Channel color highlighting (#271)
@@ -2626,13 +2633,12 @@
         const typeClass = payloadTypeColor(c.payload_type);
         const size = c.raw_hex ? Math.floor(c.raw_hex.length / 2) : 0;
         const childPath = getParsedPath(c);
-        const _cPlOff = getPathLenOffset(p.route_type);
         // #1849: TRACE header path bytes are SNR readings, not hop hashes.
         const _cIsTrace = c.payload_type === 9;
         const childHashBytes = _cIsTrace
           ? '—'
           : (c.raw_hex
-            ? (((parseInt(c.raw_hex.slice(_cPlOff * 2, _cPlOff * 2 + 2), 16) || 0) >> 6) + 1)
+            ? hashBytesText(c.raw_hex)
             : (childPath.length > 0 ? childPath[0].length / 2 : 0));
         const _cHashSizeTitle = _cIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
         const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
@@ -2666,10 +2672,9 @@
     // Channel color highlighting (#271)
     const _chanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(decoded.type || typeName, decoded.channel) : '';
     const size = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
-    const _flatPlOff = getPathLenOffset(p.route_type);
     // #1849: TRACE path bytes = SNR readings, not hop hashes.
     const _flatIsTrace = p.payload_type === 9;
-    const hashBytes = _flatIsTrace ? '—' : (((parseInt(p.raw_hex?.slice(_flatPlOff * 2, _flatPlOff * 2 + 2), 16) || 0) >> 6) + 1);
+    const hashBytes = _flatIsTrace ? '—' : hashBytesText(p.raw_hex);
     const _flatHashSizeTitle = _flatIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
     const pathStr = renderPath(pathHops, p.observer_id, { summary: true });
     const detail = getDetailPreview(decoded);
@@ -3488,6 +3493,7 @@
   let selectedObservationId = null;
 
   async function selectPacket(id, hash, prefetchedData, obsRowId) {
+    if (window.setRouteTitle) window.setRouteTitle('packets', String(hash || id));
     selectedId = id;
     selectedObservationId = obsRowId || null;
     const obsParam = selectedObservationId ? `?obs=${selectedObservationId}` : '';
@@ -3530,6 +3536,7 @@
           selectedId = null;
           selectedObservationId = null;
           history.replaceState(null, '', '#/packets');
+          if (window.setRouteTitle) window.setRouteTitle('packets');
           renderTableRows();
         }
       });
@@ -3545,9 +3552,11 @@
         document.body.appendChild(sheet);
         sheet.querySelector('#mobileSheetClose').addEventListener('click', () => {
           sheet.classList.remove('open');
+          if (window.setRouteTitle) window.setRouteTitle('packets');
         });
         sheet.querySelector('.mobile-sheet-handle').addEventListener('click', () => {
           sheet.classList.remove('open');
+          if (window.setRouteTitle) window.setRouteTitle('packets');
         });
       }
       panel = sheet.querySelector('.mobile-sheet-content');
@@ -3579,9 +3588,18 @@
     }
   }
 
+  // #1869: escaped text of an observation's radio setting. rf-params.js
+  // formats it; should that script fail to load, the raw string is shown
+  // (escaped) instead of the detail panel throwing.
+  function radioSettingHtml(radio) {
+    return window.RfParams ? window.RfParams.radioText(radio) : escapeHtml(radio || '');
+  }
+
   async function renderDetail(panel, data, chosenObsId) {
     const pkt = data.packet;
     const observations = data.observations || [];
+    // #1869: the Radio column only earns its width when the server reports one.
+    const obsHaveRadio = observations.some(o => o.radio);
 
     // Per-observation rendering (issue #849):
     // When opened from a packet row (no specific observer), default to first observation.
@@ -3825,6 +3843,7 @@
         <dt>Path</dt><dd>${displayHopCount > 0 ? `<span class="badge badge-info">${displayHopCount} hop${displayHopCount !== 1 ? 's' : ''}</span> ` + '<span class="detail-path-hops">' + renderPath(pathHops, effectivePkt.observer_id, { entries: pathEntries }) + '</span>' : '— (direct)'}</dd>
         <dt>Timestamp</dt><dd>${renderTimestampCell(effectivePkt.timestamp)}</dd>
         <dt>Observer</dt><dd>${escapeHtml(obsNameOnly(effectivePkt.observer_id))}${obsIataBadge(effectivePkt)}</dd>
+        ${effectivePkt.radio ? `<dt>Radio</dt><dd data-testid="detail-radio" title="Radio setting the observer was on when it heard this packet">${radioSettingHtml(effectivePkt.radio)}</dd>` : ''}
         ${locationHtml ? `<dt>Location</dt><dd>${locationHtml}</dd>` : ''}
         <dt>SNR / RSSI</dt><dd>${snr != null ? snr + ' dB' : '—'} / ${rssi != null ? rssi + ' dBm' : '—'}</dd>
         <dt>Route Type</dt><dd>${routeTypeName(pkt.route_type)}</dd>
@@ -3859,6 +3878,7 @@
             <th style="padding:4px 6px;text-align:left">Hops</th>
             <th style="padding:4px 6px;text-align:left">SNR</th>
             <th style="padding:4px 6px;text-align:left">RSSI</th>
+            ${obsHaveRadio ? '<th style="padding:4px 6px;text-align:left">Radio</th>' : ''}
             <th style="padding:4px 6px;text-align:left">Time</th>
           </tr></thead>
           <tbody>${observations.map(o => {
@@ -3869,6 +3889,7 @@
               <td style="padding:4px 6px">${oPath.length}</td>
               <td style="padding:4px 6px">${o.snr != null ? o.snr + ' dB' : '—'}</td>
               <td style="padding:4px 6px">${o.rssi != null ? o.rssi + ' dBm' : '—'}</td>
+              ${obsHaveRadio ? `<td style="padding:4px 6px">${o.radio ? radioSettingHtml(o.radio) : '—'}</td>` : ''}
               <td style="padding:4px 6px">${renderTimestampCell(o.timestamp)}</td>
             </tr>`;
           }).join('')}</tbody>
@@ -4491,6 +4512,7 @@
     document.addEventListener('channel-colors-changed', function() { renderVisibleRows(); });
     window._packetsTestAPI = {
       typeName,
+      hashBytesText,
       obsName,
       getDetailPreview,
       sortGroupChildren,

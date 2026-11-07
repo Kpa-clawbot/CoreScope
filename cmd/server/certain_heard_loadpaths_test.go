@@ -91,7 +91,7 @@ func TestCertainHeardFedByEveryLoadPath(t *testing.T) {
 		}
 		maxObs := db.GetMaxObservationID()
 		if _, err := w.Exec(`INSERT INTO observations (id, transmission_id, observer_id, observer_name, direction, snr, rssi, score, path_json, timestamp, raw_hex, resolved_path)
-			VALUES (2, 1, 'obs2', 'Obs2', 'RX', -9, -79, 5, ?, ?, '', NULL)`, `["`+strings.ToUpper(lpRelay[:4])+`"]`, at); err != nil {
+			VALUES (2, 1, 'obs2', 'Obs2', 'RX', -9, -79, 5, ?, ?, ?, NULL)`, `["`+strings.ToUpper(lpRelay[:4])+`"]`, at, "1541"+lpRelay[:4]+"00"); err != nil {
 			t.Fatal(err)
 		}
 		s.IngestNewObservations(maxObs, 100)
@@ -117,6 +117,7 @@ func TestCertainHeardFedByEveryLoadPath(t *testing.T) {
 			if !heard[lpRelay].Equal(want) {
 				t.Fatalf("LastHeardMap[relay] = %v; want %v: this path does not feed certainHeard", heard[lpRelay], want)
 			}
+			assertCertainRelay(t, s, lpRelay, at)
 		})
 	}
 }

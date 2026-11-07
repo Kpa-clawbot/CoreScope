@@ -68,7 +68,7 @@ type StoreTx struct {
 	parsedDecoded       map[string]interface{} // cached json.Unmarshal of DecodedJSON
 	// Dedup maps, built only once a transmission passes obsIndexThreshold
 	// observations (see obs_dedup.go); nil below it.
-	obsKeys     map[obsDedupKey]struct{}
+	obsKeys     map[obsDedupKey]*StoreObs
 	observerSet map[string]struct{} // distinct observer IDs (for UniqueObserverCount)
 	// accountedBytes is what trackedBytes was last charged for this tx
 	// (observations excluded). See rechargeTx.
@@ -92,8 +92,12 @@ type StoreObs struct {
 	RSSI           *float64
 	Score          *int
 	PathJSON       string
-	RawHex         string
 	Timestamp      string
+	// Width in hex characters, only when PathJSON matches this observation's
+	// eligible flood frame. Replaces the unused RawHex field without growing
+	// the 160-byte allocation class. Zero includes missing legacy headers.
+	// Read/write under the owning store's mu after publication.
+	relayHopHexLen uint8
 
 	// #1481 P0-2: cached parsed timestamp. The legacy handlers parse
 	// Timestamp as RFC3339Nano/RFC3339/"2006-01-02 15:04:05" with a
@@ -246,24 +250,25 @@ type PacketStore struct {
 	txRewriteMu     sync.Mutex
 	txRewriteCursor int64
 
-	mu            sync.RWMutex
-	db            *DB
-	packets       []*StoreTx                  // sorted by first_seen ASC (oldest first; newest at tail)
-	byHash        map[string]*StoreTx         // hash → *StoreTx
-	byTxID        map[int]*StoreTx            // transmission_id → *StoreTx
-	byObsID       map[int]*StoreObs           // observation_id → *StoreObs
-	maxTxID       int                         // highest transmission_id in store
-	maxObsID      int                         // highest observation_id in store
-	byObserver    map[string][]*StoreObs      // observer_id → observations
-	byNode        map[string][]*StoreTx       // pubkey → transmissions
-	nodeHashes    map[string]map[int]struct{} // pubkey → set of tx IDs listed in byNode[pubkey]
-	certainHeard  map[string]string           // pubkey → newest FirstSeen certainly from that node (certain_heard.go)
-	byPathHop     map[string][]*StoreTx       // lowercase hop/pubkey → transmissions with that hop in path
-	byPayloadType map[int][]*StoreTx          // payload_type → transmissions
-	loaded        bool
-	totalObs      int
-	insertCount   int64
-	queryCount    int64
+	mu             sync.RWMutex
+	db             *DB
+	packets        []*StoreTx                  // sorted by first_seen ASC (oldest first; newest at tail)
+	byHash         map[string]*StoreTx         // hash → *StoreTx
+	byTxID         map[int]*StoreTx            // transmission_id → *StoreTx
+	byObsID        map[int]*StoreObs           // observation_id → *StoreObs
+	maxTxID        int                         // highest transmission_id in store
+	maxObsID       int                         // highest observation_id in store
+	byObserver     map[string][]*StoreObs      // observer_id → observations
+	byNode         map[string][]*StoreTx       // pubkey → transmissions
+	nodeHashes     map[string]map[int]struct{} // pubkey → set of tx IDs listed in byNode[pubkey]
+	certainHeard   map[string]string           // pubkey → newest FirstSeen certainly from that node (certain_heard.go)
+	certainRelayed map[string]time.Time        // newest valid FirstSeen of a certain observed relay; bounded/evicted with byNode
+	byPathHop      map[string][]*StoreTx       // lowercase hop/pubkey → transmissions with that hop in path
+	byPayloadType  map[int][]*StoreTx          // payload_type → transmissions
+	loaded         bool
+	totalObs       int
+	insertCount    int64
+	queryCount     int64
 	// Response caches (separate mutex to avoid contention with store RWMutex)
 	cacheMu           sync.RWMutex
 	rfCache           map[string]*cachedResult // region → cached RF result
@@ -388,15 +393,14 @@ type PacketStore struct {
 	// its build (or a debounced rebuild). distLazyBuilding is true
 	// while a build is currently running — concurrent requests in this
 	// window receive 202 + Retry-After rather than racing N parallel
-	// O(n²) computations. distLazyOnce serialises the first build;
-	// reset by the background loader (Load() chunked merge) and by the
-	// debounced-rebuild policy so subsequent rebuilds can re-fire.
-	distLazyMu        sync.Mutex
-	distLazyOnce      sync.Once
-	distLazyBuilt     bool
-	distLazyBuilding  bool
-	distLazyLastBuilt time.Time
-	distLazyLastObs   int // totalObs at last build, for Δobs debounce
+	// O(n²) computations. distLazyGeneration advances when background
+	// loading invalidates the index; an older build cannot mark it ready.
+	distLazyMu         sync.Mutex
+	distLazyGeneration uint64
+	distLazyBuilt      bool
+	distLazyBuilding   bool
+	distLazyLastBuilt  time.Time
+	distLazyLastObs    int // totalObs at last build, for Δobs debounce
 	// distanceBuildHook, if non-nil, runs at the start of the lazy build
 	// goroutine (after distLazyBuilding is set, before any lock is held). Tests
 	// use it to hold the build open so concurrent requests deterministically
@@ -1073,8 +1077,10 @@ func (s *PacketStore) Load() error {
 			obsIDStr := nullStrVal(observerID)
 			obsPJ := nullStrVal(pathJSON)
 
-			// Dedup: skip if same observer + same path already loaded (O(1) map lookup)
-			if tx.hasObservation(obsIDStr, obsPJ) {
+			n := observedRelayHopHexLen(nullStrVal(obsRawHex), obsPJ)
+			// Dedup the observation, but retain a later eligible frame's evidence.
+			if obs := tx.mergeObservationEvidence(obsIDStr, obsPJ, n); obs != nil {
+				s.noteCertainRelays(tx, obs, relayPM)
 				continue
 			}
 
@@ -1090,6 +1096,7 @@ func (s *PacketStore) Load() error {
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
+				relayHopHexLen: n,
 			}
 
 			// Decode-window: extract resolved pubkeys for index, don't store on struct.
@@ -1097,7 +1104,7 @@ func (s *PacketStore) Load() error {
 			if rpStr != "" {
 				pks := resolvedPubkeysFromJSON(rpStr)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
-				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM, obs)
 			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
 				// resolved_path not persisted — reconstruct relay hops from
 				// path_json so relay-node analytics history survives a restart.
@@ -1110,7 +1117,7 @@ func (s *PacketStore) Load() error {
 				// PR #1643 R1 munger #1: gate on unique_prefix only — ambiguous
 				// hops are silently dropped (skipped counter logged at end).
 				rp := resolvePathForObsColdLoad(obsPJ, obsIDStr, tx, relayPM, &coldLoadAmbiguousHopsSkipped)
-				s.indexColdLoadRelayHops(tx, extractResolvedPubkeys(rp), relayPM)
+				s.indexColdLoadRelayHops(tx, extractResolvedPubkeys(rp), relayPM, obs)
 			}
 
 			tx.addObservation(obs)
@@ -1400,7 +1407,8 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			obsIDStr := nullStrVal(observerID)
 			obsPJ := nullStrVal(pathJSON)
 
-			if tx.hasObservation(obsIDStr, obsPJ) {
+			n := observedRelayHopHexLen(nullStrVal(obsRawHex), obsPJ)
+			if tx.mergeObservationEvidence(obsIDStr, obsPJ, n) != nil {
 				continue
 			}
 
@@ -1416,6 +1424,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
+				relayHopHexLen: n,
 			}
 
 			tx.addObservation(obs)
@@ -1587,12 +1596,15 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			// stats collapse after restart for relay-heavy nodes. The
 			// pubkey union was pre-built outside the lock above.
 			if pks := localResolvedPKsByTx[tx.ID]; len(pks) > 0 {
-				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM, nil)
 			}
 			// path_json fallback (resolved_path NULL): byNode ONLY, so relay
 			// nodes keep their analytics history across a restart without
 			// polluting the resolved_path/path-hop indexes (#1352).
-			s.indexColdLoadRelayHops(tx, localByNodePKsByTx[tx.ID], relayPM)
+			s.indexColdLoadRelayHops(tx, localByNodePKsByTx[tx.ID], relayPM, nil)
+			for _, obs := range tx.Observations {
+				s.noteCertainRelays(tx, obs, relayPM)
+			}
 		}
 		s.mu.Unlock()
 		runtime.Gosched()
@@ -1752,6 +1764,7 @@ func (s *PacketStore) loadBackgroundChunks() {
 	// Rebuild analytics indexes once after all chunks are merged.
 	s.mu.Lock()
 	s.buildPathHopIndex()
+	s.mu.Unlock()
 	// Distance index is now lazy (#1011) — built on first
 	// /api/analytics/distance request, not at background-load
 	// completion. If a previous request already triggered the build,
@@ -1759,9 +1772,8 @@ func (s *PacketStore) loadBackgroundChunks() {
 	// fuller dataset.
 	s.distLazyMu.Lock()
 	s.distLazyBuilt = false
-	s.distLazyOnce = sync.Once{}
+	s.distLazyGeneration++
 	s.distLazyMu.Unlock()
-	s.mu.Unlock()
 	// #1008 review m3: flip the ready flags after the synchronous
 	// rebuild for symmetry with startBackgroundIndexBuilds. Safe
 	// today because the chunk loader runs after Load() has already
@@ -1973,16 +1985,16 @@ func skipPlainJSONString(s string, i int) (int, bool) {
 //     idempotent per (transmission, pubkey) — byNode via nodeHashes, the
 //     resolved index via its forward-list check, byPathHop via
 //     pathHopResolved (#2108).
-//   - pm decides which hops are certain liveness evidence (#2260,
-//     noteCertainRelays); nil records none.
-func (s *PacketStore) indexResolvedPathHops(tx *StoreTx, pks []string, hopsSeen map[string]bool, pm *prefixMap) {
+//   - pm and obs decide which hops are certain liveness evidence (#2266);
+//     nil obs indexes attribution only (a background chunk's union).
+func (s *PacketStore) indexResolvedPathHops(tx *StoreTx, pks []string, hopsSeen map[string]bool, pm *prefixMap, obs *StoreObs) {
 	if len(pks) == 0 {
 		return
 	}
 	for _, pk := range pks {
 		s.addToByNode(tx, pk)
 	}
-	s.noteCertainRelays(tx, pks, pm)
+	s.noteCertainRelays(tx, obs, pm)
 	s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
 	s.addToResolvedPubkeyIndex(tx.ID, pks)
 }
@@ -1992,11 +2004,11 @@ func (s *PacketStore) indexResolvedPathHops(tx *StoreTx, pks []string, hopsSeen 
 // load (resolved_path NULL, #1352): the path-hop and resolved indexes stay
 // untouched, liveness still learns from the certain hops. Caller holds s.mu
 // for writing.
-func (s *PacketStore) indexColdLoadRelayHops(tx *StoreTx, pks []string, pm *prefixMap) {
+func (s *PacketStore) indexColdLoadRelayHops(tx *StoreTx, pks []string, pm *prefixMap, obs *StoreObs) {
 	for _, pk := range pks {
 		s.addToByNode(tx, pk)
 	}
-	s.noteCertainRelays(tx, pks, pm)
+	s.noteCertainRelays(tx, obs, pm)
 }
 
 // indexByNode extracts pubkeys from decoded_json and indexes the transmission.
@@ -2086,8 +2098,11 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	oldest := s.oldestLoaded
 	s.mu.RUnlock()
 	if oldest != "" {
-		needsSQL := (q.Since != "" && q.Since < oldest) ||
-			(q.Until != "" && q.Until < oldest)
+		// The radio filter (#1869) exists only in memory; the SQL path would
+		// return the window unfiltered, so a radio query stays on what the
+		// store holds.
+		needsSQL := ((q.Since != "" && q.Since < oldest) ||
+			(q.Until != "" && q.Until < oldest)) && q.Radio == ""
 		if needsSQL {
 			if result, err := s.db.QueryPackets(q); err == nil {
 				return result
@@ -2173,8 +2188,11 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	oldest := s.oldestLoaded
 	s.mu.RUnlock()
 	if oldest != "" {
-		needsSQL := (q.Since != "" && q.Since < oldest) ||
-			(q.Until != "" && q.Until < oldest)
+		// The radio filter (#1869) exists only in memory; the SQL path would
+		// return the window unfiltered, so a radio query stays on what the
+		// store holds.
+		needsSQL := ((q.Since != "" && q.Since < oldest) ||
+			(q.Until != "" && q.Until < oldest)) && q.Radio == ""
 		if needsSQL {
 			if result, err := s.db.QueryGroupedPackets(q); err == nil {
 				return result
@@ -2189,8 +2207,8 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 		q.Limit = 50
 	}
 
-	// Cache key covers all filter dimensions. Empty key = no filters.
-	cacheKey := q.Since + "|" + q.Until + "|" + q.Region + "|" + q.Area + "|" + q.Node + "|" + q.Hash + "|" + q.Observer + "|" + q.Channel
+	// Put the boolean before user-supplied fields so those cannot alias it.
+	cacheKey := strconv.FormatBool(q.ExcludeTx) + "|" + q.Since + "|" + q.Until + "|" + q.Region + "|" + q.Area + "|" + q.Node + "|" + q.Hash + "|" + q.Observer + "|" + q.Channel + "|" + q.Radio
 	if q.Type != nil {
 		cacheKey += fmt.Sprintf("|t%d", *q.Type)
 	}
@@ -2267,6 +2285,7 @@ type groupedRow struct {
 	payloadType, routeType                 *int
 	snr, rssi                              *float64
 	scopeName                              *string
+	radio                                  string      // header observation's setting (#1869)
 	observations                           []*StoreObs // slice header only, see snapshotGroupedRow
 }
 
@@ -2313,6 +2332,7 @@ func snapshotGroupedRow(tx *StoreTx) groupedRow {
 		snr:              tx.SNR,
 		rssi:             tx.RSSI,
 		scopeName:        tx.ScopeName,
+		radio:            txRadio(tx),
 		observations:     tx.Observations,
 	}
 }
@@ -2346,6 +2366,7 @@ func groupedRowsToPage(rows []groupedRow, total int) *PacketResult {
 			"snr":               floatPtrOrNil(r.snr),
 			"rssi":              floatPtrOrNil(r.rssi),
 			"scope_name":        strPtrOrNil(r.scopeName),
+			"radio":             strOrNil(r.radio),
 		}
 		// resolved_path omitted for grouped view (cold path, not worth SQL round-trip)
 		packets[i] = m
@@ -3042,7 +3063,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		routeType, payloadType                                             *int
 		obsID                                                              *int
 		observerID, observerName, observerIATA, direction, pathJSON, obsTS string
-		obsRawHex                                                          string
+		relayHopHexLen                                                     uint8
 		scopeName                                                          *string
 		snr, rssi                                                          *float64
 		score                                                              *int
@@ -3086,24 +3107,24 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		}
 
 		tr := tempRow{
-			txID:         txID,
-			rawHex:       nullStrVal(rawHex),
-			hash:         nullStrVal(hash),
-			firstSeen:    nullStrVal(firstSeen),
-			decodedJSON:  nullStrVal(decodedJSON),
-			routeType:    nullIntPtr(routeType),
-			payloadType:  nullIntPtr(payloadType),
-			observerID:   internStr(nullStrVal(observerID)),
-			observerName: internStr(nullStrVal(observerName)),
-			observerIATA: internStr(nullStrVal(observerIATA)),
-			direction:    internStr(nullStrVal(direction)),
-			pathJSON:     nullStrVal(pathJSON),
-			obsTS:        nullStrVal(obsTimestamp),
-			obsRawHex:    nullStrVal(obsRawHex),
-			scopeName:    nullStrPtr(scopeName),
-			snr:          nullFloatPtr(snrVal),
-			rssi:         nullFloatPtr(rssiVal),
-			score:        nullIntPtr(scoreVal),
+			txID:           txID,
+			rawHex:         nullStrVal(rawHex),
+			hash:           nullStrVal(hash),
+			firstSeen:      nullStrVal(firstSeen),
+			decodedJSON:    nullStrVal(decodedJSON),
+			routeType:      nullIntPtr(routeType),
+			payloadType:    nullIntPtr(payloadType),
+			observerID:     internStr(nullStrVal(observerID)),
+			observerName:   internStr(nullStrVal(observerName)),
+			observerIATA:   internStr(nullStrVal(observerIATA)),
+			direction:      internStr(nullStrVal(direction)),
+			pathJSON:       nullStrVal(pathJSON),
+			obsTS:          nullStrVal(obsTimestamp),
+			relayHopHexLen: observedRelayHopHexLen(nullStrVal(obsRawHex), nullStrVal(pathJSON)),
+			scopeName:      nullStrPtr(scopeName),
+			snr:            nullFloatPtr(snrVal),
+			rssi:           nullFloatPtr(rssiVal),
+			score:          nullIntPtr(scoreVal),
 		}
 		if obsIDVal.Valid {
 			oid := int(obsIDVal.Int64)
@@ -3202,8 +3223,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		}
 		if r.obsID != nil {
 			oid := *r.obsID
-			// Dedup (O(1) map lookup)
-			if tx.hasObservation(r.observerID, r.pathJSON) {
+			if obs := tx.mergeObservationEvidence(r.observerID, r.pathJSON, r.relayHopHexLen); obs != nil {
+				s.noteCertainRelays(tx, obs, cachedPM)
 				continue
 			}
 
@@ -3219,6 +3240,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				Score:          r.score,
 				PathJSON:       r.pathJSON,
 				Timestamp:      normalizeTimestamp(r.obsTS),
+				relayHopHexLen: r.relayHopHexLen,
 			}
 
 			// Resolve path at ingest time using neighbor graph — decode-window discipline:
@@ -3229,7 +3251,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, cachedGraph)
 				resolvedPubkeys = extractResolvedPubkeys(rpForBroadcast)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
-				s.indexResolvedPathHops(tx, resolvedPubkeys, hopsSeen, cachedPM)
+				s.indexResolvedPathHops(tx, resolvedPubkeys, hopsSeen, cachedPM, obs)
 			}
 			// Stash rpForBroadcast for later broadcast/persist (keyed by obs ID)
 			if rpForBroadcast != nil {
@@ -3338,6 +3360,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				"direction":         strOrNil(obs.Direction),
 				"observation_count": tx.ObservationCount,
 				"scope_name":        strPtrOrNil(tx.ScopeName),
+				"radio":             strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 			}
 			// Use decode-window resolved path for broadcast (never from struct)
 			if broadcastRP != nil {
@@ -3436,17 +3459,17 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	defer rows.Close()
 
 	type obsRow struct {
-		obsID        int
-		txID         int
-		observerID   string
-		observerName string
-		observerIATA string
-		direction    string
-		snr, rssi    *float64
-		score        *int
-		pathJSON     string
-		rawHex       string
-		timestamp    string
+		obsID          int
+		txID           int
+		observerID     string
+		observerName   string
+		observerIATA   string
+		direction      string
+		snr, rssi      *float64
+		score          *int
+		pathJSON       string
+		relayHopHexLen uint8
+		timestamp      string
 	}
 
 	var obsRows []obsRow
@@ -3467,18 +3490,18 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		}
 
 		obsRows = append(obsRows, obsRow{
-			obsID:        oid,
-			txID:         txID,
-			observerID:   internStr(nullStrVal(observerID)),
-			observerName: internStr(nullStrVal(observerName)),
-			observerIATA: internStr(nullStrVal(observerIATA)),
-			direction:    internStr(nullStrVal(direction)),
-			snr:          nullFloatPtr(snr),
-			rssi:         nullFloatPtr(rssi),
-			score:        nullIntPtr(score),
-			pathJSON:     nullStrVal(pathJSON),
-			rawHex:       nullStrVal(obsRawHex),
-			timestamp:    nullStrVal(ts),
+			obsID:          oid,
+			txID:           txID,
+			observerID:     internStr(nullStrVal(observerID)),
+			observerName:   internStr(nullStrVal(observerName)),
+			observerIATA:   internStr(nullStrVal(observerIATA)),
+			direction:      internStr(nullStrVal(direction)),
+			snr:            nullFloatPtr(snr),
+			rssi:           nullFloatPtr(rssi),
+			score:          nullIntPtr(score),
+			pathJSON:       nullStrVal(pathJSON),
+			relayHopHexLen: observedRelayHopHexLen(nullStrVal(obsRawHex), nullStrVal(pathJSON)),
+			timestamp:      nullStrVal(ts),
 		})
 	}
 
@@ -3513,8 +3536,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			continue // transmission not yet in store
 		}
 
-		// Dedup by observer + path (O(1) map lookup)
-		if tx.hasObservation(r.observerID, r.pathJSON) {
+		if obs := tx.mergeObservationEvidence(r.observerID, r.pathJSON, r.relayHopHexLen); obs != nil {
+			s.noteCertainRelays(tx, obs, pm)
 			continue
 		}
 
@@ -3529,10 +3552,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			RSSI:           r.rssi,
 			Score:          r.score,
 			PathJSON:       r.pathJSON,
-			// obs.RawHex deliberately NOT stored: it duplicates the parent
-			// tx.RawHex and enrichObs falls back to tx.RawHex when obs.RawHex
-			// == "". Live-polled observations must not re-introduce the dup.
-			Timestamp: normalizeTimestamp(r.timestamp),
+			Timestamp:      normalizeTimestamp(r.timestamp),
+			relayHopHexLen: r.relayHopHexLen,
 		}
 
 		// Resolve path at ingest time for late-arriving observations (review item #2).
@@ -3543,7 +3564,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, graphRef)
 				pks := extractResolvedPubkeys(obsResolvedPath)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
-				s.indexResolvedPathHops(tx, pks, hopsSeen, pm)
+				s.indexResolvedPathHops(tx, pks, hopsSeen, pm, obs)
 			}
 		}
 		// Stash for broadcast/persist
@@ -3605,6 +3626,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			"direction":         strOrNil(obs.Direction),
 			"observation_count": tx.ObservationCount,
 			"scope_name":        strPtrOrNil(tx.ScopeName),
+			"radio":             strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 		}
 		// Use decode-window resolved path for broadcast
 		if obsRPMap != nil {
@@ -3745,19 +3767,26 @@ func (s *PacketStore) resolvePacketFilterSets(q PacketQuery) packetFilterSets {
 // filterPackets applies PacketQuery filters to the in-memory packet list.
 // f holds q's filters resolved by resolvePacketFilterSets. Caller holds s.mu.
 func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreTx {
+	source := s.packets
 	// Fast path: single-key index lookups
-	if q.Hash != "" && q.Type == nil && q.Route == nil && q.Observer == "" &&
+	if q.Hash != "" && q.Type == nil && q.Route == nil && q.Observer == "" && q.Radio == "" &&
 		q.Region == "" && q.Area == "" && q.Node == "" && q.Channel == "" && q.Since == "" && q.Until == "" {
 		h := strings.ToLower(q.Hash)
 		tx := s.byHash[h]
 		if tx == nil {
 			return nil
 		}
-		return []*StoreTx{tx}
+		source = []*StoreTx{tx}
+		if !q.ExcludeTx {
+			return source
+		}
 	}
-	if q.Observer != "" && q.Type == nil && q.Route == nil &&
+	if q.Observer != "" && q.Type == nil && q.Route == nil && q.Radio == "" &&
 		q.Region == "" && q.Area == "" && q.Node == "" && q.Channel == "" && q.Hash == "" && q.Since == "" && q.Until == "" {
-		return s.transmissionsForObserver(q.Observer, nil)
+		source = s.transmissionsForObserver(q.Observer, nil)
+		if !q.ExcludeTx {
+			return source
+		}
 	}
 
 	// Pre-compute filter parameters outside the hot loop.
@@ -3793,6 +3822,9 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 		}
 	}
 
+	// One snapshot for the whole scan (#1869).
+	radioSnap := radioHistory.Load()
+
 	regionObservers := f.regionObs
 	if q.Region != "" && len(regionObservers) == 0 {
 		return nil
@@ -3812,11 +3844,13 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 
 	// Determine the source slice. Use index-based source when only node
 	// filter is active and an index exists.
-	source := s.packets
 	if hasNode && !hasType && !hasRoute && q.Observer == "" &&
-		filterHash == "" && !hasSince && !hasUntil && q.Region == "" && q.Area == "" && filterChannel == "" {
+		filterHash == "" && !hasSince && !hasUntil && q.Region == "" && q.Area == "" && filterChannel == "" && q.Radio == "" {
 		if indexed, ok := s.byNode[f.nodePK]; ok {
-			return indexed
+			source = indexed
+			if !q.ExcludeTx {
+				return source
+			}
 		}
 	}
 	// Single-pass filter: apply all predicates in one scan.
@@ -3840,10 +3874,10 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 		if hasUntil && tx.FirstSeen >= q.Until {
 			return false
 		}
-		if observerSet != nil {
+		if observerSet != nil || q.ExcludeTx {
 			found := false
 			for _, obs := range tx.Observations {
-				if observerSet[obs.ObserverID] {
+				if (observerSet == nil || observerSet[obs.ObserverID]) && (!q.ExcludeTx || !obs.isOwnTransmission()) {
 					found = true
 					break
 				}
@@ -3886,6 +3920,9 @@ func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreT
 			if !packetMatchesChannel(tx, filterChannel) {
 				return false
 			}
+		}
+		if q.Radio != "" && !txMatchesRadio(radioSnap, tx, q.Radio, observerSet) {
+			return false
 		}
 		return true
 	})
@@ -4273,20 +4310,15 @@ func enrichObsFields(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 		"rssi":          floatPtrOrNil(obs.RSSI),
 		"score":         intPtrOrNil(obs.Score),
 		"path_json":     strOrNil(obs.PathJSON),
+		"radio":         strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 	}
 
 	if tx != nil {
 		m["hash"] = strOrNil(tx.Hash)
-		// raw_hex comes from the transmission (#881). obs.RawHex is no longer
-		// retained when loading/ingesting the store — it duplicated this exact
-		// value (same content hash ⇒ same frame) and at ~10.6 observations/tx
-		// wasted ~98MB on a live ~1.7M-observation store. The obs.RawHex branch
-		// stays for callers that build a StoreObs from a response map.
-		if obs.RawHex != "" {
-			m["raw_hex"] = obs.RawHex
-		} else {
-			m["raw_hex"] = strOrNil(tx.RawHex)
-		}
+		// The hot store keeps no per-observation wire frames (#881).
+		// Packet detail replaces this representative raw with the stored
+		// observation's bytes from SQLite; equal hashes can have other paths.
+		m["raw_hex"] = strOrNil(tx.RawHex)
 		m["payload_type"] = intPtrOrNil(tx.PayloadType)
 		m["route_type"] = intPtrOrNil(tx.RouteType)
 		m["decoded_json"] = strOrNil(tx.DecodedJSON)
@@ -4317,6 +4349,7 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 		"path_json":         strOrNil(tx.PathJSON),
 		"direction":         strOrNil(tx.Direction),
 		"scope_name":        strPtrOrNil(tx.ScopeName),
+		"radio":             strOrNil(txRadio(tx)),
 	}
 	// Include parsed path array to match Node.js output shape
 	if hops := txGetParsedPath(tx); len(hops) > 0 {
@@ -4338,6 +4371,7 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 				"path_json":     strOrNil(o.PathJSON),
 				"timestamp":     strOrNil(o.Timestamp),
 				"direction":     strOrNil(o.Direction),
+				"radio":         strOrNil(observationRadio(o.ID, o.ObserverID, o.Timestamp)),
 			}
 			obs = append(obs, om)
 		}
@@ -4942,7 +4976,7 @@ func (s *PacketStore) DistanceIndexBuilding() bool {
 // TriggerDistanceIndexBuild kicks off a lazy build of the distance
 // index in a background goroutine if one is not already running and
 // the debounce policy permits. Returns immediately. Idempotent:
-// concurrent callers see only one build, gated by sync.Once.
+// concurrent callers see only one build, admitted under distLazyMu.
 //
 // Debounce policy (#1011 triage Fix path): rebuild if Δobs > 5% since
 // the last build OR at most once per 5 minutes — whichever is more
@@ -4974,20 +5008,15 @@ func (s *PacketStore) TriggerDistanceIndexBuild() {
 			s.distLazyMu.Unlock()
 			return
 		}
-		// Reset the gate so a new build can fire.
-		s.distLazyOnce = sync.Once{}
 		s.distLazyBuilt = false
 	}
+	// Claim the build before launching it. Background invalidation must not
+	// reset an in-use sync.Once or admit another build while this one runs.
+	s.distLazyBuilding = true
+	generation := s.distLazyGeneration
 	s.distLazyMu.Unlock()
 
-	// Fire-and-forget; sync.Once collapses concurrent goroutines into
-	// a single build. The Once is reset above (under the mutex) before
-	// each rebuild cycle.
-	go s.distLazyOnce.Do(func() {
-		s.distLazyMu.Lock()
-		s.distLazyBuilding = true
-		s.distLazyMu.Unlock()
-
+	go func() {
 		if s.distanceBuildHook != nil {
 			s.distanceBuildHook() // test seam: hold the build window open
 		}
@@ -5010,11 +5039,13 @@ func (s *PacketStore) TriggerDistanceIndexBuild() {
 
 		s.distLazyMu.Lock()
 		s.distLazyBuilding = false
-		s.distLazyBuilt = true
-		s.distLazyLastBuilt = time.Now()
-		s.distLazyLastObs = obsAtBuild
+		if generation == s.distLazyGeneration {
+			s.distLazyBuilt = true
+			s.distLazyLastBuilt = time.Now()
+			s.distLazyLastObs = obsAtBuild
+		}
 		s.distLazyMu.Unlock()
-	})
+	}()
 }
 
 // buildDistanceIndex precomputes haversine distances for all packets.
@@ -5122,7 +5153,7 @@ func estimateStoreTxBytesTypical(numObs int) int64 {
 func estimateStoreObsBytes(obs *StoreObs) int64 {
 	base := int64(storeObsBaseBytes)
 	base += int64(len(obs.PathJSON) + len(obs.ObserverID) + len(obs.ObserverName) +
-		len(obs.ObserverIATA) + len(obs.Direction) + len(obs.RawHex) + len(obs.Timestamp))
+		len(obs.ObserverIATA) + len(obs.Direction) + len(obs.Timestamp))
 	base += int64(numIndexesPerObs * indexEntryBytes)
 	// ResolvedPath field removed (#800) — no per-obs RP overhead
 	return base
@@ -5464,6 +5495,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		if len(filtered) == 0 {
 			delete(s.byNode, nodeKey)
 			delete(s.certainHeard, nodeKey)
+			delete(s.certainRelayed, nodeKey)
 		} else {
 			s.byNode[nodeKey] = filtered
 		}

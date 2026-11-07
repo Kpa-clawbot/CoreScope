@@ -4473,6 +4473,115 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
   });
 }
 
+// #2309: exercise the real side-panel renderer, not a copied formatter.
+console.log('\n=== nodes.js: preview metadata (#2309) ===');
+{
+  function renderPreview(overrides, relayActiveMs, now) {
+    const ctx = makeNodesSandbox();
+    if (relayActiveMs !== undefined) ctx.HEALTH_THRESHOLDS.relayActiveMs = relayActiveMs;
+    if (now !== undefined) ctx.Date = class extends Date { static now() { return now; } };
+    const source = fs.readFileSync('public/nodes.js', 'utf8');
+    vm.runInContext(source.replace('  // Test hooks',
+      '  window.testRenderNodeDetail = renderDetail;\n  // Test hooks'), ctx);
+    const node = {
+      public_key: 'abcdef01'.repeat(8), name: 'Preview fixture', role: 'repeater',
+      last_seen: '2020-01-01T00:00:00Z', hash_size: 2, ...overrides,
+    };
+    const panel = { innerHTML: '', querySelector: () => null };
+    ctx.window.testRenderNodeDetail(panel, { node, recentAdverts: [], healthData: { stats: {} } });
+    const value = label => {
+      const match = panel.innerHTML.match(new RegExp('<dt[^>]*>' + label + '(?: <span[\\s\\S]*?</span>)?</dt><dd[^>]*>([\\s\\S]*?)</dd>'));
+      return match ? match[1] : null;
+    };
+    return { value, html: panel.innerHTML, status: ctx.window._nodesGetStatusInfo(node).status };
+  }
+
+  for (const role of ['repeater', 'room']) {
+    test(role + ' preview preserves zero traffic score ahead of legacy fallback', () => {
+      const { value } = renderPreview({ role, traffic_share_score: 0, usefulness_score: 0.8 });
+      assert.match(value('Traffic share') || '', /0\.0%/);
+      assert.doesNotMatch(value('Traffic share'), /80\.0%/);
+    });
+  }
+  test('preview formats numeric strings and uses legacy score only when the new score is absent', () => {
+    assert.match(renderPreview({ traffic_share_score: '0.125' }).value('Traffic share') || '', /12\.5%/);
+    assert.match(renderPreview({ traffic_share_score: null, usefulness_score: '0.25' }).value('Traffic share') || '', /25\.0%/);
+  });
+  test('traffic-share help defines traffic and its Bridge distinction without stale planning claims', () => {
+    const { html } = renderPreview({ traffic_share_score: 0.5 });
+    assert.match(html, /non-advert mesh traffic/);
+    assert.match(html, /see Bridge score/);
+    assert.doesNotMatch(html, /others pending|planned scoring axes/);
+  });
+  test('missing and malformed scores do not become a measured zero', () => {
+    for (const raw of [undefined, null, '', ' ', 'bad', Infinity, -0.1, 1.1]) {
+      assert.strictEqual(renderPreview({ traffic_share_score: raw }).value('Traffic share'), null, String(raw));
+    }
+  });
+  test('companion preview omits relay metrics but retains its hash prefix', () => {
+    const { value } = renderPreview({ role: 'companion', traffic_share_score: 0.5, last_relayed: '2020-01-02T00:00:00Z' });
+    assert.strictEqual(value('Last Relayed'), null);
+    assert.strictEqual(value('Traffic share'), null);
+    assert.match(value('Hash Prefix') || '', /ABCD.*\(2-byte\)/);
+  });
+  test('relay attribution does not promote an uncertain node to alive or active', () => {
+    const { value, status } = renderPreview({ last_relayed: new Date().toISOString(), relay_active: true, relay_count_1h: 0, relay_count_24h: '7' });
+    assert.strictEqual(status, 'uncertain');
+    assert.match(value('Last Relayed') || '', /attributed relay/i);
+    assert.match(value('Last Relayed'), /0 relays\/hr, 7 relays\/24h/);
+    assert.doesNotMatch(value('Last Relayed'), /alive|actively relaying/i);
+    assert.match(value('Last Relayed'), /class="timestamp-text" title="[^"]+"/);
+  });
+  test('missing relay evidence stays missing and a missing count does not become zero', () => {
+    const { value } = renderPreview({ relay_count_24h: 0 });
+    assert.match(value('Last Relayed') || '', /never observed as relay hop/);
+    assert.match(value('Last Relayed'), /— relays\/hr, 0 relays\/24h/);
+    assert.doesNotMatch(value('Last Relayed'), /alive|actively relaying/i);
+  });
+  test('certain relay evidence restores the green mark for repeaters and rooms only', () => {
+    const now = Date.parse('2026-10-26T12:00:00Z');
+    for (const role of ['repeater', 'room']) {
+      const { value } = renderPreview({ role, last_certain_relay: '2026-10-26T11:59:00Z', relay_active: false }, undefined, now);
+      assert.match(value('Last Relayed'), /actively relaying/);
+      assert.match(value('Last Relayed'), /var\(--status-green-text\)/);
+      assert.doesNotMatch(value('Last Relayed'), /alive|idle|never observed as relay hop/i);
+    }
+    assert.strictEqual(renderPreview({ role: 'companion', last_certain_relay: '2026-10-26T11:59:00Z' }, undefined, now).value('Last Relayed'), null);
+  });
+  test('certain relay mark uses the existing configured window with an exclusive expiry boundary', () => {
+    const now = Date.parse('2026-10-26T12:00:00Z');
+    const hour = 3600000;
+    for (const [age, active] of [[0, true], [2 * hour - 1, true], [2 * hour, false], [3 * hour, false], [-1, false]]) {
+      const { value } = renderPreview({ last_certain_relay: new Date(now - age).toISOString(), relay_active: true }, 2 * hour, now);
+      assert.strictEqual(/actively relaying/.test(value('Last Relayed')), active, 'age=' + age);
+      assert.doesNotMatch(value('Last Relayed'), /alive|idle/i);
+    }
+    assert.match(renderPreview({ last_certain_relay: new Date(now - 23 * hour).toISOString() }, undefined, now).value('Last Relayed'), /actively relaying/);
+    assert.doesNotMatch(renderPreview({ last_certain_relay: new Date(now - 24 * hour).toISOString() }, undefined, now).value('Last Relayed'), /actively relaying/);
+  });
+  test('absent or invalid certainty never falls back to attributed relay activity', () => {
+    for (const evidence of [undefined, null, '', 'bad-date', 0, true, {}, '<img src=x onerror="bad()">']) {
+      const { value } = renderPreview({ last_certain_relay: evidence, last_relayed: new Date().toISOString(), relay_active: true });
+      assert.doesNotMatch(value('Last Relayed'), /alive|idle|actively relaying|<img|onerror=/i, String(evidence));
+      assert.match(value('Last Relayed'), /attributed relay observation/);
+    }
+  });
+  test('hash size strings format consistently, missing and malformed sizes stay unknown', () => {
+    assert.match(renderPreview({ hash_size: '2' }).value('Hash Prefix') || '', /ABCD.*\(2-byte\)/);
+    for (const size of [null, 0, -1, 1.5, '<img src=x>']) {
+      assert.strictEqual(renderPreview({ hash_size: size }).value('Hash Prefix'), 'Unknown');
+    }
+  });
+  test('relay counts and hash-size tooltip text cannot inject markup', () => {
+    const bad = '"><img src=x onerror="bad()">';
+    const { value } = renderPreview({ relay_count_1h: bad, hash_size_inconsistent: true, hash_sizes_seen: [1, bad] });
+    assert.ok(value('Last Relayed'), 'relay row is present');
+    assert.doesNotMatch(value('Last Relayed'), /<img|onerror=/);
+    assert.match(value('Hash Prefix') || '', /&quot;&gt;&lt;img/);
+    assert.doesNotMatch(value('Hash Prefix'), /<img/);
+  });
+}
+
 // ===== NODES.JS: getStatusInfo edge cases (P0 coverage expansion) =====
 console.log('\n=== nodes.js: getStatusInfo edge cases ===');
 {
