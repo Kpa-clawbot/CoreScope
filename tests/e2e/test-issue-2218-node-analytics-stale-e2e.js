@@ -29,7 +29,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     executablePath: process.env.CHROMIUM_PATH || undefined,
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
   });
-  const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
+  const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 }, timezoneId: 'America/New_York' })).newPage();
   page.setDefaultTimeout(15000);
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -90,6 +90,54 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.waitForSelector('#timeRangeBtns');
     assert(await page.evaluate(() => /— Analytics/.test(document.getElementById('app').textContent)), 'no Analytics heading');
   });
+
+  // #1154 U10: retain the actual server response, replacing only peer contacts
+  // so the timestamp contract is deterministic even when the fixture has none.
+  await page.route(ANALYTICS_RE, async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.peerInteractions = ['2024-01-02T03:04:05.123Z', null, '', 'not-a-date'].map((lastContact, i) => ({
+      peer_key: ['ab', 'cd', 'ef', '12'][i].repeat(32), peer_name: 'Example Peer ' + (i + 1), messageCount: 4 - i, lastContact,
+    }));
+    await route.fulfill({ response, json: data });
+  });
+  for (const width of [1400, 320]) {
+    for (const [mode, timezone, format, absolute] of [
+      ['ago', 'utc', 'iso', '2024-01-02 03:04:05'],
+      ['absolute', 'utc', 'iso-seconds', '2024-01-02 03:04:05.123'],
+      ['ago', 'local', 'iso', '2024-01-01 22:04:05'],
+    ]) {
+      await step(`Last Contact at ${width}px: ${mode}, ${timezone}, ${format}`, async () => {
+        await page.setViewportSize({ width, height: 900 });
+        await page.evaluate(({ mode, timezone, format }) => {
+          localStorage.setItem('meshcore-timestamp-mode', mode);
+          localStorage.setItem('meshcore-timestamp-timezone', timezone);
+          localStorage.setItem('meshcore-timestamp-format', format);
+          localStorage.removeItem('meshcore-timestamp-custom-format');
+        }, { mode, timezone, format });
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('.analytics-peer-table tbody tr');
+        const cells = page.locator('.analytics-peer-table tbody td:nth-child(3)');
+        assert(await cells.count() === 4, 'all peer contacts render');
+        const contact = cells.first().locator('[title]');
+        assert(await contact.count() === 1, 'Last Contact needs a timestamp tooltip');
+        await contact.hover();
+        const text = await contact.textContent();
+        const title = await contact.getAttribute('title');
+        assert((mode === 'ago' ? title : text) === absolute, 'absolute timestamp respects timezone and format');
+        assert(/^\d+d ago$/.test(mode === 'ago' ? text : title), 'relative timestamp remains available');
+        for (let i = 1; i < 4; i++) {
+          assert((await cells.nth(i).textContent()).trim() === '—', 'missing or invalid contact stays a dash');
+          assert(await cells.nth(i).locator('[title]').getAttribute('title') === '—', 'missing contact has no invented date');
+        }
+        if (process.env.SCREENSHOT_DIR) {
+          const path = require('path');
+          require('fs').mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+          await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `last-contact-${width}-${mode}-${timezone}.png`) });
+        }
+      });
+    }
+  }
 
   // api() reports every failed request as an unhandled "API <status>:"
   // rejection of its in-flight bookkeeping; the held 500 above is one of them.
