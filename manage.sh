@@ -27,22 +27,18 @@ if [ -f .env ]; then
   set +a
 fi
 
-# Auto-fix CRLF in .env if detected
-if [ -f .env ] && grep -qP '\r' .env 2>/dev/null; then
-  warn ".env has Windows line endings (CRLF) — fixing automatically..."
-  sed -i 's/\r$//' .env
-  log ".env converted to Unix line endings."
-fi
-
 # Resolved paths for prod/staging data (must match docker-compose.yml)
 PROD_DATA="${PROD_DATA_DIR:-$HOME/meshcore-data}"
 STAGING_DATA="${STAGING_DATA_DIR:-$HOME/meshcore-staging-data}"
 STAGING_COMPOSE_FILE="docker-compose.staging.yml"
 
 # Build metadata — exported so docker compose build picks them up via args
-export APP_VERSION=$(git describe --tags --match "v*" 2>/dev/null || echo "unknown")
-export GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+refresh_build_metadata() {
+  export APP_VERSION=$(git describe --tags --match "v*" 2>/dev/null || echo "unknown")
+  export GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+}
+refresh_build_metadata
 
 # Docker Compose — detect v2 plugin vs v1 standalone
 if docker compose version &>/dev/null 2>&1; then
@@ -67,6 +63,13 @@ warn() { printf '%b\n' "${YELLOW}⚠${NC} $1"; }
 err()  { printf '%b\n' "${RED}✗${NC} $1"; }
 info() { printf '%b\n' "${CYAN}→${NC} $1"; }
 step() { printf '%b\n' "\n${BOLD}[$1/$TOTAL_STEPS] $2${NC}"; }
+
+# Auto-fix CRLF only after the logging helpers are available.
+if [ -f .env ] && grep -qP '\r' .env 2>/dev/null; then
+  warn ".env has Windows line endings (CRLF) — fixing automatically..."
+  sed -i 's/\r$//' .env
+  log ".env converted to Unix line endings."
+fi
 
 is_true() {
   case "${1:-}" in
@@ -426,11 +429,11 @@ verify_health() {
     fi
   fi
 
-  # Wait for /api/stats response (Go backend loads packets into memory — may take 60s+)
-  info "Waiting for server to respond..."
+  # Wait for initialization, not just the HTTP listener (loading can take 60s+).
+  info "Waiting for server initialization..."
   local healthy=false
   for i in $(seq 1 45); do
-    if docker exec "$container" wget -qO- http://localhost:3000/api/stats &>/dev/null; then
+    if docker exec "$container" wget -qO- http://localhost:3000/api/healthz &>/dev/null; then
       healthy=true
       break
     fi
@@ -438,11 +441,11 @@ verify_health() {
   done
 
   if ! $healthy; then
-    err "Server did not respond after 90 seconds."
+    err "Server did not become ready after 90 seconds."
     warn "Check logs: ./manage.sh logs"
     return 1
   fi
-  log "Server is responding."
+  log "Server is ready."
 
   # Check for MQTT errors in recent logs
   local mqtt_errors
@@ -456,7 +459,7 @@ verify_health() {
   if $use_https; then
     info "Checking HTTPS for ${caddyfile_domain}..."
     if command -v curl &>/dev/null; then
-      if curl -sf --connect-timeout 5 "https://${caddyfile_domain}/api/stats" &>/dev/null; then
+      if curl -sf --connect-timeout 5 "https://${caddyfile_domain}/api/healthz" &>/dev/null; then
         log "HTTPS is working: https://${caddyfile_domain}"
       else
         warn "HTTPS not reachable yet for ${caddyfile_domain}"
@@ -1348,6 +1351,7 @@ cmd_update() {
     git checkout "$version" || { err "Failed to checkout '${version}'."; exit 1; }
   fi
 
+  refresh_build_metadata
   migrate_config auto
 
   info "Rebuilding image..."

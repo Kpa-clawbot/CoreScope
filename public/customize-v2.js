@@ -99,6 +99,8 @@
     }
   }
   function _setBrandAlt(alt) {
+    if (window.setSiteTitle) window.setSiteTitle(alt);
+    else document.title = alt || 'CoreScope';
     var node = document.querySelector('.nav-brand .brand-logo');
     if (!node) return;
     if (node.tagName.toLowerCase() === 'img') node.setAttribute('alt', alt);
@@ -790,7 +792,6 @@
     var br = effectiveConfig.branding;
     if (br) {
       if (br.siteName) {
-        document.title = br.siteName;
         _setBrandAlt(br.siteName);
         var brandEl = document.querySelector('.brand-text');
         if (brandEl) brandEl.textContent = br.siteName;
@@ -2448,7 +2449,6 @@
             _setBrandAlt(inp.value);
             var el = document.querySelector('.brand-text');
             if (el) el.textContent = inp.value;
-            document.title = inp.value;
           }
           if (section === 'branding' && key === 'logoUrl') {
             _setBrandLogoUrl(inp.value || '', null);
@@ -2810,7 +2810,6 @@
         _setBrandAlt(overrides.branding.siteName);
         var brandEl = document.querySelector('.brand-text');
         if (brandEl) brandEl.textContent = overrides.branding.siteName;
-        document.title = overrides.branding.siteName;
       }
       if (overrides.branding.logoUrl) {
         _setBrandLogoUrl(overrides.branding.logoUrl, overrides.branding.siteName || null);

@@ -486,9 +486,8 @@ type HealthThresholds struct {
 	InfraSilentHours   float64 `json:"infraSilentHours"`
 	NodeDegradedHours  float64 `json:"nodeDegradedHours"`
 	NodeSilentHours    float64 `json:"nodeSilentHours"`
-	// RelayActiveHours: how recent a path-hop appearance must be for a
-	// repeater to be considered "actively relaying" vs only "alive
-	// (advert-only)". See issue #662. Defaults to 24h.
+	// RelayActiveHours: window for the legacy attributed relay_active API
+	// field and the UI's certain-relay indicator (#2331). Defaults to 24h.
 	RelayActiveHours float64 `json:"relayActiveHours"`
 	// Issue #1552 — observer health classification thresholds (minutes).
 	// Defaults match prior hardcoded behavior in public/observers.js (10/60).
@@ -759,6 +758,7 @@ func (h HealthThresholds) ToClientMs() map[string]int {
 		"infraSilentMs":    int(h.InfraSilentHours * hourMs),
 		"nodeDegradedMs":   int(h.NodeDegradedHours * hourMs),
 		"nodeSilentMs":     int(h.NodeSilentHours * hourMs),
+		"relayActiveMs":    int(h.RelayActiveHours * hourMs),
 		"observerOnlineMs": h.ObserverOnlineMinutes * minMs,
 		"observerStaleMs":  h.ObserverStaleMinutes * minMs,
 	}

@@ -55,7 +55,10 @@ type notifyInput struct {
 	// stalls, every node's clock stops with it, so a node with a short
 	// learned window is not mailed offline before IngestStale trips (#2260).
 	NewestPacket time.Time
-	Observers    []notifyObserver // nil unless an admin chose observer.offline
+	Observers    []notifyObserver // nil unless an admin chose observer.offline or a user observer.offline.own
+	// ObserverOwners maps an uppercase observer pubkey to its owner's user id
+	// (orphaned bindings omitted); nil when observer logins are off.
+	ObserverOwners map[string]int64
 	// IngestStale: the newest packet in the store is old, so a silent node
 	// and a silent feed look the same. node.offline and observer.offline
 	// are then not compared (states unchanged, no changes).
@@ -107,7 +110,7 @@ const (
 
 var notifyEventRank = map[string]int{
 	users.NotifyNodeOffline: 0, users.NotifyNodeBattery: 1, users.NotifyNodeExternal: 2,
-	users.NotifyForeignNew: 3, users.NotifyObserverOffline: 4,
+	users.NotifyForeignNew: 3, users.NotifyObserverOffline: 4, users.NotifyObserverOfflineOwn: 5,
 }
 
 // nodeLabel is the node's name made safe for a mail line (mailSafeText),
@@ -337,6 +340,19 @@ func evaluateNotifications(in notifyInput) notifyResult {
 			}
 			if p.Has(users.NotifyNodeExternal) && in.External != nil {
 				evalExternal(&res, prev, extBad[p.UserID][pk], in.External.Alerts[pk], p.UserID, pk, name, mailing, in.Now)
+			}
+		}
+		if p.Has(users.NotifyObserverOfflineOwn) && !p.Has(users.NotifyObserverOffline) && !in.IngestStale {
+			for _, o := range in.Observers {
+				if owner, ok := in.ObserverOwners[strings.ToUpper(o.ID)]; !ok || owner != p.UserID {
+					continue
+				}
+				k := users.NotifyKey{UserID: p.UserID, Event: users.NotifyObserverOfflineOwn, Subject: o.ID}
+				name := mailSafeText(o.Name)
+				if name == "" {
+					name = o.ID
+				}
+				compare(k, name, observerState(o, in.Health, in.Now, in.IngestResumedAt, prev[k]), nil)
 			}
 		}
 		if u.Role != users.RoleAdmin {

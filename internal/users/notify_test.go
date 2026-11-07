@@ -390,3 +390,20 @@ func TestRemoveWatchDeletesItsExternalSubjects(t *testing.T) {
 		t.Fatalf("states after removing the watch = %+v", got)
 	}
 }
+
+func TestOwnObserverEventIsOpenButNotDefault(t *testing.T) {
+	if !ValidNotifyEvent(NotifyObserverOfflineOwn) || IsAdminNotifyEvent(NotifyObserverOfflineOwn) {
+		t.Fatal("observer.offline.own must be valid and not admin-only")
+	}
+	for _, e := range NodeNotifyEvents {
+		if e == NotifyObserverOfflineOwn {
+			t.Fatal("observer.offline.own is in the defaults")
+		}
+	}
+	st, _ := newTestStore(t)
+	u := mustCreate(t, st, "own@example.org", "Own")
+	p, err := st.SetNotifyPrefs(u.ID, true, []string{NotifyObserverOfflineOwn, NotifyNodeOffline})
+	if err != nil || !reflect.DeepEqual(p.Events, []string{NotifyNodeOffline, NotifyObserverOfflineOwn}) {
+		t.Fatalf("prefs = %+v, %v", p, err)
+	}
+}

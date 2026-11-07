@@ -18,6 +18,9 @@ const (
 	NotifyNodeExternal    = "node.external"    // off by default; needs notifications.externalAlerts
 	NotifyForeignNew      = "foreign.new"      // admins only
 	NotifyObserverOffline = "observer.offline" // admins only
+	// NotifyObserverOfflineOwn: offline/online mails for the observers bound
+	// to the user's own MQTT login. Open to every role, off by default.
+	NotifyObserverOfflineOwn = "observer.offline.own"
 )
 
 // Subject states.
@@ -37,6 +40,8 @@ var (
 	// OptionalNodeNotifyEvents are open to every user (when the instance
 	// configures them) and off by default.
 	OptionalNodeNotifyEvents = []string{NotifyNodeExternal}
+	// OwnerNotifyEvents are open to every user and off by default.
+	OwnerNotifyEvents = []string{NotifyObserverOfflineOwn}
 	// AdminNotifyEvents are open to admins only and off by default.
 	AdminNotifyEvents = []string{NotifyForeignNew, NotifyObserverOffline}
 )
@@ -49,7 +54,7 @@ func IsAdminNotifyEvent(e string) bool { return e == NotifyForeignNew || e == No
 
 // ValidNotifyEvent reports whether e is a known event type.
 func ValidNotifyEvent(e string) bool {
-	return e == NotifyNodeOffline || e == NotifyNodeBattery || e == NotifyNodeExternal || IsAdminNotifyEvent(e)
+	return e == NotifyNodeOffline || e == NotifyNodeBattery || e == NotifyNodeExternal || e == NotifyObserverOfflineOwn || IsAdminNotifyEvent(e)
 }
 
 // NotifyPrefs is one user's notification preferences.
@@ -106,7 +111,7 @@ func canonicalEvents(list []string) []string {
 		want[e] = true
 	}
 	out := []string{}
-	for _, group := range [][]string{NodeNotifyEvents, OptionalNodeNotifyEvents, AdminNotifyEvents} {
+	for _, group := range [][]string{NodeNotifyEvents, OptionalNodeNotifyEvents, OwnerNotifyEvents, AdminNotifyEvents} {
 		for _, e := range group {
 			if want[e] {
 				out = append(out, e)

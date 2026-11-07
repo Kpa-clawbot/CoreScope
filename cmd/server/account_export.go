@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,17 +17,19 @@ import (
 // unsubscribe tokens and companion link challenges; of a pending email
 // change only the new address is exported. Other accounts appear as ids only (activatedBy, audit).
 type accountExport struct {
-	FormatVersion int                 `json:"formatVersion"`
-	ExportedAt    string              `json:"exportedAt"`
-	Instance      string              `json:"instance"`
-	Profile       exportProfile       `json:"profile"`
-	Sessions      []exportSession     `json:"sessions"`
-	Companions    []exportCompanion   `json:"companions"`
-	Settings      *exportSettings     `json:"settings"`
-	Proposals     []exportProposal    `json:"proposals"`
-	Notifications exportNotifications `json:"notifications"`
-	Audit         []exportAuditEntry  `json:"audit"`
-	Mail          []exportMail        `json:"mail"`
+	FormatVersion    int                     `json:"formatVersion"`
+	ExportedAt       string                  `json:"exportedAt"`
+	Instance         string                  `json:"instance"`
+	Profile          exportProfile           `json:"profile"`
+	Sessions         []exportSession         `json:"sessions"`
+	Companions       []exportCompanion       `json:"companions"`
+	ObserverLogin    *exportObserverLogin    `json:"observerLogin"`
+	ObserverBindings []exportObserverBinding `json:"observerBindings"`
+	Settings         *exportSettings         `json:"settings"`
+	Proposals        []exportProposal        `json:"proposals"`
+	Notifications    exportNotifications     `json:"notifications"`
+	Audit            []exportAuditEntry      `json:"audit"`
+	Mail             []exportMail            `json:"mail"`
 }
 
 type exportProfile struct {
@@ -55,6 +58,20 @@ type exportCompanion struct {
 	Pubkey   string `json:"pubkey"`
 	Name     string `json:"name"`
 	LinkedAt string `json:"linkedAt"`
+}
+
+// exportObserverLogin is the login's metadata. The password, its hash and
+// the stored ciphertext are never exported.
+type exportObserverLogin struct {
+	Username  string `json:"username"`
+	CreatedAt string `json:"createdAt"`
+	Revoked   bool   `json:"revoked"`
+}
+
+type exportObserverBinding struct {
+	Pubkey  string `json:"pubkey"`
+	BoundAt string `json:"boundAt"`
+	BoundBy string `json:"boundBy"`
 }
 
 type exportSettings struct {
@@ -114,12 +131,13 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 		Profile: exportProfile{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName, Role: u.Role, Status: u.Status,
 			CreatedAt: rfc3339(u.CreatedAt), LastLoginAt: rfc3339Ptr(u.LastLoginAt), EmailBouncing: u.EmailBouncing,
 			ActivatedAt: rfc3339Ptr(u.ActivatedAt), ActivatedBy: u.ActivatedBy},
-		Sessions:      []exportSession{},
-		Companions:    []exportCompanion{},
-		Proposals:     []exportProposal{},
-		Notifications: exportNotifications{Watches: []exportWatch{}},
-		Audit:         []exportAuditEntry{},
-		Mail:          []exportMail{},
+		Sessions:         []exportSession{},
+		Companions:       []exportCompanion{},
+		ObserverBindings: []exportObserverBinding{},
+		Proposals:        []exportProposal{},
+		Notifications:    exportNotifications{Watches: []exportWatch{}},
+		Audit:            []exportAuditEntry{},
+		Mail:             []exportMail{},
 	}
 	pending, err := a.st.PendingEmailChange(u.ID)
 	if err != nil {
@@ -141,6 +159,19 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 	}
 	for _, l := range links {
 		x.Companions = append(x.Companions, exportCompanion{Pubkey: l.Pubkey, Name: l.Name, LinkedAt: rfc3339(l.LinkedAt)})
+	}
+	switch l, err := a.st.MQTTLoginForUser(u.ID); {
+	case err == nil:
+		x.ObserverLogin = &exportObserverLogin{Username: l.Username, CreatedAt: rfc3339(l.CreatedAt), Revoked: l.RevokedAt != nil}
+	case !errors.Is(err, users.ErrNotFound):
+		return nil, fmt.Errorf("observer login: %w", err)
+	}
+	bindings, err := a.st.ObserverBindingsForUser(u.ID)
+	if err != nil {
+		return nil, fmt.Errorf("observer bindings: %w", err)
+	}
+	for _, b := range bindings {
+		x.ObserverBindings = append(x.ObserverBindings, exportObserverBinding{Pubkey: b.Pubkey, BoundAt: rfc3339(b.BoundAt), BoundBy: b.BoundBy})
 	}
 	rec, err := a.st.SettingsRecordFor(u.ID)
 	if err != nil {

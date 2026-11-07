@@ -882,7 +882,7 @@ img.brand-logo {
   color: var(--nav-text-muted); text-decoration: none;
   padding: 14px clamp(8px, 0.6vw + 4px, 14px); font-size: var(--fs-sm);
   font-weight: var(--fw-medium); /* #1668 M3 — 12-14px fluid + 500 floor */
-  border-bottom: 2px solid transparent; transition: all .15s;
+  border-bottom: 2px solid transparent; transition: color .15s, background-color .15s, border-color .15s;
   background: none; border-top: none; border-left: none; border-right: none;
   cursor: pointer; font-family: var(--font);
   white-space: nowrap; /* #1046: never wrap labels — wrapping makes the nav bar grow taller */
@@ -986,6 +986,15 @@ img.brand-logo {
 }
 .nav-stats .stat-val { color: var(--nav-text); font-weight: 600; transition: color 0.3s ease; }
 .nav-stats .stat-val.updated { color: var(--link-color); }
+
+/* Only compact when the measured desktop strip cannot fit its primary links. */
+.nav-hide-stats .nav-stats { display: none; }
+.nav-compact .brand-text { display: none; }
+.nav-compact .brand-logo { max-width: 80px; height: auto; max-height: 36px; }
+.nav-compact .nav-left { gap: var(--space-xs); }
+.nav-compact .nav-links .nav-link { padding-inline: 4px; }
+.nav-compact .nav-more-btn { padding-inline: 6px; }
+.nav-compact .nav-account-label { max-width: 5ch; }
 
 /* === Layout === */
 /* Default: body-scroll mode — content pushes beyond viewport, iOS status-bar
@@ -2310,8 +2319,8 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 /* === Hamburger (hidden on desktop) === */
 .hamburger { display: none; }
 /* "More" button (hidden on desktop) */
-.nav-more-wrap { display: none; position: relative; }
-.nav-more-btn { display: inline-flex; }
+.nav-more-wrap { display: none; position: relative; flex-shrink: 0; }
+.nav-more-btn { display: inline-flex; transition-property: color, background-color, border-color; }
 /* #1406: position:fixed (not absolute) so the dropdown escapes .nav-more-wrap's
    layout box. When absolute, the dropdown's content extents inflated
    .nav-more-wrap.scrollHeight → bubbled into .nav-left flex line-height calc
@@ -3518,11 +3527,9 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 @container (max-width: 480px) {
   .dumbbell-row, .dumbbell-axis { --relay-airtime-columns: 70px minmax(20px, 1fr) 90px; }
 }
-/* Constrain chart media inside the card (svg/canvas at any depth). The
-   `.analytics-chart-card svg, .analytics-chart-card canvas` descendant
-   selector is robust to wrapper elements (legends, tooltips, axis
-   groups) being added between the card and the chart media. */
-.analytics-chart-card svg,
+/* Constrain chart media at any depth, preserving inline Phosphor icons.
+   Descendant selectors allow wrappers between the card and chart media. */
+.analytics-chart-card svg:not(.ph-icon),
 .analytics-chart-card canvas { max-width: 100%; height: auto; display: block; }
 .analytics-chart-card h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin-bottom: 4px; }
 .analytics-chart-desc { font-size: 10px; color: var(--text-muted); margin-bottom: 8px; font-style: italic; }

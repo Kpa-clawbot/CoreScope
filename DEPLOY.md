@@ -61,7 +61,9 @@ All persistent data lives in `/app/data`:
 - `config.json` — custom config (optional)
 - `theme.json` — custom theme (optional)
 
-**Backup:** `cp data/meshcore.db ~/backup/`
+**Backup:** Follow [Backup & Restore](docs/deployment.md#backup--restore) to
+download and verify a consistent snapshot. Do not copy `meshcore.db` while the
+server or ingestor is running; committed data may still be in its WAL file.
 
 ## TLS
 

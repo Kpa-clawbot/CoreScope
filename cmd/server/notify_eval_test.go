@@ -554,3 +554,59 @@ func TestEvaluateGraceAfterIngestResumes(t *testing.T) {
 		t.Fatalf("observer heard after recovery = %+v; want Mast back online", ch)
 	}
 }
+
+func ownInput(events ...string) notifyInput {
+	in := evInput()
+	in.Watches = nil
+	in.Prefs = []users.NotifyPrefs{{UserID: evUser, Enabled: true, Events: events}}
+	in.Observers = []notifyObserver{
+		{ID: "obs1", Name: "Roof", LastSeen: evAgo(25 * time.Hour)},
+		{ID: "OBS2", Name: "Other", LastSeen: evAgo(25 * time.Hour)},
+	}
+	in.ObserverOwners = map[string]int64{"OBS1": evUser, "OBS2": evAdmin2}
+	in.States = []users.NotifyState{
+		evStateRow(evUser, users.NotifyObserverOfflineOwn, "obs1", users.NotifyGood),
+		evStateRow(evUser, users.NotifyObserverOfflineOwn, "OBS2", users.NotifyGood),
+	}
+	return in
+}
+
+func TestEvalOwnObserverOffline(t *testing.T) {
+	res := evaluateNotifications(ownInput(users.NotifyObserverOfflineOwn))
+	ch := res.Changes[evUser]
+	if len(ch) != 1 || ch[0].Subject != "obs1" || ch[0].Event != users.NotifyObserverOfflineOwn || ch[0].To != users.NotifyBad {
+		t.Fatalf("changes = %+v; want one bad change for obs1", ch)
+	}
+	if _, ok := evState(res, evUser, users.NotifyObserverOfflineOwn, "OBS2"); ok {
+		t.Fatal("someone else's observer was evaluated")
+	}
+}
+
+func TestEvalAdminWithBothGetsOneMail(t *testing.T) {
+	in := ownInput(users.NotifyObserverOffline, users.NotifyObserverOfflineOwn)
+	in.Prefs[0].UserID = evAdmin
+	in.ObserverOwners = map[string]int64{"OBS1": evAdmin}
+	in.States = []users.NotifyState{evStateRow(evAdmin, users.NotifyObserverOffline, "obs1", users.NotifyGood)}
+	res := evaluateNotifications(in)
+	n := 0
+	for _, c := range res.Changes[evAdmin] {
+		if c.Subject == "obs1" {
+			n++
+			if c.Event != users.NotifyObserverOffline {
+				t.Errorf("event = %q; want observer.offline", c.Event)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d changes for obs1, want 1: %+v", n, res.Changes[evAdmin])
+	}
+}
+
+func TestEvalOwnObserverIngestStaleNoChange(t *testing.T) {
+	in := ownInput(users.NotifyObserverOfflineOwn)
+	in.IngestStale = true
+	res := evaluateNotifications(in)
+	if len(res.Changes[evUser]) != 0 {
+		t.Fatalf("changes during stale ingest: %+v", res.Changes[evUser])
+	}
+}

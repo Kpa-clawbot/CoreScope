@@ -17,16 +17,31 @@ const obsIndexThreshold = 64
 // hasObservation reports whether tx already holds an observation from
 // observerID with pathJSON.
 func (tx *StoreTx) hasObservation(observerID, pathJSON string) bool {
+	return tx.observation(observerID, pathJSON) != nil
+}
+
+func (tx *StoreTx) observation(observerID, pathJSON string) *StoreObs {
 	if tx.obsKeys != nil {
-		_, ok := tx.obsKeys[obsDedupKey{observerID, pathJSON}]
-		return ok
+		return tx.obsKeys[obsDedupKey{observerID, pathJSON}]
 	}
 	for _, o := range tx.Observations {
 		if o.ObserverID == observerID && o.PathJSON == pathJSON {
-			return true
+			return o
 		}
 	}
-	return false
+	return nil
+}
+
+// mergeObservationEvidence preserves an eligible flood when observer/path
+// dedup merges frames with different headers. The validated path fixes its
+// width, so known evidence can only upgrade unknown/ineligible evidence.
+// Caller owns tx privately during load or holds s.mu for writing.
+func (tx *StoreTx) mergeObservationEvidence(observerID, pathJSON string, n uint8) *StoreObs {
+	obs := tx.observation(observerID, pathJSON)
+	if obs != nil && n != 0 {
+		obs.relayHopHexLen = n
+	}
+	return obs
 }
 
 // hasObserver reports whether any observation on tx came from observerID.
@@ -53,15 +68,15 @@ func (tx *StoreTx) addObservation(obs *StoreObs) {
 	tx.ObservationCount++
 	switch {
 	case tx.obsKeys != nil:
-		tx.obsKeys[obsDedupKey{obs.ObserverID, obs.PathJSON}] = struct{}{}
+		tx.obsKeys[obsDedupKey{obs.ObserverID, obs.PathJSON}] = obs
 		if obs.ObserverID != "" {
 			tx.observerSet[obs.ObserverID] = struct{}{}
 		}
 	case len(tx.Observations) >= obsIndexThreshold:
-		tx.obsKeys = make(map[obsDedupKey]struct{}, 2*len(tx.Observations))
+		tx.obsKeys = make(map[obsDedupKey]*StoreObs, 2*len(tx.Observations))
 		tx.observerSet = make(map[string]struct{}, len(tx.Observations))
 		for _, o := range tx.Observations {
-			tx.obsKeys[obsDedupKey{o.ObserverID, o.PathJSON}] = struct{}{}
+			tx.obsKeys[obsDedupKey{o.ObserverID, o.PathJSON}] = o
 			if o.ObserverID != "" {
 				tx.observerSet[o.ObserverID] = struct{}{}
 			}

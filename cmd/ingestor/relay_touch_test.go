@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -105,7 +106,7 @@ func TestTouchRelayNodes_Debounces(t *testing.T) {
 }
 
 // TestTouchRelayNodes_IgnoresEmptyAndUnknown covers the unresolved-hop case:
-// resolvePathWithContext yields nil for ambiguous or unknown prefixes, and
+// resolvePath yields nil for ambiguous or unknown prefixes, and
 // unknown pubkeys must not create rows.
 func TestTouchRelayNodes_IgnoresEmptyAndUnknown(t *testing.T) {
 	store := newTestStore(t)
@@ -142,5 +143,109 @@ func TestTouchRelayNodes_MalformedTimestamp(t *testing.T) {
 	}
 	if n := store.Stats.RelayTouches.Load(); n != 0 {
 		t.Errorf("RelayTouches = %d, want 0", n)
+	}
+}
+
+// TestInsertTransmission_TouchesOnlyFloodRelays: only a flood path lists
+// relays that already transmitted. A direct route's path is the hops still
+// to come and a TRACE's path_json is the route it was asked to take, so a
+// trace to a node that is switched off must not mark it heard.
+func TestInsertTransmission_TouchesOnlyFloodRelays(t *testing.T) {
+	cases := []struct {
+		name        string
+		routeType   int
+		payloadType int
+		rawHex      string
+		wantTouch   bool
+	}{
+		{"flood TXT_MSG", 1, 2, "09414b60", true},
+		{"transport flood TXT_MSG", 0, 2, "0811223344414b60", true},
+		{"direct TXT_MSG", 2, 2, "0a414b60", false},
+		{"direct TRACE", 2, 9, "260032", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+
+			const relay = "4b6091e5d29f53738c0dbe013cb4aeb738955447a92465d9445e18d4099d940e"
+			const before = "2026-07-01T00:00:00Z"
+			seedRelayNode(t, store, relay, "Switched off", before)
+			if err := store.RefreshPrefixIndex(); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.UpsertObserver("fixture-observer", "Fixture observer", "", nil); err != nil {
+				t.Fatal(err)
+			}
+
+			rxTime := "2026-07-10T12:00:00Z"
+			data := &PacketData{
+				Hash: "touch-" + tc.name, RouteType: tc.routeType, PayloadType: tc.payloadType,
+				RawHex: tc.rawHex, PathJSON: `["4b60"]`, ObserverID: "fixture-observer", Timestamp: rxTime,
+			}
+			if _, err := store.InsertTransmission(data); err != nil {
+				t.Fatal(err)
+			}
+
+			want := before
+			if tc.wantTouch {
+				want = rxTime
+			}
+			if got := nodeLastSeen(t, store, relay); got != want {
+				t.Errorf("last_seen = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Adjacency can select a useful displayed path through a prefix collision,
+// but only unique prefixes prove which relay should have its liveness touched.
+func TestInsertTransmission_AdjacencyDoesNotRefreshCollidingRelays(t *testing.T) {
+	store := newTestStore(t)
+	unique := "aa" + strings.Repeat("11", 31)
+	adjacent := "bb" + strings.Repeat("22", 31)
+	other := "bb" + strings.Repeat("33", 31)
+	const before = "2026-07-01T00:00:00Z"
+	const rxTime = "2026-07-10T12:00:00Z"
+	for _, pubkey := range []string{unique, adjacent, other} {
+		seedRelayNode(t, store, pubkey, "Fixture relay", before)
+	}
+	if err := store.RefreshPrefixIndex(); err != nil {
+		t.Fatal(err)
+	}
+	graph := NewNeighborGraph()
+	graph.AddEdge(unique, adjacent)
+	store.neighborGraph.store(graph)
+	if err := store.UpsertObserver("fixture-observer", "Fixture observer", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// FLOOD ACK: header 0x0d, two 1-byte hops, then the 4-byte ACK payload.
+	data := &PacketData{
+		Hash: "relay-certainty", RouteType: 1, PayloadType: 3,
+		RawHex: "0d02aabb11223344", PathJSON: `["aa","bb"]`,
+		ObserverID: "fixture-observer", Timestamp: rxTime,
+	}
+	if _, err := store.InsertTransmission(data); err != nil {
+		t.Fatal(err)
+	}
+
+	var stored string
+	if err := store.db.QueryRow(`SELECT resolved_path FROM observations`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	resolved := unmarshalResolvedPathLocal(stored)
+	if len(resolved) != 2 || deref(resolved[0]) != unique || deref(resolved[1]) != adjacent {
+		t.Fatalf("resolved_path = %s, want unique hop followed by adjacent collision candidate", stored)
+	}
+	if got := nodeLastSeen(t, store, unique); got != rxTime {
+		t.Errorf("unique relay last_seen = %q, want %q", got, rxTime)
+	}
+	for _, pubkey := range []string{adjacent, other} {
+		if got := nodeLastSeen(t, store, pubkey); got != before {
+			t.Errorf("colliding relay %s last_seen = %q, want unchanged %q", pubkey, got, before)
+		}
+	}
+	if got := store.Stats.RelayTouches.Load(); got != 1 {
+		t.Errorf("RelayTouches = %d, want 1 (the unique hop only)", got)
 	}
 }

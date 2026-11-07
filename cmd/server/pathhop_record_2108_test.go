@@ -77,7 +77,7 @@ func phdRecordStore(count int) (store *PacketStore, old, young []*StoreTx) {
 			young = append(young, tx)
 		}
 		addTxToPathHopIndex(store.byPathHop, tx)
-		store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil)
+		store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil, nil)
 	}
 	return store, old, young
 }
@@ -107,7 +107,7 @@ func TestPathHopResolvedRecordBoundedAndEvicted_2108(t *testing.T) {
 	hopsSeen := map[string]bool{}
 	for _, tx := range store.packets {
 		for k := 0; k < 10; k++ {
-			store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil)
+			store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil, nil)
 		}
 	}
 	if got := len(store.pathHopResolved); got != len(old)+len(young) {
@@ -141,7 +141,7 @@ func TestPathHopResolvedRecordBoundedAndEvicted_2108(t *testing.T) {
 	}
 	// A survivor's next observation still adds nothing.
 	for _, tx := range young {
-		store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil)
+		store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil, nil)
 		if n := phdEntriesOf(store, tx); n != phdRecordRefsPerTx {
 			t.Fatalf("tx %d has %d entries after eviction and another observation, want %d", tx.ID, n, phdRecordRefsPerTx)
 		}
@@ -167,7 +167,7 @@ func TestPathHopResolvedRecordAcrossRebuild_2108(t *testing.T) {
 	store, _, young := phdRecordStore(40)
 	gone := store.packets[0]
 	goneOnly := strings.Repeat("e", 64) // a relay only the removed transmission went through
-	store.indexResolvedPathHops(gone, []string{goneOnly}, map[string]bool{}, nil)
+	store.indexResolvedPathHops(gone, []string{goneOnly}, map[string]bool{}, nil, nil)
 	store.packets = store.packets[1:]
 	delete(store.byTxID, gone.ID)
 	delete(store.byHash, gone.Hash)
@@ -190,7 +190,7 @@ func TestPathHopResolvedRecordAcrossRebuild_2108(t *testing.T) {
 		if _, ok := store.pathHopResolved[tx]; !ok {
 			t.Fatalf("rebuild dropped the record of live tx %d", tx.ID)
 		}
-		store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil)
+		store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil, nil)
 		if n := phdEntriesOf(store, tx); n != phdRecordRefsPerTx {
 			t.Fatalf("tx %d has %d entries after a rebuild and another observation, want %d", tx.ID, n, phdRecordRefsPerTx)
 		}
@@ -216,7 +216,7 @@ func TestPathHopResolvedRecordClearedWithEmptyIndex_2108(t *testing.T) {
 	}
 	hopsSeen := map[string]bool{}
 	for _, tx := range young {
-		store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil)
+		store.indexResolvedPathHops(tx, phdFreshKeys(), hopsSeen, nil, nil)
 		if n := phdEntriesOf(store, tx); n != phdRecordRefsPerTx {
 			t.Fatalf("tx %d has %d entries after the rebuild and another observation, want %d", tx.ID, n, phdRecordRefsPerTx)
 		}
@@ -278,7 +278,7 @@ func BenchmarkPathHopRecordMemory_2108(b *testing.B) {
 								r := (i*31 + j*997) % relays
 								pks[j] = fmt.Sprintf("%02x%062x", r%256, r)
 							}
-							store.indexResolvedPathHops(tx, pks, hopsSeen, nil)
+							store.indexResolvedPathHops(tx, pks, hopsSeen, nil, nil)
 						}
 					}
 					with := heap()

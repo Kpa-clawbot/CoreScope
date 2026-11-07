@@ -94,6 +94,27 @@ func TestObsDedupEmptyObserverNotCounted(t *testing.T) {
 	}
 }
 
+func TestObsDedupUnionsRelayEvidenceAcrossThreshold(t *testing.T) {
+	for _, count := range []int{4, obsIndexThreshold, obsIndexThreshold * 2} {
+		t.Run(fmt.Sprintf("observations=%d", count), func(t *testing.T) {
+			tx := &StoreTx{}
+			for i := 0; i < count; i++ {
+				addTestObs(tx, fmt.Sprintf("obs-%d", i), `["4F2A"]`)
+			}
+			id := fmt.Sprintf("obs-%d", count-1)
+			for _, n := range []uint8{4, 0, 4} {
+				obs := tx.mergeObservationEvidence(id, `["4F2A"]`, n)
+				if obs != tx.Observations[count-1] || obs.relayHopHexLen != 4 {
+					t.Fatal("dedup must upgrade the existing observation and never erase evidence")
+				}
+			}
+			if tx.mergeObservationEvidence("absent", `["4F2A"]`, 4) != nil || len(tx.Observations) != count {
+				t.Fatal("evidence union must not create observations")
+			}
+		})
+	}
+}
+
 // BenchmarkObsDedup measures a miss (the common case on ingest) at sizes
 // either side of the threshold.
 func BenchmarkObsDedup(b *testing.B) {

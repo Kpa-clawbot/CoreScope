@@ -42,7 +42,7 @@ func TestPathHopEviction1908(t *testing.T) {
 					tx.ScopeName = &expiredScope
 				}
 				addTxToPathHopIndex(store.byPathHop, tx)
-				store.indexResolvedPathHops(tx, []string{shared, pk}, hopsSeen, nil)
+				store.indexResolvedPathHops(tx, []string{shared, pk}, hopsSeen, nil, nil)
 			}
 			// Repeated observations no longer append the same resolved
 			// association again (#2108), but eviction must still drop every

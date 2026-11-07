@@ -17,6 +17,7 @@
  * #1153 also checks that the selected node has a visible enclosing marker
  * in an 18-hop chain, without marking a different node with the same prefix.
  * Covers the desktop side/full views and mobile full view in both themes.
+ * #2291 checks the example-packet label and follows its canonical packet link.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1146-path-link-contrast-e2e.js
  * Optional SCREENSHOT_DIR saves PNG evidence; use an ignored output directory.
@@ -83,9 +84,24 @@ async function effectiveBgFor(page, selector) {
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
   });
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  // Initial config and each theme toggle schedule a node-view rebuild. Wait
+  // for that lifecycle before selecting rows or capturing their replacement.
+  await ctx.addInitScript(() => {
+    window.addEventListener('theme-changed', () => { window.__pathThemeReady = false; });
+    window.addEventListener('theme-refresh', () => { window.__pathThemeReady = !!window._customizerV2?.initDone; });
+  });
   const page = await ctx.newPage();
   page.setDefaultTimeout(15000);
   page.on('pageerror', (e) => console.error('[pageerror]', e.message));
+
+  async function setTheme(theme) {
+    await page.waitForFunction(() => window.__pathThemeReady === true);
+    if (await page.locator('html').getAttribute('data-theme') !== theme) {
+      await page.evaluate(() => { window.__pathThemeReady = false; });
+      await page.locator('#darkModeToggle').click();
+      await page.waitForFunction(() => window.__pathThemeReady === true);
+    }
+  }
 
   console.log(`\n=== #1146 path-link contrast E2E against ${BASE} ===`);
 
@@ -94,6 +110,14 @@ async function effectiveBgFor(page, selector) {
   let selectedPubkey;
   let targetHopKey;
   let siblingKey;
+  let sampleHash;
+
+  await step('#2291 choose an existing packet for the path sample link', async () => {
+    const response = await page.request.get(BASE + '/api/packets?limit=1');
+    assert(response.ok(), 'Packet fixture request must succeed');
+    sampleHash = (await response.json()).packets?.[0]?.hash;
+    assert(/^[0-9a-f]{16}$/.test(sampleHash), 'Expected a real packet hash for click-through checks');
+  });
 
   // Mock paths API for ANY node so test is deterministic.
   await page.route('**/api/nodes/*/paths*', (route) => {
@@ -126,7 +150,7 @@ async function effectiveBgFor(page, selector) {
           hops,
           count: 5,
           lastSeen: new Date().toISOString(),
-          sampleHash: 'deadbeef00',
+          sampleHash,
         }],
       }),
     });
@@ -135,9 +159,7 @@ async function effectiveBgFor(page, selector) {
   await step('Load nodes page and force dark theme', async () => {
     await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#nodesBody tr[data-key]', { timeout: 15000 });
-    if (await page.locator('html').getAttribute('data-theme') !== 'dark') {
-      await page.locator('#darkModeToggle').click();
-    }
+    await setTheme('dark');
   });
 
   await step('Open side panel for first node and wait for paths', async () => {
@@ -173,7 +195,8 @@ async function effectiveBgFor(page, selector) {
   });
 
   async function assertCurrentHop(selector, hasHopDisplay) {
-    await page.waitForFunction((sel) => document.querySelector(sel)?.textContent.includes('Relay 18'), selector);
+    await page.waitForFunction((sel) => window.__pathThemeReady === true &&
+      document.querySelector(sel)?.textContent.includes('Relay 18'), selector);
     const targetSelector = selector + ' a[href="#/nodes/' + targetHopKey + '"]';
     const result = await page.evaluate(({ selector, targetHopKey, siblingKey }) => {
       const container = document.querySelector(selector);
@@ -224,17 +247,23 @@ async function effectiveBgFor(page, selector) {
       const filename = `${selector.slice(1)}-${page.viewportSize().width}-${theme}${hasHopDisplay ? '' : '-plain'}.png`;
       await page.locator(selector).screenshot({ path: require('path').join(SCREENSHOT_DIR, filename) });
     }
+    const sampleSelector = selector + ' a.ch-analyze-link';
+    const sample = await page.locator(sampleSelector).evaluate(link => ({
+      text: link.textContent.trim(), href: link.getAttribute('href'),
+    }));
+    assert(sample.href === '#/packets/' + sampleHash, 'Path sample link must retain its canonical packet destination');
+    assert(sample.text === 'View example packet →',
+      'Path sample link must say "View example packet →", got ' + JSON.stringify(sample.text));
   }
 
   await step('#1153 desktop side panel: selected hop stands out in an 18-hop dark chain',
     () => assertCurrentHop('#pathsContent', false));
 
   for (const theme of ['light', 'dark']) {
-    if (await page.locator('html').getAttribute('data-theme') !== theme) {
-      await page.locator('#darkModeToggle').click();
-    }
+    await setTheme(theme);
     await step('#1153 desktop side panel: ' + theme + ' theme', async () => {
       await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => window.__pathThemeReady === true);
       assert(await page.locator('html').getAttribute('data-theme') === theme, 'Expected the selected theme');
       await page.locator('#nodesBody tr[data-key]').first().click();
       await assertCurrentHop('#pathsContent', false);
@@ -249,19 +278,44 @@ async function effectiveBgFor(page, selector) {
     // The theme toggle lives in the desktop header; exercise the same theme
     // at mobile width without depending on the unrelated navigation drawer.
     await page.setViewportSize({ width: 1280, height: 900 });
-    if (await page.locator('html').getAttribute('data-theme') !== theme) {
-      await page.locator('#darkModeToggle').click();
-    }
+    await setTheme(theme);
     await page.setViewportSize({ width: 390, height: 844 });
     await step('#1153 mobile row click opens a readable full chain: ' + theme + ' theme', async () => {
       await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => window.__pathThemeReady === true);
       assert(await page.locator('html').getAttribute('data-theme') === theme, 'Expected the selected theme');
       await page.locator('#nodesBody tr[data-key]').first().click();
       await assertCurrentHop('#fullPathsContent', true);
     });
   }
 
+  for (const view of [
+    { name: 'desktop side preview', width: 1280, height: 900, selector: '#pathsContent' },
+    { name: 'desktop full page', width: 1280, height: 900, selector: '#fullPathsContent' },
+    { name: 'mobile full page', width: 390, height: 844, selector: '#fullPathsContent' },
+  ]) {
+    await step('#2291 example packet opens from ' + view.name, async () => {
+      await page.setViewportSize({ width: view.width, height: view.height });
+      await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => window.__pathThemeReady === true);
+      await page.locator('#nodesBody tr[data-key]').first().click();
+      if (view.width === 1280 && view.selector === '#fullPathsContent') {
+        await page.locator('#nodesRight .node-detail-btn').click();
+      }
+      await page.locator(view.selector + ' a.ch-analyze-link').click();
+      await page.waitForURL(url => url.hash.split('?')[0] === '#/packets/' + sampleHash);
+      const detail = view.width === 390 ? '#mobileDetailSheet.open' : '#pktRight';
+      await page.locator(detail + ' .copy-link-btn[data-packet-hash="' + sampleHash + '"]').waitFor({ state: 'visible' });
+      if (SCREENSHOT_DIR) {
+        await page.locator(detail).screenshot({
+          path: require('path').join(SCREENSHOT_DIR, 'example-packet-' + view.name.replace(/ /g, '-') + '.png'),
+        });
+      }
+    });
+  }
+
   await step('#1153 full-view fallback also marks only the selected node', async () => {
+    await page.goto(BASE + '/#/nodes/' + selectedPubkey, { waitUntil: 'domcontentloaded' });
     await page.route('**/hop-display.js*', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
     await page.reload({ waitUntil: 'domcontentloaded' });
     await assertCurrentHop('#fullPathsContent', false);

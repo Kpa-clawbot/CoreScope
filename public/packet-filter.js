@@ -288,6 +288,18 @@
     if (field === 'observer_id') return packet.observer_id || '';
     if (field === 'observer_iata' || field === 'iata') return packet.observer_iata || '';
     if (field === 'observations') return packet.observation_count || 0;
+    // Radio setting the observation was heard on, "MHz,kHz,SF,CR", resolved
+    // by the server from the observer's radio history (#1869). The parts are
+    // fields of their own so `sf == 8` works without spelling out the rest.
+    if (field === 'radio') return packet.radio || '';
+    if (field === 'freq' || field === 'bw' || field === 'sf' || field === 'cr') {
+      var rp = String(packet.radio || '').split(',');
+      if (rp.length !== 4) return null;
+      // Observer-published: an empty or non-decimal part is no value, not 0.
+      var rs = rp[{ freq: 0, bw: 1, sf: 2, cr: 3 }[field]].trim();
+      if (!/^-?\d+(\.\d+)?$/.test(rs)) return null;
+      return Number(rs);
+    }
     if (field === 'time' || field === 'timestamp') {
       // Returns ms-since-epoch or null. Falls back to first_seen when timestamp absent
       // (group rows from /api/packets?groupByHash=true expose first_seen instead).
@@ -492,6 +504,11 @@
     { name: 'observer_iata', desc: 'Observer IATA region code (e.g. SJC, SFO)' },
     { name: 'iata',          desc: 'Alias of observer_iata' },
     { name: 'observations',  desc: 'Number of observations of this packet' },
+    { name: 'radio',         desc: 'Radio setting heard on, "MHz,kHz,SF,CR" (e.g. "869.618,62.5,8,8")' },
+    { name: 'freq',          desc: 'Frequency heard on (MHz)' },
+    { name: 'bw',            desc: 'Bandwidth heard on (kHz)' },
+    { name: 'sf',            desc: 'Spreading factor heard on' },
+    { name: 'cr',            desc: 'Coding rate heard on (5-8 = 4/5-4/8)' },
     { name: 'path',          desc: 'Hop path as 1-byte prefixes joined (e.g. a3→7f). For pubkey search use routed_through.' },
     { name: 'path_prefixes', desc: 'Alias of path (1-byte hop prefixes joined with arrows)' },
     { name: 'routed_through', desc: 'Match packets routed through a node by pubkey (full or prefix)' },

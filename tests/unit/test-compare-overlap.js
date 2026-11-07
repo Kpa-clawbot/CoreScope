@@ -108,5 +108,48 @@ test('disjoint observers — 0% both ways', () => {
   assert.strictEqual(stats.shared, 0);
 });
 
-console.log(`\n  ${passed} passed, ${failed} failed`);
-process.exit(failed > 0 ? 1 : 0);
+async function testReceptionRequests() {
+  const elements = new Map();
+  function element(id) {
+    if (!elements.has(id)) elements.set(id, {
+      innerHTML: '', value: '', addEventListener() {},
+      classList: { toggle() {} }, querySelectorAll() { return []; },
+    });
+    return elements.get(id);
+  }
+  let hooks;
+  const requests = [];
+  // The top-level row represents the longest path, not necessarily the
+  // selected observer: the shared reception may even display B's TX.
+  const txOnlyA = { hash: 'a-tx-b-rx', direction: 'rx', observer_id: 'B', payload_type: 4, route_type: 1 };
+  const sharedRx = { hash: 'shared-rx', direction: 'tx', observer_id: 'B', payload_type: 4, route_type: 1 };
+  const context = makeSandbox();
+  context.location.hash = '#/compare?a=A&b=B';
+  context.document.getElementById = element;
+  context.document.querySelector = () => null;
+  context.registerPage = (name, pageHooks) => { hooks = pageHooks; };
+  context.api = async (path) => {
+    if (path === '/observers') return { observers: [{ id: 'A' }, { id: 'B' }] };
+    const query = new URLSearchParams(path.split('?')[1]);
+    requests.push(query);
+    return { packets: query.get('observer') === 'A' && query.get('excludeTx') === 'true'
+      ? [sharedRx] : [txOnlyA, sharedRx] };
+  };
+  vm.runInNewContext(compareSrc, context);
+  hooks.init(element('app'));
+  await new Promise(resolve => setImmediate(resolve));
+  test('comparison requests reception membership in exactly two bulk calls (#667)', () => {
+    assert.strictEqual(requests.length, 2);
+    assert.deepStrictEqual(requests.map(q => q.get('observer')).sort(), ['A', 'B']);
+    for (const query of requests) assert.strictEqual(query.get('excludeTx'), 'true');
+    const summary = element('compareDetail').innerHTML.replace(/<[^>]*>/g, '');
+    assert.match(summary, /A saw 1 unique packets and B saw 2 unique packets/);
+    assert.match(summary, /1 \(50\.0%\) were seen by both observers/);
+    assert.doesNotMatch(summary, /Perfect overlap/);
+  });
+}
+
+testReceptionRequests().then(() => {
+  console.log(`\n  ${passed} passed, ${failed} failed`);
+  process.exit(failed > 0 ? 1 : 0);
+}).catch(error => { console.error(error); process.exit(1); });

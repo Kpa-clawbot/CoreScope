@@ -50,6 +50,10 @@ const pruneAgedTransmissionIDs = `SELECT id FROM transmissions WHERE first_seen 
 const (
 	pruneObservationsBatch  = `DELETE FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `)`
 	pruneTransmissionsBatch = `DELETE FROM transmissions WHERE id IN (` + pruneAgedTransmissionIDs + `)`
+	// Sparse rx_radio_id rows of multi-radio observers (#1869), keyed by the
+	// observation, so they go before the observations they point at.
+	pruneObservationRadiosBatch = `DELETE FROM observation_radios WHERE observation_id IN (
+		SELECT id FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `))`
 )
 
 // PruneOldPackets deletes transmissions (and their child observations)
@@ -84,6 +88,9 @@ func (s *Store) pruneOldPackets(days int, betweenBatches func()) (int64, error) 
 		var batch int64
 		// Tagged for writer-perf visibility (#1340).
 		err := s.WriterTx("prune_packets", func(tx *sql.Tx) error {
+			if _, err := tx.Exec(pruneObservationRadiosBatch, cutoff, pruneBatchTransmissions); err != nil {
+				return fmt.Errorf("prune observation radios: %w", err)
+			}
 			if _, err := tx.Exec(pruneObservationsBatch, cutoff, pruneBatchTransmissions); err != nil {
 				return fmt.Errorf("prune observations: %w", err)
 			}

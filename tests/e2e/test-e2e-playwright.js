@@ -84,9 +84,11 @@ async function run() {
       });
       const pubkey = 'b'.repeat(64);
       const node = { public_key: pubkey, name: 'Packet count fixture', role: 'repeater',
-        last_seen: new Date().toISOString(), advert_count: 900 };
+        last_seen: new Date().toISOString(), advert_count: 900,
+        traffic_share_score: 0.25, bridge_score: 0.2 };
       const stats = { totalTransmissions: 233, totalPackets: 500, totalObservations: 12278 };
-      // Keep enough real detail content below the metric to scroll it to either edge.
+      // Score rows above Total Packets and adverts below it make both scroll
+      // edges reachable without depending on relay wording or platform fonts.
       const recentAdverts = Array.from({ length: 12 }, (_, i) => ({ hash: i.toString(16).padStart(64, '0'),
         timestamp: new Date(Date.now() - i * 60000).toISOString(), payload_type: 4, route_type: 1 }));
       await fixturePage.route('**/api/nodes**', async route => {
@@ -175,6 +177,7 @@ async function run() {
         }
 
         if (interaction === 'scroll edges') {
+          await fixturePage.evaluate(() => document.fonts.ready);
           const container = fixturePage.locator(full ? '#nodeFullBody' : '#nodesRight');
           for (const edge of ['top', 'bottom']) {
             await help.evaluate((el, edge) => {
