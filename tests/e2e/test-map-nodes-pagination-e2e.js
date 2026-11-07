@@ -29,6 +29,7 @@ const PAGE_CAP = 500;          // client page size; a node sits past it on page 
 const FILTERED_INDEX = 450;    // a page-1 row the server drops AFTER the SQL LIMIT
 const PAGE2_KEY = 'page2deadbeef00000000000000000000000000000000000000000000000beef02';
 const PAGE2_NAME = 'PAGE2 RP';
+const DEFAULT_MAP_VIEW = { lat: 40, lng: 10, zoom: 9 }; // distinct from the saved center
 
 let passed = 0, failed = 0;
 async function step(name, fn) {
@@ -78,9 +79,9 @@ async function checkSavedMapView(browser, saved, hash, expected, moveLongitude) 
   await page.route('**/api/**', route => {
     const path = new URL(route.request().url()).pathname;
     let data = {};
-    if (path === '/api/config/map') data = { center: [47.6, 7.3], zoom: 9 };
+    if (path === '/api/config/map') data = { center: [DEFAULT_MAP_VIEW.lat, DEFAULT_MAP_VIEW.lng], zoom: DEFAULT_MAP_VIEW.zoom };
     if (path === '/api/nodes') data = {
-      nodes: [{ public_key: key, name: 'WRAPPED VIEW', role: 'repeater', lat: 47.6, lon: 7.3, last_seen: new Date().toISOString(), hash_size: 2 }],
+      nodes: [{ public_key: key, name: 'WRAPPED VIEW', role: 'repeater', lat: expected.lat, lon: expected.lng, last_seen: new Date().toISOString(), hash_size: 2 }],
       has_more: false, total: 1, counts: { repeaters: 1 },
     };
     if (path === '/api/observers') data = { observers: [] };
@@ -315,7 +316,7 @@ async function checkMapTeardown(browser, stage, revisit) {
     checkSavedMapView(browser, JSON.stringify({ ...center, lat: 10, lng: -352.7 }), '#/map?node=' + 'ab'.repeat(32), { ...center, zoom: 14 }));
   for (const saved of ['{', 'null', '{}', '{"lat":91,"lng":7.3,"zoom":10}', '{"lat":47.6,"lng":"bad","zoom":10}', '{"lat":47.6,"lng":7.3,"zoom":null}']) {
     await step('invalid saved view falls back to server defaults: ' + saved, () =>
-      checkSavedMapView(browser, saved, '#/map', { ...center, zoom: 9 }));
+      checkSavedMapView(browser, saved, '#/map', DEFAULT_MAP_VIEW));
   }
   for (const lng of [-352.7, 1087.3]) {
     await step('moving to longitude ' + lng + ' saves a canonical view that reloads visibly', () =>
