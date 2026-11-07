@@ -63,6 +63,76 @@ function buildFixture() {
   return nodes;
 }
 
+// #2375: tiles wrap to another world, but markers remain at their canonical
+// longitude. Exercise real Leaflet placement, not only the saved JSON.
+async function checkSavedMapView(browser, saved, hash, expected, moveLongitude) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(() => {
+    window.__savedViewError = false;
+    window.addEventListener('unhandledrejection', () => { window.__savedViewError = true; });
+    window.addEventListener('error', () => { window.__savedViewError = true; });
+  });
+  const key = 'ab'.repeat(32);
+  await page.route('**/api/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    let data = {};
+    if (path === '/api/config/map') data = { center: [47.6, 7.3], zoom: 9 };
+    if (path === '/api/nodes') data = {
+      nodes: [{ public_key: key, name: 'WRAPPED VIEW', role: 'repeater', lat: 47.6, lon: 7.3, last_seen: new Date().toISOString(), hash_size: 2 }],
+      has_more: false, total: 1, counts: { repeaters: 1 },
+    };
+    if (path === '/api/observers') data = { observers: [] };
+    return route.fulfill({ json: data });
+  });
+  try {
+    await page.goto(BASE + '/#/tools', { waitUntil: 'domcontentloaded' });
+    await page.evaluate(({ value, hash }) => {
+      localStorage.setItem('map-view', value);
+      localStorage.setItem('meshcore-map-clustering', 'false');
+      history.replaceState(null, '', hash || '#/map');
+    }, { value: saved, hash });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    // Invalid storage must still finish initialization, rather than throw in
+    // setView and leave the map shell empty.
+    await page.waitForFunction(() => document.querySelector('#leaflet-map[data-loaded="true"]') || window.__savedViewError);
+    const loaded = await page.locator('#leaflet-map[data-loaded="true"]').count();
+    assert(loaded, 'map must finish initialization; errors: ' + errors.join('; '));
+    if (moveLongitude != null) {
+      await page.evaluate(lng => window.__mc_map.setView([47.6, lng], 10, { animate: false }), moveLongitude);
+      const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('map-view')));
+      assert(Math.abs(stored.lng - 7.3) < 1e-8, 'moveend must save wrapped longitude; got ' + stored.lng);
+      await page.reload();
+      await page.waitForSelector('#leaflet-map[data-loaded="true"]');
+    }
+    const state = await page.evaluate(key => {
+      const map = window.__mc_map;
+      if (!map) return null;
+      let marker;
+      map.eachLayer(layer => { if (layer._nodeKey === key) marker = layer; });
+      const element = marker && marker.getElement();
+      const rect = element && element.getBoundingClientRect();
+      const bounds = map.getContainer().getBoundingClientRect();
+      return {
+        lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom(),
+        markerX: rect && rect.x,
+        visible: !!rect && rect.width > 0 && rect.height > 0 && rect.right > bounds.left && rect.left < bounds.right && rect.bottom > bounds.top && rect.top < bounds.bottom,
+      };
+    }, key);
+    assert(state, 'map must initialize for saved value ' + saved + '; errors: ' + errors.join('; '));
+    // invalidateSize rounds the center to pixels; allow that sub-pixel drift.
+    assert(Math.abs(state.lat - expected.lat) < 0.01 && Math.abs(state.lng - expected.lng) < 0.01,
+      'expected center ' + JSON.stringify(expected) + ', got ' + JSON.stringify(state));
+    assert(state.zoom === expected.zoom, 'expected zoom ' + expected.zoom + ', got ' + state.zoom);
+    assert(state.visible, 'canonical marker must be inside the map; got ' + JSON.stringify(state));
+    if (hash && hash.includes('node=')) await page.waitForSelector('.leaflet-popup');
+    assert(errors.length === 0, 'map errors: ' + errors.join('; '));
+  } finally {
+    await page.close();
+  }
+}
+
 // #2030: release an old map's asynchronous response only after teardown,
 // including after a replacement map has already finished loading.
 async function checkMapTeardown(browser, stage, revisit) {
@@ -233,6 +303,23 @@ async function checkMapTeardown(browser, stage, revisit) {
     for (const revisit of [false, true]) {
       await step('late ' + stage + ' response after ' + (revisit ? 'map replacement' : 'map teardown'), () => checkMapTeardown(browser, stage, revisit));
     }
+  }
+  const center = { lat: 47.6, lng: 7.3, zoom: 10 };
+  for (const lng of [-352.7, 367.3, -1072.7, 1087.3, 7.3]) {
+    await step('saved longitude ' + lng + ' restores the visible canonical marker', () =>
+      checkSavedMapView(browser, JSON.stringify({ ...center, lng }), '#/map', center));
+  }
+  await step('a valid URL viewport wins over saved longitude', () =>
+    checkSavedMapView(browser, JSON.stringify({ ...center, lat: 10, lng: -352.7 }), '#/map?lat=47.6&lon=7.3&zoom=10', center));
+  await step('node highlight still centers and opens its popup', async () =>
+    checkSavedMapView(browser, JSON.stringify({ ...center, lat: 10, lng: -352.7 }), '#/map?node=' + 'ab'.repeat(32), { ...center, zoom: 14 }));
+  for (const saved of ['{', 'null', '{}', '{"lat":91,"lng":7.3,"zoom":10}', '{"lat":47.6,"lng":"bad","zoom":10}', '{"lat":47.6,"lng":7.3,"zoom":null}']) {
+    await step('invalid saved view falls back to server defaults: ' + saved, () =>
+      checkSavedMapView(browser, saved, '#/map', { ...center, zoom: 9 }));
+  }
+  for (const lng of [-352.7, 1087.3]) {
+    await step('moving to longitude ' + lng + ' saves a canonical view that reloads visibly', () =>
+      checkSavedMapView(browser, JSON.stringify(center), '#/map', center, lng));
   }
   await browser.close();
   console.log(`\n${passed} passed, ${failed} failed`);
