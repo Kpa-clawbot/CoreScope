@@ -69,7 +69,15 @@ console.log('\n=== precedence ===');
   assert(r.chosen.id === 11 && r.pathView === null, 'obs wins over observer');
   assert(pick({ obsId: '11', paths: 'all' }).pathView.mode === 'all', 'obs combines with paths=all');
   assert(pick({ observer: 'b1b2c3d4', paths: 'all' }).pathView.mode === 'path', 'observer wins over paths=all');
-  assert(pick({ obsId: '999', observer: 'b1b2c3d4' }).chosen.id === 10, 'an unmatched obs falls through to observer');
+  {
+    const fell = pick({ obsId: '999', observer: 'b1b2c3d4' });
+    assert(fell.chosen.id === 10 && fell.pathView.mode === 'path', 'an unmatched obs falls through to observer');
+    assert(fell.observationId === '10', 'observationId is the observer\'s observation, not the stale obs (got ' + fell.observationId + ')');
+    const stale = pick({ obsId: '999' });
+    assert(stale.chosen.id === 10 && stale.observationId === null,
+      'an unmatched obs alone falls back to the first observation with no observationId (got ' + stale.observationId + ')');
+    assert(pick({ obsId: 11 }).observationId === '11', 'a matched obs is returned as a string id');
+  }
   assert(pick({}).chosen.id === 10 && pick({}).pathView === null, 'no params: first observation, default view');
   assert(pick({ paths: 'ALL' }).pathView === null, 'paths only accepts "all"');
   assert(U.resolveDeepLinkObservation([], { observer: 'a1b2c3d4' }).chosen === null, 'no observations: nothing chosen');

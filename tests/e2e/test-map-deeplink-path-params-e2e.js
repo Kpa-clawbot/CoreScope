@@ -83,6 +83,12 @@ const active = s => s.rows.filter(r => r.active).map(r => r.key);
     assert(active(s).join() === 'BB', 'expected BB active, got ' + active(s));
   });
 
+  await step('unmatched obs falls through to observer; back link names the selected observation', async () => {
+    const s = await openRoute(page, '&obs=999999999&observer=' + pubkey.slice(0, 8));
+    assert(active(s).join() === 'BB', 'expected BB active, got ' + active(s));
+    assert(s.back === '#/packets/' + SEED_HASH + '?obs=' + target.id, 'back link must not keep the unmatched obs, got ' + s.back);
+  });
+
   await step('paths=all opens the All (union) view', async () => {
     const s = await openRoute(page, '&paths=all');
     assert(s.union, 'union overlay should be drawn');

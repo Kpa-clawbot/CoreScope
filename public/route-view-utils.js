@@ -172,8 +172,10 @@
   //              observer's earliest observation, its path isolated in the
   //              picker
   //   paths    — ?paths=all; open the picker's union ("All") view
-  // Returns { chosen, observationId, pathView } where pathView is
-  // { mode: 'all' }, { mode: 'path', path: <raw hops> } or null.
+  // Returns { chosen, observationId, pathView }. observationId is the id of
+  // the observation obs or observer actually selected (null on fallback to
+  // the first), never an unmatched obs. pathView is { mode: 'all' },
+  // { mode: 'path', path: <raw hops> } or null.
   var OBSERVER_KEY_RE = /^[0-9a-f]{8,}$/;
   function resolveDeepLinkObservation(observations, params) {
     observations = observations || [];
@@ -199,6 +201,7 @@
       }
       if (!byObserver) console.warn('[deep-link] no observation from observer ' + key);
     }
+    var observationId = chosen ? String(chosen.id) : null;
     if (!chosen) chosen = observations[0] || null;
     var pathView = null;
     if (byObserver) {
@@ -210,7 +213,7 @@
     }
     return {
       chosen: chosen,
-      observationId: params.obsId || (byObserver ? String(chosen.id) : null),
+      observationId: observationId,
       pathView: pathView
     };
   }
