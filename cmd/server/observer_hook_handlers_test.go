@@ -28,7 +28,7 @@ func newHookFixture(t *testing.T, adminEmails ...string) *hookFixture {
 	t.Helper()
 	a, fake := newTestAuthService(t, adminEmails...)
 	a.set.observerLogins = observerLoginSettings{enabled: true, hookSecret: hkSecret}
-	idx, err := newObserverLoginIndex(a.st)
+	idx, err := newObserverLoginIndex(a.st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

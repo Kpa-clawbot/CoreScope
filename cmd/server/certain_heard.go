@@ -7,6 +7,20 @@ import (
 	"github.com/meshcore-analyzer/packetpath"
 )
 
+// LastCertainRelayMap snapshots only the requested keys: O(page size), with
+// one read lock and no packet scan. Keys retain the caller's casing.
+func (s *PacketStore) LastCertainRelayMap(pubkeys []string) map[string]time.Time {
+	latest := make(map[string]time.Time, len(pubkeys))
+	s.mu.RLock()
+	for _, pk := range pubkeys {
+		if ts := s.certainRelayed[strings.ToLower(pk)]; !ts.IsZero() {
+			latest[pk] = ts
+		}
+	}
+	s.mu.RUnlock()
+	return latest
+}
+
 // Certain liveness (#2260). certainHeard holds, per pubkey, the newest
 // FirstSeen of a transmission that can only have come from that node:
 //
@@ -106,8 +120,19 @@ func observedRelayHopHexLen(raw, pathJSON string) uint8 {
 // observation, using the same membership/uniqueness rule as certainFor.
 // Caller holds s.mu for writing and has indexed the relay attribution.
 func (s *PacketStore) noteCertainRelays(tx *StoreTx, obs *StoreObs, pm *prefixMap) {
-	if obs == nil || obs.relayHopHexLen == 0 || pm == nil || tx.signatureFailed() {
+	if tx == nil || obs == nil || obs.relayHopHexLen == 0 || pm == nil || tx.signatureFailed() {
 		return
+	}
+	// Use the transmission's first_seen, as certainHeard does, never a late
+	// duplicate's observation time/LatestSeen. Parse once per eligible frame
+	// so invalid dates cannot poison the maximum and offsets/fractions compare
+	// chronologically. Only adverts need decoding; ordinary payloads stay cold.
+	relayTime, _ := parseRelayTS(tx.FirstSeen)
+	var advertSender string
+	canProveForwarding := true
+	if tx.PayloadType != nil && *tx.PayloadType == payloadTypeAdvert {
+		advertSender, _ = tx.ParsedDecoded()["pubKey"].(string)
+		canProveForwarding = advertSender != ""
 	}
 	for pos := 0; ; {
 		hop, next, ok := nextPathHop(obs.PathJSON, pos)
@@ -120,6 +145,15 @@ func (s *PacketStore) noteCertainRelays(tx *StoreTx, obs *StoreObs, pm *prefixMa
 			pk := strings.ToLower(c[0].PublicKey)
 			if s.nodeHasTx(pk, tx) && uniqueHopPrefix(pk, int(obs.relayHopHexLen), pm) {
 				s.noteCertainHeard(pk, tx)
+				// Originating an advert proves transmission, not forwarding.
+				// A different node's observed hop can forward that same advert.
+				// An unknown advert origin cannot prove forwarding either.
+				if canProveForwarding && !strings.EqualFold(pk, advertSender) && relayTime.After(s.certainRelayed[pk]) {
+					if s.certainRelayed == nil {
+						s.certainRelayed = make(map[string]time.Time)
+					}
+					s.certainRelayed[pk] = relayTime
+				}
 			}
 		}
 	}

@@ -362,6 +362,30 @@ func TestResolveObserverLogins_HookSecretMinimumLength(t *testing.T) {
 	}
 }
 
+func TestResolveObserverLoginsSharedUsernames(t *testing.T) {
+	set, err := resolveUserManagement(validObserverUM(), "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.observerLogins.sharedUsernames) != 0 {
+		t.Fatalf("default shared = %v", set.observerLogins.sharedUsernames)
+	}
+	u := validObserverUM()
+	u.ObserverLogins.SharedUsernames = []string{" meshcore_on8ar ", " ", ""}
+	set, err = resolveUserManagement(u, "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.observerLogins.sharedUsernames; len(got) != 1 || !got["meshcore_on8ar"] {
+		t.Fatalf("shared = %v", got)
+	}
+	u = validObserverUM()
+	u.ObserverLogins.SharedUsernames = []string{"meshcore_on8ar", "obs_abc"}
+	if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), `sharedUsernames: "obs_abc" is a personal login name`) {
+		t.Fatalf("obs_ name: err = %v", err)
+	}
+}
+
 func TestResolveObserverLogins_TransportValues(t *testing.T) {
 	for _, tr := range []string{"tcp", "websockets"} {
 		u := validObserverUM()

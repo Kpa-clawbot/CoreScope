@@ -8,9 +8,12 @@
 # makes the result fully static (see -extldflags below), so the runtime stage
 # has no libc dependency on the base image at all.
 #
-# BUILDPLATFORM is auto-set by buildx; default to linux/amd64 so plain
-# `docker build` (without buildx) doesn't fail on an empty platform string.
-ARG BUILDPLATFORM=linux/amd64
+# BUILDPLATFORM is set automatically by BuildKit (the default builder since
+# Docker 23, and what buildx uses) to the machine doing the build. Declare it
+# without a default: a default here overrides BuildKit's value, so a native
+# build on an arm64 host (a Raspberry Pi, Apple silicon) pulled the amd64 Go
+# image and failed with "exec format error" at the first RUN.
+ARG BUILDPLATFORM
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 ARG APP_VERSION=unknown

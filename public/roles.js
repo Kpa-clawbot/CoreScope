@@ -432,7 +432,8 @@
     infraDegradedMs: 86400000,   // 24h
     infraSilentMs:   259200000,  // 72h
     nodeDegradedMs:  3600000,    // 1h
-    nodeSilentMs:    86400000    // 24h
+    nodeSilentMs:    86400000,   // 24h
+    relayActiveMs:   86400000    // healthThresholds.relayActiveHours, default 24h
   };
 
   // Helper: get degraded/silent thresholds for a role (backward compat)

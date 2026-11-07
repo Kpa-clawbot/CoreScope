@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -105,7 +106,7 @@ func TestTouchRelayNodes_Debounces(t *testing.T) {
 }
 
 // TestTouchRelayNodes_IgnoresEmptyAndUnknown covers the unresolved-hop case:
-// resolvePathWithContext yields nil for ambiguous or unknown prefixes, and
+// resolvePath yields nil for ambiguous or unknown prefixes, and
 // unknown pubkeys must not create rows.
 func TestTouchRelayNodes_IgnoresEmptyAndUnknown(t *testing.T) {
 	store := newTestStore(t)
@@ -193,5 +194,58 @@ func TestInsertTransmission_TouchesOnlyFloodRelays(t *testing.T) {
 				t.Errorf("last_seen = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// Adjacency can select a useful displayed path through a prefix collision,
+// but only unique prefixes prove which relay should have its liveness touched.
+func TestInsertTransmission_AdjacencyDoesNotRefreshCollidingRelays(t *testing.T) {
+	store := newTestStore(t)
+	unique := "aa" + strings.Repeat("11", 31)
+	adjacent := "bb" + strings.Repeat("22", 31)
+	other := "bb" + strings.Repeat("33", 31)
+	const before = "2026-07-01T00:00:00Z"
+	const rxTime = "2026-07-10T12:00:00Z"
+	for _, pubkey := range []string{unique, adjacent, other} {
+		seedRelayNode(t, store, pubkey, "Fixture relay", before)
+	}
+	if err := store.RefreshPrefixIndex(); err != nil {
+		t.Fatal(err)
+	}
+	graph := NewNeighborGraph()
+	graph.AddEdge(unique, adjacent)
+	store.neighborGraph.store(graph)
+	if err := store.UpsertObserver("fixture-observer", "Fixture observer", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// FLOOD ACK: header 0x0d, two 1-byte hops, then the 4-byte ACK payload.
+	data := &PacketData{
+		Hash: "relay-certainty", RouteType: 1, PayloadType: 3,
+		RawHex: "0d02aabb11223344", PathJSON: `["aa","bb"]`,
+		ObserverID: "fixture-observer", Timestamp: rxTime,
+	}
+	if _, err := store.InsertTransmission(data); err != nil {
+		t.Fatal(err)
+	}
+
+	var stored string
+	if err := store.db.QueryRow(`SELECT resolved_path FROM observations`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	resolved := unmarshalResolvedPathLocal(stored)
+	if len(resolved) != 2 || deref(resolved[0]) != unique || deref(resolved[1]) != adjacent {
+		t.Fatalf("resolved_path = %s, want unique hop followed by adjacent collision candidate", stored)
+	}
+	if got := nodeLastSeen(t, store, unique); got != rxTime {
+		t.Errorf("unique relay last_seen = %q, want %q", got, rxTime)
+	}
+	for _, pubkey := range []string{adjacent, other} {
+		if got := nodeLastSeen(t, store, pubkey); got != before {
+			t.Errorf("colliding relay %s last_seen = %q, want unchanged %q", pubkey, got, before)
+		}
+	}
+	if got := store.Stats.RelayTouches.Load(); got != 1 {
+		t.Errorf("RelayTouches = %d, want 1 (the unique hop only)", got)
 	}
 }
