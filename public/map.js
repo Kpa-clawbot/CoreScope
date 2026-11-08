@@ -645,7 +645,19 @@
     } else {
       const savedView = localStorage.getItem('map-view');
       if (savedView) {
-        try { const v = JSON.parse(savedView); initCenter = [v.lat, v.lng]; initZoom = v.zoom; } catch {}
+        try {
+          const v = JSON.parse(savedView);
+          if (v && [v.lat, v.lng, v.zoom].every(Number.isFinite)) {
+            // Panning can save another world copy; markers use canonical longitudes.
+            const saved = parseViewportHash(new URLSearchParams({
+              lat: v.lat, lon: L.latLng(v.lat, v.lng).wrap().lng, zoom: v.zoom
+            }).toString());
+            if (saved) {
+              initCenter = [saved.lat, saved.lon];
+              initZoom = saved.zoom;
+            }
+          }
+        } catch {}
       }
     }
     map = L.map('leaflet-map', { zoomControl: true }).setView(initCenter, initZoom);
@@ -751,7 +763,7 @@
 
     // Save position on move
     map.on('moveend', () => {
-      const c = map.getCenter();
+      const c = map.getCenter().wrap();
       localStorage.setItem('map-view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }));
       userHasMoved = true;
     });
