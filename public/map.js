@@ -1463,6 +1463,7 @@
         edgeCounts: edgeCounts,
         packetHash: opts.packetHash || null,
         observationId: opts.observationId || null,
+        initialPathView: opts.initialPathView || null,
         allPaths: paths,
         packetContext: opts.packetContext || null
       });
@@ -1475,7 +1476,10 @@
   // fetches the packet+observations from /api/packets/<hash>, picks the
   // selected observation as canonical, and dispatches the same payload that
   // the packets-page 'View on map' button would have set in sessionStorage.
-  // Without an obs param, the first observation is used.
+  // Without an obs param, the first observation is used. Optional:
+  //   &observer=<pubkey or 8+ char prefix> — that observer's earliest
+  //     observation, its path isolated in the path picker
+  //   &paths=all — open the path picker's "All" (union) view
   async function loadRouteFromDeepLink() {
     try {
       const hash = location.hash || '';
@@ -1499,10 +1503,13 @@
       const pkt = data.packet || data;
       const observations = data.observations || pkt.observations || [];
       if (!observations.length) return;
-      // Pick the user-chosen observation by id, fall back to first
-      let chosen = null;
-      if (obsId) chosen = observations.find(o => String(o.id) === String(obsId));
-      if (!chosen) chosen = observations[0];
+      // Pick the observation: ?obs=<id>, else ?observer=<pubkey|prefix>'s
+      // earliest, else the first. ?observer / ?paths=all also set which
+      // path-picker view the route opens in.
+      const pick = window.MC_ROUTE_UTILS.resolveDeepLinkObservation(observations, {
+        obsId: obsId, observer: params.get('observer'), paths: params.get('paths')
+      });
+      const chosen = pick.chosen;
       // Parse decoded for src/dst.
       // Try observation first, fall back to packet-level decoded_json (GRP_TXT
       // / TRACE packets often have channel + content at the packet level, not
@@ -1705,11 +1712,12 @@
         return;
       }
       if (allPaths.length === 1) {
-        drawPacketRoute(chosenPath, origin, { destination: destination, packetHash: packetHash, observationId: obsId, packetContext: pktCtx, inferredHops: inferredHops });
+        drawPacketRoute(chosenPath, origin, { destination: destination, packetHash: packetHash, observationId: pick.observationId, packetContext: pktCtx, inferredHops: inferredHops });
       } else {
         drawPacketRouteMulti(allPaths, origin, {
           packetHash: packetHash,
-          observationId: obsId,
+          observationId: pick.observationId,
+          initialPathView: pick.pathView,
           canonicalPath: chosenPath,
           inferredHops: inferredHops,
           destination: destination,
