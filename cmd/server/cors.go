@@ -38,9 +38,11 @@ func applyCORSEnv(cfg *Config) {
 // such as "https://*.myproject.pages.dev" then covers every deployment and
 // branch preview of a static host project (85868e50.myproject.pages.dev).
 // ok is false for anything else, including a wildcard over fewer than three
-// labels: "https://*.pages.dev" would admit every Pages site on the internet,
-// and without the Public Suffix List the label count is what keeps shared
-// hosting suffixes (pages.dev, github.io, co.uk) out.
+// labels: "https://*.pages.dev" would admit every Pages site on the internet.
+// The label count is a sanity floor, not a Public Suffix List check. It keeps
+// two-label shared suffixes (pages.dev, github.io, co.uk) out, but
+// "https://*.s3.amazonaws.com" passes and would admit every S3 website
+// endpoint, so a wildcard belongs only over a host the operator controls.
 func wildcardOrigin(entry string) (scheme, rest string, ok bool) {
 	scheme, rest, ok = strings.Cut(entry, "://*.")
 	if !ok {
@@ -110,14 +112,19 @@ const corsExposedHeaders = "Retry-After, X-CoreScope-Load-Status"
 // no Access-Control-* headers are added, preserving browser same-origin policy.
 // An entry is an exact origin, a wildcard label (originMatches) or "*".
 //
-// Embed contract (issue #1369): the cross-domain surface is read-only. The
-// middleware advertises only GET, HEAD, and OPTIONS in Access-Control-Allow-
-// Methods so iframes / server-side fetchers cannot opt into POST/PUT/DELETE
-// via CORS. Same-origin writes (admin UI, API-key holders on the canonical
-// origin) are unaffected — they never go through the preflight path.
+// Embed contract (issue #1369): no cross-origin writes. The middleware
+// advertises only GET, HEAD, and OPTIONS in Access-Control-Allow-Methods so
+// iframes cannot opt into POST/PUT/DELETE via CORS. That header only governs
+// requests with a preflight: a CORS simple request (a POST with a text/plain
+// body) has none, which is how a listed origin calls the three anonymous POSTs
+// that compute an answer and write nothing (/api/decode,
+// /api/packets/observations, /api/paths/inspect; see simple_post_test.go).
+// Same-origin writes (admin UI, API-key holders on the canonical origin) are
+// unaffected — they never go through the preflight path.
 // The exception is the bearer routes of companion linking (bearerCORSPath,
 // only with user management on), which also allow POST, PUT, DELETE and the
-// Authorization header.
+// Authorization header, for every listed origin: each deployment under a
+// wildcard entry included.
 // Credentialed CORS is intentionally NOT enabled.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +181,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		} else {
-			// Read-only embed contract — see comment above.
+			// Embed contract — see comment above.
 			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
 		}

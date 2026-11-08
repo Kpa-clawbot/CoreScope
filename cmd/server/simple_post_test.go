@@ -10,7 +10,7 @@ import (
 // A UI served from another origin (a static host listed in
 // CORS_ALLOWED_ORIGINS) sends its three anonymous JSON POSTs with Content-Type
 // text/plain. That keeps each one a CORS simple request: no preflight, which
-// the read-only embed CORS tier (Allow-Methods GET, HEAD, OPTIONS) would
+// the embed CORS tier (Allow-Methods GET, HEAD, OPTIONS) would
 // refuse. It works because these handlers decode the body as JSON whatever its
 // Content-Type. If a handler starts insisting on application/json, this fails
 // here instead of on the static host.

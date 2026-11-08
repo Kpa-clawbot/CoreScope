@@ -155,7 +155,9 @@ type Config struct {
 	// requests. When empty (default), no Access-Control-* headers are sent,
 	// so browsers enforce same-origin policy. Set to ["*"] to allow all origins.
 	// An entry may use one wildcard label, "https://*.myproject.pages.dev"
-	// (see originMatches); LoadConfig drops wildcard entries that are unsafe.
+	// (see originMatches); LoadConfig drops malformed wildcards and those over
+	// fewer than three labels, a sanity floor rather than a Public Suffix List
+	// check (see wildcardOrigin).
 	CORSAllowedOrigins []string `json:"corsAllowedOrigins,omitempty"`
 
 	// WebSocket carries the /ws transport limits from #1794. Omitted entirely
