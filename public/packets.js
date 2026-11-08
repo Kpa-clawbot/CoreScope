@@ -752,8 +752,7 @@
   // already built (decouples observer fetch from row render).
   let _rebuildObserverMenu = null;
   let regionMap = {};
-  const TYPE_NAMES = SHORT_BY_ID;
-  function typeName(t) { return TYPE_NAMES[t] ?? `Type ${t}`; }
+  function typeName(t) { return window.PayloadLabels.api.displayName(t); }
   const isMobile = window.innerWidth <= 1024;
   const PACKET_LIMIT = isMobile ? 1000 : 50000;
   const DEFAULT_TIME_WINDOW = 15;

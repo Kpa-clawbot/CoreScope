@@ -41,6 +41,8 @@ function makeSandbox() {
 
 const ctx = makeSandbox();
 const sandbox = vm.createContext(ctx);
+// index.html loads payload-labels.js before compare.js.
+vm.runInContext(fs.readFileSync(REPO_ROOT + '/public/payload-labels.js', 'utf8'), sandbox);
 const compareSrc = fs.readFileSync(REPO_ROOT + '/public/compare.js', 'utf8');
 vm.runInContext(compareSrc, sandbox);
 
@@ -135,7 +137,9 @@ async function testReceptionRequests() {
     return { packets: query.get('observer') === 'A' && query.get('excludeTx') === 'true'
       ? [sharedRx] : [txOnlyA, sharedRx] };
   };
-  vm.runInNewContext(compareSrc, context);
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(REPO_ROOT + '/public/payload-labels.js', 'utf8'), context);
+  vm.runInContext(compareSrc, context);
   hooks.init(element('app'));
   await new Promise(resolve => setImmediate(resolve));
   test('comparison requests reception membership in exactly two bulk calls (#667)', () => {

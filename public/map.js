@@ -1566,16 +1566,8 @@
         const m = nodes.find(n => n.public_key.toLowerCase().startsWith(hL));
         return m ? m.name : null;
       }
-      // Map payload_type byte → string. Source: cmd/ingestor/decoder.go.
-      // 0=REQ, 1=RESPONSE, 2=TXT_MSG, 3=ACK, 4=ADVERT, 5=GRP_TXT,
-      // 6=GRP_DATA, 7=ANON_REQ, 8=PATH, 9=TRACE, 10=MULTIPART,
-      // 11=CONTROL, 12=RAW_CUSTOM.
-      const PAYLOAD_TYPE_MAP = {
-        0: 'REQ', 1: 'RESPONSE', 2: 'TXT_MSG', 3: 'ACK', 4: 'ADVERT',
-        5: 'GRP_TXT', 6: 'GRP_DATA', 7: 'ANON_REQ', 8: 'PATH',
-        9: 'TRACE', 10: 'MULTIPART', 11: 'CONTROL', 12: 'RAW_CUSTOM'
-      };
-      const inferredType = decoded.type || PAYLOAD_TYPE_MAP[pkt.payload_type] || 'OTHER';
+      // payload_type byte → firmware enum name from the canonical map.
+      const inferredType = decoded.type || window.PayloadLabels.api.enumNameById(pkt.payload_type) || 'OTHER';
       // Try to peek at raw_hex bytes to extract src/destHash when decoded is empty.
       // TXT_MSG/REQ/RESPONSE/ANON_REQ all have the same wire layout:
       //   byte0=route+type, byte1=path_len, then path bytes, then destHash + srcHash + encrypted body.
