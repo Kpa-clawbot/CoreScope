@@ -98,6 +98,7 @@
       "tests/e2e/test-logo-theme-e2e.js",
       "tests/e2e/test-map-deeplink-path-params-e2e.js",
       "tests/e2e/test-map-estimated-e2e.js",
+      "tests/e2e/test-map-foreign-advert-e2e.js",
       "tests/e2e/test-reported-nodes-e2e.js",
       "tests/e2e/test-map-modal-fluid-e2e.js",
       "tests/e2e/test-map-nodes-pagination-e2e.js",
