@@ -135,11 +135,11 @@ CSApi.fetch('/api/config/cache').then(r => r.json()).then(cfg => {
     if (k in CLIENT_TTL && typeof v === 'number') CLIENT_TTL[k] = v * 1000;
   }
 }).catch(() => {});
-// A static build that calls the API on another origin can fail in two ways
-// the embedded UI never sees, and both would otherwise leave pages silently
+// A packaged UI (a static host, the web container) can fail in two ways the
+// embedded UI never sees, and both would otherwise leave pages silently
 // empty. A blocked CORS request (the server does not list this origin)
 // rejects with a TypeError and no status: that becomes code
-// 'network_or_cors'. A wrong API base answers with the static host's HTML:
+// 'network_or_cors'. A wrong API base answers with a static host's HTML:
 // that becomes code 'not_json'. Each shows one toast a minute at most.
 const _apiProblemShownAt = {};
 function apiProblem(code, message, cause) {
@@ -208,9 +208,12 @@ async function api(path, { ttl = 0, bust = false } = {}) {
     try {
       while (true) {
         const res = await apiFetchOrExplain(path);
-        // A static host or proxy error page is not a server warm-up response,
-        // even when its status is 503. Explain it before status/retry handling.
-        rejectHtmlResponse(res, path);
+        // On a packaged UI, a static host or proxy error page is not a server
+        // warm-up response, even when its status is 503: explain it before
+        // status/retry handling. The embedded UI keeps its old handling: a
+        // proxy's HTML 503 is retried below, and the server's SPA fallback for
+        // an unknown /api path fails to parse.
+        if (!CSApi.embedded) rejectHtmlResponse(res, path);
         if (res.status === 503 && attempt < maxAttempts) {
           const ra = parseInt(res.headers.get('Retry-After'), 10);
           const wait = isFinite(ra) && ra > 0 ? ra * 1000 : delay;

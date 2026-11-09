@@ -1,8 +1,8 @@
 /* public/api-base.js and public/deployment.js: where every /api request and
  * the WebSocket go, and what each request may carry, for the embedded UI and
- * for a static build on another origin. Also api()'s two cross-origin errors
- * in public/app.js: a blocked request (network_or_cors) and an HTML answer
- * from a wrong API base (not_json). */
+ * for a static build on another origin. Also api()'s two errors for a
+ * packaged UI in public/app.js: a blocked request (network_or_cors) and an
+ * HTML answer from a wrong API base (not_json). */
 'use strict';
 const assert = require('assert');
 const fs = require('fs');
@@ -51,6 +51,14 @@ test('URLs stay relative and the WebSocket is on this host', () => {
   assert.strictEqual(api.crossOrigin, false);
   assert.strictEqual(api.anonymous, false);
   assert.strictEqual(api.channel, 'classic');
+});
+
+test('embedded is the classic descriptor on its own origin, and nothing else', () => {
+  assert.strictEqual(sandbox().api.embedded, true);
+  // The web container's build: the same origin, but packaged apart from the server.
+  assert.strictEqual(sandbox({ channel: 'static' }).api.embedded, false);
+  // A hand-edited descriptor that only moves the API base.
+  assert.strictEqual(sandbox({ apiBase: 'https://analyzer.example', auth: false }).api.embedded, false);
 });
 
 test('the WebSocket follows the page to wss on https', () => {
@@ -215,6 +223,44 @@ for (const status of [404, 503]) {
     assert.deepStrictEqual(notices, ['Server returned an unexpected response']);
   });
 }
+
+// A real HTML Response: res.json() throws on it.
+const html = (status) => ({
+  ok: status >= 200 && status < 300, status,
+  headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null) },
+  json: async () => { throw new SyntaxError("Unexpected token '<', \"<!doctype \"... is not valid JSON"); },
+});
+
+test('the web container (same origin, packaged) reports an HTML answer as not_json too', async () => {
+  const { ctx, notices } = appCtx({ channel: 'static' }, async (url) =>
+    (/config\/cache/.test(url) ? json({}) : html(200)));
+  await assert.rejects(ctx.api('/stats'), (err) => err.code === 'not_json');
+  assert.deepStrictEqual(notices, ['Server returned an unexpected response']);
+});
+
+test("the embedded UI keeps its old handling of an HTML answer: no notice, 503 retried", async () => {
+  // The server's SPA fallback answers an unknown /api path with index.html.
+  const a = appCtx({}, async (url) => (/config\/cache/.test(url) ? json({}) : html(200)));
+  await assert.rejects(a.ctx.api('/nope'), (err) => {
+    assert.strictEqual(err.name, 'SyntaxError');
+    assert.strictEqual(err.code, undefined);
+    return true;
+  });
+  // A proxy's HTML 503 is retried like the server's warm-up.
+  let calls = 0;
+  const b = appCtx({}, async (url) => {
+    if (/config\/cache/.test(url)) return json({});
+    calls++;
+    return html(503);
+  });
+  await assert.rejects(b.ctx.api('/stats'), (err) => {
+    assert.strictEqual(err.status, 503);
+    assert.strictEqual(err.code, undefined);
+    return true;
+  });
+  assert.strictEqual(calls, 7, 'one initial request plus six retries');
+  assert.deepStrictEqual(a.notices.concat(b.notices), []);
+});
 
 test('JSON 4xx errors retain their status and retry metadata without an unexpected-response notice', async () => {
   for (const status of [404, 429]) {

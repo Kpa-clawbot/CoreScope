@@ -61,6 +61,10 @@
     crossOrigin: !!base,
     // anonymous: a static build that must not offer logins or admin actions.
     anonymous: !!base && !auth,
+    // embedded: the server serves this UI (the classic descriptor on its own
+    // origin). A packaged build in the web container is same-origin but not
+    // embedded.
+    embedded: !base && (dep.channel || 'classic') === 'classic',
     channel: dep.channel || 'classic',
     commit: dep.commit || null,
     url: url,
