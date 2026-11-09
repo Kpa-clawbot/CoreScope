@@ -1,8 +1,9 @@
 # CoreScope web container: the static UI on its own, served by Caddy, which
 # forwards /api and /ws to a CoreScope server container. The UI and the API
-# then share one origin: no CORS settings, and logins work as on the classic
-# UI. docker-compose.split.yml runs the two together; see "Deployment modes"
-# in docs/deployment.md.
+# then share one origin, so the server needs no CORS settings. Logins work as
+# on the classic UI once the server's userManagement.publicBaseUrl is this
+# container's public origin. docker-compose.split.yml runs the two together;
+# see "Deployment modes" in docs/deployment.md.
 #
 # Runtime environment:
 #   BACKEND       host:port of the CoreScope server. Default corescope:3000.

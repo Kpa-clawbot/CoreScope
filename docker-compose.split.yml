@@ -2,8 +2,10 @@
 # server in the usual image.
 #
 # The web container (Dockerfile.web, Caddy) serves the static UI and forwards
-# /api and /ws to the server, so both share one origin: no CORS settings, and
-# logins work as on the classic UI. The server container is unchanged and still
+# /api and /ws to the server, so both share one origin: no CORS settings. With
+# user management on, set the server's userManagement.publicBaseUrl to the web
+# container's public origin (scheme and port included): logins and other
+# writes are checked against it. The server container is unchanged and still
 # serves everything, the classic UI included, on port 3000 inside the compose
 # network; publish it too if you want to reach that directly.
 #
