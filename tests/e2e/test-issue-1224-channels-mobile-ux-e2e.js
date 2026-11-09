@@ -2,8 +2,11 @@
  * E2E (#1224): Channels page mobile UX overhaul.
  *
  * At 375x800 viewport the channels page must:
- *  - Render a header strip above the channel list ≤60px tall (page title +
- *    Add chip + region filter chip + analytics overflow) in ONE row.
+ *  - Render a compact header strip above the channel list: page title and
+ *    Add chip share the first row, and the header never overlaps the
+ *    channel list (#2381: on touch devices the 44/48px touch targets used to
+ *    overflow a fixed 56px header onto the first channel rows). The region
+ *    pills may sit on a second, sideways-scrolling row.
  *  - Render "+ Add Channel" as a compact chip — NOT a full-width hero (the
  *    add control must be narrower than 65% of the sidebar width).
  *  - Render channel rows where the channel name has computed-width > 150px
@@ -19,6 +22,38 @@ const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
 
 let passed = 0, failed = 0;
+
+// Runs in the page. Returns the header, title, Add chip and channel-list boxes.
+function headerGeometry() {
+  const sidebar = document.querySelector('.ch-sidebar');
+  const header = sidebar && sidebar.querySelector('.ch-sidebar-header');
+  const title = header && header.querySelector('.ch-sidebar-title');
+  const add = document.getElementById('chAddChannelBtn');
+  const list = document.getElementById('chList');
+  if (!header || !title || !add || !list) return null;
+  const box = (el) => { const b = el.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, h: b.height }; };
+  // The header's own box can stay small while its children overflow it
+  // (#2381 had max-height: 56px with wrapped 44px pills painting below),
+  // so measure the lowest visible descendant too.
+  let contentBottom = header.getBoundingClientRect().bottom;
+  header.querySelectorAll('*').forEach((el) => {
+    const b = el.getBoundingClientRect();
+    if (b.height > 0 && b.width > 0) contentBottom = Math.max(contentBottom, b.bottom);
+  });
+  return { header: box(header), title: box(title), add: box(add), list: box(list), contentBottom };
+}
+
+// #2381: the header may grow to a second row for the region pills, but it
+// must stay compact and must never paint over the channel list.
+function checkHeaderGeometry(r) {
+  assert(r.contentBottom <= r.list.top + 1,
+    'sidebar header content (bottom ' + Math.round(r.contentBottom) + 'px) overlaps #chList (top ' +
+    Math.round(r.list.top) + 'px)');
+  const titleMid = r.title.top + r.title.h / 2;
+  assert(titleMid >= r.add.top && titleMid <= r.add.bottom,
+    '"+ Add" chip must share the first header row with the title');
+  assert(r.header.h <= 120, 'sidebar header must stay compact on mobile, got ' + Math.round(r.header.h) + 'px');
+}
 async function step(name, fn) {
   try { await fn(); passed++; console.log('  \u2713 ' + name); }
   catch (e) { failed++; console.error('  \u2717 ' + name + ': ' + e.message); }
@@ -44,15 +79,10 @@ async function run() {
   }, { timeout: 15000 });
   await page.waitForTimeout(300);
 
-  await step('header strip above channel list is \u226460px tall on mobile', async () => {
-    const headerH = await page.evaluate(() => {
-      const sidebar = document.querySelector('.ch-sidebar');
-      const header = sidebar && sidebar.querySelector('.ch-sidebar-header');
-      if (!header) return null;
-      return Math.round(header.getBoundingClientRect().height);
-    });
-    assert(headerH !== null, 'sidebar header not found');
-    assert(headerH <= 60, 'sidebar header must be \u226460px on mobile, got ' + headerH + 'px');
+  await step('header: title + Add on one row, no overlap with channel list', async () => {
+    const r = await page.evaluate(headerGeometry);
+    assert(r !== null, 'sidebar header / title / add button / #chList not found');
+    checkHeaderGeometry(r);
   });
 
   await step('"+ Add Channel" is a compact chip, not full-width hero', async () => {
@@ -98,10 +128,30 @@ async function run() {
       '% of viewport (' + data.vh + 'px) \u2014 must be <40%');
   });
 
+  // #2381: same checks on a touch device, where (pointer: coarse) gives the
+  // region pills and "+ Add" their 44/48px touch-target minimums.
+  await ctx.close();
+  const ctxT = await browser.newContext({ viewport: { width: 375, height: 800 }, hasTouch: true, isMobile: true });
+  const pT = await ctxT.newPage();
+  await pT.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+  await pT.waitForFunction(() => {
+    const l = document.getElementById('chList');
+    return l && l.querySelectorAll('.ch-item, .ch-row').length > 0;
+  }, { timeout: 15000 });
+  await pT.waitForTimeout(300);
+
+  await step('touch (375px, pointer: coarse): header does not overlap channel list', async () => {
+    const coarse = await pT.evaluate(() => matchMedia('(pointer: coarse)').matches);
+    assert(coarse, 'touch context did not report (pointer: coarse)');
+    const r = await pT.evaluate(headerGeometry);
+    assert(r !== null, 'sidebar header / title / add button / #chList not found');
+    checkHeaderGeometry(r);
+  });
+
   // Desktop guard: at 1024x800 the sidebar must remain side-by-side with main
   // (layout flex-direction stays row), not stacked. This protects the desktop
   // experience from a regression introduced by the mobile fix.
-  await ctx.close();
+  await ctxT.close();
   const ctx2 = await browser.newContext({ viewport: { width: 1024, height: 800 } });
   const p2 = await ctx2.newPage();
   await p2.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });

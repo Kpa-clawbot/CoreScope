@@ -2505,6 +2505,10 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
     overflow-x: auto; scrollbar-width: none;
   }
   .ch-header-region::-webkit-scrollbar { display: none; }
+  /* Dropdown mode (>4 regions): the menu is position:absolute below its
+     trigger, so the row must not clip it. A single trigger never needs
+     to scroll sideways anyway. */
+  .ch-header-region:has(.region-dropdown-wrap) { overflow: visible; }
   .ch-header-region:empty { display: none; }
   .ch-header-region .region-filter-bar { padding: 0; gap: 4px; flex-wrap: nowrap; }
 
