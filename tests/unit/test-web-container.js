@@ -91,5 +91,17 @@ test('compose publishes 443 over UDP too, for the HTTP/3 Caddy advertises', () =
   assert.ok(compose.includes('- "${HTTPS_PORT:-443}:443/udp"'), 'udp 443');
 });
 
+test('compose fixes the web container address, so the server can trust that address alone', () => {
+  // trustedProxies believes X-Forwarded-For from the listed addresses. The
+  // compose subnet also holds its gateway, where a client reaching a published
+  // port 3000 through Docker's proxy arrives from, so the docs name only the
+  // web container, and its address must survive a recreate.
+  const net = '${SPLIT_NET:-172.30.83}';
+  assert.ok(compose.includes(`subnet: "${net}.0/24"`), 'fixed subnet');
+  assert.ok(compose.includes(`ip_range: "${net}.0/25"`), 'automatic addresses must stay below .128');
+  assert.ok(compose.includes(`ipv4_address: "${net}.200"`), 'fixed web container address');
+  assert.ok(read('docs/deployment.md').includes('`172.30.83.200`'), 'docs/deployment.md names the default address');
+});
+
 console.log(`\nweb container: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

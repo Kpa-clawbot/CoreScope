@@ -73,6 +73,7 @@ CORESCOPE_IMAGE=ghcr.io/kpa-clawbot/corescope:edge \
 | `GIT_COMMIT` | the build time | The UI's cache buster |
 | `CHANNEL` | `static` | `beta`, `next` or `dev` shows a badge |
 | `MQTT_BIND`, `MQTT_PORT` | `127.0.0.1`, `1883` | Where the server's built-in broker is published. It accepts anonymous clients, so set `MQTT_BIND=0.0.0.0` only to let gateways on a network you trust publish to it |
+| `SPLIT_NET` | `172.30.83` | The compose network's /24, as its first three octets; the web container is `.200` in it. Change it only if Docker reports that the pool overlaps another network, and update `trustedProxies` to match |
 
 - When `userManagement.enabled` is true, set `userManagement.publicBaseUrl` in
   the server's config to the public web origin, including its scheme and port
@@ -91,8 +92,12 @@ CORESCOPE_IMAGE=ghcr.io/kpa-clawbot/corescope:edge \
   `docker compose -f docker-compose.split.yml up -d --build web`.
 - Behind the web container, as behind the all-in-one image's Caddy, every
   request reaches the server from the proxy's address, so per-IP limits are off
-  until `webSocket.trustedProxies` and `userManagement.trustedProxies` list it
-  (the compose network's subnet, from `docker network inspect`).
+  until `webSocket.trustedProxies` and `userManagement.trustedProxies` list it.
+  The compose file fixes that address at `172.30.83.200`: list it alone. Never
+  list the compose subnet. It also holds the gateway address, and a client that
+  reaches a published port 3000 through Docker's proxy (from the host itself or
+  over IPv6, for example) arrives from there, so its own `X-Forwarded-For`
+  would be believed.
 
 ### Static host or CDN
 
