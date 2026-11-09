@@ -3,9 +3,10 @@
  *
  * The web container serves the static UI and forwards the API and the
  * WebSocket to a CoreScope server container, so the UI is same-origin and
- * needs no CORS. Nothing in CI builds it, so these pin what would otherwise
- * drift silently: how the UI is packaged, what Caddy forwards, the cache rules
- * a static host gets from deploy/static/_headers, and the server's address.
+ * needs no CORS. CI builds and smokes the image (deploy.yml, image-check);
+ * these pin what that run cannot see: how the UI is packaged, what Caddy
+ * forwards, the cache rules a static host gets from deploy/static/_headers,
+ * and how compose wires the server.
  */
 'use strict';
 const fs = require('fs');
@@ -101,6 +102,15 @@ test('compose fixes the web container address, so the server can trust that addr
   assert.ok(compose.includes(`ip_range: "${net}.0/25"`), 'automatic addresses must stay below .128');
   assert.ok(compose.includes(`ipv4_address: "${net}.200"`), 'fixed web container address');
   assert.ok(read('docs/deployment.md').includes('`172.30.83.200`'), 'docs/deployment.md names the default address');
+});
+
+test('CI builds and smokes the web image and validates the split compose file', () => {
+  // Nothing publishes the web image; without this, a broken base image,
+  // package or Caddyfile reaches an operator first.
+  const ci = read('.github/workflows/deploy.yml');
+  assert.ok(/docker buildx build \. -f Dockerfile\.web --load/.test(ci), 'image-check builds Dockerfile.web');
+  assert.ok(/curl[^\n]*\/api\/healthz/.test(ci), 'the smoke checks that /api reaches BACKEND');
+  assert.ok(/docker compose -f docker-compose\.split\.yml config --quiet/.test(ci), 'split compose validated');
 });
 
 console.log(`\nweb container: ${passed} passed, ${failed} failed`);
