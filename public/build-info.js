@@ -49,7 +49,7 @@
   function describe(h) {
     var api = window.CSApi;
     var server = { version: known(h && h.version), commit: known(h && h.commit) };
-    var separate = api.channel !== 'classic';
+    var separate = !api.embedded;
     var ui = separate ? { version: known(api.version), commit: known(api.commit) } : server;
     return { separate: separate, mismatch: separate && sameBuild(ui, server) === false, ui: ui, server: server };
   }

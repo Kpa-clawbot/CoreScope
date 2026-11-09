@@ -48,6 +48,14 @@ test('a separate UI on the same commit is not a mismatch (short and long shas)',
   assert.deepStrictEqual(plain(info.server), { version: 'edge', commit: 'dac8d9f' });
 });
 
+test('separate follows CSApi.embedded: an API on another origin is separate, whatever the channel', () => {
+  // A hand-edited deployment.js that only moves the API base keeps the
+  // classic channel, but the server no longer serves this UI.
+  assert.strictEqual(load({ apiBase: 'https://analyzer.example', auth: false }).describe({ version: 'v3.16.0' }).separate, true);
+  assert.strictEqual(load({ channel: 'static' }).describe({}).separate, true);
+  assert.strictEqual(load(undefined).describe({}).separate, false);
+});
+
 test('a separate UI on another commit is a mismatch', () => {
   assert.strictEqual(load(SPLIT).describe({ version: 'edge', commit: 'abc1234' }).mismatch, true);
 });
