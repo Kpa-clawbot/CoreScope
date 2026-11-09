@@ -3,11 +3,17 @@
 const vm = require('vm');
 const fs = require('fs');
 const assert = require('assert');
+const { loadApiBase } = require('./api-base-sandbox');
 
 let passed = 0, failed = 0;
+// Tests run one after another and are awaited: most render the page, which
+// is async. (A synchronous runner reported them passed before their awaits,
+// and the process.exit at the end ended the run before any assertion.)
+let chain = Promise.resolve();
 function test(name, fn) {
-  try { fn(); passed++; console.log(`  ✅ ${name}`); }
-  catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
+  chain = chain.then(fn).then(
+    () => { passed++; console.log(`  ✅ ${name}`); },
+    (e) => { failed++; console.log(`  ❌ ${name}: ${e.message}`); });
 }
 
 // Minimal sandbox to run perf.js in a browser-like context
@@ -36,6 +42,9 @@ function makeSandbox() {
   };
   ctx.window.document = ctx.document;
   ctx.globalThis = ctx;
+  // perf.js fetches through CSApi, as in the browser: load the real
+  // deployment.js and api-base.js. Their fetch is this sandbox's fetch.
+  loadApiBase(ctx);
   return { ctx, pages, getHtml: () => capturedHtml };
 }
 
@@ -43,7 +52,7 @@ function makeSandbox() {
 function loadPerf() {
   const sb = makeSandbox();
   const code = fs.readFileSync('public/perf.js', 'utf8');
-  vm.runInNewContext(code, sb.ctx);
+  vm.runInContext(code, sb.ctx);
   return sb;
 }
 
@@ -151,14 +160,15 @@ test('Go engine shows goRuntime values', async () => {
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
-  assert.ok(html.includes('17'), 'goroutines value');
-  assert.ok(html.includes('31'), 'numGC value');
-  assert.ok(html.includes('2.1ms'), 'pauseTotalMs value');
-  assert.ok(html.includes('0.03ms'), 'lastPauseMs value');
-  assert.ok(html.includes('473MB'), 'heapAllocMB value');
-  assert.ok(html.includes('1035MB'), 'heapSysMB value');
-  assert.ok(html.includes('663MB'), 'heapInuseMB value');
-  assert.ok(html.includes('371MB'), 'heapIdleMB value');
+  // perf.js prints times and sizes to one decimal.
+  assert.ok(html.includes('>17<'), 'goroutines value');
+  assert.ok(html.includes('>31<'), 'numGC value');
+  assert.ok(html.includes('>2.1ms<'), 'pauseTotalMs value');
+  assert.ok(html.includes('>0.0ms<'), 'lastPauseMs value (0.03 to one decimal)');
+  assert.ok(html.includes('>473.0MB<'), 'heapAllocMB value');
+  assert.ok(html.includes('>1035.0MB<'), 'heapSysMB value');
+  assert.ok(html.includes('>663.0MB<'), 'heapInuseMB value');
+  assert.ok(html.includes('>371.0MB<'), 'heapIdleMB value');
 });
 
 test('Go engine does NOT show Event Loop labels', async () => {
@@ -254,7 +264,7 @@ test('Missing engine field shows Node UI', async () => {
 test('Version card shows version tag when health.version is set', async () => {
   const sb = loadPerf();
   const health = { ...goHealth, version: '3.8.2', commit: 'unknown' };
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -265,7 +275,7 @@ test('Version card shows version tag when health.version is set', async () => {
 test('Version card shows commit hash when version is unknown', async () => {
   const sb = loadPerf();
   const health = { ...goHealth, version: 'unknown', commit: 'abc1234def' };
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -276,7 +286,7 @@ test('Version card shows commit hash when version is unknown', async () => {
 test('Version card shows both version and commit when both are known', async () => {
   const sb = loadPerf();
   const health = { ...goHealth, version: 'v3.8.2', commit: 'deadbeef1234' };
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -287,7 +297,7 @@ test('Version card shows both version and commit when both are known', async () 
 test('Version card is absent when health has no version or commit', async () => {
   const sb = loadPerf();
   const health = { ...goHealth }; // no version/commit fields
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -297,7 +307,7 @@ test('Version card is absent when health has no version or commit', async () => 
 test('Version card is absent when both version and commit are "unknown"', async () => {
   const sb = loadPerf();
   const health = { ...goHealth, version: 'unknown', commit: 'unknown' };
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -337,5 +347,7 @@ test('renderVersionCard: uses perf-num--small class (no inline style)', () => {
   assert.ok(!card.includes('font-size'), 'should not use inline font-size style');
 });
 
-console.log(`\n${passed} passed, ${failed} failed\n`);
-process.exit(failed ? 1 : 0);
+chain.then(() => {
+  console.log(`\n${passed} passed, ${failed} failed\n`);
+  process.exit(failed ? 1 : 0);
+});
