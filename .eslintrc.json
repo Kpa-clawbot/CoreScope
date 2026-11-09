@@ -323,7 +323,11 @@
         "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
-        "selector": "Literal[value=/href=\\\"\\/api\\//]",
+        "selector": "Literal[value=/(href|src|action)=[\"']\\/api\\//]",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
+      },
+      {
+        "selector": "TemplateElement[value.raw=/(href|src|action)=[\"']\\/api\\//]",
         "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
