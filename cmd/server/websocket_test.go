@@ -454,3 +454,31 @@ func TestHubDefaultPingInterval(t *testing.T) {
 		t.Fatalf("pingInterval = %v, want 30s (public/app.js WS_STALE_MS depends on it)", got)
 	}
 }
+
+// UIs cached from before the UI moved its WebSocket to /ws still connect on
+// "/": wsOrStatic upgrades any path the static handler serves. Keep that
+// until those clients are gone; this pins it.
+func TestWebSocketUpgradeOnRootStillWorks(t *testing.T) {
+	hub := NewHub()
+	static := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("static"))
+	})
+	srv := httptest.NewServer(wsOrStatic(hub, static))
+	defer srv.Close()
+
+	conn, resp, err := websocket.DefaultDialer.Dial("ws"+srv.URL[4:]+"/", nil)
+	if err != nil {
+		t.Fatalf("dial /: %v", err)
+	}
+	defer conn.Close()
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("dial /: status %d, want 101", resp.StatusCode)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for hub.ClientCount() != 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if hub.ClientCount() != 1 {
+		t.Errorf("expected the root connection to register with the hub, got %d clients", hub.ClientCount())
+	}
+}
