@@ -86,7 +86,8 @@ if grep -rl "__BUST__" "$OUT" >/dev/null; then fail "a __BUST__ placeholder is l
 [ ! -e "$OUT/functions" ] && [ ! -e "$OUT/_worker.js" ] || fail "functions/ and _worker.js are not allowed: the frontend is static only"
 count=$(find "$OUT" -type f | wc -l)
 [ "$count" -lt 20000 ] || fail "$count files; Cloudflare Pages allows fewer than 20000"
-big=$(find "$OUT" -type f -size +25M | head -1)
+# 25 MiB in bytes: busybox find (the web image) has no M suffix.
+big=$(find "$OUT" -type f -size +26214400c | head -1)
 [ -z "$big" ] || fail "$big is over 25 MiB, the Cloudflare Pages per-file limit"
 # Byte for byte public/, plus _headers; only index.html and deployment.js differ.
 expected=$( (cd public && find . -type f; echo ./_headers) | sort)

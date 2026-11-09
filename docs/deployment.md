@@ -5,6 +5,7 @@ Comprehensive guide to deploying and operating CoreScope. For a quick start, see
 ## Table of Contents
 
 - [System Requirements](#system-requirements)
+- [Deployment modes](#deployment-modes)
 - [Docker Deployment](#docker-deployment)
 - [Configuration Reference](#configuration-reference)
 - [MQTT Setup](#mqtt-setup)
@@ -27,6 +28,69 @@ Comprehensive guide to deploying and operating CoreScope. For a quick start, see
 | Docker | 20.10+ | Latest stable |
 
 CoreScope runs well on Raspberry Pi 4/5 (ARM64). The Go server uses ~300 MB RAM for 56K+ packets.
+
+---
+
+## Deployment modes
+
+The UI is static files (`public/`) that call the server's API. The three modes
+differ only in what serves those files. The server container is the same image
+in all three, and it still serves the classic UI itself.
+
+| Mode | The UI is served by | API | Server CORS setting | Logins |
+|---|---|---|---|---|
+| [All-in-one container](#all-in-one-container) | the server container | same origin | none | yes |
+| [Split containers](#split-containers) | a web container (`Dockerfile.web`) that forwards the API | same origin | none | yes |
+| [Static host or CDN](#static-host-or-cdn) | Cloudflare Pages, a CDN or any web server | another origin | `CORS_ALLOWED_ORIGINS` | no, links to the classic UI |
+
+### All-in-one container
+
+The default, and what the rest of this guide describes: one image runs the
+server, the ingestor and, optionally, Mosquitto and Caddy. The server serves the
+UI from `/app/public` and the API on one origin. See
+[Docker Deployment](#docker-deployment).
+
+### Split containers
+
+`docker-compose.split.yml` runs the server image unchanged next to a web
+container built from `Dockerfile.web`. The web container is Caddy: it serves the
+UI, packaged by `scripts/static/build.sh` when the image is built, and forwards
+`/api/*` and `/ws` to the server. The browser sees one origin, so the server
+needs no CORS setting and logins work as on the classic UI.
+
+```bash
+docker compose -f docker-compose.split.yml up -d --build
+```
+
+| Variable | Default | |
+|---|---|---|
+| `HTTP_PORT`, `HTTPS_PORT` | `80`, `443` | Published by the web container |
+| `SITE_ADDRESS` | `:80` | A domain name turns on Caddy's automatic HTTPS |
+| `CORESCOPE_IMAGE` | `ghcr.io/kpa-clawbot/corescope:latest` | The server image |
+| `DATA_DIR` | `./data` | The server's data directory |
+| `GIT_COMMIT` | the build time | The UI's cache buster |
+| `CHANNEL` | `static` | `beta`, `next` or `dev` shows a badge |
+
+- The web container finds the server through `BACKEND` (`corescope:3000` in the
+  compose file). Port 3000 stays inside the compose network, and the server
+  still serves everything there, the classic UI included; publish it if you want
+  to reach that directly.
+- To update only the UI, rebuild the web container:
+  `docker compose -f docker-compose.split.yml up -d --build web`. Keep it on the
+  version the server runs; a newer UI may call endpoints an older server lacks.
+- Behind the web container, as behind the all-in-one image's Caddy, every
+  request reaches the server from the proxy's address, so per-IP limits are off
+  until `webSocket.trustedProxies` and `userManagement.trustedProxies` list it
+  (the compose network's subnet, from `docker network inspect`).
+
+### Static host or CDN
+
+`make web` (or `scripts/static/build.sh`) writes the anonymous build to
+`dist/web` for Cloudflare Pages or any static host. It calls the server
+cross-origin, so the server lists the UI's origin in `CORS_ALLOWED_ORIGINS`.
+It sends no cookies; logins and admin pages link to the classic UI on the
+server. Setup, previews, server settings and rollback:
+[deploy/static/README.md](../deploy/static/README.md).
 
 ---
 

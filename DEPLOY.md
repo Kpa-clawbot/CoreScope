@@ -24,6 +24,13 @@ curl -sL https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/docker-c
 docker compose up -d
 ```
 
+### Other deployment modes
+
+The UI can also run in a container of its own
+(`docker compose -f docker-compose.split.yml up -d --build`) or from a static
+host or CDN such as Cloudflare Pages. See
+[Deployment modes](docs/deployment.md#deployment-modes).
+
 ## Image Tags
 
 | Tag | Description |

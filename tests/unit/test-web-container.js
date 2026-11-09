@@ -1,0 +1,71 @@
+/* test-web-container.js — the web container (Dockerfile.web) and
+ * docker-compose.split.yml agree with the rest of the repo.
+ *
+ * The web container serves the static UI and forwards the API and the
+ * WebSocket to a CoreScope server container, so the UI is same-origin and
+ * needs no CORS. Nothing in CI builds it, so these pin what would otherwise
+ * drift silently: how the UI is packaged, what Caddy forwards, the cache rules
+ * a static host gets from deploy/static/_headers, and the server's address.
+ */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+
+const ROOT = path.join(__dirname, '..', '..');
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+const code = (text) => text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+
+const dockerfile = code(read('Dockerfile.web')).join('\n').replace(/\\\n/g, ' ');
+const caddyfile = code(read('docker/web/Caddyfile'));
+const compose = read('docker-compose.split.yml');
+
+let passed = 0, failed = 0;
+function test(name, fn) {
+  try { fn(); passed++; console.log(`  ✅ ${name}`); }
+  catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
+}
+
+console.log('\n=== web container ===');
+
+test('the image packages public/ with scripts/static/build.sh, same-origin with logins', () => {
+  const run = dockerfile.split('\n').find((l) => /^RUN\b.*scripts\/static\/build\.sh/.test(l));
+  assert.ok(run, 'no RUN of scripts/static/build.sh');
+  assert.ok(/\bAPI_BASE=same-origin\b/.test(run), run);
+  assert.ok(/\bAUTH=true\b/.test(run), run);
+  assert.ok(/\bOUT=\/srv\b/.test(run), run);
+});
+
+test('Caddy serves /srv and forwards /api/* and /ws to BACKEND', () => {
+  assert.ok(caddyfile.includes('root * /srv'), 'root * /srv');
+  assert.ok(caddyfile.includes('file_server'), 'file_server');
+  const matcher = caddyfile.find((l) => l.startsWith('@backend '));
+  assert.ok(matcher, '@backend matcher');
+  assert.deepStrictEqual(matcher.split(/\s+/).slice(2).sort(), ['/api/*', '/ws']);
+  assert.ok(caddyfile.includes('reverse_proxy @backend {$BACKEND}'), 'reverse_proxy @backend {$BACKEND}');
+});
+
+test('Caddy sends the no-cache rule for exactly the paths in deploy/static/_headers', () => {
+  const headers = code(read('deploy/static/_headers'));
+  const fromHeaders = headers.filter((l) => l.startsWith('/')).sort();
+  const matcher = caddyfile.find((l) => l.startsWith('@nocache '));
+  assert.ok(matcher, '@nocache matcher');
+  assert.deepStrictEqual(matcher.split(/\s+/).slice(2).sort(), fromHeaders);
+  const rule = headers.find((l) => l.startsWith('Cache-Control:')).replace('Cache-Control:', '').trim();
+  assert.ok(caddyfile.includes(`header @nocache Cache-Control "${rule}"`), rule);
+});
+
+test('compose points BACKEND at the server service, on the port the image runs it on', () => {
+  const port = read('docker/supervisord-go-no-caddy.conf').match(/corescope-server .*-port (\d+)/)[1];
+  assert.ok(/^ {2}corescope:\s*$/m.test(compose), 'no corescope service');
+  assert.ok(compose.includes(`BACKEND=corescope:${port}`), `BACKEND=corescope:${port}`);
+  assert.ok(dockerfile.includes(`BACKEND=corescope:${port}`), 'Dockerfile.web default BACKEND');
+});
+
+test("compose turns the server's own Caddy off and builds the web image from Dockerfile.web", () => {
+  assert.ok(compose.includes('DISABLE_CADDY=true'), 'DISABLE_CADDY=true');
+  assert.ok(/dockerfile:\s*Dockerfile\.web\b/.test(compose), 'dockerfile: Dockerfile.web');
+});
+
+console.log(`\nweb container: ${passed} passed, ${failed} failed`);
+if (failed) process.exit(1);

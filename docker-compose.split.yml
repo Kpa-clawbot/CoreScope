@@ -1,0 +1,60 @@
+# CoreScope — split containers: the UI in its own web container and the
+# server in the usual image.
+#
+# The web container (Dockerfile.web, Caddy) serves the static UI and forwards
+# /api and /ws to the server, so both share one origin: no CORS settings, and
+# logins work as on the classic UI. The server container is unchanged and still
+# serves everything, the classic UI included, on port 3000 inside the compose
+# network; publish it too if you want to reach that directly.
+#
+# Usage: docker compose -f docker-compose.split.yml up -d --build
+# Docs:  docs/deployment.md, "Deployment modes"
+#
+# Variables (shell or .env):
+#   CORESCOPE_IMAGE  the server image. Default ghcr.io/kpa-clawbot/corescope:latest
+#   DATA_DIR         the server's data directory. Default ./data
+#   HTTP_PORT        default 80;  HTTPS_PORT default 443
+#   SITE_ADDRESS     :80 (default), or a domain name for automatic HTTPS
+#   GIT_COMMIT       the UI's cache buster; default the build time
+#   CHANNEL          static (default), or beta, next, dev for a badge
+
+services:
+  corescope:
+    image: ${CORESCOPE_IMAGE:-ghcr.io/kpa-clawbot/corescope:latest}
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+    environment:
+      - DISABLE_CADDY=true
+      - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-}
+        CHANNEL: ${CHANNEL:-static}
+    image: corescope-web:latest
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - web-caddy-data:/data
+    environment:
+      - BACKEND=corescope:3000
+      - SITE_ADDRESS=${SITE_ADDRESS:-:80}
+    depends_on:
+      - corescope
+    restart: unless-stopped
+
+volumes:
+  # Caddy's TLS certificates when SITE_ADDRESS is a domain name.
+  web-caddy-data:
