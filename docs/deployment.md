@@ -72,6 +72,7 @@ CORESCOPE_IMAGE=ghcr.io/kpa-clawbot/corescope:edge \
 | `DATA_DIR` | `./data` | The server's data directory |
 | `GIT_COMMIT` | the build time | The UI's cache buster |
 | `CHANNEL` | `static` | `beta`, `next` or `dev` shows a badge |
+| `MQTT_BIND`, `MQTT_PORT` | `127.0.0.1`, `1883` | Where the server's built-in broker is published. It accepts anonymous clients, so set `MQTT_BIND=0.0.0.0` only to let gateways on a network you trust publish to it |
 
 - When `userManagement.enabled` is true, set `userManagement.publicBaseUrl` in
   the server's config to the public web origin, including its scheme and port

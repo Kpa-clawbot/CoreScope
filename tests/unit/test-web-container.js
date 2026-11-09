@@ -75,5 +75,14 @@ test('compose has no default server image, so the server and the UI versions are
   assert.ok(/\$\{CORESCOPE_IMAGE:\?[^}]+\}/.test(line), 'CORESCOPE_IMAGE must be required (${VAR:?message}): ' + line);
 });
 
+test("compose publishes the server's MQTT broker on localhost only, unless MQTT_BIND says otherwise", () => {
+  // docker/mosquitto.conf accepts anonymous clients, so anyone who reaches a
+  // published 1883 could feed the analyzer packets.
+  assert.ok(/^allow_anonymous true$/m.test(read('docker/mosquitto.conf')), 'mosquitto.conf changed; revisit this default');
+  const mapping = compose.match(/^\s+- "([^"]*:1883)"\s*$/m);
+  assert.ok(mapping, 'no 1883 port mapping');
+  assert.ok(mapping[1].startsWith('${MQTT_BIND:-127.0.0.1}:'), mapping[1]);
+});
+
 console.log(`\nweb container: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

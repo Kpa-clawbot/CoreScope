@@ -23,12 +23,16 @@
 #   SITE_ADDRESS     :80 (default), or a domain name for automatic HTTPS
 #   GIT_COMMIT       the UI's cache buster; default the build time
 #   CHANNEL          static (default), or beta, next, dev for a badge
+#   MQTT_BIND        where the server's built-in broker is published. Default
+#                    127.0.0.1: it accepts anonymous clients, so set 0.0.0.0
+#                    only to let gateways on a network you trust publish to it.
+#   MQTT_PORT        default 1883
 
 services:
   corescope:
     image: ${CORESCOPE_IMAGE:?set CORESCOPE_IMAGE to the server image of this checkout's version, e.g. ghcr.io/kpa-clawbot/corescope:edge on master or :vX.Y.Z on a release tag}
     ports:
-      - "${MQTT_PORT:-1883}:1883"
+      - "${MQTT_BIND:-127.0.0.1}:${MQTT_PORT:-1883}:1883"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
     environment:
