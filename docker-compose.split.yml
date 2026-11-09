@@ -9,11 +9,15 @@
 # serves everything, the classic UI included, on port 3000 inside the compose
 # network; publish it too if you want to reach that directly.
 #
-# Usage: docker compose -f docker-compose.split.yml up -d --build
+# Usage: CORESCOPE_IMAGE=ghcr.io/kpa-clawbot/corescope:edge \
+#          docker compose -f docker-compose.split.yml up -d --build
 # Docs:  docs/deployment.md, "Deployment modes"
 #
 # Variables (shell or .env):
-#   CORESCOPE_IMAGE  the server image. Default ghcr.io/kpa-clawbot/corescope:latest
+#   CORESCOPE_IMAGE  required: the server image of the same version as this
+#                    checkout, which the web image is built from. :edge on
+#                    master, :vX.Y.Z on a release tag. There is no default, so
+#                    a release server is never paired with a newer UI unasked.
 #   DATA_DIR         the server's data directory. Default ./data
 #   HTTP_PORT        default 80;  HTTPS_PORT default 443
 #   SITE_ADDRESS     :80 (default), or a domain name for automatic HTTPS
@@ -22,7 +26,7 @@
 
 services:
   corescope:
-    image: ${CORESCOPE_IMAGE:-ghcr.io/kpa-clawbot/corescope:latest}
+    image: ${CORESCOPE_IMAGE:?set CORESCOPE_IMAGE to the server image of this checkout's version, e.g. ghcr.io/kpa-clawbot/corescope:edge on master or :vX.Y.Z on a release tag}
     ports:
       - "${MQTT_PORT:-1883}:1883"
     volumes:

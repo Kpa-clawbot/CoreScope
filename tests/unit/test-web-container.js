@@ -67,5 +67,13 @@ test("compose turns the server's own Caddy off and builds the web image from Doc
   assert.ok(/dockerfile:\s*Dockerfile\.web\b/.test(compose), 'dockerfile: Dockerfile.web');
 });
 
+test('compose has no default server image, so the server and the UI versions are picked together', () => {
+  // The web image is built from this checkout; a default such as :latest (the
+  // last release) would pair it with a different server version unasked.
+  const line = compose.split('\n').find((l) => /^\s+image:.*CORESCOPE_IMAGE/.test(l));
+  assert.ok(line, 'no image line using CORESCOPE_IMAGE');
+  assert.ok(/\$\{CORESCOPE_IMAGE:\?[^}]+\}/.test(line), 'CORESCOPE_IMAGE must be required (${VAR:?message}): ' + line);
+});
+
 console.log(`\nweb container: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

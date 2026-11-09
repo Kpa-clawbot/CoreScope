@@ -60,14 +60,15 @@ needs no CORS setting. Logins work as on the classic UI when account
 configuration uses the public web origin, as described below.
 
 ```bash
-docker compose -f docker-compose.split.yml up -d --build
+CORESCOPE_IMAGE=ghcr.io/kpa-clawbot/corescope:edge \
+  docker compose -f docker-compose.split.yml up -d --build
 ```
 
 | Variable | Default | |
 |---|---|---|
 | `HTTP_PORT`, `HTTPS_PORT` | `80`, `443` | Published by the web container |
 | `SITE_ADDRESS` | `:80` | A domain name turns on Caddy's automatic HTTPS |
-| `CORESCOPE_IMAGE` | `ghcr.io/kpa-clawbot/corescope:latest` | The server image |
+| `CORESCOPE_IMAGE` | none, required | The server image of the same version as the checkout the web image is built from: `:edge` on `master`, `:vX.Y.Z` on a release tag |
 | `DATA_DIR` | `./data` | The server's data directory |
 | `GIT_COMMIT` | the build time | The UI's cache buster |
 | `CHANNEL` | `static` | `beta`, `next` or `dev` shows a badge |
@@ -83,9 +84,10 @@ docker compose -f docker-compose.split.yml up -d --build
   compose file). Port 3000 stays inside the compose network, and the server
   still serves everything there, the classic UI included; publish it if you want
   to reach that directly.
-- To update only the UI, rebuild the web container:
-  `docker compose -f docker-compose.split.yml up -d --build web`. Keep it on the
-  version the server runs; a newer UI may call endpoints an older server lacks.
+- The web image is built from your checkout, so keep the checkout and
+  `CORESCOPE_IMAGE` on the same version: a newer UI may call endpoints an older
+  server lacks. To update only the UI, rebuild the web container:
+  `docker compose -f docker-compose.split.yml up -d --build web`.
 - Behind the web container, as behind the all-in-one image's Caddy, every
   request reaches the server from the proxy's address, so per-IP limits are off
   until `webSocket.trustedProxies` and `userManagement.trustedProxies` list it

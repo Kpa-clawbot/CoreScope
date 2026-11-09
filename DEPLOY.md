@@ -26,9 +26,9 @@ docker compose up -d
 
 ### Other deployment modes
 
-The UI can also run in a container of its own
-(`docker compose -f docker-compose.split.yml up -d --build`) or from a static
-host or CDN such as Cloudflare Pages. See
+The UI can also run in a container of its own (`docker-compose.split.yml`, with
+`CORESCOPE_IMAGE` set to the server image of your checkout's version) or from a
+static host or CDN such as Cloudflare Pages. See
 [Deployment modes](docs/deployment.md#deployment-modes).
 
 ## Image Tags
