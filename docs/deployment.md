@@ -66,8 +66,8 @@ CORESCOPE_IMAGE=ghcr.io/kpa-clawbot/corescope:edge \
 
 | Variable | Default | |
 |---|---|---|
-| `HTTP_PORT`, `HTTPS_PORT` | `80`, `443` | Published by the web container |
-| `SITE_ADDRESS` | `:80` | A domain name turns on Caddy's automatic HTTPS |
+| `HTTP_PORT`, `HTTPS_PORT` | `80`, `443` | Published by the web container; 443 over TCP and UDP (HTTP/3) |
+| `SITE_ADDRESS` | `:80` | A domain name turns on Caddy's automatic HTTPS and HTTP/3. Keep the default ports then: certificate issuance and the HTTP/3 advertisement both assume 80 and 443 |
 | `CORESCOPE_IMAGE` | none, required | The server image of the same version as the checkout the web image is built from: `:edge` on `master`, `:vX.Y.Z` on a release tag |
 | `DATA_DIR` | `./data` | The server's data directory |
 | `GIT_COMMIT` | the build time | The UI's cache buster |

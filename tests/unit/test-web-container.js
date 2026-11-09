@@ -84,5 +84,12 @@ test("compose publishes the server's MQTT broker on localhost only, unless MQTT_
   assert.ok(mapping[1].startsWith('${MQTT_BIND:-127.0.0.1}:'), mapping[1]);
 });
 
+test('compose publishes 443 over UDP too, for the HTTP/3 Caddy advertises', () => {
+  // With a domain in SITE_ADDRESS, Caddy serves HTTP/3 and sends Alt-Svc:
+  // h3=":443". Without the UDP port, browsers try QUIC, time out and fall back.
+  assert.ok(compose.includes('- "${HTTPS_PORT:-443}:443"'), 'tcp 443');
+  assert.ok(compose.includes('- "${HTTPS_PORT:-443}:443/udp"'), 'udp 443');
+});
+
 console.log(`\nweb container: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
