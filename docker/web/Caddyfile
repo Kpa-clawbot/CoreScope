@@ -15,7 +15,7 @@
 
 	# The same rules as deploy/static/_headers: these change on every deploy
 	# without a ?v= buster, so a browser must always revalidate them.
-	@nocache path / /index.html /deployment.js
+	@nocache path / /index.html /area-map.html /geofilter-builder.html /geofilter-docs.html /deployment.js
 	header @nocache Cache-Control "no-cache, no-store, must-revalidate"
 
 	root * /srv

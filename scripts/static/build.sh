@@ -84,9 +84,12 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 cp -R public/. "$OUT/"
 
-# The same substitution spaHandler makes at server start, with the commit in
-# place of a timestamp so a rebuild of one commit is byte-identical.
-sed -i.bak "s/__BUST__/$COMMIT/g" "$OUT/index.html" && rm -f "$OUT/index.html.bak"
+# The same substitution spaHandler makes at server start in every top-level
+# page, with the commit in place of a timestamp so a rebuild of one commit is
+# byte-identical.
+for page in "$OUT"/*.html; do
+  sed -i.bak "s/__BUST__/$COMMIT/g" "$page" && rm -f "$page.bak"
+done
 
 classic_js=null
 [ -n "$CLASSIC_URL" ] && classic_js="'$CLASSIC_URL'"
@@ -105,14 +108,19 @@ count=$(find "$OUT" -type f | wc -l)
 # 25 MiB in bytes: busybox find (the web image) has no M suffix.
 big=$(find "$OUT" -type f -size +26214400c | head -1)
 [ -z "$big" ] || fail "$big is over 25 MiB, the Cloudflare Pages per-file limit"
-# Byte for byte public/, plus _headers; only index.html and deployment.js differ.
+# Byte for byte public/, plus _headers. deployment.js is new, and the
+# top-level pages differ only by the cache buster.
 expected=$( (cd public && find . -type f; echo ./_headers) | sort)
 actual=$(cd "$OUT" && find . -type f | sort)
 [ "$expected" = "$actual" ] || fail "the output is not exactly public/ plus _headers:
 $(diff <(echo "$expected") <(echo "$actual") || true)"
 while IFS= read -r f; do
-  case "$f" in ./index.html|./deployment.js|./_headers) continue ;; esac
-  cmp -s "public/$f" "$OUT/$f" || fail "$f differs from public/$f"
+  case "$f" in
+    ./deployment.js|./_headers) ;;
+    ./*/*) cmp -s "public/$f" "$OUT/$f" || fail "$f differs from public/$f" ;;
+    ./*.html) sed "s/__BUST__/$COMMIT/g" "public/$f" | cmp -s - "$OUT/$f" || fail "$f is not public/$f with the cache buster" ;;
+    *) cmp -s "public/$f" "$OUT/$f" || fail "$f differs from public/$f" ;;
+  esac
 done <<< "$actual"
 
 echo "build: $OUT ($count files) channel=$CHANNEL commit=$COMMIT apiBase=${API_BASE:-same-origin} auth=$AUTH"

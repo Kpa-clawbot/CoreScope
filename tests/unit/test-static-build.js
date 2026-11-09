@@ -32,6 +32,8 @@ function descriptor(out) {
   vm.runInContext(fs.readFileSync(path.join(out, 'deployment.js'), 'utf8'), ctx);
   return JSON.parse(JSON.stringify(ctx.CS_DEPLOYMENT));
 }
+// The top-level pages of public/: each is served on its own and gets the cache buster.
+const PAGES = fs.readdirSync(path.join(ROOT, 'public')).filter((f) => /\.html$/i.test(f)).sort();
 const OK = { API_BASE: 'https://analyzer.example', AUTH: 'false', CHANNEL: 'beta', COMMIT: 'abc1234' };
 
 console.log('static build.sh');
@@ -51,7 +53,7 @@ test('replaces every __BUST__ in index.html with the commit', () => {
   assert.strictEqual((html.match(/\?v=abc1234/g) || []).length, want);
 });
 
-test('is public/ byte for byte plus _headers, apart from index.html and deployment.js', () => {
+test('is public/ byte for byte plus _headers, apart from the top-level pages and deployment.js', () => {
   const r = run(OK);
   const list = (dir) => {
     const acc = [];
@@ -61,11 +63,43 @@ test('is public/ byte for byte plus _headers, apart from index.html and deployme
   const pub = list(path.join(ROOT, 'public'));
   assert.deepStrictEqual(list(r.out), pub.concat('_headers').sort());
   for (const f of pub) {
-    if (f === 'index.html' || f === 'deployment.js') continue;
+    if (PAGES.includes(f) || f === 'deployment.js') continue;
     assert.ok(fs.readFileSync(path.join(ROOT, 'public', f)).equals(fs.readFileSync(path.join(r.out, f))), f + ' changed');
   }
   assert.strictEqual(fs.readFileSync(path.join(r.out, '_headers'), 'utf8'),
     fs.readFileSync(path.join(ROOT, 'deploy', 'static', '_headers'), 'utf8'));
+});
+
+// Every top-level page, not just index.html, loads its own scripts with the
+// cache buster, so a page served fresh never runs a script cached from the
+// previous deploy. vendor/ files carry their version in the path instead.
+test('every local script and stylesheet in a top-level page carries ?v=__BUST__', () => {
+  const missing = [];
+  for (const page of PAGES) {
+    const html = fs.readFileSync(path.join(ROOT, 'public', page), 'utf8');
+    for (const tag of html.match(/<(script|link)\b[^>]*>/gi) || []) {
+      if (/^<link/i.test(tag) && !/\brel=["']stylesheet["']/i.test(tag)) continue;
+      const m = /\b(?:src|href)=["']([^"']+)["']/i.exec(tag);
+      if (!m || /^(https?:)?\/\//i.test(m[1]) || /^data:/i.test(m[1]) || /^\/?vendor\//.test(m[1])) continue;
+      if (!/\?v=__BUST__$/.test(m[1])) missing.push(page + ': ' + m[1]);
+    }
+  }
+  assert.deepStrictEqual(missing, []);
+});
+
+test('the build replaces the cache buster in every top-level page and changes nothing else', () => {
+  const r = run(OK);
+  for (const page of PAGES) {
+    const src = fs.readFileSync(path.join(ROOT, 'public', page), 'utf8');
+    assert.strictEqual(fs.readFileSync(path.join(r.out, page), 'utf8'), src.split('__BUST__').join('abc1234'), page);
+  }
+  assert.ok(fs.readFileSync(path.join(r.out, 'area-map.html'), 'utf8').includes('api-base.js?v=abc1234'));
+});
+
+test('_headers makes every top-level page and deployment.js revalidate', () => {
+  const paths = fs.readFileSync(path.join(ROOT, 'deploy', 'static', '_headers'), 'utf8')
+    .split('\n').filter((l) => l.startsWith('/')).map((l) => l.trim()).sort();
+  assert.deepStrictEqual(paths, ['/', '/deployment.js'].concat(PAGES.map((p) => '/' + p)).sort());
 });
 
 test('the same commit builds the same bytes', () => {

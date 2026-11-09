@@ -33,12 +33,14 @@ preview origins.
 make web API_BASE=https://analyzer.example.org AUTH=false
 ```
 
-writes `dist/web`: `public/` byte for byte, except that `index.html` gets a
-cache buster and `deployment.js` says where the API is. Serve that folder at the
-root of a hostname; the UI uses absolute paths such as `/icons/…`. `_headers`
-holds the cache rules (Cloudflare Pages and Netlify read it; other hosts need
-the same three rules in their own config). The variables are in step 6 below and
-at the top of `scripts/static/build.sh`.
+writes `dist/web`: `public/` byte for byte, except that every top-level page
+(`index.html` and the tool pages) gets the cache buster and `deployment.js` says
+where the API is. Serve that folder at the root of a hostname; the UI uses
+absolute paths such as `/icons/…`. `_headers` holds the cache rules: the pages
+and `deployment.js` always revalidate, while everything they load carries
+`?v=<commit>`. Cloudflare Pages and Netlify read it; other hosts need the same
+rules in their own config. The variables are in step 6 below and at the top of
+`scripts/static/build.sh`.
 
 ## Deploying from a fork
 
