@@ -161,7 +161,7 @@ async function apiFetchOrExplain(path) {
     throw e;
   }
 }
-async function jsonOrExplain(res, path) {
+function rejectHtmlResponse(res, path) {
   const ct = res.headers && typeof res.headers.get === 'function' ? res.headers.get('Content-Type') : null;
   // Only HTML is refused: an /api answer is never a page, while some JSON
   // handlers leave Content-Type to Go's sniffing (text/plain).
@@ -169,9 +169,9 @@ async function jsonOrExplain(res, path) {
     const err = apiProblem('not_json', 'Server returned an unexpected response');
     err.status = res.status;
     err.path = path;
+    err.retryAfter = res.headers.get('Retry-After');
     throw err;
   }
-  return res.json();
 }
 async function api(path, { ttl = 0, bust = false } = {}) {
   const t0 = performance.now();
@@ -208,6 +208,9 @@ async function api(path, { ttl = 0, bust = false } = {}) {
     try {
       while (true) {
         const res = await apiFetchOrExplain(path);
+        // A static host or proxy error page is not a server warm-up response,
+        // even when its status is 503. Explain it before status/retry handling.
+        rejectHtmlResponse(res, path);
         if (res.status === 503 && attempt < maxAttempts) {
           const ra = parseInt(res.headers.get('Retry-After'), 10);
           const wait = isFinite(ra) && ra > 0 ? ra * 1000 : delay;
@@ -225,7 +228,7 @@ async function api(path, { ttl = 0, bust = false } = {}) {
           err.retryAfter = res.headers.get('Retry-After');
           throw err;
         }
-        const data = await jsonOrExplain(res, path);
+        const data = await res.json();
         const ms = performance.now() - t0;
         _apiPerf.calls++;
         _apiPerf.totalMs += ms;

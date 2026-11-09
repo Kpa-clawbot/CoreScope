@@ -155,7 +155,11 @@ function appCtx(deployment, fetchImpl) {
   try { vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8'), ctx); } catch (_) { /* only api() is needed */ }
   return { ctx, notices };
 }
-const json = (body, ct) => ({ ok: true, status: 200, headers: { get: (k) => (k.toLowerCase() === 'content-type' ? ct : null) }, json: async () => body });
+const json = (body, ct, status = 200, retryAfter = null) => ({
+  ok: status >= 200 && status < 300, status,
+  headers: { get: (k) => ({ 'content-type': ct, 'retry-after': retryAfter })[k.toLowerCase()] || null },
+  json: async () => body,
+});
 
 test('a blocked request on another origin becomes network_or_cors, with one notice', async () => {
   const { ctx, notices } = appCtx({ apiBase: 'https://analyzer.example', auth: false }, (url) =>
@@ -187,6 +191,77 @@ test('an HTML answer (a static host page) becomes not_json, not a parse error', 
   assert.strictEqual(err.code, 'not_json');
   assert.strictEqual(err.status, 200);
   assert.deepStrictEqual(notices, ['Server returned an unexpected response']);
+});
+
+for (const status of [404, 503]) {
+  test('HTML ' + status + ' reports not_json before status handling and does not retry', async () => {
+    let calls = 0;
+    const { ctx, notices } = appCtx({ apiBase: 'https://wrong.example', auth: false }, async (url) => {
+      if (/config\/cache/.test(url)) return json({});
+      calls++;
+      return json(null, 'text/html; charset=utf-8', status, '3');
+    });
+    const warmups = [];
+    ctx.onWarmup_1659 = (active) => warmups.push(active);
+    await assert.rejects(ctx.api('/stats'), (err) => {
+      assert.strictEqual(err.code, 'not_json');
+      assert.strictEqual(err.status, status);
+      assert.strictEqual(err.path, '/stats');
+      assert.strictEqual(err.retryAfter, '3');
+      return true;
+    });
+    assert.strictEqual(calls, 1, 'HTML errors must not retry');
+    assert.deepStrictEqual(warmups, [], 'HTML is not an analytics warm-up');
+    assert.deepStrictEqual(notices, ['Server returned an unexpected response']);
+  });
+}
+
+test('JSON 4xx errors retain their status and retry metadata without an unexpected-response notice', async () => {
+  for (const status of [404, 429]) {
+    let calls = 0;
+    const { ctx, notices } = appCtx({ apiBase: 'https://api.example', auth: false }, async (url) => {
+      if (/config\/cache/.test(url)) return json({});
+      calls++;
+      return json({ error: 'unavailable' }, 'application/json', status, '5');
+    });
+    await assert.rejects(ctx.api('/stats'), (err) => {
+      assert.strictEqual(err.message, 'API ' + status + ': /stats');
+      assert.strictEqual(err.status, status);
+      assert.strictEqual(err.retryAfter, '5');
+      assert.strictEqual(err.code, undefined);
+      return true;
+    });
+    assert.strictEqual(calls, 1);
+    assert.deepStrictEqual(notices, []);
+  }
+});
+
+test('JSON 503 warm-up still retries and balances its notice on success or exhaustion', async () => {
+  for (const recover of [true, false]) {
+    let calls = 0;
+    const { ctx, notices } = appCtx({ apiBase: 'https://api.example', auth: false }, async (url) => {
+      if (/config\/cache/.test(url)) return json({});
+      calls++;
+      return calls > 1 && recover ? json({ ready: true }, 'application/json') :
+        json({ error: 'warming up' }, 'application/json', 503, '2');
+    });
+    const warmups = [];
+    ctx.onWarmup_1659 = (active) => warmups.push(active);
+    if (recover) {
+      assert.strictEqual((await ctx.api('/stats')).ready, true);
+      assert.strictEqual(calls, 2);
+    } else {
+      await assert.rejects(ctx.api('/stats'), (err) => {
+        assert.strictEqual(err.status, 503);
+        assert.strictEqual(err.retryAfter, '2');
+        assert.strictEqual(err.code, undefined);
+        return true;
+      });
+      assert.strictEqual(calls, 7, 'one initial request plus six retries');
+    }
+    assert.deepStrictEqual(warmups, [true, false]);
+    assert.deepStrictEqual(notices, []);
+  }
 });
 
 test('JSON answers parse, including handlers that leave Content-Type to sniffing', async () => {

@@ -166,9 +166,9 @@ async function run() {
     await p.close();
   });
 
-  await test('an HTML answer shows "Server returned an unexpected response"', async () => {
+  for (const status of [200, 404]) await test('an HTML ' + status + ' answer shows "Server returned an unexpected response"', async () => {
     const p = await context.newPage();
-    await p.route(API + '/api/stats', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><p>static host page</p>',
+    await p.route(API + '/api/stats', (route) => route.fulfill({ status, contentType: 'text/html', body: '<!doctype html><p>static host page</p>',
       headers: { 'Access-Control-Allow-Origin': SPLIT } }));
     await p.goto(SPLIT + '/#/home', { waitUntil: 'domcontentloaded' });
     await p.waitForFunction(() => {
