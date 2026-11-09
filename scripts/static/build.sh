@@ -70,6 +70,16 @@ case "$CHANNEL" in
 esac
 [[ "$COMMIT" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || fail "COMMIT must be 1-40 characters of [A-Za-z0-9._-]: '$COMMIT'"
 
+# OUT is replaced wholesale, so it must be new, empty or a previous build:
+# a typo in OUT must not wipe an unrelated folder.
+MARKER='/* Written by scripts/static/build.sh. */'
+if [ -e "$OUT" ]; then
+  [ -d "$OUT" ] || fail "OUT is not a directory: $OUT"
+  if [ -n "$(ls -A "$OUT")" ] && [ "$(head -n 1 "$OUT/deployment.js" 2>/dev/null)" != "$MARKER" ]; then
+    fail "refusing to replace $OUT: it is neither empty nor a previous build (no deployment.js written by this script)"
+  fi
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT"
 cp -R public/. "$OUT/"
@@ -81,7 +91,7 @@ sed -i.bak "s/__BUST__/$COMMIT/g" "$OUT/index.html" && rm -f "$OUT/index.html.ba
 classic_js=null
 [ -n "$CLASSIC_URL" ] && classic_js="'$CLASSIC_URL'"
 cat > "$OUT/deployment.js" <<EOF
-/* Written by scripts/static/build.sh. */
+$MARKER
 window.CS_DEPLOYMENT = { channel: '$CHANNEL', commit: '$COMMIT', version: null, apiBase: '$API_BASE', auth: $AUTH, classicUrl: $classic_js };
 EOF
 

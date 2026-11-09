@@ -102,6 +102,38 @@ test('same-origin is for a host that forwards /api and /ws to the server', () =>
   assert.strictEqual(d.auth, true);
 });
 
+// OUT is replaced wholesale, so a typo must not wipe an unrelated folder.
+test('refuses to replace a folder that is neither empty nor a previous build', () => {
+  const dir = path.join(TMP, 'precious');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'notes.txt'), 'keep');
+  const r = run(Object.assign({}, OK, { OUT: dir }));
+  assert.notStrictEqual(r.status, 0, 'should fail');
+  assert.ok(/refusing to replace/.test(r.stderr), r.stderr);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'notes.txt'), 'utf8'), 'keep');
+});
+
+test('refuses a file as OUT', () => {
+  const file = path.join(TMP, 'a-file');
+  fs.writeFileSync(file, 'keep');
+  const r = run(Object.assign({}, OK, { OUT: file }));
+  assert.notStrictEqual(r.status, 0, 'should fail');
+  assert.ok(/not a directory/.test(r.stderr), r.stderr);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'keep');
+});
+
+test('replaces its own previous build, and builds into an empty folder', () => {
+  const first = run(OK);
+  assert.strictEqual(first.status, 0, first.stderr);
+  const again = run(Object.assign({}, OK, { OUT: first.out, CHANNEL: 'next' }));
+  assert.strictEqual(again.status, 0, again.stderr);
+  assert.strictEqual(descriptor(first.out).channel, 'next');
+  const empty = path.join(TMP, 'empty'); // the web image builds into the empty /srv
+  fs.mkdirSync(empty);
+  const r = run(Object.assign({}, OK, { OUT: empty }));
+  assert.strictEqual(r.status, 0, r.stderr);
+});
+
 const refusals = [
   ['same-origin without logins', { API_BASE: 'same-origin', AUTH: 'false' }, /same-origin needs AUTH=true/],
   // The server allows no credentialed CORS, so every request of such a build
