@@ -303,29 +303,63 @@
     "no-restricted-syntax": [
       "error",
       {
-        "selector": "CallExpression[callee.name='fetch'][arguments.0.type='Literal'][arguments.0.value=/^\\/api/]",
-        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+        "selector": "CallExpression[callee.name='fetch']",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
-        "selector": "CallExpression[callee.name='fetch'][arguments.0.type='TemplateLiteral'][arguments.0.quasis.0.value.raw=/^\\/api/]",
-        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+        "selector": "CallExpression[callee.property.name='fetch'][callee.object.name=/^(window|self|globalThis)$/]",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
-        "selector": "CallExpression[callee.name='fetch'][arguments.0.type='BinaryExpression'][arguments.0.left.value=/^\\/api/]",
-        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+        "selector": "NewExpression[callee.name=/^(XMLHttpRequest|EventSource)$/]",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
-        "selector": "CallExpression[callee.property.name='fetch'][callee.object.name='window'][arguments.0.value=/^\\/api/]",
-        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+        "selector": "CallExpression[callee.property.name='sendBeacon']",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
         "selector": "NewExpression[callee.name='WebSocket']:not([arguments.0.callee.property.name='wsUrl'])",
-        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
         "selector": "Literal[value=/href=\\\"\\/api\\//]",
-        "message": "Call the API through CSApi (public/api-base.js) so the UI also works from a static host: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl."
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
+      },
+      {
+        "selector": "AssignmentExpression[left.property.name=/^(href|src|action)$/][right.value=/^\\/api\\//]",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
+      },
+      {
+        "selector": "AssignmentExpression[left.property.name=/^(href|src|action)$/][right.left.value=/^\\/api\\//]",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
+      },
+      {
+        "selector": "AssignmentExpression[left.property.name=/^(href|src|action)$/][right.quasis.0.value.raw=/^\\/api\\//]",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
+      },
+      {
+        "selector": "CallExpression[callee.property.name='open'][arguments.0.value=/^\\/api\\//]",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
+      },
+      {
+        "selector": "CallExpression[callee.property.name='open'][arguments.0.left.value=/^\\/api\\//]",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
+      },
+      {
+        "selector": "CallExpression[callee.property.name='open'][arguments.0.quasis.0.value.raw=/^\\/api\\//]",
+        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       }
     ]
-  }
+  },
+  "overrides": [
+    {
+      "files": [
+        "public/api-base.js"
+      ],
+      "rules": {
+        "no-restricted-syntax": "off"
+      }
+    }
+  ]
 }
