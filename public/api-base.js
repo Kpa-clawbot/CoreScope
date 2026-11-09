@@ -11,6 +11,15 @@
   var auth = dep.auth !== false;
   var classicBase = String(dep.classicUrl || '').replace(/\/+$/, '');
 
+  // Logins on another origin send the session cookie, which no server accepts
+  // across origins yet, so CORS blocks every request. build.sh refuses the
+  // pair; a hand-edited deployment.js gets told why instead.
+  if (base && auth && window.console) {
+    window.console.warn('CoreScope: deployment.js pairs an apiBase on another origin with auth: true. ' +
+      'The server does not accept the session cookie across origins, so every API request will be blocked. ' +
+      'Set auth: false, or serve this UI from the API origin.');
+  }
+
   // url('/api/nodes?limit=50') is the full URL of an API path.
   function url(path) {
     if (typeof path !== 'string' || path.charAt(0) !== '/') throw new Error('api path must start with /: ' + path);

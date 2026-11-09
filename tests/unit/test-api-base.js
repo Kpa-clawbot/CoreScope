@@ -101,6 +101,24 @@ test('URLs and the WebSocket go to the API origin, and cookies ride along', asyn
   assert.strictEqual(calls[0].opts.credentials, 'include');
 });
 
+test('a hand-edited descriptor with logins on another origin warns once at load', () => {
+  // build.sh refuses this pair: no server accepts the cookie across origins,
+  // so CORS blocks every request. Say why instead of failing silently.
+  function warnings(deployment) {
+    const out = [];
+    const ctx = { console: { warn: (m) => out.push(m) }, location: { protocol: 'https:', host: 'beta.example', hash: '' } };
+    ctx.window = ctx;
+    loadApiBase(ctx, deployment);
+    return out;
+  }
+  const w = warnings({ channel: 'beta', apiBase: 'https://analyzer.example', auth: true });
+  assert.strictEqual(w.length, 1);
+  assert.match(w[0], /auth: false/);
+  assert.deepStrictEqual(warnings({ channel: 'beta', apiBase: 'https://analyzer.example', auth: false }), []);
+  assert.deepStrictEqual(warnings(undefined), []);
+  assert.deepStrictEqual(warnings({ channel: 'static' }), []);
+});
+
 section('api-base.js: anonymous static build (auth: false)');
 
 test('no request carries cookies: the embed CORS tier would block an include request', async () => {
