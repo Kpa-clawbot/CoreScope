@@ -21,6 +21,7 @@ public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT 
   app.js           — SPA router, shared globals, theme loading, api() (cached GETs)
   deployment.js    — where the API is (rewritten by scripts/static/build.sh for a static host)
   api-base.js      — CSApi: the ONLY code that builds API URLs or opens connections (see "API calls")
+  build-info.js    — BuildInfo: the UI build and the server build (/api/health, asked once per page) for the version footer, /perf and issue reports
   roles.js         — ROLE_COLORS, TYPE_COLORS, health thresholds, shared helpers
   nodes.js         — Nodes list + side pane + full detail page
   map.js           — Leaflet map with markers, legend, filters

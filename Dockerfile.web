@@ -16,12 +16,16 @@ WORKDIR /src
 COPY public/ public/
 COPY scripts/static/ scripts/static/
 COPY deploy/static/ deploy/static/
-# GIT_COMMIT is the cache buster on every asset (?v=); without one, the build
-# time, as the server does at start. CHANNEL beta, next or dev shows a badge.
+# GIT_COMMIT names the UI build and is the cache buster on every asset (?v=);
+# without one, build-<time>, which cannot pass for a commit when the UI's
+# commit is compared with the server's. APP_VERSION is the UI's version, as in
+# the server image (there is no .git here to describe). CHANNEL beta, next or
+# dev shows a badge.
 ARG GIT_COMMIT=
+ARG APP_VERSION=
 ARG CHANNEL=static
-RUN COMMIT="$(printf '%.12s' "${GIT_COMMIT:-$(date +%s)}")" \
-    API_BASE=same-origin AUTH=true CHANNEL="$CHANNEL" OUT=/srv \
+RUN if [ -n "$GIT_COMMIT" ]; then COMMIT="$(printf '%.12s' "$GIT_COMMIT")"; else COMMIT="build-$(date +%s)"; fi && \
+    COMMIT="$COMMIT" VERSION="$APP_VERSION" API_BASE=same-origin AUTH=true CHANNEL="$CHANNEL" OUT=/srv \
     bash scripts/static/build.sh && \
     rm /srv/_headers
 

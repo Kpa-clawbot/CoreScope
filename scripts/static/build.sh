@@ -22,6 +22,9 @@
 #   COMMIT       shown in the UI and used as the cache buster. Default: the
 #                first 7 characters of CF_PAGES_COMMIT_SHA (set by Pages), else
 #                git rev-parse --short HEAD.
+#   VERSION      optional. The UI's version, shown next to the server's when
+#                the UI is served apart from it. Default: git describe --tags
+#                --match 'v*' when that works (e.g. v3.16.0-21-gdac8d9f).
 #   CLASSIC_URL  optional. The embedded UI, for "Open in classic" links.
 #   OUT          output directory. Default dist/web.
 set -euo pipefail
@@ -37,6 +40,8 @@ CLASSIC_URL="${CLASSIC_URL:-}"
 COMMIT="${COMMIT:-}"
 if [ -z "$COMMIT" ] && [ -n "${CF_PAGES_COMMIT_SHA:-}" ]; then COMMIT="${CF_PAGES_COMMIT_SHA:0:7}"; fi
 if [ -z "$COMMIT" ]; then COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)"; fi
+VERSION="${VERSION:-}"
+if [ -z "$VERSION" ]; then VERSION="$(git describe --tags --match 'v*' 2>/dev/null || true)"; fi
 
 # Every value lands inside a JS string literal, so each one is held to a
 # shape that cannot break out of it.
@@ -69,6 +74,7 @@ case "$CHANNEL" in
   *) fail "CHANNEL must be beta, next, dev or static: $CHANNEL" ;;
 esac
 [[ "$COMMIT" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || fail "COMMIT must be 1-40 characters of [A-Za-z0-9._-]: '$COMMIT'"
+[ -z "$VERSION" ] || [[ "$VERSION" =~ ^[A-Za-z0-9._+-]{1,64}$ ]] || fail "VERSION must be 1-64 characters of [A-Za-z0-9._+-]: '$VERSION'"
 
 # OUT is replaced wholesale, so it must be new, empty or a previous build:
 # a typo in OUT must not wipe an unrelated folder.
@@ -93,9 +99,11 @@ done
 
 classic_js=null
 [ -n "$CLASSIC_URL" ] && classic_js="'$CLASSIC_URL'"
+version_js=null
+[ -n "$VERSION" ] && version_js="'$VERSION'"
 cat > "$OUT/deployment.js" <<EOF
 $MARKER
-window.CS_DEPLOYMENT = { channel: '$CHANNEL', commit: '$COMMIT', version: null, apiBase: '$API_BASE', auth: $AUTH, classicUrl: $classic_js };
+window.CS_DEPLOYMENT = { channel: '$CHANNEL', commit: '$COMMIT', version: $version_js, apiBase: '$API_BASE', auth: $AUTH, classicUrl: $classic_js };
 EOF
 
 cp deploy/static/_headers "$OUT/_headers"
@@ -123,4 +131,4 @@ while IFS= read -r f; do
   esac
 done <<< "$actual"
 
-echo "build: $OUT ($count files) channel=$CHANNEL commit=$COMMIT apiBase=${API_BASE:-same-origin} auth=$AUTH"
+echo "build: $OUT ($count files) channel=$CHANNEL commit=$COMMIT version=${VERSION:-none} apiBase=${API_BASE:-same-origin} auth=$AUTH"

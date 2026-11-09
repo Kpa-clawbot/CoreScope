@@ -91,5 +91,19 @@ test('compose publishes 443 over UDP too, for the HTTP/3 Caddy advertises', () =
   assert.ok(compose.includes('- "${HTTPS_PORT:-443}:443/udp"'), 'udp 443');
 });
 
+test('the web image names its build: APP_VERSION becomes VERSION, and compose passes both build args', () => {
+  const run = dockerfile.split('\n').find((l) => /^RUN\b.*scripts\/static\/build\.sh/.test(l));
+  assert.ok(/\bARG APP_VERSION\b/.test(dockerfile), 'ARG APP_VERSION');
+  assert.ok(/\bVERSION="\$APP_VERSION"/.test(run), run);
+  assert.ok(compose.includes('APP_VERSION: ${APP_VERSION:-}'), 'compose APP_VERSION build arg');
+  assert.ok(compose.includes('GIT_COMMIT: ${GIT_COMMIT:-}'), 'compose GIT_COMMIT build arg');
+});
+
+test('without GIT_COMMIT the image uses an id that cannot pass for a commit', () => {
+  // A bare timestamp is all digits, which a commit check would take for a
+  // short sha and compare with the server's commit.
+  assert.ok(dockerfile.includes('build-$(date +%s)'), 'fallback build-<epoch>');
+});
+
 console.log(`\nweb container: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

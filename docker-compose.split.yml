@@ -23,7 +23,10 @@
 #   SITE_ADDRESS     :80 (default), or a domain name for automatic HTTPS, which
 #                    needs the default ports: certificate issuance and the
 #                    HTTP/3 advertisement both assume 80 and 443
-#   GIT_COMMIT       the UI's cache buster; default the build time
+#   GIT_COMMIT       the UI's commit and cache buster, e.g.
+#                    $(git rev-parse --short HEAD); default build-<time>
+#   APP_VERSION      the UI's version, e.g. $(git describe --tags --match 'v*'),
+#                    shown next to the server's in the nav drawer and on /perf
 #   CHANNEL          static (default), or beta, next, dev for a badge
 #   MQTT_BIND        where the server's built-in broker is published. Default
 #                    127.0.0.1: it accepts anonymous clients, so set 0.0.0.0
@@ -53,6 +56,7 @@ services:
       dockerfile: Dockerfile.web
       args:
         GIT_COMMIT: ${GIT_COMMIT:-}
+        APP_VERSION: ${APP_VERSION:-}
         CHANNEL: ${CHANNEL:-static}
     image: corescope-web:latest
     ports:

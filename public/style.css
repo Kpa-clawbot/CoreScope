@@ -214,6 +214,9 @@
   --nav-bg2: #1a1a2e;
   --nav-text: #ffffff;
   --nav-text-muted: #cbd5e1;
+  /* Version footer when the UI and the server are different builds
+     (build-info.js). The nav is dark in both themes: amber-300 is 13:1 there. */
+  --nav-version-mismatch: var(--palette-amber-300, #fcd34d);
   --nav-active-bg: rgba(74, 158, 255, 0.15);
   --accent: #4a9eff;
   /* #1668 M2 — accessible accent for chips/badges/active buttons that put
@@ -3617,6 +3620,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 
 /* Perf dashboard */
 .perf-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; min-width: 120px; text-align: center; }
+.perf-card--mismatch { border-color: var(--status-yellow); }
 .perf-num { font-size: 24px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
 .perf-num--small { font-size: 0.85em; }
 .perf-num--small a { color: var(--text-muted); text-decoration: none; }

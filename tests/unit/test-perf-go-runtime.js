@@ -4,6 +4,7 @@ const vm = require('vm');
 const fs = require('fs');
 const assert = require('assert');
 const { loadApiBase } = require('./api-base-sandbox');
+const BUILD_INFO = fs.readFileSync('public/build-info.js', 'utf8');
 
 let passed = 0, failed = 0;
 // Tests run one after another and are awaited: most render the page, which
@@ -45,6 +46,7 @@ function makeSandbox() {
   // perf.js fetches through CSApi, as in the browser: load the real
   // deployment.js and api-base.js. Their fetch is this sandbox's fetch.
   loadApiBase(ctx);
+  vm.runInContext(BUILD_INFO, ctx);
   return { ctx, pages, getHtml: () => capturedHtml };
 }
 
@@ -330,6 +332,13 @@ test('renderVersionCard: commit link points to commit URL', () => {
   assert.ok(card.includes('href='), 'should contain an anchor tag');
 });
 
+test('renderVersionCard: a version that is not a release (edge) is text, not a broken release link', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: 'edge', commit: 'abc1234' });
+  assert.ok(!card.includes('releases/tag') && !card.includes('vedge'), card);
+  assert.ok(card.includes('edge · <a href') && card.includes('/commit/abc1234'), card);
+});
+
 test('renderVersionCard: returns empty string for null health', () => {
   const sb = loadPerf();
   assert.strictEqual(sb.ctx.renderVersionCard(null), '');
@@ -345,6 +354,46 @@ test('renderVersionCard: uses perf-num--small class (no inline style)', () => {
   const card = sb.ctx.renderVersionCard({ version: '1.0.0', commit: 'abc1234' });
   assert.ok(card.includes('perf-num--small'), 'should use perf-num--small class');
   assert.ok(!card.includes('font-size'), 'should not use inline font-size style');
+});
+
+// --- UI build next to the server's (build-info.js) ---
+
+test('renderVersionCard takes a label', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: '3.8.2', commit: 'abc1234' }, 'Server version');
+  assert.ok(card.includes('perf-label">Server version<'), card);
+});
+
+test('renderUiVersionCard: release tags and commits are linked, other versions are text', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderUiVersionCard({ separate: true, mismatch: false,
+    ui: { version: 'v3.17.0', commit: 'abc1234def' }, server: { version: 'v3.17.0', commit: 'abc1234' } });
+  assert.ok(card.includes('releases/tag/v3.17.0') && card.includes('/commit/abc1234def'), card);
+  assert.ok(card.includes('perf-label">UI version<'), card);
+  const dev = sb.ctx.renderUiVersionCard({ separate: true, mismatch: false,
+    ui: { version: 'v3.16.0-21-gdac8d9f', commit: 'build-1794206204' }, server: { version: 'edge', commit: null } });
+  assert.ok(!dev.includes('releases/tag') && !dev.includes('/commit/'), dev);
+  assert.ok(dev.includes('v3.16.0-21-gdac8d9f') && dev.includes('build-1794206204'), dev);
+});
+
+test('renderUiVersionCard says when the UI and the server differ, and is empty for the embedded UI', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderUiVersionCard({ separate: true, mismatch: true,
+    ui: { version: null, commit: 'abc1234' }, server: { version: null, commit: 'def5678' } });
+  assert.ok(card.includes('perf-card--mismatch') && /differs from the server/.test(card), card);
+  assert.strictEqual(sb.ctx.renderUiVersionCard({ separate: false, ui: {}, server: {} }), '');
+  assert.strictEqual(sb.ctx.renderUiVersionCard(null), '');
+});
+
+test('the page shows the UI card next to the server card when BuildInfo says they are separate', async () => {
+  const sb = loadPerf();
+  sb.ctx.window.BuildInfo.describe = () => ({ separate: true, mismatch: false,
+    ui: { version: 'v3.17.0', commit: 'abc1234' }, server: { version: 'v3.17.0', commit: 'abc1234' } });
+  stubFetch(sb, { ...basePerf, goRuntime }, { ...goHealth, version: '3.17.0', commit: 'abc1234' });
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 50));
+  const html = sb.getHtml();
+  assert.ok(html.includes('perf-label">Server version<') && html.includes('perf-label">UI version<'), html.slice(0, 300));
 });
 
 chain.then(() => {

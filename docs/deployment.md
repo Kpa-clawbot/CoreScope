@@ -70,7 +70,8 @@ CORESCOPE_IMAGE=ghcr.io/kpa-clawbot/corescope:edge \
 | `SITE_ADDRESS` | `:80` | A domain name turns on Caddy's automatic HTTPS and HTTP/3. Keep the default ports then: certificate issuance and the HTTP/3 advertisement both assume 80 and 443 |
 | `CORESCOPE_IMAGE` | none, required | The server image of the same version as the checkout the web image is built from: `:edge` on `master`, `:vX.Y.Z` on a release tag |
 | `DATA_DIR` | `./data` | The server's data directory |
-| `GIT_COMMIT` | the build time | The UI's cache buster |
+| `GIT_COMMIT` | `build-<time>` | The UI's commit and cache buster, e.g. `$(git rev-parse --short HEAD)` |
+| `APP_VERSION` | none | The UI's version, e.g. `$(git describe --tags --match 'v*')`. With `GIT_COMMIT`, the nav drawer and `/perf` show the UI build next to the server's and flag two different builds |
 | `CHANNEL` | `static` | `beta`, `next` or `dev` shows a badge |
 | `MQTT_BIND`, `MQTT_PORT` | `127.0.0.1`, `1883` | Where the server's built-in broker is published. It accepts anonymous clients, so set `MQTT_BIND=0.0.0.0` only to let gateways on a network you trust publish to it |
 

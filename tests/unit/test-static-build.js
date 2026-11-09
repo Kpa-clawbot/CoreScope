@@ -39,9 +39,9 @@ const OK = { API_BASE: 'https://analyzer.example', AUTH: 'false', CHANNEL: 'beta
 console.log('static build.sh');
 
 test('writes the descriptor from the environment', () => {
-  const r = run(Object.assign({}, OK, { CLASSIC_URL: 'https://analyzer.example/' }));
+  const r = run(Object.assign({}, OK, { CLASSIC_URL: 'https://analyzer.example/', VERSION: 'v3.17.0' }));
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.deepStrictEqual(descriptor(r.out), { channel: 'beta', commit: 'abc1234', version: null,
+  assert.deepStrictEqual(descriptor(r.out), { channel: 'beta', commit: 'abc1234', version: 'v3.17.0',
     apiBase: 'https://analyzer.example', auth: false, classicUrl: 'https://analyzer.example' });
 });
 
@@ -168,7 +168,18 @@ test('replaces its own previous build, and builds into an empty folder', () => {
   assert.strictEqual(r.status, 0, r.stderr);
 });
 
+test('VERSION names the build in deployment.js; by default git describe does', () => {
+  const r = run(Object.assign({}, OK, { VERSION: 'v3.17.0' }));
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(descriptor(r.out).version, 'v3.17.0');
+  const d = run(OK);
+  assert.strictEqual(d.status, 0, d.stderr);
+  const git = spawnSync('git', ['describe', '--tags', '--match', 'v*'], { cwd: ROOT, encoding: 'utf8' });
+  assert.strictEqual(descriptor(d.out).version, git.status === 0 ? git.stdout.trim() : null);
+});
+
 const refusals = [
+  ['a version with a quote', { VERSION: "v1';alert(1)//" }, /VERSION must be/],
   ['same-origin without logins', { API_BASE: 'same-origin', AUTH: 'false' }, /same-origin needs AUTH=true/],
   // The server allows no credentialed CORS, so every request of such a build
   // would be blocked: logins on another origin are refused, not built broken.

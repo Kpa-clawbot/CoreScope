@@ -86,6 +86,7 @@ upstream.
    | `AUTH` | `false` | Required, no default. Must be `false`: the server allows no credentialed CORS, so `build.sh` refuses `true` with a cross-origin `API_BASE` |
    | `CHANNEL` | `beta` | `beta`, `next` or `dev` show a badge; `static` shows none |
    | `CLASSIC_URL` | `https://analyzer.example.org` | Optional. Target of the "Open in classic" links |
+   | `VERSION` | `v3.17.0` | Optional. The UI's version, shown next to the server's. Default: `git describe --tags --match 'v*'` when the checkout has the tags |
    | `SKIP_DEPENDENCY_INSTALL` | `1` | `build.sh` needs no npm packages |
 
    `COMMIT` defaults to the first 7 characters of `CF_PAGES_COMMIT_SHA`.
