@@ -21,6 +21,11 @@
   // remembers to type: page, channel, commit, browser. GitHub's title and body
   // parameters do this without an issue template in the repository.
   function issueUrl(channel, commit, page, browser) {
+    // Account queries can contain mail-link tokens. Redact before creating
+    // the badge: account.js removes tokens with replaceState, which does not
+    // emit hashchange to refresh an already-created issue link.
+    page = String(page || '');
+    if (/^#\/account(?:\/|\?|$)/.test(page)) page = page.split('?')[0];
     var body = '**Page:** ' + (page || '') + '\n\n' +
       '**What I expected (what the classic site does):**\n\n\n' +
       '**What happened on the ' + (channel || 'beta') + ' frontend:**\n\n\n' +

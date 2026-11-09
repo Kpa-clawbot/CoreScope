@@ -92,6 +92,35 @@ test('the badge opens a new issue with page, channel, commit and browser filled 
   assert.ok(body.endsWith('Channel: beta · Commit: abc1234 · Browser: TestBrowser/1.0\n'), body);
 });
 
+test('account reports omit private query values even before a token is removed from the address bar', () => {
+  for (const auth of [false, true]) {
+    for (const route of ['#/account', '#/account/activate', '#/account/reset', '#/account/confirm-email', '#/account/unsubscribe']) {
+      const hash = route + '?token=private-link-token&section=notifications';
+      const { ctx, doc } = load({ channel: 'beta', apiBase: auth ? '' : 'https://api.example', auth,
+        classicUrl: 'https://analyzer.example' }, hash);
+      const badge = doc.getElementById('csChannelBadge');
+      const body = new URL(badge.href).searchParams.get('body');
+      assert.ok(body.startsWith('**Page:** ' + route + '\n'), body);
+      assert.ok(!body.includes('private-link-token') && !body.includes('section='), body);
+      assert.strictEqual(doc.getElementById('csClassicLink').href, 'https://analyzer.example/' + hash);
+      assert.ok(ctx.CSBeta.classicOnlyHtml('Logging in').includes('token=private-link-token&amp;section=notifications'));
+
+      // account.js uses replaceState, which does not emit hashchange. The
+      // already-created badge must be safe without waiting for a refresh.
+      ctx.location.hash = route;
+      assert.ok(!new URL(badge.href).searchParams.get('body').includes('private-link-token'));
+    }
+  }
+});
+
+test('navigating to an account token link keeps the report private and the classic transfer intact', () => {
+  const { ctx, doc, listeners } = load({ channel: 'beta', auth: false, classicUrl: 'https://analyzer.example' });
+  ctx.location.hash = '#/account/reset?token=another-private-token';
+  listeners.hashchange.forEach((fn) => fn());
+  assert.ok(new URL(doc.getElementById('csChannelBadge').href).searchParams.get('body').startsWith('**Page:** #/account/reset\n'));
+  assert.strictEqual(doc.getElementById('csClassicLink').href, 'https://analyzer.example/#/account/reset?token=another-private-token');
+});
+
 test('the classic link appears only with a classic URL, and both links follow the hash', () => {
   const none = load({ channel: 'beta', apiBase: 'https://api.example', auth: false });
   assert.strictEqual(none.doc.getElementById('csClassicLink'), null);

@@ -140,6 +140,21 @@ async function run() {
     }
   });
 
+  await test('account tokens stay out of issue reports and remain in classic transfer links', async () => {
+    for (const view of ['activate', 'reset', 'confirm-email', 'unsubscribe']) {
+      const route = '#/account/' + view;
+      const hash = route + '?token=e2e-private-link-token';
+      await page.goto(SPLIT + '/' + hash, { waitUntil: 'domcontentloaded' });
+      const classic = page.locator('#app .cs-classic-link');
+      await classic.waitFor({ timeout: 5000 });
+      const report = new URL(await page.locator('#csChannelBadge').getAttribute('href')).searchParams.get('body');
+      assert(report.startsWith('**Page:** ' + route + '\n'), 'report should retain only the account route: ' + report);
+      assert(!report.includes('e2e-private-link-token'), 'account token leaked into issue report');
+      assert(await page.locator('#csClassicLink').getAttribute('href') === API + '/' + hash, 'nav transfer lost token');
+      assert(await classic.getAttribute('href') === API + '/' + hash, 'account transfer lost token');
+    }
+  });
+
   await test('a blocked API request shows "Can\'t reach the CoreScope API"', async () => {
     const p = await context.newPage();
     await p.route(API + '/api/stats', (route) => route.abort('failed'));
