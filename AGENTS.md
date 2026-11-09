@@ -4,7 +4,8 @@ Guide for AI agents working on this codebase. Read this before writing any code.
 
 ## Architecture
 
-Go backend + static frontend. No build step. No framework. No bundler.
+Go backend + static frontend. No build step: `public/` is what the browser runs. No framework. No bundler.
+`scripts/static/build.sh` is packaging, not a build: it copies `public/` for a static host or the web container, writes `deployment.js` and fills in `__BUST__`, and never transforms code.
 
 **⚠️ The Node.js server (server.js) is DEPRECATED and has been removed. All backend code is in Go.**
 **⚠️ DO NOT create or modify any Node.js server files. All backend changes go in `cmd/server/` or `cmd/ingestor/`.**
@@ -35,9 +36,10 @@ public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT 
   style.css        — Main styles, CSS variables for theming
   live.css         — Live page styles
   home.css         — Home page styles
-  index.html       — SPA shell, script/style tags with __BUST__ placeholder (auto-replaced at server startup)
+  index.html       — SPA shell, script/style tags with __BUST__ placeholder (filled in automatically; see rule 3)
 test-fixtures/     — Real data SQLite fixture from staging (used for E2E tests)
-scripts/           — Tooling (coverage collector, fixture capture, frontend instrumentation)
+scripts/           — Tooling (coverage collector, fixture capture, frontend instrumentation;
+                     static/build.sh packages the UI for a static host or the web container)
 ```
 
 ### Data Flow
@@ -115,7 +117,7 @@ The SQLite driver (`github.com/mattn/go-sqlite3`) is cgo. **`CGO_ENABLED=0` stil
 After pushing, verify the change works in an actual browser. Use `browser profile=openclaw` against the running instance. Take a screenshot if the change is visual. If you can't validate it, say so — don't claim it works.
 
 ### 3. Cache busters are automatic — do NOT manually edit them
-Cache busters are injected automatically by the Go server at startup. The `__BUST__` placeholder in `index.html` is replaced with a Unix timestamp when the server reads the file. No manual bumping needed — every server restart picks up new asset versions. Do NOT replace `__BUST__` with hardcoded timestamps.
+Cache busters are injected automatically. The Go server replaces the `__BUST__` placeholder in every top-level page (`index.html`, `area-map.html`, `geofilter-*.html`) with a Unix timestamp at startup, so every server restart picks up new asset versions. `scripts/static/build.sh` replaces it with the commit when it packages the UI. No manual bumping needed. Do NOT replace `__BUST__` with hardcoded timestamps, and give every local script or stylesheet a new page loads `?v=__BUST__`.
 
 ### 4. Verify API response shape before building UI
 Before writing client code that consumes an API endpoint, check what the endpoint ACTUALLY returns. Use `curl` or check the server code. Don't assume fields exist — grouped packets (`groupByHash=true`) have different fields than raw packets. This has caused multiple breakages.
