@@ -9,8 +9,12 @@ run the UI in a container.
 
 This is the **anonymous** build (`AUTH=false`): it reads everything a logged-out
 visitor can read, live updates included, and links to the classic site for
-logging in and admin work. It needs **no server code change**, only one env var
-on the server.
+logging in and admin work. On the server it needs one setting,
+`CORS_ALLOWED_ORIGINS` (see [Server](#server)), on a version that includes #2362:
+`edge` now, and releases cut from `master` after it. Older servers accept the
+origin too, but they hide the `Retry-After` and `X-CoreScope-Load-Status`
+headers from it, so the warm-up banner never shows, and they refuse wildcard
+preview origins.
 
 ## How it works
 
@@ -93,13 +97,17 @@ Keep each frontend on the version its server runs: `prod` on the release tag
 your production containers run, `stage` on upstream `master` if staging runs
 the master image. Upgrade the server first, then move the branch. Move branches
 by fast-forward, so they stay identical to upstream commits (`upstream` is this
-repository, `region` is your fork):
+repository, `region` is your fork, and `vX.Y.Z` is the release your production
+server runs):
 
 ```bash
 git fetch upstream --tags
-git push region v3.16.0:refs/heads/prod
+git push region vX.Y.Z:refs/heads/prod
 git push region upstream/master:refs/heads/stage
 ```
+
+Releases up to v3.16.0 predate `scripts/static/build.sh` and have nothing to
+build, so `prod` can only follow releases cut after it.
 
 Only move `stage` to a `master` commit whose CI passed. A pull request into
 `prod` also works if you want a review step, but its merge commits make the
@@ -157,8 +165,8 @@ to this repository get no preview deployment; this is how to try one.
 ## Roll back
 
 - **The UI:** in the Pages dashboard, roll back to the previous deployment, or
-  move the deploy branch back to the previous tag
-  (`git push --force-with-lease region v3.15.0:refs/heads/prod`).
+  move the deploy branch back to the previous release tag
+  (`git push --force-with-lease region vX.Y.Z:refs/heads/prod`).
 - **Access from the static origin:** remove it from `CORS_ALLOWED_ORIGINS` and
   restart. The static UI then shows "Can't reach the CoreScope API"; the classic
   UI and embeds are unaffected.
