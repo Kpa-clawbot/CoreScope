@@ -4,7 +4,8 @@ Guide for AI agents working on this codebase. Read this before writing any code.
 
 ## Architecture
 
-Go backend + static frontend. No build step. No framework. No bundler.
+Go backend + static frontend. No build step: `public/` is what the browser runs. No framework. No bundler.
+`scripts/static/build.sh` is packaging, not a build: it copies `public/` for a static host or the web container, writes `deployment.js` and fills in `__BUST__`, and never transforms code.
 
 **⚠️ The Node.js server (server.js) is DEPRECATED and has been removed. All backend code is in Go.**
 **⚠️ DO NOT create or modify any Node.js server files. All backend changes go in `cmd/server/` or `cmd/ingestor/`.**
@@ -36,9 +37,10 @@ public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT 
   style.css        — Main styles, CSS variables for theming
   live.css         — Live page styles
   home.css         — Home page styles
-  index.html       — SPA shell, script/style tags with __BUST__ placeholder (auto-replaced at server startup)
+  index.html       — SPA shell, script/style tags with __BUST__ placeholder (filled in automatically; see rule 3)
 test-fixtures/     — Real data SQLite fixture from staging (used for E2E tests)
-scripts/           — Tooling (coverage collector, fixture capture, frontend instrumentation)
+scripts/           — Tooling (coverage collector, fixture capture, frontend instrumentation;
+                     static/build.sh packages the UI for a static host or the web container)
 ```
 
 ### Data Flow
@@ -116,7 +118,7 @@ The SQLite driver (`github.com/mattn/go-sqlite3`) is cgo. **`CGO_ENABLED=0` stil
 After pushing, verify the change works in an actual browser. Use `browser profile=openclaw` against the running instance. Take a screenshot if the change is visual. If you can't validate it, say so — don't claim it works.
 
 ### 3. Cache busters are automatic — do NOT manually edit them
-Cache busters are injected automatically by the Go server at startup. The `__BUST__` placeholder in `index.html` is replaced with a Unix timestamp when the server reads the file. No manual bumping needed — every server restart picks up new asset versions. Do NOT replace `__BUST__` with hardcoded timestamps.
+Cache busters are injected automatically. The Go server replaces the `__BUST__` placeholder in every top-level page (`index.html`, `area-map.html`, `geofilter-*.html`) with a Unix timestamp at startup, so every server restart picks up new asset versions. `scripts/static/build.sh` replaces it with the commit when it packages the UI. No manual bumping needed. Do NOT replace `__BUST__` with hardcoded timestamps, and give every local script or stylesheet a new page loads `?v=__BUST__`.
 
 ### 4. Verify API response shape before building UI
 Before writing client code that consumes an API endpoint, check what the endpoint ACTUALLY returns. Use `curl` or check the server code. Don't assume fields exist — grouped packets (`groupByHash=true`) have different fields than raw packets. This has caused multiple breakages.
@@ -211,7 +213,7 @@ The UI runs embedded in the server, in the web container, and from a static host
 | Link, download, `src` | `CSApi.url('/api/…')` |
 | WebSocket | `new WebSocket(CSApi.wsUrl('/ws'))` |
 
-- **Never** call `fetch`, `XMLHttpRequest`, `EventSource`, `navigator.sendBeacon` or `new WebSocket(url)` directly, or put a bare `/api/…` path in an `href`, `src` or `action` (assigned in code or written into markup) or in `window.open`. It works embedded and breaks on a static host. The `no-restricted-syntax` rule in `.eslintrc.json` rejects all of these in `public/*.js` (only `api-base.js` is exempt) and CI fails on it: run `npx eslint public/*.js` before pushing. Do not silence it with `eslint-disable`. `tests/e2e/test-lint-network-calls.js` pins what the rule reports; extend it when you extend the rule.
+- **Never** call `fetch`, `XMLHttpRequest`, `EventSource`, `navigator.sendBeacon` or `new WebSocket(url)` directly, or put a bare `/api/…` path in an `href`, `src` or `action` (assigned, set with `setAttribute` or written into markup) or in `window.open`, `location.assign`, `location.replace` or `location =`. It works embedded and breaks on a static host. The `no-restricted-syntax` rule in `.eslintrc.json` rejects all of these in `public/*.js` (only `api-base.js` is exempt) and CI fails on it: run `npx eslint public/*.js` before pushing. That command never sees the inline scripts and markup of `public/*.html`; `tests/e2e/test-lint-network-calls.js` applies the same rule to them, and pins what the rule reports: extend it when you extend the rule. The rule sees a path at the start of a string, a concatenation or a template; a URL assembled elsewhere and passed in a variable gets past it, so it does not replace review. Do not silence it with `eslint-disable`. The one exception is `area-map.html`, whose Server field can name another server.
 - **Logins and writes:** the anonymous static build (`CSApi.anonymous`) sends no cookies. A feature that needs a login or a write shows `CSBeta.classicOnlyHtml('…')` (or links with `CSApi.classicHref(hash)`) instead, as `account.js`, `admin.js` and `perf.js` do.
 - **Tests:** a test that runs a frontend file outside the browser must load `deployment.js` and `api-base.js` first, or `CSApi` is undefined and its fetches fail silently inside their `try` blocks. vm sandboxes: `tests/unit/api-base-sandbox.js`. jsdom: `w.eval` both files before the file under test (`tests/e2e/test-region-quick-picks.js`).
 

@@ -7,7 +7,8 @@
 # container's public origin (scheme and port included): logins and other
 # writes are checked against it. The server container is unchanged and still
 # serves everything, the classic UI included, on port 3000 inside the compose
-# network; publish it too if you want to reach that directly.
+# network; publish it too if you want to reach that directly. For per-IP
+# limits, the server trusts the web container's fixed address: see networks.
 #
 # Usage: CORESCOPE_IMAGE=ghcr.io/kpa-clawbot/corescope:edge \
 #          docker compose -f docker-compose.split.yml up -d --build
@@ -32,6 +33,11 @@
 #                    127.0.0.1: it accepts anonymous clients, so set 0.0.0.0
 #                    only to let gateways on a network you trust publish to it.
 #   MQTT_PORT        default 1883
+#   SPLIT_NET        the compose network's /24, as its first three octets.
+#                    Default 172.30.83, which puts the web container at
+#                    172.30.83.200. Change it only if Docker reports that the
+#                    pool overlaps another network, and update the server's
+#                    trustedProxies to match.
 
 services:
   corescope:
@@ -69,9 +75,28 @@ services:
     environment:
       - BACKEND=corescope:3000
       - SITE_ADDRESS=${SITE_ADDRESS:-:80}
+    networks:
+      default:
+        # The one address the server's trustedProxies lists; see networks.
+        ipv4_address: "${SPLIT_NET:-172.30.83}.200"
     depends_on:
       - corescope
     restart: unless-stopped
+
+networks:
+  # A fixed subnet gives the web container a fixed address, so the server's
+  # webSocket.trustedProxies and userManagement.trustedProxies can list it
+  # alone (172.30.83.200 by default) and still match after a recreate. Never
+  # list the whole subnet: it holds the gateway address too, and a client
+  # that reaches a published port 3000 through Docker's proxy arrives from
+  # there, so its own X-Forwarded-For would be believed.
+  default:
+    ipam:
+      config:
+        - subnet: "${SPLIT_NET:-172.30.83}.0/24"
+          # Automatic addresses come from the lower half, so no container
+          # can take the web container's.
+          ip_range: "${SPLIT_NET:-172.30.83}.0/25"
 
 volumes:
   # Caddy's TLS certificates when SITE_ADDRESS is a domain name.

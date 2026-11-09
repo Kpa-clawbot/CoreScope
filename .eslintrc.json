@@ -324,35 +324,23 @@
         "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
-        "selector": "Literal[value=/(href|src|action)=[\"']\\/api\\//]",
+        "selector": "Literal[value=/(href|src|action)=[\"']\\/api(\\/|$)/]",
         "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
-        "selector": "TemplateElement[value.raw=/(href|src|action)=[\"']\\/api\\//]",
+        "selector": "TemplateElement[value.raw=/(href|src|action)=[\"']\\/api(\\/|$)/]",
         "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
-        "selector": "AssignmentExpression[left.property.name=/^(href|src|action)$/][right.value=/^\\/api\\//]",
+        "selector": "AssignmentExpression:matches([left.property.name=/^(href|src|action|location)$/], [left.name='location']):matches([right.value=/^\\/api(\\/|$)/], [right.left.value=/^\\/api(\\/|$)/], [right.left.left.value=/^\\/api(\\/|$)/], [right.quasis.0.value.raw=/^\\/api(\\/|$)/])",
         "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
-        "selector": "AssignmentExpression[left.property.name=/^(href|src|action)$/][right.left.value=/^\\/api\\//]",
+        "selector": "CallExpression:matches([callee.name='open'], [callee.property.name='open'], [callee.object.name='location'][callee.property.name=/^(assign|replace)$/], [callee.object.property.name='location'][callee.property.name=/^(assign|replace)$/]):matches([arguments.0.value=/^\\/api(\\/|$)/], [arguments.0.left.value=/^\\/api(\\/|$)/], [arguments.0.left.left.value=/^\\/api(\\/|$)/], [arguments.0.quasis.0.value.raw=/^\\/api(\\/|$)/])",
         "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       },
       {
-        "selector": "AssignmentExpression[left.property.name=/^(href|src|action)$/][right.quasis.0.value.raw=/^\\/api\\//]",
-        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
-      },
-      {
-        "selector": "CallExpression[callee.property.name='open'][arguments.0.value=/^\\/api\\//]",
-        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
-      },
-      {
-        "selector": "CallExpression[callee.property.name='open'][arguments.0.left.value=/^\\/api\\//]",
-        "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
-      },
-      {
-        "selector": "CallExpression[callee.property.name='open'][arguments.0.quasis.0.value.raw=/^\\/api\\//]",
+        "selector": "CallExpression[callee.property.name='setAttribute'][arguments.0.value=/^(href|src|action|formaction)$/]:matches([arguments.1.value=/^\\/api(\\/|$)/], [arguments.1.left.value=/^\\/api(\\/|$)/], [arguments.1.left.left.value=/^\\/api(\\/|$)/], [arguments.1.quasis.0.value.raw=/^\\/api(\\/|$)/])",
         "message": "Every request to the CoreScope server goes through CSApi (public/api-base.js) so the UI also works from a static host or CDN: CSApi.fetch, CSApi.postJSON, CSApi.url, CSApi.wsUrl, or api() and CSAuth.request, which use it. See \"API calls\" in AGENTS.md."
       }
     ]

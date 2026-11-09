@@ -3,9 +3,10 @@
  *
  * The web container serves the static UI and forwards the API and the
  * WebSocket to a CoreScope server container, so the UI is same-origin and
- * needs no CORS. Nothing in CI builds it, so these pin what would otherwise
- * drift silently: how the UI is packaged, what Caddy forwards, the cache rules
- * a static host gets from deploy/static/_headers, and the server's address.
+ * needs no CORS. CI builds and smokes the image (deploy.yml, image-check);
+ * these pin what that run cannot see: how the UI is packaged, what Caddy
+ * forwards, the cache rules a static host gets from deploy/static/_headers,
+ * and how compose wires the server.
  */
 'use strict';
 const fs = require('fs');
@@ -103,6 +104,27 @@ test('without GIT_COMMIT the image uses an id that cannot pass for a commit', ()
   // A bare timestamp is all digits, which a commit check would take for a
   // short sha and compare with the server's commit.
   assert.ok(dockerfile.includes('build-$(date +%s)'), 'fallback build-<epoch>');
+});
+
+test('compose fixes the web container address, so the server can trust that address alone', () => {
+  // trustedProxies believes X-Forwarded-For from the listed addresses. The
+  // compose subnet also holds its gateway, where a client reaching a published
+  // port 3000 through Docker's proxy arrives from, so the docs name only the
+  // web container, and its address must survive a recreate.
+  const net = '${SPLIT_NET:-172.30.83}';
+  assert.ok(compose.includes(`subnet: "${net}.0/24"`), 'fixed subnet');
+  assert.ok(compose.includes(`ip_range: "${net}.0/25"`), 'automatic addresses must stay below .128');
+  assert.ok(compose.includes(`ipv4_address: "${net}.200"`), 'fixed web container address');
+  assert.ok(read('docs/deployment.md').includes('`172.30.83.200`'), 'docs/deployment.md names the default address');
+});
+
+test('CI builds and smokes the web image and validates the split compose file', () => {
+  // Nothing publishes the web image; without this, a broken base image,
+  // package or Caddyfile reaches an operator first.
+  const ci = read('.github/workflows/deploy.yml');
+  assert.ok(/docker buildx build \. -f Dockerfile\.web --load/.test(ci), 'image-check builds Dockerfile.web');
+  assert.ok(/curl[^\n]*\/api\/healthz/.test(ci), 'the smoke checks that /api reaches BACKEND');
+  assert.ok(/docker compose -f docker-compose\.split\.yml config --quiet/.test(ci), 'split compose validated');
 });
 
 console.log(`\nweb container: ${passed} passed, ${failed} failed`);
