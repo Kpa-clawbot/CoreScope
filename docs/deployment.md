@@ -56,7 +56,8 @@ UI from `/app/public` and the API on one origin. See
 container built from `Dockerfile.web`. The web container is Caddy: it serves the
 UI, packaged by `scripts/static/build.sh` when the image is built, and forwards
 `/api/*` and `/ws` to the server. The browser sees one origin, so the server
-needs no CORS setting and logins work as on the classic UI.
+needs no CORS setting. Logins work as on the classic UI when account
+configuration uses the public web origin, as described below.
 
 ```bash
 docker compose -f docker-compose.split.yml up -d --build
@@ -71,6 +72,13 @@ docker compose -f docker-compose.split.yml up -d --build
 | `GIT_COMMIT` | the build time | The UI's cache buster |
 | `CHANNEL` | `static` | `beta`, `next` or `dev` shows a badge |
 
+- When `userManagement.enabled` is true, set `userManagement.publicBaseUrl` in
+  the server's config to the public web origin, including its scheme and port
+  (for example, `http://localhost:8080` for a web container published on port
+  8080). Login and other state-changing requests compare the browser's `Origin`
+  or `Referer` with this configured origin; forwarding the public `Host` header
+  alone is not enough. This value also determines mail links. See
+  [account configuration](user-guide/accounts.md#2-configure).
 - The web container finds the server through `BACKEND` (`corescope:3000` in the
   compose file). Port 3000 stays inside the compose network, and the server
   still serves everything there, the classic UI included; publish it if you want
