@@ -127,5 +127,13 @@ test('CI builds and smokes the web image and validates the split compose file', 
   assert.ok(/docker compose -f docker-compose\.split\.yml config --quiet/.test(ci), 'split compose validated');
 });
 
+test('the CI smoke names the build as a release does: APP_VERSION in, version in deployment.js', () => {
+  const ci = read('.github/workflows/deploy.yml');
+  const step = ci.slice(ci.indexOf('name: Build and smoke the web image'));
+  assert.ok(/APP_VERSION: \$\{\{ steps\.meta\.outputs\.app_version \}\}/.test(step), 'APP_VERSION from the build metadata');
+  assert.ok(/--build-arg APP_VERSION="\$APP_VERSION"/.test(step), 'APP_VERSION build arg');
+  assert.ok(step.includes("version: '$APP_VERSION'"), 'deployment.js must carry the version');
+});
+
 console.log(`\nweb container: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

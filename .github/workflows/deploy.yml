@@ -981,9 +981,11 @@ jobs:
       - name: Build and smoke the web image (Dockerfile.web)
         env:
           GIT_COMMIT: ${{ steps.meta.outputs.git_commit }}
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
         run: |
           set -euo pipefail
-          docker buildx build . -f Dockerfile.web --load -t corescope-web:check --build-arg GIT_COMMIT="$GIT_COMMIT"
+          docker buildx build . -f Dockerfile.web --load -t corescope-web:check \
+            --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg APP_VERSION="$APP_VERSION"
           # BACKEND is a closed port: /api must reach it (502), not the file server (404).
           docker run -d --name web-check -p 8080:80 -e BACKEND=127.0.0.1:9 corescope-web:check
           trap 'docker logs web-check 2>&1 | tail -20; docker rm -f web-check >/dev/null' EXIT
@@ -992,7 +994,9 @@ jobs:
           echo "$page" | grep -q "app.js?v=$GIT_COMMIT" || { echo "::error::index.html is not busted with the commit"; exit 1; }
           if echo "$page" | grep -q __BUST__; then echo "::error::index.html still has __BUST__"; exit 1; fi
           grep -qi '^cache-control: no-cache' headers.txt || { echo "::error::index.html may be cached"; exit 1; }
-          curl -fsS http://localhost:8080/deployment.js | grep -q "apiBase: ''" || { echo "::error::deployment.js is not same-origin"; exit 1; }
+          dep=$(curl -fsS http://localhost:8080/deployment.js)
+          echo "$dep" | grep -q "apiBase: ''" || { echo "::error::deployment.js is not same-origin"; exit 1; }
+          echo "$dep" | grep -q "version: '$APP_VERSION'" || { echo "::error::deployment.js does not name version $APP_VERSION"; exit 1; }
           code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/healthz)
           [ "$code" = 502 ] || { echo "::error::/api/healthz answered $code, not 502 from the closed BACKEND"; exit 1; }
           echo "web image serves the packaged UI and forwards /api ✅"
