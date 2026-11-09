@@ -85,11 +85,11 @@ test('the commit defaults to the first 7 characters of CF_PAGES_COMMIT_SHA', () 
 
 test('http is accepted for localhost only, and the channel defaults to static', () => {
   for (const base of ['http://localhost:3000', 'http://127.0.0.1:13581']) {
-    const r = run({ API_BASE: base, AUTH: 'true', COMMIT: 'dev' });
+    const r = run({ API_BASE: base, AUTH: 'false', COMMIT: 'dev' });
     assert.strictEqual(r.status, 0, base + ': ' + r.stderr);
     const d = descriptor(r.out);
     assert.strictEqual(d.apiBase, base);
-    assert.strictEqual(d.auth, true);
+    assert.strictEqual(d.auth, false);
     assert.strictEqual(d.channel, 'static');
   }
 });
@@ -104,6 +104,10 @@ test('same-origin is for a host that forwards /api and /ws to the server', () =>
 
 const refusals = [
   ['same-origin without logins', { API_BASE: 'same-origin', AUTH: 'false' }, /same-origin needs AUTH=true/],
+  // The server allows no credentialed CORS, so every request of such a build
+  // would be blocked: logins on another origin are refused, not built broken.
+  ['logins on another origin', { AUTH: 'true' }, /AUTH=true needs API_BASE=same-origin/],
+  ['logins on another origin, localhost', { API_BASE: 'http://localhost:3000', AUTH: 'true' }, /AUTH=true needs API_BASE=same-origin/],
   ['no API_BASE', { API_BASE: '' }, /API_BASE is required/],
   ['http on a real host', { API_BASE: 'http://analyzer.example' }, /API_BASE must be/],
   ['a path', { API_BASE: 'https://analyzer.example/corescope' }, /API_BASE must be/],

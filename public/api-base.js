@@ -24,9 +24,10 @@
   }
 
   // credentials picks what a request may carry. Same origin keeps the
-  // browser default. Cross-origin with logins sends the session cookie.
-  // Cross-origin without logins sends nothing: the server's embed CORS tier
-  // never allows credentials, so an 'include' request would be blocked.
+  // browser default. Cross-origin with logins sends the session cookie, which
+  // no server accepts yet: build.sh refuses that combination. Cross-origin
+  // without logins sends nothing: the server's embed CORS tier never allows
+  // credentials, so an 'include' request would be blocked.
   function credentials() {
     if (!base) return 'same-origin';
     return auth ? 'include' : 'omit';

@@ -12,10 +12,12 @@
 #   API_BASE     required. https://host[:port] of the CoreScope server
 #                (http only for localhost / 127.0.0.1), or same-origin for a
 #                host that forwards /api and /ws to the server itself.
-#   AUTH         required, true or false. false builds the anonymous UI: no
-#                cookies, no login or admin controls. There is no default, so
-#                nobody turns logins on by accident. same-origin needs true:
-#                the UI then uses the server's logins exactly as embedded.
+#   AUTH         required, true or false; there is no default, so nobody turns
+#                logins on by accident. false builds the anonymous UI: no
+#                cookies, no login or admin controls. It is the only kind that
+#                works on another origin, because the server allows no
+#                credentialed CORS. true needs API_BASE=same-origin: the UI
+#                then uses the server's logins exactly as embedded.
 #   CHANNEL      beta | next | dev | static. Default static.
 #   COMMIT       shown in the UI and used as the cache buster. Default: the
 #                first 7 characters of CF_PAGES_COMMIT_SHA (set by Pages), else
@@ -43,21 +45,25 @@ origin_ok() {
   [[ "$1" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]{1,5})?$ ]]
 }
 [ -n "$API_BASE" ] || fail "API_BASE is required (the CoreScope server, e.g. https://analyzer.example.org, or same-origin)"
+case "$AUTH" in
+  true|false) ;;
+  *) fail "AUTH must be true or false (false for the anonymous build)" ;;
+esac
 API_BASE="${API_BASE%/}"
 if [ "$API_BASE" = same-origin ]; then
   [ "$AUTH" = true ] || fail "same-origin needs AUTH=true: a UI on the server's own origin uses its logins"
   API_BASE=''
 else
   origin_ok "$API_BASE" || fail "API_BASE must be https://host[:port] in lowercase, with no path (http only for localhost), or same-origin: $API_BASE"
+  # A build with logins sends the session cookie with every request, and the
+  # server never answers a credentialed cross-origin request, so the browser
+  # would block all of them.
+  [ "$AUTH" = false ] || fail "AUTH=true needs API_BASE=same-origin: the server allows no credentialed CORS, so every API request of a cross-origin build with logins would be blocked (use AUTH=false)"
 fi
 if [ -n "$CLASSIC_URL" ]; then
   CLASSIC_URL="${CLASSIC_URL%/}"
   origin_ok "$CLASSIC_URL" || fail "CLASSIC_URL must be https://host[:port], with no path: $CLASSIC_URL"
 fi
-case "$AUTH" in
-  true|false) ;;
-  *) fail "AUTH must be true or false (false for the anonymous build)" ;;
-esac
 case "$CHANNEL" in
   beta|next|dev|static) ;;
   *) fail "CHANNEL must be beta, next, dev or static: $CHANNEL" ;;

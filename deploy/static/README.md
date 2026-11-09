@@ -77,7 +77,7 @@ upstream.
    | Name | Example | Notes |
    |---|---|---|
    | `API_BASE` | `https://analyzer.example.org` | The CoreScope server. https, lowercase, no path |
-   | `AUTH` | `false` | Required, no default. `false` until the server supports credentialed CORS |
+   | `AUTH` | `false` | Required, no default. Must be `false`: the server allows no credentialed CORS, so `build.sh` refuses `true` with a cross-origin `API_BASE` |
    | `CHANNEL` | `beta` | `beta`, `next` or `dev` show a badge; `static` shows none |
    | `CLASSIC_URL` | `https://analyzer.example.org` | Optional. Target of the "Open in classic" links |
    | `SKIP_DEPENDENCY_INSTALL` | `1` | `build.sh` needs no npm packages |
