@@ -111,26 +111,123 @@
     }, 100);
   }
 
-  // #1461 followup: node-detail inset map tile layer that honors the
-  // customizer dark-tile-provider pick (#1420/#1430). Falls back to
-  // window.getTileUrl() output if the registry isn't loaded. Also applies
-  // the provider's invert CSS filter to the tile pane when needed.
+  // #1470 followup, node-map light-tiles refactor: the node detail inset map
+  // (and every page reusing this helper via window._applyTilesToNodeMap —
+  // node-reach-map.js, rx-coverage.js) resolves tiles through the shared
+  // MC_resolveTile() registry resolver, so light mode honours the same
+  // provider pick / operator lightDefault as the main map, carries the Carto
+  // key even when /api/config/client lands after the map is created, and
+  // passes the provider's attribution/maxZoom/refUrl/invertFilter through.
+  //
+  // Reactivity: maps register in one shared window slot (__mcNodeTileSync);
+  // a single mc-tile-provider-changed listener + a single data-theme
+  // MutationObserver re-sync every live map in place — old layers are removed
+  // before the new ones are added, never stacked. Maps whose container has
+  // left the DOM are pruned at sync time, so SPA navigation (removeDetailMap,
+  // reach-map destroy) cannot leak listeners or touch removed maps.
+  // Deliberately self-contained (no other nodes.js helpers): the #1470 unit
+  // test extracts just this function and runs it in a sandbox.
   function _applyTilesToNodeMap(map) {
-    if (!map) return;
-    var tileUrl = (window.getTileUrl && window.getTileUrl()) || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-    var provider = window.getActiveTileProvider && window.getActiveTileProvider();
-    var attribution = (provider && provider.attribution) || '© OpenStreetMap contributors';
-    var layer = L.tileLayer(tileUrl, { maxZoom: 18, attribution: attribution }).addTo(map);
-    // Esri 2-layer provider: add the labels reference overlay too
-    if (provider && provider.refUrl) {
-      try { L.tileLayer(provider.refUrl, { maxZoom: 18 }).addTo(map); } catch (_e) {}
+    if (!map) return null;
+    var st = (window.__mcNodeTileSync = window.__mcNodeTileSync || { maps: [], wired: false, onChange: null });
+
+    function themeIsDark() {
+      if (typeof window.MC_isDarkTheme === 'function') return !!window.MC_isDarkTheme();
+      try { // canonical check mirrors map-tile-providers.js _isDark()
+        var attr = document.documentElement.getAttribute('data-theme');
+        if (attr === 'dark') return true;
+        if (attr === 'light') return false;
+        return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      } catch (_e) { return false; }
     }
-    // Apply invert CSS filter to the tile pane if the provider needs it
-    try {
-      var pane = map.getPane && map.getPane('tilePane');
-      if (pane) pane.style.filter = (provider && provider.invertFilter) ? provider.invertFilter : '';
-    } catch (_e) {}
-    return layer;
+
+    function resolve() {
+      if (window.MC_resolveTile) {
+        try { return window.MC_resolveTile(themeIsDark()); } catch (_e) {}
+      }
+      // Registry module absent: fall back to what getTileUrl() knows.
+      var url = (window.getTileUrl && window.getTileUrl()) || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+      var provider = window.getActiveTileProvider && window.getActiveTileProvider();
+      return {
+        url: url,
+        attribution: (provider && provider.attribution) || '© OpenStreetMap contributors',
+        maxZoom: 18,
+        refUrl: (provider && provider.refUrl) || null,
+        invertFilter: (provider && provider.invertFilter) || null
+      };
+    }
+
+    // Build the (reusable) layer for one map record: resolve → remove old
+    // layers → add new ones → apply pane filter. Registered records carry
+    // this closure as apply(), so the single shared listener can re-sync
+    // every live map.
+    function makeApply(rec) {
+      return function () {
+        var r = resolve();
+        if (rec.layer) { try { map.removeLayer(rec.layer); } catch (_e) {} rec.layer = null; }
+        if (rec.refLayer) { try { map.removeLayer(rec.refLayer); } catch (_e) {} rec.refLayer = null; }
+        try {
+          rec.layer = L.tileLayer(r.url, { maxZoom: r.maxZoom || 18, attribution: r.attribution || '© OpenStreetMap contributors' }).addTo(map);
+          // Esri 2-layer provider: labels come as a separate reference tileset
+          // stacked on the base layer.
+          if (r.refUrl) {
+            rec.refLayer = L.tileLayer(r.refUrl, { maxZoom: r.maxZoom || 18, attribution: r.attribution || '© OpenStreetMap contributors' }).addTo(map);
+          }
+        } catch (_e) { return rec.layer; }
+        // Apply the invert CSS filter to the tile pane when the provider needs
+        // it (dark-inverted light styles like positron-dark / carto-voyager-dark).
+        try {
+          var pane = map.getPane && map.getPane('tilePane');
+          if (pane) pane.style.filter = r.invertFilter || '';
+        } catch (_e) {}
+        return rec.layer;
+      };
+    }
+
+    var rec = { map: map, layer: null, refLayer: null, apply: null };
+    rec.apply = makeApply(rec);
+    // Re-registering the same map (rx-coverage re-init) replaces its record
+    // instead of stacking a second sync for it. Its old layers must go too —
+    // otherwise a leaflet rewire leaves two base layers stacked on the map.
+    (function replacePrevRec() {
+      for (var i = 0; i < st.maps.length; i++) {
+        if (st.maps[i].map === map) {
+          var prev = st.maps.splice(i, 1)[0];
+          if (prev.layer) { try { map.removeLayer(prev.layer); } catch (_e) {} }
+          if (prev.refLayer) { try { map.removeLayer(prev.refLayer); } catch (_e) {} }
+          break;
+        }
+      }
+    })();
+    st.maps.push(rec);
+
+    function onChange(e) {
+      // Ignore a pick for the other theme: it doesn't change these tiles.
+      var type = (e && e.detail && e.detail.type) || null;
+      if (type && type !== (themeIsDark() ? 'dark' : 'light')) return;
+      var kept = [];
+      for (var i = 0; i < st.maps.length; i++) {
+        var r2 = st.maps[i];
+        var container = r2.map && r2.map.getContainer && r2.map.getContainer();
+        if (container && container.isConnected === false) continue; // page gone — prune silently
+        kept.push(r2);
+        try { r2.apply(); } catch (_err) {}
+      }
+      st.maps = kept;
+    }
+
+    if (!st.wired) {
+      st.onChange = onChange; // exposed for tests/sandboxes without MutationObserver
+      try { window.addEventListener('mc-tile-provider-changed', onChange); } catch (_e) {}
+      if (typeof MutationObserver === 'function') {
+        try {
+          new MutationObserver(function () { onChange(null); })
+            .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+        } catch (_e) {}
+      }
+      st.wired = true;
+    }
+    return rec.apply();
   }
   // Exposed so the node-reach link-map (node-reach-map.js) reuses the user's
   // configured tile provider instead of hardcoding OSM.

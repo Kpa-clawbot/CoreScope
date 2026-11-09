@@ -198,6 +198,10 @@
   window.MC_setServerDefaultTileProvider = setServerDefault;
   window.MC_setServerDefaultLightTileProvider = setServerDefaultLight;
   window.MC_applyTileFilter             = applyTileFilter;
+  // Theme truth used by every map surface (data-theme attr, else OS preference).
+  // roles.js helpers consult this at call time instead of re-deriving it, so a
+  // theme flip and a pixel-perfect tile pick can't disagree about "dark".
+  window.MC_isDarkTheme                 = _isDark;
 
   /**
    * Resolve a registry id to a concrete tile-URL string, invoking function-typed
@@ -210,6 +214,114 @@
     var u = p && (p.url || p.baseUrl);
     if (!u) return fallback;
     return (typeof u === 'function') ? u() : u;
+  };
+
+  // ── Shared tile resolution (single source of truth) ──────────────────────
+  //
+  // Before this block every surface resolved its own basemap: map.js/_resolveTileUrl
+  // and live.js/_liveResolveTile honoured the light provider pick, while roles.js'
+  // getTileUrl() light branch returned the bare TILE_LIGHT constant and every other
+  // consumer (node detail inset, node reach, rx-coverage, analytics minimap) went
+  // through that asymmetric path — wrong basemap in light mode, keyless Carto tiles
+  // when config raced page load, and provider extras (attribution, maxZoom,
+  // refUrl, invertFilter) dropped on the floor. All of them now come here.
+
+  // Bare-constant fallbacks for the sandboxed/no-registry case (roles.js is the
+  // normal home of TILE_DARK/TILE_LIGHT and loads before this file; keep the
+  // literals in sync with roles.js if either ever changes).
+  var _FALLBACK_TILE_DARK  = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  var _FALLBACK_TILE_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+  var _ATTR_CARTO  = '© OpenStreetMap © CartoDB';
+  var _ATTR_OSM    = '© OpenStreetMap contributors';
+  var _DEFAULT_MAX_ZOOM = 19;
+
+  function _constantTileUrl(dark) {
+    // Prefer the roles.js-scalar when present (it carries explicit legacy
+    // overrides and keyed defaults after MeshConfigReady resolves).
+    try {
+      if (dark && typeof TILE_DARK === 'string' && TILE_DARK) return TILE_DARK;
+      if (!dark && typeof TILE_LIGHT === 'string' && TILE_LIGHT) return TILE_LIGHT;
+    } catch (_e) { /* not loaded — use the literals */ }
+    return dark ? _FALLBACK_TILE_DARK : _FALLBACK_TILE_LIGHT;
+  }
+
+  /**
+   * Resolve the effective tile provider for a theme into a plain descriptor:
+   *   { type, id, url, attribution, maxZoom, refUrl, invertFilter }
+   * `url` is always a resolved string — provider `url`/`baseUrl` builders are
+   * invoked here so callers never hand L.tileLayer a function (#1614).
+   * Resolution happens at call time (never cached): MC_initTileRegistry(true)
+   * reassigns the registry when async config arrives, and localStorage picks
+   * can change at any moment.
+   *
+   * Precedence:
+   *   1. Explicit operator override (cfg.tiles.dark|light or
+   *      map.tiles.darkUrl|lightUrl — tracked by roles.js in
+   *      window.MC_LEGACY_TILE_OVERRIDE; beats everything).
+   *   2. User/operator registry pick for the theme (MC_getDarkTileProvider /
+   *      MC_getLightTileProvider — localStorage, then server default, then the
+   *      shipped carto defaults).
+   *   3. The TILE_DARK/TILE_LIGHT constants (pre-config load or a registry
+   *      the config has emptied out).
+   */
+  window.MC_resolveTile = function (isDark) {
+    isDark = !!isDark;
+    var desc = {
+      type: isDark ? 'dark' : 'light',
+      id: null,
+      url: null,
+      attribution: _ATTR_CARTO,
+      maxZoom: _DEFAULT_MAX_ZOOM,
+      refUrl: null,
+      invertFilter: null,
+      override: false
+    };
+    // 1. Explicit operator override beats user picks
+    try {
+      var ov = window.MC_LEGACY_TILE_OVERRIDE;
+      if (ov && ov[desc.type]) {
+        desc.url = _constantTileUrl(isDark);
+        desc.attribution = _ATTR_OSM;
+        desc.override = true;
+        return desc;
+      }
+    } catch (_e) { /* fall through to the registry */ }
+    // 2. Registry pick for this theme (honours localStorage + server defaults).
+    // Reads the PUBLIC getters/registry ref, not the private internals: they're
+    // the stable contract (window.MC_TILE_PROVIDERS is kept in sync by
+    // MC_initTileRegistry after every rebuild) and they let test sandboxes
+    // inject mocks the same way the #1614 harness does.
+    var id = null;
+    try {
+      if (isDark && typeof window.MC_getDarkTileProvider === 'function') id = window.MC_getDarkTileProvider();
+      else if (!isDark && typeof window.MC_getLightTileProvider === 'function') id = window.MC_getLightTileProvider();
+    } catch (_e) { id = null; }
+    var reg = null;
+    try { reg = window.MC_TILE_PROVIDERS || null; } catch (_e) { reg = null; }
+    if (!reg) reg = REGISTRY;
+    var _pick = function (pid) {
+      return (pid && Object.prototype.hasOwnProperty.call(reg, pid)) ? reg[pid] : null;
+    };
+    var p = _pick(id);
+    // The stored/default id may reference a provider the running config has
+    // disabled; keep the old map.js/live.js behaviour of falling back to the
+    // shipped default entry before giving up on the registry.
+    var defId = isDark ? DEFAULT_ID : DEFAULT_ID_LIGHT;
+    if (!p) p = _pick(defId);
+    if (p && p.type && p.type !== desc.type) p = null; // registry is authoritative on types
+    if (!p) { // 3. Bare constants (roles.js scalars or shipped literals)
+      if (!id) desc.id = null;
+      desc.url = _constantTileUrl(isDark);
+      return desc;
+    }
+    var u = p.url || p.baseUrl;
+    desc.id = id;
+    desc.url = (typeof u === 'function') ? u() : u;
+    desc.attribution = p.attribution || _ATTR_CARTO;
+    desc.maxZoom = p.maxZoom || _DEFAULT_MAX_ZOOM;
+    desc.refUrl = p.refUrl || null;
+    desc.invertFilter = p.invertFilter || null;
+    return desc;
   };
 
 

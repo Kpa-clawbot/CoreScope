@@ -1551,9 +1551,17 @@
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    // #1420 — multi-provider dark-tile picker. Light mode unchanged.
+    // #1420 — multi-provider dark-tile picker. Light mode unchanged (live page).
     let _liveDarkRefLayer = null;
+    // Delegates to the shared registry resolver (MC_resolveTile); same deal as
+    // map.js — the legacy body only runs if map-tile-providers.js didn't load.
     function _liveResolveTile(dark) {
+      if (window.MC_resolveTile) {
+        try {
+          const r = window.MC_resolveTile(!!dark);
+          return { url: r.url, attribution: r.attribution, refUrl: r.refUrl, maxZoom: r.maxZoom };
+        } catch (_e) { /* fall through to the legacy body */ }
+      }
       const reg = window.MC_TILE_PROVIDERS || {};
       if (!dark) {
         const lightId = (typeof window.MC_getLightTileProvider === 'function') ? window.MC_getLightTileProvider() : null;
@@ -1596,9 +1604,9 @@
       }
     }
     const _liveInitTile = _liveResolveTile(isDark);
-    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
+    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: _liveInitTile.maxZoom || 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
     if (isDark && _liveInitTile.refUrl) {
-      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
+      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: _liveInitTile.maxZoom || 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
     }
     if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
   

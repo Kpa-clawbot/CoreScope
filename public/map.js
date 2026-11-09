@@ -668,9 +668,18 @@
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    // #1420 — multi-provider dark-tile picker. Light mode unchanged.
+    // #1420 — multi-provider dark-tile picker. Light mode unchanged (map page).
     let _darkRefLayer = null;  // Esri-only: labels overlay
+    // Delegates to the shared registry resolver (MC_resolveTile) so every map
+    // surface honours the same provider picks/overrides; the legacy body below
+    // only runs if map-tile-providers.js somehow didn't load.
     function _resolveTileUrl(dark) {
+      if (window.MC_resolveTile) {
+        try {
+          const r = window.MC_resolveTile(!!dark);
+          return { url: r.url, attribution: r.attribution, refUrl: r.refUrl, maxZoom: r.maxZoom };
+        } catch (_e) { /* fall through to the legacy body */ }
+      }
       const reg = window.MC_TILE_PROVIDERS || {};
       if (!dark) {
         const lightId = (typeof window.MC_getLightTileProvider === 'function') ? window.MC_getLightTileProvider() : null;
@@ -715,10 +724,10 @@
     const _initTile = _resolveTileUrl(isDark);
     const tileLayer = L.tileLayer(_initTile.url, {
       attribution: _initTile.attribution,
-      maxZoom: 19,
+      maxZoom: _initTile.maxZoom || 19,
     }).addTo(autoLayerGroup);
     if (isDark && _initTile.refUrl) {
-      _darkRefLayer = L.tileLayer(_initTile.refUrl, { maxZoom: 19, attribution: _initTile.attribution }).addTo(autoLayerGroup);
+      _darkRefLayer = L.tileLayer(_initTile.refUrl, { maxZoom: _initTile.maxZoom || 19, attribution: _initTile.attribution }).addTo(autoLayerGroup);
     }
     if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
     
