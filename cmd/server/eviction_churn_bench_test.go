@@ -112,7 +112,7 @@ func TestEvictionChurnOwnsOnlyLivePackets(t *testing.T) {
 func BenchmarkEvictionOwnershipChurn(b *testing.B) {
 	const batch, fanout, cycles = 1000, 16, 8
 	b.ReportAllocs()
-	var retained, tracked, orphans float64
+	var retained, tracked, orphans, livePackets, liveObservations float64
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		runtime.GC()
@@ -131,14 +131,24 @@ func BenchmarkEvictionOwnershipChurn(b *testing.B) {
 		b.StopTimer()
 		runtime.GC()
 		runtime.ReadMemStats(&after)
+		packetCount, observationCount := len(s.packets), 0
+		for _, tx := range s.packets {
+			observationCount += len(tx.Observations)
+		}
+		if packetCount != batch || observationCount != batch*fanout {
+			b.Fatalf("retained %d packets/%d observations, want %d/%d", packetCount, observationCount, batch, batch*fanout)
+		}
 		retained += float64(int64(after.HeapAlloc) - int64(before.HeapAlloc))
 		tracked += float64(s.trackedBytes)
 		orphans += float64(evictedNodePacketCount(s))
+		livePackets += float64(packetCount)
+		liveObservations += float64(observationCount)
 		runtime.KeepAlive(s)
 		b.StartTimer()
 	}
 	b.ReportMetric(retained/float64(b.N), "retained-B/op")
 	b.ReportMetric(tracked/float64(b.N), "tracked-B/op")
 	b.ReportMetric(orphans/float64(b.N), "orphan-tx/op")
-	b.ReportMetric(batch, "live-tx/op")
+	b.ReportMetric(livePackets/float64(b.N), "live-tx/op")
+	b.ReportMetric(liveObservations/float64(b.N), "live-obs/op")
 }
