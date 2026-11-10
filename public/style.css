@@ -2068,6 +2068,14 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .node-detail { padding: 4px 0; }
 .node-detail-name { font-size: 20px; font-weight: 700; margin: 12px 0 4px; }
 .node-detail-role { margin-bottom: 12px; }
+.node-quick-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.node-quick-actions .btn-primary {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; padding: 4px 10px; text-decoration: none;
+}
+@media (pointer: coarse) {
+  .node-quick-actions .btn-primary { min-height: 44px; min-width: 44px; }
+}
 .node-detail-section {
   background: var(--card-bg); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px; margin-bottom: 8px;
