@@ -29,7 +29,7 @@ Guide for existing CoreScope users switching from the Node.js Docker image to th
 
 ## Prerequisites
 
-- **Docker** 20.10+ and **Docker Compose** v2 (verify: `docker compose version`)
+- **Docker** 23.0+ (or 20.10+ with `DOCKER_BUILDKIT=1`, since this guide builds the image) and **Docker Compose** v2 (verify: `docker compose version`)
 - An existing CoreScope deployment running the Node.js image
 - The repository cloned locally (needed to build the Go image):
   ```bash
