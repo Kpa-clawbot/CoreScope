@@ -86,7 +86,10 @@
       map: map,
       setLinks: setLinks,
       get bounds() { return bounds; },
-      destroy: function () { try { map.remove(); } catch (e) {} }
+      destroy: function () {
+        try { if (window.__mcNodeTileSyncUnregister) window.__mcNodeTileSyncUnregister(map); } catch (e) {}
+        try { map.remove(); } catch (e) {}
+      }
     };
   }
 

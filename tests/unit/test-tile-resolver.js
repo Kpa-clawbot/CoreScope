@@ -200,6 +200,20 @@ test('resolve(light, stored pick disabled by config) → falls back cleanly', ()
   assert.ok(r.url, 'still resolves a URL — got ' + r.url);
   assert.ok(!/voyager/.test(r.url), 'disabled pick not used — got ' + r.url);
   assert.strictEqual(r.override, false);
+  // Review followup: the id must name the entry the URL actually came from.
+  // Here even the shipped default is gone from the registry (carto disabled
+  // entirely), so the constant fallback applies and no id exists.
+  assert.strictEqual(r.id, null, 'no id for the constant fallback — got ' + r.id);
+});
+
+test('resolve(desc.id) reports the server default entry when the stored pick is disabled', () => {
+  const ctx = makeSandbox({ theme: 'dark' });
+  ctx.window.MC_MAP_CFG = { tiles: { darkDefault: 'carto-dark', providers: { carto: { enabled: true } } } };
+  loadResolver(ctx);
+  ctx.window.localStorage.setItem('mc-dark-tile-provider', 'nonexistent'); // invalid id → default
+  const r = ctx.window.MC_resolveTile(true);
+  assert.strictEqual(r.id, 'carto-dark', 'id = default entry — got ' + r.id);
+  assert.ok(/dark_all/.test(r.url));
 });
 
 test('resolve(light, server lightDefault=carto-voyager, no user pick) → voyager', () => {
@@ -438,6 +452,56 @@ test('node helper: re-apply on the SAME map replaces the record, one base layer'
   assert.strictEqual(live.length, 1, 'no stacking on same-map re-init — got ' + live.length +
     (live.length ? ' url=' + live[0].url : ''));
   assert.strictEqual(ctx.window.__mcNodeTileSync.maps.length, 1, 'no duplicate sync records');
+});
+
+// ── Review followup: bounded tile-sync registry (AGENTS.md rule 0) ──────────
+
+test('node helper: registration prunes records of maps gone from the DOM (bounded)', () => {
+  const ctx = makeSandbox({ theme: 'light' });
+  loadResolver(ctx);
+  const mock = makeL();
+  ctx.L = mock.L;
+  vm.runInContext(extractApplyTilesHelper(), ctx, { filename: 'nodes.js#_applyTilesToNodeMap' });
+  // Walk through 50 node pages WITHOUT any theme/provider change (so the
+  // shared onChange prune never runs) — the registry must still stay bounded.
+  for (let i = 0; i < 50; i++) {
+    const map = mock.newMap();
+    ctx._map = map;
+    vm.runInContext('window.__lastNodeTileLayer = _applyTilesToNodeMap(_map);', ctx);
+    map._connected = false; // SPA navigated away (no explicit unregister call)
+  }
+  assert.strictEqual(ctx.window.__mcNodeTileSync.maps.length, 1,
+    'one live record after 50 navigations — got ' + ctx.window.__mcNodeTileSync.maps.length);
+});
+
+test('node helper: explicit unregister drops the record + its layers', () => {
+  const ctx = makeSandbox({ theme: 'light' });
+  loadResolver(ctx);
+  const mock = makeL();
+  const map = loadNodeHelper(ctx, mock.newMap, mock.L);
+  assert.ok(typeof ctx.window.__mcNodeTileSyncUnregister === 'function',
+    'unregister hook exists after the first map registers');
+  assert.strictEqual(ctx.window.__mcNodeTileSync.maps.length, 1);
+  ctx.window.__mcNodeTileSyncUnregister(map);
+  assert.strictEqual(ctx.window.__mcNodeTileSync.maps.length, 0, 'record dropped');
+  // The layers were also detached from the map (removeDetailMap removes the
+  // map right after, but the hook must not leak a layer for safety).
+  assert.strictEqual(map._layers.filter(l => !l._removed).length, 0, 'layers detached');
+  // Firing the shared listener afterwards must not resurrect anything.
+  ctx.fire('mc-tile-provider-changed', { type: 'mc-tile-provider-changed', detail: { fromConfig: true } });
+  assert.strictEqual(ctx.window.__mcNodeTileSync.maps.length, 0, 'stays empty');
+});
+
+test('node helper: unregister is idempotent and tolerates unknown maps', () => {
+  const ctx = makeSandbox({ theme: 'light' });
+  loadResolver(ctx);
+  const mock = makeL();
+  const map = loadNodeHelper(ctx, mock.newMap, mock.L);
+  ctx.window.__mcNodeTileSyncUnregister(map);
+  ctx.window.__mcNodeTileSyncUnregister(map); // second call: no throw
+  ctx.window.__mcNodeTileSyncUnregister(null); // null: no throw
+  ctx.window.__mcNodeTileSyncUnregister({});   // unknown map: no throw
+  assert.strictEqual(ctx.window.__mcNodeTileSync.maps.length, 0);
 });
 
 console.log(`\ntile resolver: ${passed} passed, ${failed} failed`);

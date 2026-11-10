@@ -303,19 +303,19 @@
       return (pid && Object.prototype.hasOwnProperty.call(reg, pid)) ? reg[pid] : null;
     };
     var p = _pick(id);
+    var pickedId = p ? id : null;
     // The stored/default id may reference a provider the running config has
     // disabled; keep the old map.js/live.js behaviour of falling back to the
     // shipped default entry before giving up on the registry.
     var defId = isDark ? DEFAULT_ID : DEFAULT_ID_LIGHT;
-    if (!p) p = _pick(defId);
-    if (p && p.type && p.type !== desc.type) p = null; // registry is authoritative on types
+    if (!p) { p = _pick(defId); pickedId = p ? defId : null; }
+    if (p && p.type && p.type !== desc.type) { p = null; pickedId = null; } // registry is authoritative on types
     if (!p) { // 3. Bare constants (roles.js scalars or shipped literals)
-      if (!id) desc.id = null;
       desc.url = _constantTileUrl(isDark);
       return desc;
     }
     var u = p.url || p.baseUrl;
-    desc.id = id;
+    desc.id = pickedId; // the entry the URL actually came from
     desc.url = (typeof u === 'function') ? u() : u;
     desc.attribution = p.attribution || _ATTR_CARTO;
     desc.maxZoom = p.maxZoom || _DEFAULT_MAX_ZOOM;

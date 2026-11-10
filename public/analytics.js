@@ -2471,7 +2471,7 @@
       const _tileR = (typeof window.MC_resolveTile === 'function')
         ? window.MC_resolveTile(typeof window.MC_isDarkTheme === 'function' ? window.MC_isDarkTheme() : false)
         : null;
-      L.tileLayer(getTileUrl(), { maxZoom: (_tileR && _tileR.maxZoom) || 18 }).addTo(map);
+      L.tileLayer((_tileR && _tileR.url) || getTileUrl(), { maxZoom: (_tileR && _tileR.maxZoom) || 18 }).addTo(map);
 
       const latlngs = [];
       nodesWithLoc.forEach((n, i) => {

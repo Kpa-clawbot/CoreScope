@@ -100,7 +100,13 @@
     if (owner && detailMap && !owner.contains(detailMap.getContainer())) return;
     clearTimeout(detailMapResizeTimer);
     detailMapResizeTimer = null;
-    if (detailMap) { detailMap.remove(); detailMap = null; }
+    if (detailMap) {
+      // Drop the tile-sync record before Leaflet tears the map down (#review:
+      // the shared onChange prune cannot see an attached container).
+      try { if (window.__mcNodeTileSyncUnregister) window.__mcNodeTileSyncUnregister(detailMap); } catch (_e) {}
+      detailMap.remove();
+      detailMap = null;
+    }
   }
 
   function resizeDetailMapAfterLayout() {
@@ -184,8 +190,25 @@
       };
     }
 
+    // Bounded registry (AGENTS.md rule 0): records are dropped (a) when a new
+    // map registers and theirs is disconnected, and (b) explicitly via
+    // window.__mcNodeTileSyncUnregister(map) from the destroy paths of every
+    // consumer — removeDetailMap (nodes.js), node-reach-map.js, rx-coverage.js.
+    // Explicit unregister covers maps whose container stays attached after
+    // map.remove(), which the isConnected check cannot see.
+    function pruneStaleRecords() {
+      var kept = [];
+      for (var k = 0; k < st.maps.length; k++) {
+        var container = st.maps[k].map && st.maps[k].map.getContainer && st.maps[k].map.getContainer();
+        if (container && container.isConnected === false) continue;
+        kept.push(st.maps[k]);
+      }
+      st.maps = kept;
+    }
+
     var rec = { map: map, layer: null, refLayer: null, apply: null };
     rec.apply = makeApply(rec);
+    pruneStaleRecords();
     // Re-registering the same map (rx-coverage re-init) replaces its record
     // instead of stacking a second sync for it. Its old layers must go too —
     // otherwise a leaflet rewire leaves two base layers stacked on the map.
@@ -205,16 +228,25 @@
       // Ignore a pick for the other theme: it doesn't change these tiles.
       var type = (e && e.detail && e.detail.type) || null;
       if (type && type !== (themeIsDark() ? 'dark' : 'light')) return;
-      var kept = [];
+      pruneStaleRecords();
       for (var i = 0; i < st.maps.length; i++) {
-        var r2 = st.maps[i];
-        var container = r2.map && r2.map.getContainer && r2.map.getContainer();
-        if (container && container.isConnected === false) continue; // page gone — prune silently
-        kept.push(r2);
-        try { r2.apply(); } catch (_err) {}
+        try { st.maps[i].apply(); } catch (_err) {}
       }
-      st.maps = kept;
     }
+
+    // Explicit unregister for destroy paths (see pruneStaleRecords note).
+    // Wire-once: every consumer guard-checks typeof before calling.
+    window.__mcNodeTileSyncUnregister = function (m) {
+      if (!m || !st) return;
+      for (var i = 0; i < st.maps.length; i++) {
+        if (st.maps[i].map === m) {
+          var gone = st.maps.splice(i, 1)[0];
+          if (gone.layer) { try { m.removeLayer(gone.layer); } catch (_e) {} }
+          if (gone.refLayer) { try { m.removeLayer(gone.refLayer); } catch (_e) {} }
+          break;
+        }
+      }
+    };
 
     if (!st.wired) {
       st.onChange = onChange; // exposed for tests/sandboxes without MutationObserver
