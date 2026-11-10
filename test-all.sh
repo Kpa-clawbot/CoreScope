@@ -172,6 +172,7 @@ node tests/unit/test-live-dt-cap-1524.js
 node tests/unit/test-live-legend-helper.js
 node tests/unit/test-live-multibyte-filter.js
 node tests/unit/test-live-region-filter.js
+node tests/unit/test-live-radio-filter.js
 node tests/unit/test-live.js
 node tests/unit/test-map-clustering.js
 node tests/unit/test-map-estimated.js

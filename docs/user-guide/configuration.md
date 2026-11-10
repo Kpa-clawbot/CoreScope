@@ -184,6 +184,23 @@ Lower values = fresher data but more server load.
 |-------|---------|-------------|
 | `liveMap.propagationBufferMs` | `5000` | How long to buffer observations before animating |
 
+### Live radio filter
+
+```json
+"liveRadioFilters": [
+  { "label": "MediaMesh", "freqMHz": 911.15 }
+]
+```
+
+Adds a **Radio** picker to the live page. Choosing an entry shows only packets that every
+observer heard on that frequency, which isolates a second mesh that multi-radio observers
+listen to next to the main channel. Each observation's radio setting comes from the observer's
+radio history: its status `radio`, plus `radios: [{id, radio}]` and a per-packet `rx_radio_id`
+for multi-radio observers. A packet that was also heard on another setting, or by an observer
+that never reported its radio, is hidden. The choice is remembered per browser, and
+`#/live?radioOnly=MediaMesh` (label or MHz) selects it from a link. Leave the list empty to
+hide the picker.
+
 ## HTTPS
 
 ```json

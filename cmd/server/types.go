@@ -1114,6 +1114,8 @@ type ClientConfigResponse struct {
 	// its companion is linked.
 	ClientRxRequireLinkedCompanion bool             `json:"clientRxRequireLinkedCompanion,omitempty"`
 	PathTrust                      *PathTrustConfig `json:"pathTrust,omitempty"`
+	// Radio channels the /live page can narrow to (config liveRadioFilters).
+	LiveRadioFilters []LiveRadioFilter `json:"liveRadioFilters"`
 	// Present only when user management is on, so the payload is unchanged
 	// for every instance that leaves it off.
 	UserManagement *ClientUserManagement `json:"userManagement,omitempty"`

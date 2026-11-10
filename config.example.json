@@ -331,6 +331,8 @@
     "maxNodes": 2000,
     "_comment_maxNodes": "Maximum nodes the /live map fetches (and renders) in one page. Default 2000. Raise this on deployments that have measured perf headroom on mid-range mobile (heap + frame-time). Server clamps to [100, 20000]: misconfigured values are coerced silently. Also caps the matching /api/packets?limit fetch the live VCR-rewind code uses. Reporter: #1574."
   },
+  "liveRadioFilters": [],
+  "_comment_liveRadioFilters": "Radio channels the /live page's Radio picker can narrow to: packets heard ONLY on that frequency by every observer that reported them. For a second mesh on its own frequency, heard by multi-radio observers (status `radios` + per-packet `rx_radio_id`). Example: [{\"label\": \"MediaMesh\", \"freqMHz\": 911.15}]. Empty or unset hides the picker.",
   "timestamps": {
     "defaultMode": "ago",
     "timezone": "local",

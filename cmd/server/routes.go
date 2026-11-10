@@ -561,6 +561,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		ClientRfSamples:                s.cfg.ClientRfSamplesEnabled(),
 		ClientRxRequireLinkedCompanion: s.auth != nil && s.cfg.ClientRxRequireLinkedCompanionSet(),
 		PathTrust:                      &pathTrust,
+		LiveRadioFilters:               s.cfg.ClientLiveRadioFilters(),
 		UserManagement:                 s.clientUserManagement(),
 	})
 }
