@@ -48,6 +48,7 @@ node tests/unit/test-compare-overlap.js
 node tests/unit/test-confidence-indicator.js
 node tests/unit/test-coverage-gate.js
 node tests/unit/test-customizer-v2.js
+node tests/unit/test-dockerfile-buildplatform.js
 node tests/unit/test-drag-manager.js
 node tests/unit/test-e2e-coverage.js
 node tests/unit/test-direct-rf-heard-by.js
@@ -83,6 +84,7 @@ node tests/unit/test-issue-1412-customizer-no-override.js
 node tests/unit/test-issue-1415-packets-layout.js
 node tests/unit/test-issue-1418-cb-preset-ramp.js
 node tests/unit/test-issue-1418-deeplink-hops-channels.js
+node tests/unit/test-map-deeplink-path-params.js
 node tests/unit/test-issue-1418-edge-weights.js
 node tests/unit/test-issue-1418-polish-review.js
 node tests/unit/test-issue-1418-raw-hex-extraction.js
@@ -144,6 +146,7 @@ node tests/unit/test-issue-1836-crossnav-case-normalization.js
 node tests/unit/test-issue-1843-node-qr-quiet-zone.js
 node tests/unit/test-issue-1846-observers-width.js
 node tests/unit/test-issue-1849-trace-hashbytes.js
+node tests/unit/test-hb-column-header-route.js
 node tests/unit/test-issue-1851-channel-message-scope.js
 node tests/unit/test-issue-1862-map-region-filter.js
 node tests/unit/test-issue-1868-control-decode.js
@@ -199,6 +202,7 @@ node tests/unit/test-panel-corner.js
 node tests/unit/test-path-inspector.js
 node tests/unit/test-payload-labels-content.js
 node tests/unit/test-payload-labels-namespace.js
+node tests/unit/test-payload-labels-surfaces.js
 node tests/unit/test-perf-anomaly.js
 node tests/unit/test-perf-disk-io-1120.js
 node tests/unit/test-perf-go-runtime.js
@@ -223,6 +227,7 @@ node tests/unit/test-traces.js
 node tests/unit/test-url-state.js
 node tests/unit/test-user-management-ui.js
 node tests/unit/test-vendored-libs.js
+node tests/unit/test-observer-neighbors.js
 node tests/unit/test-warmup-banner.js
 node tests/unit/test-ws-stale-watchdog-1074.js
 node tests/unit/test-xss-escape-sinks.js

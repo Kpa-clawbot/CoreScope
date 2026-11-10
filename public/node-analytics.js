@@ -1,7 +1,6 @@
 /* === CoreScope — node-analytics.js === */
 'use strict';
 (function () {
-  const PAYLOAD_LABELS = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 11: 'Control' };
   const CHART_COLORS = ['#4a9eff', '#ff6b6b', '#51cf66', '#fcc419', '#cc5de8', '#20c997', '#ff922b', '#845ef7', '#f06595', '#339af0'];
   const GRADE_COLORS = { A: '#51cf66', 'A-': '#51cf66', 'B+': '#339af0', B: '#339af0', C: '#fcc419', D: '#ff6b6b' };
   const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -197,11 +196,14 @@
             <div class="analytics-chart-desc">Nodes this device has exchanged messages with</div>
             <div class="analytics-table-scroll"><table class="analytics-peer-table">
               <thead><tr><th scope="col">Peer</th><th scope="col">Messages</th><th scope="col">Last Contact</th></tr></thead>
-              <tbody>${data.peerInteractions.map(p => `<tr>
+              <tbody>${data.peerInteractions.map(p => {
+                const contact = formatTimestampWithTooltip(p.lastContact);
+                return `<tr>
                 <td><a href="#/nodes/${encodeURIComponent(p.peer_key)}" style="color:var(--link-color)">${escapeHtml(p.peer_name)}</a></td>
                 <td>${p.messageCount}</td>
-                <td>${timeAgo(p.lastContact)}</td>
-              </tr>`).join('')}</tbody>
+                <td><span class="timestamp-text" title="${escapeHtml(contact.tooltip)}">${escapeHtml(contact.text)}</span></td>
+              </tr>`;
+              }).join('')}</tbody>
             </table></div>
           </div>` : ''}
         </div>
@@ -290,7 +292,7 @@
     const c = new Chart(ctx, {
       type: 'doughnut',
       data: {
-        labels: items.map(i => PAYLOAD_LABELS[i.payload_type] || 'Type ' + i.payload_type),
+        labels: items.map(i => window.PayloadLabels.api.displayName(i.payload_type)),
         datasets: [{ data: items.map(i => i.count), backgroundColor: items.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]) }]
       },
       options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } } }

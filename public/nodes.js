@@ -3,7 +3,6 @@
 
 (function () {
   let nodes = [];
-  const PAYLOAD_TYPES = {0:'Request',1:'Response',2:'Direct Msg',3:'ACK',4:'Advert',5:'Channel Msg',7:'Anon Req',8:'Path',9:'Trace'};
 
   function syncClaimedToFavorites() {
     const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
@@ -209,14 +208,20 @@
   function renderLastRelayed(n, table) {
     if (n.role !== 'repeater' && n.role !== 'room') return '';
     const hasRelay = n.last_relayed && Number.isFinite(new Date(n.last_relayed).getTime());
+    const certainMs = typeof n.last_certain_relay === 'string' ? Date.parse(n.last_certain_relay) : NaN;
+    const hasCertainRelay = Number.isFinite(certainMs);
+    const certainAge = Date.now() - certainMs;
     let value = hasRelay
       ? renderNodeTimestampHtml(n.last_relayed) + ' <span style="color:var(--text-muted);font-size:11px">attributed relay observation</span>'
-      : '<span style="color:var(--text-muted)">never observed as relay hop</span>';
+      : '<span style="color:var(--text-muted)">' + (hasCertainRelay ? 'no attributed non-advert relay' : 'never observed as relay hop') + '</span>';
+    if (hasCertainRelay && certainAge >= 0 && certainAge < HEALTH_THRESHOLDS.relayActiveMs) {
+      value += ' <span data-certain-relay-active style="color:var(--status-green-text);font-size:11px">actively relaying</span>';
+    }
     if (n.relay_count_1h != null || n.relay_count_24h != null) {
       const count = raw => { const v = nodeMetricNumber(raw); return Number.isSafeInteger(v) ? v : '—'; };
       value += ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${count(n.relay_count_1h)} relays/hr, ${count(n.relay_count_24h)} relays/24h)</span>`;
     }
-    return renderNodeMetric('Last Relayed', value, table, "Last time this node was attributed as a relay hop in a non-advert packet observed by the network. This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: 'Last Heard' counts only packets that can be this node alone.");
+    return renderNodeMetric('Last Relayed', value, table, "Last time this node was attributed as a relay hop in a non-advert packet observed by the network. This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: 'Last Heard' counts only packets that can be this node alone. The green actively relaying mark requires recent certain relay evidence, including forwarding another node's advert. No mark does not imply idle or offline.");
   }
 
   function renderTrafficShare(n, table) {
@@ -1978,7 +1983,7 @@
             ${group.adverts.length ? group.adverts.map(a => {
               let decoded;
               try { decoded = JSON.parse(a.decoded_json); } catch {}
-              const pType = PAYLOAD_TYPES[a.payload_type] || 'Packet';
+              const pType = window.PayloadLabels.api.shortById(a.payload_type) || 'Packet';
               const icon = a.payload_type === 4 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg>' : a.payload_type === 5 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg>' : a.payload_type === 2 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg>';
               const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
               const obs = a.observer_name || a.observer_id;

@@ -40,10 +40,10 @@ assert(/payload_type\s*!==\s*7/.test(mapSrc),
   'ANON_REQ (type 7) special-cased to skip srcHash extraction');
 assert(/payload_type\s*===\s*5/.test(mapSrc),
   'GRP_TXT (type 5) branch present for channel_hash extraction');
-assert(/PAYLOAD_TYPE_MAP\s*=\s*\{[^}]*0:\s*'REQ'[^}]*1:\s*'RESPONSE'[^}]*2:\s*'TXT_MSG'/m.test(mapSrc),
-  'PAYLOAD_TYPE_MAP covers 0=REQ, 1=RESPONSE, 2=TXT_MSG');
-assert(/5:\s*'GRP_TXT'[^}]*7:\s*'ANON_REQ'[^}]*8:\s*'PATH'/m.test(mapSrc),
-  'PAYLOAD_TYPE_MAP covers 5=GRP_TXT, 7=ANON_REQ, 8=PATH');
+assert(/inferredType\s*=\s*decoded\.type\s*\|\|\s*window\.PayloadLabels\.api\.enumNameById\(pkt\.payload_type\)/.test(mapSrc),
+  'inferredType falls back to the canonical enum name (payload-labels.js), not a local map');
+assert(!/PAYLOAD_TYPE_MAP\s*=/.test(mapSrc),
+  'no hand-rolled PAYLOAD_TYPE_MAP (it had RAW_CUSTOM on 12; firmware uses 0x0F)');
 
 // Polish review (djb): pathLen MUST be bounded before slicing. A crafted
 // pathLen=200 byte would surface random body bytes as srcHash/destHash.

@@ -63,7 +63,7 @@ function load() {
     })),
   };
   const call = (prefix) => calls.filter((c) => c.url.startsWith(prefix));
-  return { page, app, els, nav, hop, buttons, call };
+  return { ctx, page, app, els, nav, hop, buttons, call };
 }
 
 // The real router in public/app.js, so the generation the pages read is the
@@ -271,6 +271,39 @@ function loadRouter() {
     assert(!badge.innerHTML.includes('<img'), status + ': voltage never enters HTML');
     assert(badge.textContent === (mv == null ? '' : ' · ' + mv + ' mV'), status + ': voltage is appended as text, including zero');
     assert(badge.style.color === color, status + ': badge uses its theme color');
+  }
+
+  console.log('Node Analytics: Last Contact timestamps (#1154 U10)');
+  for (const [name, lastContact, settings, text, title] of [
+    ['relative UTC', '2024-01-02T03:04:05.123Z', {}, '1h ago', '2024-01-02 03:04:05'],
+    ['absolute UTC', '2024-01-02T03:04:05.123Z', { mode: 'absolute' }, '2024-01-02 03:04:05', '1h ago'],
+    ['milliseconds', '2024-01-02T03:04:05.123Z', { format: 'iso-seconds' }, '1h ago', '2024-01-02 03:04:05.123'],
+    ['custom format escaping', '2024-01-02T03:04:05.123Z', { 'custom-format': 'YYYY-MM-DD <clock> "Z"' },
+      '1h ago', '2024-01-02 &lt;clock&gt; &quot;UTC&quot;'],
+    ['future', '2024-01-02T05:04:05.123Z', {}, '2024-01-02 05:04:05', 'in 1h'],
+    ['null', null, {}, '—', '—'],
+    ['missing', undefined, {}, '—', '—'],
+    ['empty', '', {}, '—', '—'],
+    ['invalid', 'not-a-date', {}, '—', '—'],
+  ]) {
+    const t = load();
+    const shared = loadRouter().ctx;
+    shared.Date = class extends Date { static now() { return Date.parse('2024-01-02T04:04:05.123Z'); } };
+    shared.SITE_CONFIG = { timestamps: { allowCustomFormat: true } };
+    const prefs = Object.assign({ mode: 'ago', timezone: 'utc', format: 'iso' }, settings);
+    shared.localStorage.getItem = (key) => prefs[key.replace('meshcore-timestamp-', '')] || null;
+    t.ctx.timeAgo = shared.timeAgo;
+    t.ctx.formatTimestampWithTooltip = shared.formatTimestampWithTooltip;
+    t.ctx.escapeHtml = shared.escapeHtml;
+    t.page.init(t.app, PK + '/analytics');
+    const data = analyticsData(7);
+    data.peerInteractions = [{ peer_key: 'cd'.repeat(32), peer_name: 'Example Peer', messageCount: 3, lastContact }];
+    t.call('/nodes/')[0].resolve(data);
+    await flush();
+    const cells = [...t.app.innerHTML.matchAll(/<td>([\s\S]*?)<\/td>/g)];
+    const contact = cells[2] && cells[2][1];
+    assert(!!contact && contact.includes('title="' + title + '"'), name + ': Last Contact has the expected tooltip');
+    assert(!!contact && contact.replace(/<[^>]*>/g, '') === text, name + ': Last Contact has the expected display text');
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

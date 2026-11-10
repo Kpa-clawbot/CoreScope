@@ -77,7 +77,6 @@ if (typeof window !== 'undefined') {
 }
 
 (function () {
-  var PAYLOAD_LABELS = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 11: 'Control' };
   var MAX_PACKETS = 10000;
   var observers = [];
   var selA = null;
@@ -271,8 +270,8 @@ if (typeof window !== 'undefined') {
     try {
       var since24h = sinceISO(24);
       var results = await Promise.all([
-        api('/packets?observer=' + encodeURIComponent(selA) + '&limit=' + MAX_PACKETS + '&since=' + encodeURIComponent(since24h)),
-        api('/packets?observer=' + encodeURIComponent(selB) + '&limit=' + MAX_PACKETS + '&since=' + encodeURIComponent(since24h))
+        api('/packets?observer=' + encodeURIComponent(selA) + '&excludeTx=true&limit=' + MAX_PACKETS + '&since=' + encodeURIComponent(since24h)),
+        api('/packets?observer=' + encodeURIComponent(selB) + '&excludeTx=true&limit=' + MAX_PACKETS + '&since=' + encodeURIComponent(since24h))
       ]);
 
       packetsA = results[0].packets || [];
@@ -331,7 +330,7 @@ if (typeof window !== 'undefined') {
 
     var typeHtml = Object.keys(typeBreakdown).map(function (t) {
       return '<span class="compare-type-badge">' +
-        escapeHtml(PAYLOAD_LABELS[t] || 'Type ' + t) + ' <b>' + typeBreakdown[t] + '</b>' +
+        escapeHtml(window.PayloadLabels.api.displayName(t)) + ' <b>' + typeBreakdown[t] + '</b>' +
       '</span>';
     }).join('');
 
@@ -517,7 +516,7 @@ if (typeof window !== 'undefined') {
         '<tbody>' + displayed.map(function (h) {
           var p = mapA.get(h) || mapB.get(h);
           if (!p) return '';
-          var typeName = PAYLOAD_LABELS[p.payload_type] || 'Type ' + p.payload_type;
+          var typeName = window.PayloadLabels.api.displayName(p.payload_type);
           var obsLabel = '';
           if (currentView === 'both') {
             obsLabel = nameA + ', ' + nameB;

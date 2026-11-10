@@ -79,17 +79,22 @@ func (l indexedLogin) denied() bool { return l.revoked || l.disabled }
 
 // observerLoginIndex answers the broker hooks from memory. owners holds every
 // bound pubkey; a nil owner means the binding is orphaned. owned counts the
-// pubkeys each user owns in owners.
+// pubkeys each user owns in owners. confirmed holds the owned pubkeys whose
+// owner's login has published under them; shared is the broker's own shared
+// login names, denied on a confirmed pubkey. shared is fixed after load.
 type observerLoginIndex struct {
 	mu         sync.RWMutex
 	byUsername map[string]indexedLogin
 	byUser     map[int64]string
 	owners     map[string]*int64
 	owned      map[int64]int
+	confirmed  map[string]bool
+	shared     map[string]bool
 }
 
-// newObserverLoginIndex loads every login and binding from st once.
-func newObserverLoginIndex(st *users.Store) (*observerLoginIndex, error) {
+// newObserverLoginIndex loads every login and binding from st once. An
+// orphaned binding is never confirmed: nobody owns it.
+func newObserverLoginIndex(st *users.Store, shared map[string]bool) (*observerLoginIndex, error) {
 	logins, err := st.AllMQTTLogins()
 	if err != nil {
 		return nil, err
@@ -103,6 +108,8 @@ func newObserverLoginIndex(st *users.Store) (*observerLoginIndex, error) {
 		byUser:     make(map[int64]string, len(logins)),
 		owners:     make(map[string]*int64, len(bindings)),
 		owned:      make(map[int64]int, len(logins)),
+		confirmed:  make(map[string]bool, len(bindings)),
+		shared:     shared,
 	}
 	ids := make([]int64, 0, len(logins))
 	for _, l := range logins {
@@ -120,6 +127,9 @@ func newObserverLoginIndex(st *users.Store) (*observerLoginIndex, error) {
 	}
 	for _, b := range bindings {
 		ix.setOwner(b.Pubkey, b.UserID)
+		if b.UserID != nil && b.ConfirmedAt != nil {
+			ix.confirmed[b.Pubkey] = true
+		}
 	}
 	return ix, nil
 }
@@ -188,16 +198,30 @@ func (ix *observerLoginIndex) setOwner(pk string, uid *int64) {
 	ix.setOwnerLocked(pk, uid)
 }
 
-// setOwnerLocked moves pk to uid and keeps owned in step. Caller holds mu.
+// setOwnerLocked moves pk to uid and keeps owned and confirmed in step: the
+// confirmation survives only when the owner stays the same. Caller holds mu.
 func (ix *observerLoginIndex) setOwnerLocked(pk string, uid *int64) {
-	if old, ok := ix.owners[pk]; ok && old != nil {
+	old, ok := ix.owners[pk]
+	if ok && old != nil {
 		if ix.owned[*old]--; ix.owned[*old] <= 0 {
 			delete(ix.owned, *old)
 		}
 	}
+	if old == nil || uid == nil || *old != *uid {
+		delete(ix.confirmed, pk)
+	}
 	ix.owners[pk] = uid
 	if uid != nil {
 		ix.owned[*uid]++
+	}
+}
+
+// confirm marks pk confirmed when uid still owns it.
+func (ix *observerLoginIndex) confirm(pk string, uid int64) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if o := ix.owners[pk]; o != nil && *o == uid {
+		ix.confirmed[pk] = true
 	}
 }
 
@@ -250,8 +274,9 @@ func parsePublishTopic(topic string) (pubkey string, ok bool) {
 }
 
 // authorize answers an authz hook for any action: unknown usernames are
-// ignored, anything but publish is denied for managed logins.
-func (ix *observerLoginIndex) authorize(username, action, topic string, bind func(pk string, uid int64) (*int64, bool, error)) (hookResult, string, bool) {
+// ignored, anything but publish is denied for managed logins and ignored for
+// shared logins.
+func (ix *observerLoginIndex) authorize(username, action, topic string, bind func(pk string, uid int64) (*int64, bool, error), confirm func(pk string, uid int64) (bool, error)) (hookResult, string, bool) {
 	if action != "publish" {
 		ix.mu.RLock()
 		_, known := ix.byUsername[username]
@@ -261,13 +286,42 @@ func (ix *observerLoginIndex) authorize(username, action, topic string, bind fun
 		}
 		return hookDeny, "", false
 	}
-	return ix.authorizePublish(username, topic, bind)
+	return ix.authorizePublish(username, topic, bind, confirm)
+}
+
+// authorizeShared denies a shared login on any meshcore/<x>/<pubkey>... topic
+// whose pubkey is confirmed, whatever the segment count, because the ingestor
+// attributes such a topic to that pubkey. Everything else is ignored, so the
+// broker decides as before.
+func (ix *observerLoginIndex) authorizeShared(username, topic string) (hookResult, string, bool) {
+	seg := strings.SplitN(topic, "/", 4)
+	if len(seg) < 3 || seg[0] != "meshcore" {
+		return hookIgnore, "", false
+	}
+	pk, err := users.NormalizeObserverKey(seg[2])
+	if err != nil {
+		return hookIgnore, "", false
+	}
+	ix.mu.RLock()
+	confirmed := ix.confirmed[pk]
+	ix.mu.RUnlock()
+	if !confirmed {
+		return hookIgnore, "", false
+	}
+	log.Printf("[observer-logins] publish denied: user=%s observer=%s: confirmed owner", username, pk[:8])
+	return hookDeny, pk, false
 }
 
 // authorizePublish applies the binding table. bind is the store's
 // first-claim-wins insert; it runs outside the lock and is called only for a
-// well-formed topic whose pubkey the index does not know.
-func (ix *observerLoginIndex) authorizePublish(username, topic string, bind func(pk string, uid int64) (*int64, bool, error)) (res hookResult, boundPK string, created bool) {
+// well-formed topic whose pubkey the index does not know. confirm is the
+// store's one-time confirmed_at write; it runs outside the lock and is called
+// only for an allowed owner publish on an unconfirmed pubkey. A failed
+// confirm still allows the publish.
+func (ix *observerLoginIndex) authorizePublish(username, topic string, bind func(pk string, uid int64) (*int64, bool, error), confirm func(pk string, uid int64) (bool, error)) (res hookResult, boundPK string, created bool) {
+	if ix.shared[username] {
+		return ix.authorizeShared(username, topic)
+	}
 	ix.mu.RLock()
 	l, ok := ix.byUsername[username]
 	ix.mu.RUnlock()
@@ -300,11 +354,26 @@ func (ix *observerLoginIndex) authorizePublish(username, topic string, bind func
 		if _, raced := ix.owners[pk]; !raced {
 			ix.setOwnerLocked(pk, owner)
 		}
+		// BindObserver confirms the row it creates.
+		if o := ix.owners[pk]; created && o != nil && *o == l.userID {
+			ix.confirmed[pk] = true
+		}
 		ix.mu.Unlock()
 	}
 	if owner == nil || *owner != l.userID {
 		log.Printf("[observer-logins] publish denied: user=%s observer=%s", username, pk[:8])
 		return hookDeny, pk, false
+	}
+	ix.mu.RLock()
+	confirmed := ix.confirmed[pk]
+	ix.mu.RUnlock()
+	if !confirmed {
+		ok, err := confirm(pk, l.userID)
+		if err != nil {
+			log.Printf("[observer-logins] confirm failed: user=%s observer=%s: %v", username, pk[:8], err)
+		} else if ok {
+			ix.confirm(pk, l.userID)
+		}
 	}
 	return hookAllow, pk, created
 }
@@ -316,7 +385,8 @@ func (ix *observerLoginIndex) ownerOf(pk string) *int64 {
 	return ix.owners[pk]
 }
 
-// unbind forgets pk so the next publisher can claim it.
+// unbind forgets pk so the next publisher can claim it; setOwnerLocked drops
+// its confirmation.
 func (ix *observerLoginIndex) unbind(pk string) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()

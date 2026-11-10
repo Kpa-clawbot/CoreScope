@@ -154,6 +154,10 @@ type Config struct {
 	// CORSAllowedOrigins is the list of origins permitted to make cross-origin
 	// requests. When empty (default), no Access-Control-* headers are sent,
 	// so browsers enforce same-origin policy. Set to ["*"] to allow all origins.
+	// An entry may use one wildcard label, "https://*.myproject.pages.dev"
+	// (see originMatches); LoadConfig drops malformed wildcards and those over
+	// fewer than three labels, a sanity floor rather than a Public Suffix List
+	// check (see wildcardOrigin).
 	CORSAllowedOrigins []string `json:"corsAllowedOrigins,omitempty"`
 
 	// WebSocket carries the /ws transport limits from #1794. Omitted entirely
@@ -486,9 +490,8 @@ type HealthThresholds struct {
 	InfraSilentHours   float64 `json:"infraSilentHours"`
 	NodeDegradedHours  float64 `json:"nodeDegradedHours"`
 	NodeSilentHours    float64 `json:"nodeSilentHours"`
-	// RelayActiveHours: how recent a path-hop appearance must be for a
-	// repeater to be considered "actively relaying" vs only "alive
-	// (advert-only)". See issue #662. Defaults to 24h.
+	// RelayActiveHours: window for the legacy attributed relay_active API
+	// field and the UI's certain-relay indicator (#2331). Defaults to 24h.
 	RelayActiveHours float64 `json:"relayActiveHours"`
 	// Issue #1552 — observer health classification thresholds (minutes).
 	// Defaults match prior hardcoded behavior in public/observers.js (10/60).
@@ -531,12 +534,14 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		cfg.migrateDeprecatedConfig()
 		cfg.applyListLimitsDefaults()
 		applyCORSEnv(cfg)
+		cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
 		return cfg, nil
 	}
 	cfg.NormalizeTimestampConfig()
 	cfg.migrateDeprecatedConfig()
 	cfg.applyListLimitsDefaults()
 	applyCORSEnv(cfg)
+	cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
 	return cfg, nil // defaults
 }
 
@@ -759,6 +764,7 @@ func (h HealthThresholds) ToClientMs() map[string]int {
 		"infraSilentMs":    int(h.InfraSilentHours * hourMs),
 		"nodeDegradedMs":   int(h.NodeDegradedHours * hourMs),
 		"nodeSilentMs":     int(h.NodeSilentHours * hourMs),
+		"relayActiveMs":    int(h.RelayActiveHours * hourMs),
 		"observerOnlineMs": h.ObserverOnlineMinutes * minMs,
 		"observerStaleMs":  h.ObserverStaleMinutes * minMs,
 	}

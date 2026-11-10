@@ -126,16 +126,7 @@ func (s *Server) queryCoverageFiltered(node, rx string, rxIn []string, days int,
 			args = append(args, c)
 		}
 	}
-	if rx != "" {
-		where = append(where, "rx_pubkey = ?")
-		args = append(args, strings.ToLower(rx))
-	}
-	if len(rxIn) > 0 {
-		where = append(where, "rx_pubkey IN ("+sqlPlaceholders(len(rxIn))+")")
-		for _, pk := range rxIn {
-			args = append(args, pk)
-		}
-	}
+	where, args = appendRxFilter(where, args, "rx_pubkey", rx, rxIn)
 	if days > 0 {
 		since := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 		where = append(where, "rx_at >= ?")
@@ -147,6 +138,23 @@ func (s *Server) queryCoverageFiltered(node, rx string, rxIn []string, days int,
 	}
 	defer rows.Close()
 	return scanCoverageRows(rows)
+}
+
+// appendRxFilter narrows a client_* table query to one companion (rx) and/or
+// to a set of companions (rxIn, lowercase; see myCompanionPubkeys). col is
+// the table's rx_pubkey column. Callers return early on an empty non-nil rxIn.
+func appendRxFilter(where []string, args []interface{}, col, rx string, rxIn []string) ([]string, []interface{}) {
+	if rx != "" {
+		where = append(where, col+" = ?")
+		args = append(args, strings.ToLower(rx))
+	}
+	if len(rxIn) > 0 {
+		where = append(where, col+" IN ("+sqlPlaceholders(len(rxIn))+")")
+		for _, pk := range rxIn {
+			args = append(args, pk)
+		}
+	}
+	return where, args
 }
 
 // handleRxCoverage serves global (or per-observer via ?rx=) coverage as GeoJSON

@@ -306,17 +306,14 @@ test('[adv #1] route-view.js: all-1-byte paths do NOT collide on empty key', () 
   // key "". Distinct routes vanished into one bucket. Fix uses a sentinel
   // prefixed with the rawHops signature so the buckets stay distinct.
   //
-  // We assert the EXACT inline aggregation logic now used in route-view.js
-  // by replaying its key derivation on representative inputs.
+  // Exercises the real key derivation route-view.js groups by
+  // (MC_ROUTE_UTILS.pathGroupKey in route-view-utils.js).
   const ctx = freshSandbox();
+  vm.runInContext(fs.readFileSync(path.join(REPO_ROOT, 'public/route-view-utils.js'), 'utf8'), ctx);
+  const pathGroupKey = ctx.window.MC_ROUTE_UTILS.pathGroupKey;
   const aggregate = (paths) => {
     const seen = {};
-    paths.forEach((p) => {
-      const rawHops = p.path || [];
-      const hops = ctx.window.MC_filterPathHops(rawHops);
-      const key = hops.length ? hops.join('-') : ('__all1byte__::' + rawHops.join('-'));
-      seen[key] = true;
-    });
+    paths.forEach((p) => { seen[pathGroupKey(p.path, ctx.window.MC_filterPathHops)] = true; });
     return Object.keys(seen).length;
   };
   // Toggle ON
@@ -334,8 +331,11 @@ test('[adv #1] route-view.js source: key derivation uses sentinel for all-1-byte
   // Source-grep guard: if a future refactor reverts to `hops.join("-")`
   // bare aggregation, this test catches it.
   const src = fs.readFileSync(path.join(REPO_ROOT, 'public/route-view.js'), 'utf8');
-  assert.ok(src.indexOf('__all1byte__::') !== -1 || src.indexOf('⟨all-1byte⟩::') !== -1,
-    'route-view.js must include a sentinel for all-1-byte aggregation buckets');
+  const utils = fs.readFileSync(path.join(REPO_ROOT, 'public/route-view-utils.js'), 'utf8');
+  assert.ok(/seen\[pathGroupKey\(p\.path, filterHops\)\]/.test(src) && /var k = pathGroupKey\(rawHops, filterHops\)/.test(src),
+    'route-view.js must key both the path count and the picker groups with pathGroupKey');
+  assert.ok(utils.indexOf('⟨all-1byte⟩::') !== -1,
+    'pathGroupKey must include a sentinel for all-1-byte aggregation buckets');
 });
 
 test('[adv #2] map.js source: drawPacketRoute propagates hopsHiddenCount to renderer', () => {

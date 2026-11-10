@@ -182,6 +182,60 @@ async function main() {
     }
   }
 
+  // #2332: refitting an open menu must preserve the focused destination,
+  // even when that destination moves back into the inline navigation.
+  async function resizeAndRefit(width) {
+    await page.setViewportSize({ width, height: HEIGHT });
+    await page.evaluate(() => new Promise(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+  }
+  await resizeAndRefit(1250);
+  await page.locator('#navMoreBtn').click();
+  const focusedHref = await page.locator('#navMoreMenu .nav-link').first().getAttribute('href');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), focusedHref);
+  await resizeAndRefit(1249);
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), focusedHref,
+    'refitting an open More menu must retain its focused destination');
+  assert.equal(await page.evaluate(() => document.getElementById('navMoreMenu').contains(document.activeElement)), true);
+  assert.equal(await page.locator('#navMoreBtn').getAttribute('aria-expanded'), 'true');
+  passes++;
+  console.log('  ✅ More retains its focused destination after a refit');
+
+  await resizeAndRefit(2560);
+  assert.equal(await page.evaluate(href => document.activeElement ===
+    [...document.querySelectorAll('.nav-links .nav-link')].find(link => link.getAttribute('href') === href), focusedHref), true,
+  'focus must follow a More destination that moves inline');
+  assert.equal(await page.locator('#navMoreMenu .nav-link').count(), 0);
+  assert.equal(await page.locator('#navMoreMenu').evaluate(menu => menu.classList.contains('open')), false);
+  assert.equal(await page.locator('#navMoreBtn').getAttribute('aria-expanded'), 'false');
+  passes++;
+  console.log('  ✅ Focus follows the inline destination and the empty More menu closes');
+
+  await resizeAndRefit(1250);
+  await page.locator('#navMoreBtn').click();
+  await page.keyboard.press('Tab');
+  const secondHref = await page.locator('#navMoreMenu .nav-link').nth(1).getAttribute('href');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), secondHref);
+  await resizeAndRefit(1249);
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), secondHref,
+    'refitting More must retain a later destination instead of resetting to the first');
+  assert.equal(await page.evaluate(() => document.getElementById('navMoreMenu').contains(document.activeElement)), true);
+  assert.equal(await page.locator('#navMoreBtn').getAttribute('aria-expanded'), 'true');
+  await page.keyboard.press('Escape');
+  passes++;
+  console.log('  ✅ More retains a later keyboard destination after a refit');
+
+  await resizeAndRefit(1250);
+  await page.locator('#navMoreBtn').click();
+  await page.locator('#accountToggle').focus();
+  await resizeAndRefit(1249);
+  assert.equal(await page.evaluate(() => document.activeElement === document.getElementById('accountToggle')), true,
+    'refitting More must not steal focus from another control');
+  await page.keyboard.press('Escape');
+  passes++;
+  console.log('  ✅ More refits leave focus on controls outside the menu');
+
   // Account configuration can arrive after the first fit, without a resize
   // or route change. Exercise the real auth renderer, then change its label.
   let releaseConfig;
@@ -261,7 +315,7 @@ async function main() {
 
   await browser.close();
 
-  const total = ROUTES.length * VIEWPORTS.length + resizeWidths.length + 7;
+  const total = ROUTES.length * VIEWPORTS.length + resizeWidths.length + 11;
   console.log(`\ntest-nav-fluid-1055-e2e.js: ${failures === 0 ? 'OK' : 'FAIL'} — ${passes}/${total} passed`);
   process.exit(failures === 0 ? 0 : 1);
 }

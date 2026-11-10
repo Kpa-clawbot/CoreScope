@@ -3,11 +3,10 @@
 
 // --- Route/Payload name maps ---
 const ROUTE_TYPES = { 0: 'TRANSPORT_FLOOD', 1: 'FLOOD', 2: 'DIRECT', 3: 'TRANSPORT_DIRECT' };
-const PAYLOAD_TYPES = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 6: 'Group Data', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 10: 'Multipart', 11: 'Control', 15: 'Raw Custom' };
 const PAYLOAD_COLORS = { 0: 'req', 1: 'response', 2: 'txt-msg', 3: 'ack', 4: 'advert', 5: 'grp-txt', 6: 'grp-data', 7: 'anon-req', 8: 'path', 9: 'trace', 10: 'multipart', 11: 'control', 15: 'raw-custom' };
 
 function routeTypeName(n) { return ROUTE_TYPES[n] || 'UNKNOWN'; }
-function payloadTypeName(n) { return PAYLOAD_TYPES[n] || 'UNKNOWN'; }
+function payloadTypeName(n) { return window.PayloadLabels.api.shortById(n) || 'UNKNOWN'; }
 function payloadTypeColor(n) { return PAYLOAD_COLORS[n] || 'unknown'; }
 function isTransportRoute(rt) { return rt === 0 || rt === 3; }
 /** Byte offset of path_len in raw_hex: 5 for transport routes (4 bytes of next/last hop codes precede it), 1 otherwise. */
@@ -1536,6 +1535,10 @@ window.addEventListener('DOMContentLoaded', () => {
     var overflowQueue = buildOverflowQueue();
 
     function rebuildMoreMenu() {
+      // Removing a focused clone drops focus onto the body. Keep its
+      // destination whether the next fit leaves it in More or moves it inline.
+      const focused = navMoreMenu.contains(document.activeElement) ? document.activeElement : null;
+      let focusTarget = focused && allLinks.find(link => link.getAttribute('href') === focused.getAttribute('href'));
       navMoreMenu.innerHTML = '';
       const hidden = allLinks.filter(a => a.classList.contains('is-overflow'));
       hidden.forEach(function(link) {
@@ -1551,14 +1554,17 @@ window.addEventListener('DOMContentLoaded', () => {
         clone.addEventListener('click', closeNav);
         clone.addEventListener('click', closeMoreMenu);
         navMoreMenu.appendChild(clone);
+        if (link === focusTarget) focusTarget = clone;
       });
       // If nothing overflows, hide the More button entirely so wide
       // viewports don't show a useless dropdown trigger.
       navMoreWrap.classList.toggle('is-hidden', hidden.length === 0);
+      if (hidden.length === 0) closeMoreMenu();
       // Refresh active state on the More button (a hidden active link
       // means the More menu currently "is" the active section).
       var hasActiveMore = navMoreMenu.querySelector('.nav-link.active');
       navMoreBtn.classList.toggle('active', !!hasActiveMore);
+      if (focusTarget) focusTarget.focus();
     }
 
     function applyNavPriority() {

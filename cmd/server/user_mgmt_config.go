@@ -248,6 +248,9 @@ type ObserverLoginsConfig struct {
 	HookSecret    string               `json:"hookSecret,omitempty"`
 	EncryptionKey string               `json:"encryptionKey,omitempty"`
 	Broker        ObserverBrokerConfig `json:"broker"`
+	// SharedUsernames are the broker's own shared login names; the authz
+	// hook denies them a publish under a confirmed observer pubkey.
+	SharedUsernames []string `json:"sharedUsernames,omitempty"`
 }
 
 // ObserverBrokerConfig is the broker an observer connects to, as shown to
@@ -268,6 +271,8 @@ type observerLoginSettings struct {
 	port       int
 	transport  string
 	tls        bool
+	// sharedUsernames is nil when none are configured.
+	sharedUsernames map[string]bool
 }
 
 const (
@@ -309,6 +314,19 @@ func resolveObserverLogins(c *ObserverLoginsConfig, getenv func(string) string) 
 	}
 	if o.transport != "tcp" && o.transport != "websockets" {
 		return observerLoginSettings{}, fmt.Errorf("userManagement.observerLogins.broker.transport %q is not supported (use \"tcp\" or \"websockets\")", o.transport)
+	}
+	for _, name := range c.SharedUsernames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if strings.HasPrefix(name, mqttUsernamePrefix) {
+			return observerLoginSettings{}, fmt.Errorf("userManagement.observerLogins.sharedUsernames: %q is a personal login name", name)
+		}
+		if o.sharedUsernames == nil {
+			o.sharedUsernames = map[string]bool{}
+		}
+		o.sharedUsernames[name] = true
 	}
 	return o, nil
 }
