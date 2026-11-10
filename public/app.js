@@ -545,6 +545,15 @@ function formatTimestampWithTooltip(isoString, mode) {
   return { text, tooltip, isFuture };
 }
 
+function renderTimestampHtml(isoString) {
+  const f = formatTimestampWithTooltip(isoString);
+  const warn = f.isFuture
+    ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
+    : '';
+  return `<span class="timestamp-text" title="${escapeHtml(f.tooltip)}">${escapeHtml(f.text)}</span>${warn}`;
+}
+window.renderTimestampHtml = renderTimestampHtml;
+
 // Format a Date for chart axis labels, respecting customizer timestamp settings.
 // shortForm: true = time only (for intra-day), false = date+time (multi-day).
 function formatChartAxisLabel(d, shortForm) {
