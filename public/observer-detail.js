@@ -74,7 +74,6 @@ window.ObserverDetailNaiveBanner = {
 };
 
 (function () {
-  const PAYLOAD_LABELS = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 11: 'Control' };
   const CHART_COLORS = ['#4a9eff', '#ff6b6b', '#51cf66', '#fcc419', '#cc5de8', '#20c997', '#ff922b', '#845ef7', '#f06595', '#339af0'];
 
   let charts = [];
@@ -447,7 +446,7 @@ window.ObserverDetailNaiveBanner = {
   function renderTypeChart(types) {
     const ctx = document.getElementById('obsTypeChart');
     if (!ctx) return;
-    const labels = Object.keys(types).map(k => PAYLOAD_LABELS[k] || 'Type ' + k);
+    const labels = Object.keys(types).map(k => window.PayloadLabels.api.displayName(k));
     const values = Object.values(types);
     const c = new Chart(ctx, {
       type: 'doughnut',
@@ -532,7 +531,7 @@ window.ObserverDetailNaiveBanner = {
         const hops = (typeof window !== 'undefined' && window.MC_filterPathHops)
           ? window.MC_filterPathHops(rawHops)
           : rawHops;
-        const typeName = PAYLOAD_LABELS[p.payload_type] || 'Type ' + p.payload_type;
+        const typeName = window.PayloadLabels.api.displayName(p.payload_type);
         return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/packets/${p.hash || p.id}">
           <td>${timeAgo(p.timestamp)}</td>
           <td>${typeName}</td>

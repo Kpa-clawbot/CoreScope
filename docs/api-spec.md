@@ -2638,7 +2638,7 @@ A transmission/packet as stored in memory and returned by most endpoints:
   "hash":              string,              // content hash (dedup key)
   "first_seen":        string (ISO),        // when first observed
   "timestamp":         string (ISO),        // display timestamp (= first_seen)
-  "route_type":        number,              // 0=DIRECT, 1=FLOOD, 2=reserved, 3=TRANSPORT
+  "route_type":        number,              // 0=TRANSPORT_FLOOD, 1=FLOOD, 2=DIRECT, 3=TRANSPORT_DIRECT
   "payload_type":      number,              // 0=REQ, 1=RESPONSE, 2=TXT_MSG, 3=ACK, 4=ADVERT, 5=GRP_TXT, 7=ANON_REQ, 8=PATH, 9=TRACE, 11=CONTROL
   "payload_version":   number | null,
   "decoded_json":      string | null,       // JSON-stringified decoded payload

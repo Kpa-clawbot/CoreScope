@@ -169,8 +169,10 @@ on the *Proposals* tab.
 
 - An approved channel is decrypted by the ingestor from its next refresh (once a
   minute, no restart) and listed for every visitor on the Channels page, also before
-  it has traffic and regardless of the region filter. Messages received before the
-  approval stay encrypted.
+  it has traffic and regardless of the region filter. Messages stored before the
+  approval are decrypted too: the ingestor re-decodes the stored messages it could
+  not decrypt with the new key (#2133), and the server picks them up without a
+  restart.
 - Revoking stops decryption of new messages from the next refresh; stored messages
   stay. A channel that is also in `hashChannels` or `channelKeys` stays decrypted.
 - A name in `hashChannels`, or a `channelKeys` name written with its leading `#`, cannot

@@ -1,5 +1,5 @@
 /**
- * E2E (#1122 / #1124): Packets page filter UX repairs.
+ * E2E (#1122 / #1124 / #667): Packets page filter UX and observer context.
  *
  * Asserts:
  *  1. Filter help opens as a centered modal with a visible backdrop AND modal
@@ -12,6 +12,8 @@
  *     hops are in any rendered packet's path.
  *  4. Focus management: opening the help moves focus to the close button;
  *     closing returns focus to the trigger.
+ *  5. Observer-source context stays visible and describes the packet table
+ *     across filtering, grouping, refresh, and mobile layout.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1122-packets-filter-ux-e2e.js
  */
@@ -26,6 +28,24 @@ async function step(name, fn) {
   catch (e) { failed++; console.error('  ✗ ' + name + ': ' + e.message); }
 }
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
+
+async function assertObserverContext(page) {
+  const note = page.locator('#packetObserverContext');
+  assert(await note.isVisible(), 'Packet counts must visibly explain their observer-report source');
+  const text = await note.innerText();
+  assert(/observer reports/i.test(text) && /received by this instance/i.test(text),
+    'Context must identify the reports received by this instance');
+  assert(/partial view/i.test(text) && /not (total network traffic|network-wide totals)/i.test(text)
+    && /firmware counters/i.test(text), 'Context must distinguish partial coverage from network and firmware totals');
+  const describedBy = await page.locator('#pktTable').getAttribute('aria-describedby');
+  assert((describedBy || '').split(/\s+/).includes('packetObserverContext'),
+    'The packet table must expose its source context to assistive technology');
+  const box = await note.boundingBox();
+  const viewport = page.viewportSize();
+  assert(box && box.x >= 0 && box.x + box.width <= viewport.width + 1
+    && box.y >= 0 && box.y + box.height <= viewport.height,
+    'Observer context must be readable within the viewport');
+}
 
 (async () => {
   const browser = await chromium.launch({
@@ -140,6 +160,51 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     assert(result.offenders.length === 0,
       'Path cells exceed 60px row height: ' + JSON.stringify(result.offenders) +
       ' (maxHops seen=' + result.maxHops + ', maxHeight=' + result.maxH + ')');
+  });
+
+  await step('#667: populated packet table explains its observer-report source', async () => {
+    assert(await page.locator('#pktBody td.col-time').count() > 0, 'Expected real fixture packet rows');
+    await assertObserverContext(page);
+  });
+
+  await step('#667: observer context survives an empty filter and clearing it', async () => {
+    await page.fill('#packetFilterInput', 'snr > 1000000');
+    await page.press('#packetFilterInput', 'Escape');
+    await page.waitForFunction(() => document.getElementById('pktBody').textContent.includes('No packets found'));
+    await assertObserverContext(page);
+    await page.fill('#packetFilterInput', '');
+    await page.press('#packetFilterInput', 'Escape');
+    await page.waitForSelector('#pktBody td.col-time');
+    await assertObserverContext(page);
+  });
+
+  await step('#667: observer context survives grouping and refresh with live updates enabled', async () => {
+    await page.fill('#packetFilterInput', '');
+    await page.press('#packetFilterInput', 'Escape');
+    await page.waitForSelector('#pktBody td.col-time');
+    const wasGrouped = await page.locator('#fGroup').evaluate(el => el.classList.contains('active'));
+    await page.click('#fGroup');
+    await page.waitForFunction(grouped => document.getElementById('fGroup').classList.contains('active') !== grouped, wasGrouped);
+    await page.waitForSelector('#pktBody td.col-time');
+    await assertObserverContext(page);
+    assert(await page.locator('#pktPauseBtn').getAttribute('aria-label') === 'Pause live updates',
+      'Expected live updates to remain enabled');
+    const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/packets' && response.ok());
+    await page.click('[data-action="pkt-refresh"]');
+    await (await refreshed).finished();
+    await page.waitForSelector('#pktBody td.col-time');
+    await assertObserverContext(page);
+  });
+
+  await step('#667: observer context remains visible in the mobile layout', async () => {
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    try {
+      await mobile.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
+      await mobile.waitForSelector('#pktTable');
+      await assertObserverContext(mobile);
+    } finally {
+      await mobile.close();
+    }
   });
 
   await browser.close();
