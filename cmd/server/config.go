@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -308,6 +309,10 @@ type ClientRxCoverageConfig struct {
 	// RequireLinkedCompanion (companion linking): the ingestor drops client
 	// messages from companions no user linked. Only with userManagement.enabled.
 	RequireLinkedCompanion bool `json:"requireLinkedCompanion,omitempty"`
+	// AppURL is the operator's CoreDrive RX web deployment, shown as a QR
+	// code on the coverage page. Only an absolute https URL with a host is
+	// used; see validClientRxAppURL.
+	AppURL string `json:"appUrl,omitempty"`
 }
 
 // ClientRxCoverageEnabled reports whether the opt-in mobile client-RX coverage
@@ -321,6 +326,30 @@ func (c *Config) ClientRxCoverageEnabled() bool {
 // management on).
 func (c *Config) ClientRxRequireLinkedCompanionSet() bool {
 	return c != nil && c.ClientRxCoverage != nil && c.ClientRxCoverage.RequireLinkedCompanion
+}
+
+// ClientRxAppURL returns clientRxCoverage.appUrl when the coverage feature is
+// on and the URL is valid, else "".
+func (c *Config) ClientRxAppURL() string {
+	if !c.ClientRxCoverageEnabled() || !validClientRxAppURL(c.ClientRxCoverage.AppURL) {
+		return ""
+	}
+	return c.ClientRxCoverage.AppURL
+}
+
+// validClientRxAppURL accepts only an absolute https URL with a host name.
+func validClientRxAppURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Hostname() != ""
+}
+
+// warnClientRxAppURL logs one line at startup when clientRxCoverage.appUrl is
+// set but unusable, since the coverage page then silently shows no QR code.
+func warnClientRxAppURL(c *Config) {
+	if c == nil || c.ClientRxCoverage == nil || c.ClientRxCoverage.AppURL == "" || validClientRxAppURL(c.ClientRxCoverage.AppURL) {
+		return
+	}
+	log.Printf("[config] clientRxCoverage.appUrl %q ignored: it must be an absolute https URL with a host", c.ClientRxCoverage.AppURL)
 }
 
 // ClientRfSamplesConfig gates the opt-in RF environment sample stream.
