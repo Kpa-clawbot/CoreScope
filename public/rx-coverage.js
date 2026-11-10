@@ -162,7 +162,15 @@
   // inverted, opposite-direction colour axis) sits right below it.
   function subtitleHtml() {
     var colourText = layer === 'noise' ? 'Colour = median RF noise floor per cell.' : 'Colour = best signal per cell.';
-    return 'Where roaming CoreScope-RX clients heard nodes. ' + colourText + ' <a href="https://github.com/efiten/corescope-rx" target="_blank" rel="noopener">Get the companion app →</a>';
+    return 'Where roaming CoreDrive RX clients heard nodes. ' + colourText + ' ' + appLinkHtml(window.MC_CLIENT_RX_APP_URL);
+  }
+
+  // appLinkHtml is the link at the end of the subtitle. With clientRxAppUrl set the
+  // app panel right below already shows and links that deployment, so the subtitle
+  // carries no link; without it, the project page.
+  function appLinkHtml(url) {
+    if (url) return '';
+    return '<a href="https://github.com/efiten/coredrive-rx" target="_blank" rel="noopener">Get the companion app →</a>';
   }
 
   // appPanelHtml: the operator's CoreDrive RX deployment (clientRxAppUrl from
@@ -652,6 +660,6 @@
   }
 
   if (window.addEventListener) window.addEventListener('cs-auth-changed', onAuthChanged);
-  window.CSRxCoverage = { _test: { appPanelHtml: appPanelHtml, coverageUrl: coverageUrl, mineBtnHtml: mineBtnHtml, authUser: authUser, coverageReply: coverageReply, freshBody: freshBody } };
+  window.CSRxCoverage = { _test: { appLinkHtml: appLinkHtml, appPanelHtml: appPanelHtml, coverageUrl: coverageUrl, mineBtnHtml: mineBtnHtml, authUser: authUser, coverageReply: coverageReply, freshBody: freshBody } };
   registerPage('rx-coverage', { init: init, destroy: destroy });
 })();
