@@ -609,6 +609,7 @@
   window.MeshConfigReady = fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
     window.MC_CLIENT_RX_COVERAGE = cfg.clientRxCoverage === true;
     window.MC_CLIENT_RF_SAMPLES = cfg.clientRfSamples === true;
+    window.MC_CLIENT_RX_APP_URL = typeof cfg.clientRxAppUrl === 'string' ? cfg.clientRxAppUrl : '';
     // Coverage is opt-in: the nav link is NOT in static HTML (so the default-off
     // nav matches upstream and the nav-overflow tests). Inject it after Analytics
     // only when enabled, then nudge applyNavPriority (it re-runs on 'resize').

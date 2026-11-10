@@ -220,6 +220,7 @@ node tests/unit/test-rx-coverage-mine.js
 node tests/unit/test-rx-coverage-escape.js
 node tests/unit/test-rx-coverage-noise.js
 node tests/unit/test-rx-coverage-viewport.js
+node tests/unit/test-rx-coverage-app-qr.js
 node tests/unit/test-scope-audit-styles-linked.js
 node tests/unit/test-settings-sync.js
 node tests/unit/test-slideover-1056-rowsel-strict.js
