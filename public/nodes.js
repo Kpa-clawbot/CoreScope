@@ -173,14 +173,10 @@
   }
 
   function renderNodeTimestampHtml(isoString) {
-    if (typeof formatTimestampWithTooltip !== 'function' || typeof getTimestampMode !== 'function') {
+    if (typeof renderTimestampHtml !== 'function') {
       return escapeHtml(typeof timeAgo === 'function' ? timeAgo(isoString) : '—');
     }
-    const f = formatTimestampWithTooltip(isoString, getTimestampMode());
-    const warn = f.isFuture
-      ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
-      : '';
-    return `<span class="timestamp-text" title="${escapeHtml(f.tooltip)}">${escapeHtml(f.text)}</span>${warn}`;
+    return renderTimestampHtml(isoString);
   }
 
   function renderNodeTimestampText(isoString) {
