@@ -162,7 +162,37 @@
   // inverted, opposite-direction colour axis) sits right below it.
   function subtitleHtml() {
     var colourText = layer === 'noise' ? 'Colour = median RF noise floor per cell.' : 'Colour = best signal per cell.';
-    return 'Where roaming CoreScope-RX clients heard nodes. ' + colourText + ' <a href="https://github.com/efiten/corescope-rx" target="_blank" rel="noopener">Get the companion app →</a>';
+    return 'Where roaming CoreDrive RX clients heard nodes. ' + colourText + ' ' + appLinkHtml(window.MC_CLIENT_RX_APP_URL);
+  }
+
+  // appLinkHtml is the link at the end of the subtitle. With clientRxAppUrl set the
+  // app panel right below already shows and links that deployment, so the subtitle
+  // carries no link; without it, the project page.
+  function appLinkHtml(url) {
+    if (url) return '';
+    return '<a href="https://github.com/efiten/coredrive-rx" target="_blank" rel="noopener">Get the companion app →</a>';
+  }
+
+  // appPanelHtml: the operator's CoreDrive RX deployment (clientRxAppUrl from
+  // /api/config/client) as a QR code plus the link; '' when none is set.
+  // makeQr is the vendored qrcode(typeNumber, errorCorrectionLevel).
+  function appPanelHtml(url, makeQr) {
+    if (!url) return '';
+    var svg = '';
+    if (typeof makeQr === 'function') {
+      try {
+        var qr = makeQr(0, 'M');
+        qr.addData(url);
+        qr.make();
+        svg = qr.createSvgTag(3, 12);
+      } catch (e) { console.warn('rx-coverage: QR code failed', e); }
+    }
+    var u = escapeHtml(url);
+    return '<div class="rx-app" id="rxApp">' +
+      (svg ? '<div class="rx-app-qr" role="img" aria-label="QR code of ' + u + '">' + svg + '</div>' : '') +
+      '<div class="rx-app-text">Map coverage with CoreDrive RX: scan this in the app (Settings &gt; Deployment) or open it on your phone.' +
+      '<br><a class="rx-app-url" href="' + u + '" target="_blank" rel="noopener">' + u + '</a></div>' +
+      '</div>';
   }
 
   function pageHtml() {
@@ -173,6 +203,7 @@
     return '<div style="max-width:1100px;margin:0 auto;padding:12px 16px">' +
       '<h2 style="margin:4px 0 2px;font-size:18px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Mobile RX coverage</h2>' +
       '<div style="color:var(--text-muted);font-size:11px" id="rxSubtitle">' + subtitleHtml() + '</div>' +
+      appPanelHtml(window.MC_CLIENT_RX_APP_URL, window.qrcode) +
       '<div class="analytics-time-range" id="rxDays" style="margin:8px 0">' + dayBtn(1) + dayBtn(7) + dayBtn(14) + dayBtn(30) + '</div>' +
       '<div class="analytics-time-range" id="rxMineBar" style="margin:8px 0" hidden></div>' +
       layerBar +
@@ -629,6 +660,6 @@
   }
 
   if (window.addEventListener) window.addEventListener('cs-auth-changed', onAuthChanged);
-  window.CSRxCoverage = { _test: { coverageUrl: coverageUrl, mineBtnHtml: mineBtnHtml, authUser: authUser, coverageReply: coverageReply, freshBody: freshBody } };
+  window.CSRxCoverage = { _test: { appLinkHtml: appLinkHtml, appPanelHtml: appPanelHtml, coverageUrl: coverageUrl, mineBtnHtml: mineBtnHtml, authUser: authUser, coverageReply: coverageReply, freshBody: freshBody } };
   registerPage('rx-coverage', { init: init, destroy: destroy });
 })();

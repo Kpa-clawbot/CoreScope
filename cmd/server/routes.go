@@ -560,6 +560,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		ClientRxCoverage:               s.cfg.ClientRxCoverageEnabled(),
 		ClientRfSamples:                s.cfg.ClientRfSamplesEnabled(),
 		ClientRxRequireLinkedCompanion: s.auth != nil && s.cfg.ClientRxRequireLinkedCompanionSet(),
+		ClientRxAppURL:                 s.cfg.ClientRxAppURL(),
 		PathTrust:                      &pathTrust,
 		UserManagement:                 s.clientUserManagement(),
 	})
