@@ -116,7 +116,7 @@ window.ObserverDetailNaiveBanner = {
           <a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">←</a>
           <h2 style="margin:0" id="obsTitle">Observer Detail</h2>
           <a href="#/nodes/${encodeURIComponent(currentId.toLowerCase())}" class="btn-secondary" title="View this pubkey as a node" style="text-decoration:none;font-size:12px;padding:4px 10px">View node detail →</a>
-          <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:100%">
             <span class="compare-with-group">
               <label class="sr-only" for="obsCompareWithPicker">Compare with another observer</label>
               <select id="obsCompareWithPicker" data-action="compare-with-picker"
@@ -375,14 +375,14 @@ window.ObserverDetailNaiveBanner = {
     if (!el) return;
     chartDefaults();
     el.innerHTML = `
-      <div class="obs-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px">
+      <div class="obs-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:16px">
         <div class="chart-card" style="padding:12px">
           <h3 style="margin:0 0 8px;font-size:0.95em">Packets Over Time</h3>
           <canvas id="obsTimeChart" role="img" aria-label="Packets over time chart"></canvas>
         </div>
         <div class="chart-card" style="padding:12px">
           <h3 style="margin:0 0 8px;font-size:0.95em">Packet Types</h3>
-          <div style="max-width:280px;margin:0 auto"><canvas id="obsTypeChart" role="img" aria-label="Packet types chart"></canvas></div>
+          <div style="max-width:280px;aspect-ratio:1;margin:0 auto"><canvas id="obsTypeChart" role="img" aria-label="Packet types chart"></canvas></div>
         </div>
         <div class="chart-card" style="padding:12px">
           <h3 style="margin:0 0 8px;font-size:0.95em">Unique Nodes Heard</h3>

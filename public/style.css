@@ -4304,10 +4304,13 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
 .observers-page .page-header h2 { font-size: var(--fs-lg); margin: 0 var(--space-sm) 0 0; }
 .observers-page .page-header .obs-refresh-spacer { margin-left: auto; }
 
+/* Empty datasets leave canvases at their native size without Chart.js. */
+.observer-detail-page .obs-charts canvas { max-width: 100%; }
+
 /* Observer-detail header: the Compare-with picker + Compare button
  * should sit together visually. Reuses the same .btn-secondary. */
 .observer-detail-page .compare-with-group {
-  display: inline-flex; align-items: stretch; gap: 0;
+  display: inline-flex; align-items: stretch; gap: 0; max-width: 100%;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface-1); overflow: hidden;
 }
@@ -4315,7 +4318,7 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
   border: none; background: transparent; color: var(--text);
   font-size: var(--fs-sm); padding: 6px 10px;
   border-right: 1px solid var(--border);
-  min-height: 0;
+  min-height: 0; min-width: 0;
 }
 .observer-detail-page .compare-with-group select.time-range-select:focus { outline: none; }
 .observer-detail-page .compare-with-group button[data-action="compare-with-go"] {
