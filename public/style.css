@@ -2495,18 +2495,30 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 
   /* #1224 Channels mobile UX: compact header, dominant channel name,
      icon-only row actions, smaller empty state. */
+  /* No max-height here: on touch devices the region pills (44px) and
+     + Add (48px) touch-target minimums can't fit a 56px cap, and the
+     wrapped rows overflowed onto the channel list. Instead: title + Add
+     on row 1, region pills on a full-width, sideways-scrolling row 2. */
   .ch-sidebar-header {
     padding: 6px 10px; gap: 6px;
-    max-height: 56px;
+    flex-wrap: wrap;
   }
-  .ch-sidebar-title { font-size: 14px; }
+  .ch-sidebar-title { font-size: 14px; flex: 1 1 auto; order: 1; }
   .ch-sidebar-title .ch-icon { font-size: 16px; }
-  .ch-add-channel-btn { padding: 4px 8px; font-size: 12px; }
+  .ch-add-channel-btn { padding: 4px 8px; font-size: 12px; flex: 0 0 auto; order: 2; }
   .ch-analytics-link { padding: 3px 7px; font-size: 13px; }
   /* Region filter shows just its compact pills/dropdown trigger in the header. */
-  .ch-header-region .region-filter-bar { padding: 0; gap: 4px; }
-  .ch-header-region .region-pill { padding: 2px 6px; font-size: 11px; }
-  .ch-header-region .region-dropdown-trigger { padding: 3px 6px; font-size: 11px; }
+  .ch-header-region {
+    order: 3; flex: 1 0 100%; min-width: 0;
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .ch-header-region::-webkit-scrollbar { display: none; }
+  /* Dropdown mode (>4 regions): the menu is position:absolute below its
+     trigger, so the row must not clip it. A single trigger never needs
+     to scroll sideways anyway. */
+  .ch-header-region:has(.region-dropdown-wrap) { overflow: visible; }
+  .ch-header-region:empty { display: none; }
+  .ch-header-region .region-filter-bar { padding: 0; gap: 4px; flex-wrap: nowrap; }
 
   /* Keep legacy channel rows compact without reducing the shared hit area.
      The mobile chat-app renderer uses rows without inline action icons. */
