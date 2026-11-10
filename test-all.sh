@@ -84,6 +84,7 @@ node tests/unit/test-issue-1412-customizer-no-override.js
 node tests/unit/test-issue-1415-packets-layout.js
 node tests/unit/test-issue-1418-cb-preset-ramp.js
 node tests/unit/test-issue-1418-deeplink-hops-channels.js
+node tests/unit/test-map-deeplink-path-params.js
 node tests/unit/test-issue-1418-edge-weights.js
 node tests/unit/test-issue-1418-polish-review.js
 node tests/unit/test-issue-1418-raw-hex-extraction.js
@@ -201,6 +202,7 @@ node tests/unit/test-panel-corner.js
 node tests/unit/test-path-inspector.js
 node tests/unit/test-payload-labels-content.js
 node tests/unit/test-payload-labels-namespace.js
+node tests/unit/test-payload-labels-surfaces.js
 node tests/unit/test-perf-anomaly.js
 node tests/unit/test-perf-disk-io-1120.js
 node tests/unit/test-perf-go-runtime.js

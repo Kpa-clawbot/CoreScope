@@ -308,6 +308,61 @@ async function packetsTypeLabels(page) {
     }
   });
 
+  // Node Analytics and Observer detail used to carry their own label maps
+  // without GRP_DATA / MULTIPART / RAW_CUSTOM, so their "Packet Types"
+  // doughnuts read "Type 6". The fixture has (almost) no such packets, so
+  // the real API response is fetched and its type breakdown replaced.
+  // Ids 6, 10, 15 must read as canonical labels; 13 (undefined in the
+  // firmware) keeps the "Type 13" fallback.
+  const INJECTED_IDS = [6, 10, 15, 13];
+  const EXPECTED_DOUGHNUT = [
+    EXPECTED_SHORT.GRP_DATA, EXPECTED_SHORT.MULTIPART, EXPECTED_SHORT.RAW_CUSTOM, 'Type 13'
+  ];
+  const doughnutLabels = (canvasId) => page.waitForFunction((id) => {
+    const el = document.getElementById(id);
+    const chart = el && window.Chart && window.Chart.getChart(el);
+    return chart ? chart.data.labels.slice() : null;
+  }, canvasId, { timeout: 15000 }).then((h) => h.jsonValue());
+
+  await step('Node Analytics "Packet Types" doughnut uses canonical labels', async () => {
+    const pk = await page.evaluate(async () => {
+      const r = await (await fetch('/api/nodes?limit=1')).json();
+      return (r.nodes || r)[0].public_key;
+    });
+    await page.route(/\/api\/nodes\/[^/]+\/analytics/, async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.packetTypeBreakdown = INJECTED_IDS.map((id, i) => ({ payload_type: id, count: 10 - i }));
+      await route.fulfill({ response, json });
+    });
+    await page.goto(BASE + '/#/nodes/' + pk + '/analytics', { waitUntil: 'domcontentloaded' });
+    const labels = await doughnutLabels('packetTypeChart');
+    await page.unroute(/\/api\/nodes\/[^/]+\/analytics/);
+    assert(JSON.stringify(labels) === JSON.stringify(EXPECTED_DOUGHNUT),
+      'node analytics labels: ' + JSON.stringify(labels));
+  });
+
+  await step('Observer detail "Packet Types" doughnut uses canonical labels', async () => {
+    const obsId = await page.evaluate(async () => {
+      const r = await (await fetch('/api/observers')).json();
+      return (r.observers || r)[0].id;
+    });
+    await page.route(/\/api\/observers\/[^/]+\/analytics/, async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.packetTypes = {};
+      INJECTED_IDS.forEach((id, i) => { json.packetTypes[id] = 10 - i; });
+      await route.fulfill({ response, json });
+    });
+    await page.goto(BASE + '/#/observers/' + encodeURIComponent(obsId), { waitUntil: 'domcontentloaded' });
+    const labels = await doughnutLabels('obsTypeChart');
+    await page.unroute(/\/api\/observers\/[^/]+\/analytics/);
+    // Object keys come back in ascending numeric order.
+    const expected = [EXPECTED_SHORT.GRP_DATA, EXPECTED_SHORT.MULTIPART, 'Type 13', EXPECTED_SHORT.RAW_CUSTOM];
+    assert(JSON.stringify(labels) === JSON.stringify(expected),
+      'observer detail labels: ' + JSON.stringify(labels));
+  });
+
   await ctx.close();
   await browser.close();
   console.log(`\n=== ${passed} passed, ${failed} failed ===`);

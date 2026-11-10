@@ -8,6 +8,8 @@
  *   escapeHtml(s)
  *   buildPacketContextBlock(pktCtx)
  *   buildSnrSparkline(snrTrend)
+ *   pathGroupKey(rawHops, filterHops)
+ *   resolveDeepLinkObservation(observations, params)
  *
  * `spiderFanFor` is NOT extracted — it consumes Leaflet LatLng / map types
  * (mapRef.latLngToLayerPoint, mk.getLatLng, mk.setLatLng, L.point) and is
@@ -154,9 +156,73 @@
       '<span class="mc-rt-detail-spark-meta">' + pts.length + ' obs · ' + minS.toFixed(1) + '..' + maxS.toFixed(1) + ' dB</span>';
   }
 
+  // Path-picker grouping key for one observation's raw hops. filterHops is
+  // the #1633 hide-1-byte-hops filter (window.MC_filterPathHops) or absent.
+  // #1689 r1 (adv #1): a path the filter strips entirely keeps its raw hops
+  // in a sentinel key, so distinct all-1-byte routes stay separate groups.
+  function pathGroupKey(rawHops, filterHops) {
+    rawHops = rawHops || [];
+    var hops = typeof filterHops === 'function' ? filterHops(rawHops) : rawHops;
+    return hops.length ? hops.join('→') : ('⟨all-1byte⟩::' + rawHops.join('→'));
+  }
+
+  // Deep-link observation choice for #/map?packet=<hash>. params:
+  //   obsId    — ?obs=<observation id>; wins when it names an observation
+  //   observer — ?observer=<pubkey or hex prefix of 8+ chars>; that
+  //              observer's earliest observation, its path isolated in the
+  //              picker
+  //   paths    — ?paths=all; open the picker's union ("All") view
+  // Returns { chosen, observationId, pathView }. observationId is the id of
+  // the observation obs or observer actually selected (null on fallback to
+  // the first), never an unmatched obs. pathView is { mode: 'all' },
+  // { mode: 'path', path: <raw hops> } or null.
+  var OBSERVER_KEY_RE = /^[0-9a-f]{8,}$/;
+  function resolveDeepLinkObservation(observations, params) {
+    observations = observations || [];
+    params = params || {};
+    var chosen = null, byObserver = false;
+    if (params.obsId) {
+      chosen = observations.find(function (o) { return String(o.id) === String(params.obsId); }) || null;
+    }
+    var key = String(params.observer || '').trim().toLowerCase();
+    if (!chosen && key) {
+      if (OBSERVER_KEY_RE.test(key)) {
+        var best = null, bestTs = Infinity;
+        observations.forEach(function (o) {
+          if (String(o.observer_id || '').toLowerCase().indexOf(key) !== 0) return;
+          var ts = Date.parse(o.timestamp);
+          if (isNaN(ts)) ts = Infinity;
+          if (!best || ts < bestTs || (ts === bestTs && Number(o.id) < Number(best.id))) {
+            best = o; bestTs = ts;
+          }
+        });
+        chosen = best;
+        byObserver = !!best;
+      }
+      if (!byObserver) console.warn('[deep-link] no observation from observer ' + key);
+    }
+    var observationId = chosen ? String(chosen.id) : null;
+    if (!chosen) chosen = observations[0] || null;
+    var pathView = null;
+    if (byObserver) {
+      var path = [];
+      try { path = JSON.parse(chosen.path_json || '[]'); } catch (_) {}
+      pathView = { mode: 'path', path: path };
+    } else if (params.paths === 'all') {
+      pathView = { mode: 'all' };
+    }
+    return {
+      chosen: chosen,
+      observationId: observationId,
+      pathView: pathView
+    };
+  }
+
   window.MC_ROUTE_UTILS = {
     escapeHtml: escapeHtml,
     buildPacketContextBlock: buildPacketContextBlock,
-    buildSnrSparkline: buildSnrSparkline
+    buildSnrSparkline: buildSnrSparkline,
+    pathGroupKey: pathGroupKey,
+    resolveDeepLinkObservation: resolveDeepLinkObservation
   };
 })();

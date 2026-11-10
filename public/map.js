@@ -38,6 +38,10 @@
     return s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   };
 
+  // The stored flag is sticky; it is not a current location or bridge finding.
+  const FOREIGN_ADVERT_DESCRIPTION = 'An advert from this node was flagged outside the configured area at ingestion. This historical flag does not indicate its current location.';
+  const FOREIGN_ADVERT_INDICATOR = '<span class="map-foreign-indicator" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>';
+
   // Roles loaded from shared roles.js (ROLE_STYLE, ROLE_LABELS, ROLE_COLORS globals)
 
   // ── #1356 a11y constants — letter prefix + glyph + neutral fill carriers ──
@@ -345,7 +349,7 @@
     return out;
   }
 
-  function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride) {
+  function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride, isForeign) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
     // #1438: default fill resolves through the live CSS var so existing
     // mounted SVG markers recolor when cb-preset switches or the
@@ -413,15 +417,16 @@
     }
     const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${path}${obsOverlay}</svg>`;
     return L.divIcon({
-      html: svg,
+      html: svg + (isForeign ? FOREIGN_ADVERT_INDICATOR : ''),
       className: 'meshcore-marker' + (isStale ? ' marker-stale' : ''),
       iconSize: [size, size],
       iconAnchor: [c, c],
       popupAnchor: [0, -c],
+      collisionBounds: { x: -c, y: -c, w: size + (isForeign ? 7 : 0), h: size + (isForeign ? 7 : 0) },
     });
   }
 
-  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) {
+  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState, metrics) {
     // Show the short mesh hash ID (first N bytes of pubkey, uppercased). When
     // the width is unobserved the label falls back to one byte — it has to draw
     // something — but says so instead of asserting a 1-byte config.
@@ -454,9 +459,15 @@
     }
     var scopeClass = scopeMeta ? (' scope-' + scopeMeta.key) : '';
     var scopeAria = scopeMeta ? (', scope config ' + scopeMeta.label) : '';
-    var scopeTitle = scopeMeta ? (' title="' + scopeMeta.label + ' — ' + scopeMeta.title.replace(/"/g, '&quot;') + '"') : '';
+    var labelTitle = scopeMeta ? (scopeMeta.label + ' — ' + scopeMeta.title) : '';
     var ariaStatus = status ? ('multi-byte ' + status + ', hash ' + shortHash + ariaWidth + scopeAria)
                             : ('repeater hash ' + shortHash + ariaWidth + scopeAria);
+    var isForeign = node.foreign === true;
+    if (isForeign) {
+      var foreignTitle = 'Foreign advert flag: ' + FOREIGN_ADVERT_DESCRIPTION;
+      ariaStatus += ', ' + foreignTitle;
+      labelTitle += (labelTitle ? ' — ' : '') + foreignTitle;
+    }
     // Observer indicator stays a star — it is an orthogonal signal, not a status color.
     var obsIndicator = isAlsoObserver
       ? ' <span aria-hidden="true" style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span>'
@@ -464,15 +475,45 @@
     // Glyph + thin-space (U+2009) + hash. Visible content is aria-hidden so AT
     // reads the aria-label only (avoids "check mark 3 E" literal announcements).
     var visible = (glyph ? glyph + '\u2009' : '') + shortHash;
-    var html = '<div class="mc-mb-label' + statusClass + scopeClass + unknownWidth + '" role="img" aria-label="' + ariaStatus + '"' + scopeTitle + '>' +
-      '<span aria-hidden="true">' + visible + '</span>' + obsIndicator + '</div>';
+    var html = '<div class="mc-mb-label' + statusClass + scopeClass + unknownWidth + '" role="img" aria-label="' + ariaStatus + '"' + (labelTitle ? ' title="' + safeEsc(labelTitle) + '"' : '') + '>' +
+      '<span aria-hidden="true">' + visible + '</span>' + obsIndicator + (isForeign ? FOREIGN_ADVERT_INDICATOR : '') + '</div>';
     return L.divIcon({
       html: html,
       className: 'meshcore-marker meshcore-label-marker' + (isStale ? ' marker-stale' : ''),
       iconSize: null,
       iconAnchor: [14, 12],
       popupAnchor: [0, -12],
+      collisionBounds: metrics ? {
+        x: -14, y: -12,
+        w: Math.ceil(metrics.textWidth(visible) + metrics.padding + (isAlsoObserver ? metrics.observer : 0) + (isForeign ? 17 : 0)),
+        h: metrics.height,
+      } : null,
     });
+  }
+
+  // Read the label font once per render, outside the marker/placement loops.
+  // Canvas measures short text without forcing a DOM layout for each node.
+  function markerLabelMetrics() {
+    const probe = document.createElement('div');
+    probe.className = 'mc-mb-label';
+    probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none';
+    probe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(probe);
+    try {
+      const style = getComputedStyle(probe);
+      const context = document.createElement('canvas').getContext('2d');
+      context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
+      const spacing = parseFloat(style.letterSpacing) || 0;
+      const textWidth = text => context.measureText(text).width + text.length * spacing;
+      return {
+        textWidth,
+        padding: parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth),
+        observer: textWidth(' ') + 16, // .ph-icon is 16px, including in the observer span.
+        height: Math.ceil(Math.max(24, parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 4)),
+      };
+    } finally {
+      probe.remove();
+    }
   }
 
   async function init(container) {
@@ -604,7 +645,19 @@
     } else {
       const savedView = localStorage.getItem('map-view');
       if (savedView) {
-        try { const v = JSON.parse(savedView); initCenter = [v.lat, v.lng]; initZoom = v.zoom; } catch {}
+        try {
+          const v = JSON.parse(savedView);
+          if (v && [v.lat, v.lng, v.zoom].every(Number.isFinite)) {
+            // Panning can save another world copy; markers use canonical longitudes.
+            const saved = parseViewportHash(new URLSearchParams({
+              lat: v.lat, lon: L.latLng(v.lat, v.lng).wrap().lng, zoom: v.zoom
+            }).toString());
+            if (saved) {
+              initCenter = [saved.lat, saved.lon];
+              initZoom = saved.zoom;
+            }
+          }
+        } catch {}
       }
     }
     map = L.map('leaflet-map', { zoomControl: true }).setView(initCenter, initZoom);
@@ -710,7 +763,7 @@
 
     // Save position on move
     map.on('moveend', () => {
-      const c = map.getCenter();
+      const c = map.getCenter().wrap();
       localStorage.setItem('map-view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }));
       userHasMoved = true;
     });
@@ -1463,6 +1516,7 @@
         edgeCounts: edgeCounts,
         packetHash: opts.packetHash || null,
         observationId: opts.observationId || null,
+        initialPathView: opts.initialPathView || null,
         allPaths: paths,
         packetContext: opts.packetContext || null
       });
@@ -1475,7 +1529,10 @@
   // fetches the packet+observations from /api/packets/<hash>, picks the
   // selected observation as canonical, and dispatches the same payload that
   // the packets-page 'View on map' button would have set in sessionStorage.
-  // Without an obs param, the first observation is used.
+  // Without an obs param, the first observation is used. Optional:
+  //   &observer=<pubkey or 8+ char prefix> — that observer's earliest
+  //     observation, its path isolated in the path picker
+  //   &paths=all — open the path picker's "All" (union) view
   async function loadRouteFromDeepLink() {
     try {
       const hash = location.hash || '';
@@ -1499,10 +1556,13 @@
       const pkt = data.packet || data;
       const observations = data.observations || pkt.observations || [];
       if (!observations.length) return;
-      // Pick the user-chosen observation by id, fall back to first
-      let chosen = null;
-      if (obsId) chosen = observations.find(o => String(o.id) === String(obsId));
-      if (!chosen) chosen = observations[0];
+      // Pick the observation: ?obs=<id>, else ?observer=<pubkey|prefix>'s
+      // earliest, else the first. ?observer / ?paths=all also set which
+      // path-picker view the route opens in.
+      const pick = window.MC_ROUTE_UTILS.resolveDeepLinkObservation(observations, {
+        obsId: obsId, observer: params.get('observer'), paths: params.get('paths')
+      });
+      const chosen = pick.chosen;
       // Parse decoded for src/dst.
       // Try observation first, fall back to packet-level decoded_json (GRP_TXT
       // / TRACE packets often have channel + content at the packet level, not
@@ -1566,16 +1626,8 @@
         const m = nodes.find(n => n.public_key.toLowerCase().startsWith(hL));
         return m ? m.name : null;
       }
-      // Map payload_type byte → string. Source: cmd/ingestor/decoder.go.
-      // 0=REQ, 1=RESPONSE, 2=TXT_MSG, 3=ACK, 4=ADVERT, 5=GRP_TXT,
-      // 6=GRP_DATA, 7=ANON_REQ, 8=PATH, 9=TRACE, 10=MULTIPART,
-      // 11=CONTROL, 12=RAW_CUSTOM.
-      const PAYLOAD_TYPE_MAP = {
-        0: 'REQ', 1: 'RESPONSE', 2: 'TXT_MSG', 3: 'ACK', 4: 'ADVERT',
-        5: 'GRP_TXT', 6: 'GRP_DATA', 7: 'ANON_REQ', 8: 'PATH',
-        9: 'TRACE', 10: 'MULTIPART', 11: 'CONTROL', 12: 'RAW_CUSTOM'
-      };
-      const inferredType = decoded.type || PAYLOAD_TYPE_MAP[pkt.payload_type] || 'OTHER';
+      // payload_type byte → firmware enum name from the canonical map.
+      const inferredType = decoded.type || window.PayloadLabels.api.enumNameById(pkt.payload_type) || 'OTHER';
       // Try to peek at raw_hex bytes to extract src/destHash when decoded is empty.
       // TXT_MSG/REQ/RESPONSE/ANON_REQ all have the same wire layout:
       //   byte0=route+type, byte1=path_len, then path bytes, then destHash + srcHash + encrypted body.
@@ -1713,11 +1765,12 @@
         return;
       }
       if (allPaths.length === 1) {
-        drawPacketRoute(chosenPath, origin, { destination: destination, packetHash: packetHash, observationId: obsId, packetContext: pktCtx, inferredHops: inferredHops });
+        drawPacketRoute(chosenPath, origin, { destination: destination, packetHash: packetHash, observationId: pick.observationId, packetContext: pktCtx, inferredHops: inferredHops });
       } else {
         drawPacketRouteMulti(allPaths, origin, {
           packetHash: packetHash,
-          observationId: obsId,
+          observationId: pick.observationId,
+          initialPathView: pick.pathView,
           canonicalPath: chosenPath,
           inferredHops: inferredHops,
           destination: destination,
@@ -1995,16 +2048,20 @@
 
     for (var i = 0; i < markers.length; i++) {
       var m = markers[i];
-      var w = m.isLabel ? 38 : 20;
-      var h = m.isLabel ? 24 : 20;
+      // Callers without bounds retain the old placement (including route labels).
+      var bounds = m.collisionBounds;
+      var w = bounds ? bounds.w : (m.isLabel ? 38 : 20);
+      var h = bounds ? bounds.h : (m.isLabel ? 24 : 20);
+      var left = bounds ? bounds.x : -w / 2;
+      var top = bounds ? bounds.y : -h / 2;
       var pt = mapRef.latLngToLayerPoint(m.latLng);
       var bestPt = pt;
-      var box = { x: pt.x - w / 2, y: pt.y - h / 2, w: w, h: h };
+      var box = { x: pt.x + left, y: pt.y + top, w: w, h: h };
 
       if (overlaps(box)) {
         for (var j = 0; j < offsets.length; j++) {
           var tryPt = L.point(pt.x + offsets[j][0], pt.y + offsets[j][1]);
-          var tryBox = { x: tryPt.x - w / 2, y: tryPt.y - h / 2, w: w, h: h };
+          var tryBox = { x: tryPt.x + left, y: tryPt.y + top, w: w, h: h };
           if (!overlaps(tryBox)) {
             bestPt = tryPt;
             box = tryBox;
@@ -2102,6 +2159,10 @@
 
     const filterCtx = { selectedReferenceNode, neighborPubkeys };
     const filtered = nodes.filter(n => nodePassesMapFilters(n, filters, filterCtx));
+    // A warning and its neighbors need their full footprints. Keep the ordinary
+    // map's placement unchanged when no warning is present; clusters place themselves.
+    const sizeWarnings = !filters.clustering && filtered.some(n => n.foreign === true);
+    const labelMetrics = sizeWarnings && filters.hashLabels ? markerLabelMetrics() : null;
 
     const allMarkers = [];
 
@@ -2134,7 +2195,8 @@
       // scope overlay stands down rather than the two fighting over the fill.
       var scopeState = (scopeTintEnabled(filters.scopeOverlay, filters.scopeState) && !mbColor) ? (node.scope_config_state || null) : null;
       var scopeColor = scopeState ? scopeTint(node) : null;
-      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor);
+      const isForeign = node.foreign === true;
+      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState, labelMetrics) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor, isForeign);
       const latLng = L.latLng(node.lat, node.lon);
       // The scope state has to leave the fill and reach the DOM, or a dot marker
       // is colour and nothing else — which on the achromat preset is six greys
@@ -2145,8 +2207,9 @@
       // produced. The popup carries it too, for the pointerless case.
       var scopeLabel = scopeState ? scopeStateLabel(scopeState) : '';
       var markerAlt = (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' +
-        (scopeLabel ? ', scope config ' + scopeLabel : '');
-      allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: markerAlt, title: scopeLabel ? markerAlt : '' });
+        (scopeLabel ? ', scope config ' + scopeLabel : '') +
+        (isForeign ? ', Foreign advert flag: ' + FOREIGN_ADVERT_DESCRIPTION : '');
+      allMarkers.push({ latLng, node, icon, isLabel: useLabel, collisionBounds: sizeWarnings ? icon.options.collisionBounds : null, popupFn: function() { return buildPopup(node); }, alt: markerAlt, title: scopeLabel || isForeign ? markerAlt : '' });
     }
 
     // Add observer markers (skip observers already represented as a node marker)
@@ -2161,7 +2224,7 @@
         if (obs.id && displayedNodePubkeys.has(obs.id.toLowerCase())) continue;
         const icon = makeMarkerIcon('observer');
         const latLng = L.latLng(obs.lat, obs.lon);
-        allMarkers.push({ latLng, node: obs, icon, isLabel: false, popupFn: function() { return buildObserverPopup(obs); }, alt: (obs.name || obs.id || 'Unknown') + ' (observer)' });
+        allMarkers.push({ latLng, node: obs, icon, isLabel: false, collisionBounds: sizeWarnings ? icon.options.collisionBounds : null, popupFn: function() { return buildObserverPopup(obs); }, alt: (obs.name || obs.id || 'Unknown') + ' (observer)' });
       }
     }
 
@@ -2325,6 +2388,7 @@
       <div class="map-popup" style="font-family:var(--font);min-width:180px;">
         <h3 style="font-weight:700;font-size:14px;margin:0 0 4px;">${safeEsc(node.name || 'Unknown')}</h3>
         ${roleBadge}${obsBadge}
+        ${node.foreign === true ? '<p class="map-foreign-notice"><strong>Foreign advert flag</strong><br>' + FOREIGN_ADVERT_DESCRIPTION + '</p>' : ''}
         <dl style="margin-top:8px;font-size:12px;">
           ${hashPrefixRow}
           ${mbRow}

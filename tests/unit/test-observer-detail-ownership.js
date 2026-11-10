@@ -58,6 +58,8 @@ function harness(failChartAt = 0) {
       return new Promise((resolve, reject) => Object.assign(request, { resolve, reject }));
     },
   });
+  // index.html loads payload-labels.js before observer-detail.js.
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../public/payload-labels.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../public/observer-detail.js'), 'utf8'), context);
   function visit(id) {
     page.destroy();
