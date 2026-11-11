@@ -654,7 +654,13 @@
   function destroy() {
     destroyed = true;
     generation++;
-    if (map) { try { map.remove(); } catch (e) {} map = null; }
+    if (map) {
+      // Bounded tile-sync registry: drop the record before Leaflet removal
+      // (the container can stay attached, so isConnected pruning can't see it).
+      try { if (window.__mcNodeTileSyncUnregister) window.__mcNodeTileSyncUnregister(map); } catch (e) {}
+      try { map.remove(); } catch (e) {}
+      map = null;
+    }
     covLayer = null;
     gapRenderer = null;
   }

@@ -523,36 +523,11 @@
   window.TILE_DARK  = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
   window.TILE_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
 
-  window.getTileUrl = function () {
-    var isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
-      (document.documentElement.getAttribute('data-theme') !== 'light' &&
-       window.matchMedia('(prefers-color-scheme: dark)').matches);
-    if (!isDark) return TILE_LIGHT;
-    // #1461 followup: honor customizer's dark-tile-provider pick (#1420 / #1430)
-    // when the registry is loaded. Falls back to TILE_DARK if absent.
-    try {
-      if (window.MC_getDarkTileProvider && window.MC_TILE_PROVIDERS) {
-        var id = window.MC_getDarkTileProvider();
-        var p = window.MC_TILE_PROVIDERS[id];
-        if (p && (p.url || p.baseUrl)) {
-          // #1614: providers added in #1533 (carto/osm/stamen) declare
-          // `url` as a function for lazy config resolution. Invoke it so
-          // we always return a string URL template; L.tileLayer otherwise
-          // stringifies the function source and every tile request 404s.
-          var u = p.url || p.baseUrl;
-          return (typeof u === 'function') ? u() : u;
-        }
-      }
-    } catch (_e) {}
-    return TILE_DARK;
-  };
   /* Helper: get the full provider object (for callers that also need the
    * invertFilter or refUrl/attribution). Returns null when no customizer
    * provider applies (light mode, or registry not loaded). */
   window.getActiveTileProvider = function () {
-    var isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
-      (document.documentElement.getAttribute('data-theme') !== 'light' &&
-       window.matchMedia('(prefers-color-scheme: dark)').matches);
+    var isDark = (typeof window.MC_isDarkTheme === 'function') ? !!window.MC_isDarkTheme() : _tileThemeIsDark();
     if (!isDark) return null;
     try {
       if (window.MC_getDarkTileProvider && window.MC_TILE_PROVIDERS) {
@@ -562,6 +537,47 @@
     } catch (_e) {}
     return null;
   };
+
+  // Theme check for the legacy (registry-not-loaded) path below; kept in sync
+  // with map-tile-providers.js' _isDark(), which is the canonical version.
+  function _tileThemeIsDark() {
+    try {
+      var attr = document.documentElement.getAttribute('data-theme');
+      if (attr === 'dark') return true;
+      if (attr === 'light') return false;
+      return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    } catch (_e) { return false; }
+  }
+
+  /* getTileUrl(): thin wrapper over MC_resolveTile(). Before the node-map
+   * light-tiles refactor this function resolved dark providers from the
+   * registry but returned the bare TILE_LIGHT scalar in light mode — ignoring
+   * the user's Light Mode Provider pick, the operator's lightDefault, and the
+   * Carto key when /api/config/client hadn't landed yet. Callers that only
+   * need the URL can keep calling this; callers that also want attribution /
+   * maxZoom / refUrl / invertFilter should call window.MC_resolveTile()
+   * directly and read the whole descriptor. */
+  window.getTileUrl = function () {
+    var isDark = (typeof window.MC_isDarkTheme === 'function') ? !!window.MC_isDarkTheme() : _tileThemeIsDark();
+    if (window.MC_resolveTile) {
+      try { return window.MC_resolveTile(isDark).url; } catch (_e) {}
+    }
+    // Legacy fallback for sandboxes that mock the registry without loading
+    // map-tile-providers.js (mirrors #1614's function-URL contract).
+    if (!isDark) return TILE_LIGHT;
+    try {
+      if (window.MC_getDarkTileProvider && window.MC_TILE_PROVIDERS) {
+        var id = window.MC_getDarkTileProvider();
+        var p = window.MC_TILE_PROVIDERS[id];
+        if (p && (p.url || p.baseUrl)) {
+          var u = p.url || p.baseUrl;
+          return (typeof u === 'function') ? u() : u;
+        }
+      }
+    } catch (_e) {}
+    return TILE_DARK;
+  };
+
 
   // ─── SNR thresholds ───
   window.SNR_THRESHOLDS = { excellent: 6, good: 0 };
@@ -657,11 +673,19 @@
     }
     if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry(true);
     // CARTO raster needs an API key now, so the bare TILE_DARK/TILE_LIGHT
-    // fallbacks have to pick it up as well — getTileUrl() returns TILE_LIGHT
-    // directly in light mode and never consults the registry. Explicit
-    // darkUrl/lightUrl overrides above still win.
+    // fallbacks pick it up here — code that still reads the constants directly
+    // (screens without the registry) gets keyed URLs. Registry-driven surfaces
+    // fetch their URLs lazily through MC_resolveTile() instead.
     if (typeof window.MC_tileUrlById === 'function') {
       var _tOv = (cfg.tiles || (cfg.map && cfg.map.tiles) || {});
+      // Tell MC_resolveTile that explicit operator overrides are in play so
+      // they beat the user's provider pick on every consumer (only the legacy
+      // roles.js path saw them before). Resolved lazily at call time via the
+      // TILE_DARK/TILE_LIGHT scalars, which carry the override URLs above.
+      window.MC_LEGACY_TILE_OVERRIDE = {
+        dark:  !!(_tOv.dark || _tOv.darkUrl),
+        light: !!(_tOv.light || _tOv.lightUrl)
+      };
       if (!_tOv.dark && !_tOv.darkUrl)   window.TILE_DARK  = window.MC_tileUrlById('carto-dark',  window.TILE_DARK);
       if (!_tOv.light && !_tOv.lightUrl) window.TILE_LIGHT = window.MC_tileUrlById('carto-light', window.TILE_LIGHT);
     }

@@ -99,6 +99,7 @@ node tests/unit/test-issue-1456-score-labels.js
 node tests/unit/test-issue-1461-mobile-page-actions.js
 node tests/unit/test-issue-1470-card-bg-contrast.js
 node tests/unit/test-issue-1470-node-tile-helper.js
+node tests/unit/test-tile-resolver.js
 node tests/unit/test-issue-1473-prefix-generator.js
 node tests/unit/test-issue-1473-reserved-prefixes.js
 node tests/unit/test-issue-1485-live-anim-z.js

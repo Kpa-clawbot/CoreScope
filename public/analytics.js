@@ -2466,7 +2466,12 @@
     // Render minimap
     if (hasMap && typeof L !== 'undefined') {
       const map = L.map('subpathMap', { zoomControl: false, attributionControl: false });
-      L.tileLayer(getTileUrl(), { maxZoom: 18 }).addTo(map);
+      // Shared resolver for attribution/maxZoom parity with the other maps
+      // (OpenTopoMap caps at 17, USGS at 16 — a hardcoded 18 404s above those).
+      const _tileR = (typeof window.MC_resolveTile === 'function')
+        ? window.MC_resolveTile(typeof window.MC_isDarkTheme === 'function' ? window.MC_isDarkTheme() : false)
+        : null;
+      L.tileLayer((_tileR && _tileR.url) || getTileUrl(), { maxZoom: (_tileR && _tileR.maxZoom) || 18 }).addTo(map);
 
       const latlngs = [];
       nodesWithLoc.forEach((n, i) => {
