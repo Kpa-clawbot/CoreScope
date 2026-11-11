@@ -506,10 +506,10 @@
     `;
 
     // Affinity stats widget — fetch and append if debugAffinity enabled
-    var showDebug = (window.CLIENT_CONFIG && window.CLIENT_CONFIG.debugAffinity) || localStorage.getItem('meshcore-affinity-debug') === 'true';
+    var showDebug = !CSApi.anonymous && ((window.CLIENT_CONFIG && window.CLIENT_CONFIG.debugAffinity) || localStorage.getItem('meshcore-affinity-debug') === 'true');
     if (showDebug) {
       var apiKey = localStorage.getItem('meshcore-api-key') || '';
-      fetch('/api/debug/affinity', { headers: { 'X-API-Key': apiKey } })
+      CSApi.fetch('/api/debug/affinity', { headers: { 'X-API-Key': apiKey } })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (data) {
           if (!data || !data.stats) return;
@@ -4903,7 +4903,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading clock health data…</div>';
     try {
       const aqs = AreaFilter.areaQueryString();
-      var data = await (await fetch('/api/nodes/clock-skew' + (aqs ? '?' + aqs.slice(1) : ''))).json();
+      var data = await (await CSApi.fetch('/api/nodes/clock-skew' + (aqs ? '?' + aqs.slice(1) : ''))).json();
       if (!Array.isArray(data) || !data.length) {
         el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No clock skew data available. Nodes need recent adverts for clock analysis.</div>';
         return;

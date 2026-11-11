@@ -17,6 +17,7 @@
  */
 'use strict';
 const fs = require('fs');
+const { loadApiBase } = require('./api-base-sandbox');
 const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
@@ -60,6 +61,7 @@ function loadAnalyticsHelpers() {
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
+  loadApiBase(sandbox);
   vm.runInContext(fs.readFileSync(path.join(REPO_ROOT, 'public/analytics.js'), 'utf8'), sandbox);
   return sandbox;
 }
@@ -147,6 +149,7 @@ function loadApi(responses) {
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
+  loadApiBase(sandbox);
   vm.runInContext(fs.readFileSync(path.join(REPO_ROOT, 'public/app.js'), 'utf8'), sandbox);
   return { sandbox, calls };
 }

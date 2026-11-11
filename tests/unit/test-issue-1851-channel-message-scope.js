@@ -16,6 +16,7 @@
  */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const assert = require('assert');
 const { createCipheriv, createHmac, createHash } = require('crypto');
@@ -51,6 +52,7 @@ function loadPathHashSize() {
     fetch: () => new Promise(() => {}),
   };
   vm.createContext(appCtx);
+  loadApiBase(appCtx);
   vm.runInContext(fs.readFileSync('public/app.js', 'utf8'), appCtx);
   return appCtx.pathHashSize;
 }
@@ -125,6 +127,7 @@ function makeChannelsSandbox(apiImpl) {
   };
   ctx.window.matchMedia = ctx.matchMedia;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   for (const file of ['public/vendor/aes-ecb.js', 'public/channel-decrypt.js', 'public/channels.js']) {
     vm.runInContext(fs.readFileSync(file, 'utf8'), ctx);
     for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];

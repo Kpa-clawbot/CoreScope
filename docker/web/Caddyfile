@@ -1,0 +1,23 @@
+# The web container (Dockerfile.web): the static UI from /srv, with the API
+# and the WebSocket forwarded to the CoreScope server, so both share this
+# origin. BACKEND is the server's host:port; SITE_ADDRESS is ":80" for plain
+# HTTP, or a domain name for automatic HTTPS.
+#
+# Caddy adds X-Forwarded-For. To keep the server's per-IP limits behind this
+# proxy, list its address in webSocket.trustedProxies (and
+# userManagement.trustedProxies) in the server's config.json.
+
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	@backend path /api/* /ws
+	reverse_proxy @backend {$BACKEND}
+
+	# The same rules as deploy/static/_headers: these change on every deploy
+	# without a ?v= buster, so a browser must always revalidate them.
+	@nocache path / /index.html /area-map.html /geofilter-builder.html /geofilter-docs.html /deployment.js
+	header @nocache Cache-Control "no-cache, no-store, must-revalidate"
+
+	root * /srv
+	file_server
+}

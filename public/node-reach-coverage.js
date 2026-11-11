@@ -41,7 +41,7 @@
       var b = map.getBounds();
       var bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].join(',');
       var url = '/api/nodes/' + encodeURIComponent(pubkey) + '/rx-coverage?bbox=' + bbox + '&z=' + map.getZoom();
-      fetch(url).then(function (r) { return r.json(); }).then(function (fc) {
+      CSApi.fetch(url).then(function (r) { return r.json(); }).then(function (fc) {
         group.clearLayers();
         (fc.features || []).forEach(function (f) {
           var ring = (f.geometry.coordinates[0] || []).map(function (c) { return [c[1], c[0]]; }); // [lon,lat]→[lat,lon]

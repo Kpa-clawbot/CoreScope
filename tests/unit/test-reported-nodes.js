@@ -1,5 +1,6 @@
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 // Unit test for reported-nodes.js: repeaters known only from their reported
 // name must be findable, and every position must read as an estimate.
 const assert = require('assert');
@@ -19,6 +20,7 @@ const sandbox = {
   Date,
 };
 vm.createContext(sandbox);
+loadApiBase(sandbox);
 vm.runInContext(code, sandbox);
 const R = sandbox.window.ReportedNodes;
 

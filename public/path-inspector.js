@@ -82,11 +82,7 @@
     }
 
     resultsDiv.innerHTML = '<p>Loading...</p>';
-    fetch('/api/paths/inspect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prefixes: prefixes })
-    })
+    CSApi.postJSON('/api/paths/inspect', { prefixes: prefixes })
       .then(function (r) {
         if (r.status === 503) return r.json().then(function (d) { throw new Error('Service warming up, retry in a few seconds.'); });
         if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || 'Request failed'); });

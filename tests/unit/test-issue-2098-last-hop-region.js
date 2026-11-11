@@ -14,6 +14,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const vm = require('vm');
 
@@ -23,6 +24,7 @@ function load(file) {
     parseInt, parseFloat, isNaN,
   };
   vm.createContext(sandbox);
+  loadApiBase(sandbox);
   vm.runInContext(fs.readFileSync(REPO_ROOT + '/public/' + file, 'utf8'), sandbox);
   return sandbox;
 }
@@ -101,6 +103,7 @@ function loadDisplay() {
     },
   };
   vm.createContext(sandbox);
+  loadApiBase(sandbox);
   vm.runInContext(fs.readFileSync(REPO_ROOT + '/public/hop-display.js', 'utf8'), sandbox);
   return { HopDisplay: sandbox.window.HopDisplay, appended };
 }
@@ -157,6 +160,7 @@ function loadPackets() {
     registerPage: () => {},
   };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   const loadFile = f => {
     vm.runInContext(fs.readFileSync(REPO_ROOT + '/public/' + f, 'utf8'), ctx, { filename: f });
     for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];

@@ -1,6 +1,7 @@
 /* Tests for perf.js Disk I/O + Write Sources + SQLite sections (#1120) */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const assert = require('assert');
 
@@ -41,7 +42,8 @@ function makeSandbox() {
 function loadPerf() {
   const sb = makeSandbox();
   const code = fs.readFileSync('public/perf.js', 'utf8');
-  vm.runInNewContext(code, sb.ctx);
+  loadApiBase(sb.ctx);
+  vm.runInContext(code, sb.ctx);
   return sb;
 }
 

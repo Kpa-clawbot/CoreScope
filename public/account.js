@@ -119,7 +119,7 @@
       (window.CSSettingsSync ? '<h3>Settings sync</h3><div id="syncSection"></div>' : '') +
       '<h3>My data</h3>' +
       '<p class="account-hint">One JSON file with everything this instance stores about your account: profile, devices, synced settings, proposals, notifications, and your account and mail history. Passwords and login tokens are not included.</p>' +
-      '<div class="account-actions"><a class="account-btn account-btn-secondary" id="accountExport" href="/api/account/export" download>Download my data</a></div>' +
+      '<div class="account-actions"><a class="account-btn account-btn-secondary" id="accountExport" href="' + escapeHtml(CSApi.url('/api/account/export')) + '" download>Download my data</a></div>' +
       '<h3>Delete account</h3><form id="delForm" class="account-form" novalidate>' +
       '<p class="account-hint">This removes your account permanently. Server backups can still hold a copy for a few days until they rotate out.</p>' +
       field('delPw', 'Current password', 'password', 'current-password') +
@@ -460,6 +460,7 @@
   };
 
   function init(app, routeParam) {
+    if (CSApi.anonymous) { app.innerHTML = shell('Accounts', CSBeta.classicOnlyHtml('Logging in')); return; }
     if (!window.CSAuth) { app.innerHTML = shell('Accounts', '<p>Accounts are not available.</p>'); return; }
     app.innerHTML = shell('Accounts', '<p>Loading…</p>');
     // A page left before the session is known must not render over the next one (#2230).
