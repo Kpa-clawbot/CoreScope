@@ -1,0 +1,144 @@
+/* Repeater Planner — Area mode. Colours come from style.css variables only. */
+
+:root {
+  /* Cluster palette: 0 = largest (main backbone). Built from existing status/accent
+     variables, so dark mode follows the theme automatically. */
+  --mc-pa-comp-0: var(--status-green, #22c55e);
+  --mc-pa-comp-1: var(--status-orange, #f97316);
+  --mc-pa-comp-2: var(--status-purple, #a855f7);
+  --mc-pa-comp-3: var(--status-info, #3b82f6);
+  --mc-pa-comp-4: var(--status-red, #ef4444);
+  --mc-pa-comp-5: var(--status-yellow, #eab308);
+  --mc-pa-comp-6: var(--status-amber, #f59e0b);
+  --mc-pa-comp-7: var(--text-muted, #6b7280);
+}
+
+.mc-pa { display: flex; flex-direction: column; gap: 12px; padding: 4px 2px 16px; color: var(--text); font-size: 14px; }
+
+.mc-pa-label { font-weight: var(--fw-medium, 600); margin-bottom: 6px; }
+.mc-pa-area-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mc-pa-btn {
+  min-height: 40px; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--input-bg, var(--surface)); color: var(--text);
+}
+.mc-pa-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.mc-pa-btn[aria-pressed="true"] { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-strong, var(--accent)); }
+.mc-pa-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.mc-pa-btn:focus-visible, .mc-pa-primary:focus-visible, .mc-pa-cancel:focus-visible,
+.mc-pa-field input:focus-visible, .mc-pa-field select:focus-visible,
+.mc-pa-check input:focus-visible, .mc-pa-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.mc-pa-hint { margin: 6px 0 0; color: var(--text-muted); font-size: 13px; }
+.mc-pa-hint.mc-pa-bad { color: var(--status-red-text); font-weight: var(--fw-medium, 600); }
+
+.mc-pa-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mc-pa-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-muted); }
+.mc-pa-field input, .mc-pa-field select {
+  min-height: 40px; padding: 6px 8px; border-radius: 8px; box-sizing: border-box; width: 100%;
+  border: 1px solid var(--border); background: var(--input-bg, var(--surface)); color: var(--text); font-size: 14px;
+}
+.mc-pa-fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0; padding: 6px 10px 8px; display: flex; flex-direction: column; gap: 4px; }
+.mc-pa-fieldset legend { font-size: 13px; color: var(--text-muted); padding: 0 4px; }
+.mc-pa-check { display: flex; align-items: center; gap: 8px; min-height: 32px; cursor: pointer; }
+.mc-pa-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+
+.mc-pa-primary {
+  min-height: 44px; border-radius: 8px; border: 0; cursor: pointer; font-size: 15px; font-weight: var(--fw-medium, 600);
+  background: var(--accent-strong, var(--accent)); color: var(--text-on-accent, var(--surface));
+}
+.mc-pa-primary:hover:not(:disabled) { filter: brightness(1.1); }
+.mc-pa-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.mc-pa-progress-wrap[hidden], .mc-pa-error[hidden] { display: none; }
+.mc-pa-progress-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
+.mc-pa-cancel { background: none; border: 0; padding: 4px 6px; color: var(--accent-strong, var(--accent)); cursor: pointer; text-decoration: underline; }
+.mc-pa-progress { height: 8px; border-radius: 4px; background: var(--surface-2, var(--border)); overflow: hidden; }
+.mc-pa-progress-bar { height: 100%; width: 0; background: var(--accent-strong, var(--accent)); transition: width 0.3s ease; }
+.mc-pa-progress-bar.mc-pa-indeterminate { width: 35%; animation: mc-pa-slide 1.2s ease-in-out infinite; }
+@keyframes mc-pa-slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .mc-pa-progress-bar.mc-pa-indeterminate { animation: none; width: 100%; opacity: 0.5; } }
+
+.mc-pa-error {
+  padding: 10px 12px; border-radius: 8px; border: 1px solid var(--status-red);
+  background: var(--surface-2, var(--surface)); color: var(--status-red-text);
+}
+
+.mc-pa-results { display: flex; flex-direction: column; gap: 12px; }
+.mc-pa-banner { padding: 10px 12px; border-radius: 8px; font-weight: var(--fw-medium, 600); border-left: 4px solid var(--border); background: var(--surface-2, var(--surface)); }
+.mc-pa-banner-good { border-left-color: var(--status-green); }
+.mc-pa-banner-info { border-left-color: var(--status-info); }
+.mc-pa-banner-neutral { border-left-color: var(--status-amber); }
+
+.mc-pa-summary { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mc-pa-summary th, .mc-pa-summary td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: right; font-weight: normal; }
+.mc-pa-summary thead th { color: var(--text-muted); }
+.mc-pa-summary tbody th { text-align: left; color: var(--text); }
+.mc-pa-summary td { font-variant-numeric: tabular-nums; }
+.mc-pa-better { color: var(--status-green-text); font-weight: var(--fw-medium, 600); }
+
+.mc-pa-note, .mc-pa-disclaimer { margin: 0; font-size: 12px; color: var(--text-muted); }
+.mc-pa-warnings { margin: 0; padding: 8px 12px 8px 28px; font-size: 13px; border-radius: 8px; border-left: 4px solid var(--status-amber); background: var(--surface-2, var(--surface)); color: var(--status-amber-text, var(--text)); }
+
+.mc-pa-mapopts { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.mc-pa-count { color: var(--text-muted); font-size: 12px; }
+.mc-pa-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-muted); }
+.mc-pa-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.mc-pa-legend li[hidden] { display: none; }
+.mc-pa-lg-sw { width: 28px; height: 10px; flex: none; overflow: visible; }
+
+.mc-pa-sites { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.mc-pa-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--card-bg, var(--surface)); }
+.mc-pa-card:hover, .mc-pa-card:focus-within { border-color: var(--accent); background: var(--accent-bg); }
+.mc-pa-card-head { display: flex; align-items: center; gap: 8px; }
+.mc-pa-card-title { font-weight: var(--fw-medium, 600); }
+.mc-pa-badge, .mc-pa-site span {
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-weight: 700;
+  background: var(--accent-strong, var(--accent)); color: var(--text-on-accent, var(--surface));
+}
+.mc-pa-badge { width: 24px; height: 24px; font-size: 13px; flex: none; }
+.mc-pa-reason { margin: 6px 0; }
+.mc-pa-links { list-style: none; margin: 0 0 8px; padding: 0; font-size: 13px; color: var(--text-muted); overflow-wrap: anywhere; }
+.mc-pa-links li { padding: 2px 0; }
+.mc-pa-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---- map layers (Leaflet sets className on the SVG path / div) ---- */
+.mc-pa-area { stroke: var(--accent); stroke-width: 2px; stroke-dasharray: 6 4; fill: var(--accent); fill-opacity: 0.06; }
+.mc-pa-area.mc-pa-drawing { fill-opacity: 0.15; }
+.mc-pa-drawing-map, .mc-pa-drawing-map .leaflet-interactive { cursor: crosshair; }
+
+.mc-pa-node { stroke: var(--surface, var(--bg)); stroke-width: 1.5px; fill-opacity: 0.95; }
+.mc-pa-comp-0 { fill: var(--mc-pa-comp-0); }
+.mc-pa-comp-1 { fill: var(--mc-pa-comp-1); }
+.mc-pa-comp-2 { fill: var(--mc-pa-comp-2); }
+.mc-pa-comp-3 { fill: var(--mc-pa-comp-3); }
+.mc-pa-comp-4 { fill: var(--mc-pa-comp-4); }
+.mc-pa-comp-5 { fill: var(--mc-pa-comp-5); }
+.mc-pa-comp-6 { fill: var(--mc-pa-comp-6); }
+.mc-pa-comp-7 { fill: var(--mc-pa-comp-7); }
+.mc-pa-node.mc-pa-stale { fill-opacity: 0.35; stroke-dasharray: 2 2; }
+.mc-pa-node.mc-pa-out { fill-opacity: 0.3; stroke-opacity: 0.4; }
+
+.mc-pa-edge { fill: none; stroke: var(--text-muted); stroke-width: 2px; stroke-opacity: 1; }
+.mc-pa-edge-observed { stroke-dasharray: none; stroke-width: 2.5px; }
+.mc-pa-edge-solid { stroke-dasharray: 8 5; }
+.mc-pa-edge-marginal { stroke-dasharray: 2 5; stroke-linecap: round; }
+
+.mc-pa-link { fill: none; stroke: var(--accent-strong, var(--accent)); stroke-width: 3px; stroke-opacity: 0.9; }
+.mc-pa-link-marginal { stroke-dasharray: 2 5; stroke-linecap: round; }
+.mc-pa-link.mc-pa-hl { stroke-width: 6px; stroke-opacity: 1; }
+
+.mc-pa-site { background: none; border: 0; }
+.mc-pa-site span {
+  width: 30px; height: 30px; font-size: 15px; box-sizing: border-box;
+  border: 3px solid var(--surface, var(--bg)); box-shadow: 0 1px 4px var(--shadow, rgba(0, 0, 0, 0.4));
+  transition: transform 0.12s ease;
+}
+.mc-pa-site.mc-pa-hl span { transform: scale(1.35); }
+
+/* ---- phone: single column; the page turns the panel into a bottom sheet ---- */
+@media (max-width: 767px) {
+  .mc-pa { font-size: 15px; }
+  .mc-pa-grid { grid-template-columns: 1fr 1fr; }
+  .mc-pa-btn { flex: 1 1 auto; }
+  .mc-pa-card-actions .mc-pa-btn { flex: 1 1 0; }
+}

@@ -64,6 +64,16 @@ func (l *rateLimiter) take(key string) (bool, time.Duration) {
 	return false, time.Duration((1 - b.tokens) / l.rate * float64(time.Second))
 }
 
+// refund gives back one token taken from key (a charge for work that was then
+// refused elsewhere), never above the burst. A key with no bucket is a no-op.
+func (l *rateLimiter) refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b := l.buckets[key]; b != nil {
+		b.tokens = math.Min(l.burst, b.tokens+1)
+	}
+}
+
 // gc drops buckets that have refilled completely (they carry no state).
 func (l *rateLimiter) gc() {
 	l.mu.Lock()

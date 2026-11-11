@@ -1120,6 +1120,11 @@ type ClientConfigResponse struct {
 	// Present only when user management is on, so the payload is unchanged
 	// for every instance that leaves it off.
 	UserManagement *ClientUserManagement `json:"userManagement,omitempty"`
+	// Present only when los.enabled: the map route view's line-of-sight
+	// defaults (los_config.go).
+	LOS *LOSClientConfig `json:"los,omitempty"`
+	// Present only when planner.enabled (planner_config.go).
+	Planner *PlannerClientConfig `json:"planner,omitempty"`
 }
 
 // ClientUserManagement tells the frontend that accounts exist, and whether

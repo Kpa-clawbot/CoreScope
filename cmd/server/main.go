@@ -464,6 +464,32 @@ func main() {
 			cfg.RfParams.NodesURL, cfg.RfParams.PresetsURL, cfg.RfParams.refresh(), cfg.RfParams.maxAge())
 	}
 
+	// Radio line-of-sight elevation profiles. OPT-IN: without los.enabled
+	// nothing is fetched and /api/elevation/profile answers 404.
+	if cfg.LOS.enabled() {
+		logLOSConfig(cfg.LOS)
+		losCfg, _ := cfg.LOS.resolved()
+		srv.elevation = newElevationService(losCfg)
+		srv.elevation.nodes = func() []nodeInfo {
+			if srv.store == nil {
+				return nil
+			}
+			ns, _ := srv.store.getCachedNodesAndPM()
+			return ns
+		}
+		srv.elevation.ipr = &wsLimiter{state: map[string]*wsIPState{},
+			trustedProxies: parseCIDRList(cfg.WSTrustedProxies(), "webSocket.trustedProxies")}
+		srv.elevation.rl = newRateLimiter(10, time.Minute)
+	}
+
+	// Repeater planner. OPT-IN: without planner.enabled no terrain tile is
+	// fetched and /api/planner/* answers 404.
+	if cfg.Planner.enabled() {
+		logPlannerConfig(cfg.Planner)
+		plannerCfg, _ := cfg.Planner.resolved()
+		srv.planner = newPlannerService(plannerCfg, srv)
+	}
+
 	// Steady-state repeater-enrichment recomputer (issue #1262).
 	// Prewarms the bulk caches feeding handleNodes so the very first
 	// /api/nodes?limit=2000 from live.js's SPA bootstrap hits a
@@ -579,6 +605,12 @@ func main() {
 
 		// 3b. Close users.db (user management, opt-in; no-op when off).
 		srv.closeUserManagement()
+
+		// 3c. Cancel planner jobs and wait for them: they read the store,
+		// so before dbClose.
+		if srv.planner != nil {
+			srv.planner.Close()
+		}
 
 		// 4. Close database (release SQLite WAL lock)
 		if err := dbClose(); err != nil {

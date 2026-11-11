@@ -236,6 +236,14 @@ type Config struct {
 	// LoRa RF parameters per node from the MeshCore map (issue #1268).
 	// OPT-IN: nil or an empty nodesUrl starts no fetch.
 	RfParams *RfParamsConfig `json:"rfParams,omitempty"`
+
+	// Radio line-of-sight on the map's packet route view (los_config.go).
+	// OPT-IN: nil or enabled=false fetches no elevation data.
+	LOS *LOSConfig `json:"los,omitempty"`
+
+	// Repeater planner (#/tools/planner, planner_types.go). OPT-IN: nil or
+	// enabled=false fetches no terrain tiles and /api/planner/* answers 404.
+	Planner *PlannerConfig `json:"planner,omitempty"`
 }
 
 // CustomizerConfig holds operator-side knobs for the in-app customizer modal.
