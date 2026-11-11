@@ -606,16 +606,22 @@ func main() {
 // It reads index.html once at creation time and replaces the __BUST__ placeholder
 // with a Unix timestamp so browsers fetch fresh JS/CSS after each server restart.
 func spaHandler(root string, fs http.Handler) http.Handler {
-	// Pre-process index.html: replace __BUST__ with a cache-bust timestamp
-	indexPath := filepath.Join(root, "index.html")
-	rawHTML, err := os.ReadFile(indexPath)
-	if err != nil {
-		log.Printf("[static] warning: could not read index.html for cache-bust: %v", err)
-		rawHTML = []byte("<!DOCTYPE html><html><body><h1>CoreScope</h1><p>index.html not found</p></body></html>")
-	}
+	// Pre-process every top-level page, index.html and the tool pages
+	// (area-map.html, geofilter-builder.html): replace __BUST__ with a
+	// cache-bust timestamp, so each loads the scripts of this start.
 	bustValue := fmt.Sprintf("%d", time.Now().Unix())
-	indexHTML := []byte(strings.ReplaceAll(string(rawHTML), "__BUST__", bustValue))
-	log.Printf("[static] cache-bust value: %s", bustValue)
+	pages := bustPages(root, bustValue)
+	indexHTML, ok := pages["/index.html"]
+	if !ok {
+		log.Printf("[static] warning: could not read index.html for cache-bust")
+		indexHTML = []byte("<!DOCTYPE html><html><body><h1>CoreScope</h1><p>index.html not found</p></body></html>")
+	}
+	log.Printf("[static] cache-bust value: %s (%d pages)", bustValue, len(pages))
+	servePage := func(w http.ResponseWriter, body []byte) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Write(body)
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Defense-in-depth: explicitly reject path-traversal attempts before
@@ -628,20 +634,21 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		// Serve pre-processed index.html for root and /index.html
-		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			w.Write(indexHTML)
+		// Serve the pre-processed index.html for the root, and each
+		// pre-processed page (/index.html included) at its own path
+		if r.URL.Path == "/" {
+			servePage(w, indexHTML)
+			return
+		}
+		if page, ok := pages[r.URL.Path]; ok {
+			servePage(w, page)
 			return
 		}
 
 		path := filepath.Join(root, r.URL.Path)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			// SPA fallback — serve pre-processed index.html
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			w.Write(indexHTML)
+			servePage(w, indexHTML)
 			return
 		}
 		// Disable caching for JS/CSS/HTML
@@ -650,6 +657,29 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 		}
 		fs.ServeHTTP(w, r)
 	})
+}
+
+// bustPages reads each .html file at the top of root, keyed by its URL path
+// ("/index.html"), with every __BUST__ replaced by bust.
+func bustPages(root, bust string) map[string][]byte {
+	pages := map[string][]byte{}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		log.Printf("[static] warning: could not list %s for cache-bust: %v", root, err)
+		return pages
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".html") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(root, e.Name()))
+		if err != nil {
+			log.Printf("[static] warning: could not read %s for cache-bust: %v", e.Name(), err)
+			continue
+		}
+		pages["/"+e.Name()] = []byte(strings.ReplaceAll(string(raw), "__BUST__", bust))
+	}
+	return pages
 }
 
 // isSafeStaticPath rejects request paths that contain traversal sequences

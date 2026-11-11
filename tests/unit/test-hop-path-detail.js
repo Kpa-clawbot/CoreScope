@@ -8,6 +8,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const vm = require('vm');
 
@@ -71,6 +72,7 @@ function loadPage() {
     registerPage: () => {},
   };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   const loadFile = f => {
     vm.runInContext(fs.readFileSync(REPO_ROOT + '/public/' + f, 'utf8'), ctx, { filename: f });
     for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];

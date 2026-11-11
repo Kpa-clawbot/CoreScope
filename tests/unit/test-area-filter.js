@@ -6,6 +6,7 @@
  */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const assert = require('assert');
 
@@ -53,6 +54,7 @@ function buildCtx({ storageValue = null, fetchResponse = [] } = {}) {
     String,
   };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync('public/area-filter.js', 'utf8'), ctx);
   return { AF: ctx.window.AreaFilter, ctx, storage, listeners };
 }

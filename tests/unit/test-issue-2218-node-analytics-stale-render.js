@@ -7,6 +7,7 @@
  */
 'use strict';
 const fs = require('fs');
+const { loadApiBase } = require('./api-base-sandbox');
 const path = require('path');
 const vm = require('vm');
 
@@ -53,6 +54,7 @@ function load() {
   // The battery card of whatever page is on screen.
   ['batteryStatusBadge', 'batteryEmpty', 'batteryChart'].forEach((id) => { els[id] = mkEl(); });
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(SRC, ctx);
   // The shared #app container; time-range buttons are wired after a render.
   const buttons = {};
@@ -92,6 +94,7 @@ function loadRouter() {
   ctx.addEventListener = (t, fn) => { listeners[t] = fn; };
   ctx.dispatchEvent = () => {};
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', '..', 'public/roles.js'), 'utf8'), ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', '..', 'public/app.js'), 'utf8'), ctx);
   const go = (hash) => { ctx.location.hash = hash; listeners.hashchange(); };

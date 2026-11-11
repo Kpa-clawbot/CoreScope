@@ -84,8 +84,10 @@
   &nbsp;·&nbsp; <a href="/geofilter-docs.html">Documentation</a>
 </div>
 
-<script src="geofilter-draft.js"></script>
-<script src="map-tile-providers.js"></script>
+<script src="deployment.js?v=__BUST__"></script>
+<script src="api-base.js?v=__BUST__"></script>
+<script src="geofilter-draft.js?v=__BUST__"></script>
+<script src="map-tile-providers.js?v=__BUST__"></script>
 <script>
 const map = L.map('map').setView([50.5, 4.4], 8);
 
@@ -98,7 +100,7 @@ const tiles = L.tileLayer(DEFAULT_DARK_TILES, {
 // This page is standalone (not the SPA), so it loads the server's map config
 // itself and re-resolves the tile URL through the shared registry. Without
 // this, CARTO serves every tile stamped 'API KEY REQUIRED' — with a 200.
-fetch('/api/config/client')
+CSApi.fetch('/api/config/client')
   .then(function (r) { return r.json(); })
   .then(function (cfg) {
     window.MC_MAP_CFG = (cfg && cfg.map) || { tiles: { providers: {} } };

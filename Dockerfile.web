@@ -1,0 +1,42 @@
+# CoreScope web container: the static UI on its own, served by Caddy, which
+# forwards /api and /ws to a CoreScope server container. The UI and the API
+# then share one origin, so the server needs no CORS settings. Logins work as
+# on the classic UI once the server's userManagement.publicBaseUrl is this
+# container's public origin. docker-compose.split.yml runs the two together;
+# see "Deployment modes" in docs/deployment.md.
+#
+# Runtime environment:
+#   BACKEND       host:port of the CoreScope server. Default corescope:3000.
+#   SITE_ADDRESS  :80 (default) for plain HTTP, or a domain name for Caddy's
+#                 automatic HTTPS (publish 80 and 443, and keep /data).
+
+FROM alpine:3.24 AS build
+RUN apk add --no-cache bash
+WORKDIR /src
+COPY public/ public/
+COPY scripts/static/ scripts/static/
+COPY deploy/static/ deploy/static/
+# GIT_COMMIT names the UI build and is the cache buster on every asset (?v=);
+# without one, build-<time>, which cannot pass for a commit when the UI's
+# commit is compared with the server's. APP_VERSION is the UI's version, as in
+# the server image (there is no .git here to describe). CHANNEL beta, next or
+# dev shows a badge.
+ARG GIT_COMMIT=
+ARG APP_VERSION=
+ARG CHANNEL=static
+RUN if [ -n "$GIT_COMMIT" ]; then COMMIT="$(printf '%.12s' "$GIT_COMMIT")"; else COMMIT="build-$(date +%s)"; fi && \
+    COMMIT="$COMMIT" VERSION="$APP_VERSION" API_BASE=same-origin AUTH=true CHANNEL="$CHANNEL" OUT=/srv \
+    bash scripts/static/build.sh && \
+    rm /srv/_headers
+
+FROM alpine:3.24
+RUN apk add --no-cache caddy
+COPY --from=build /srv /srv
+COPY docker/web/Caddyfile /etc/caddy/Caddyfile
+ENV BACKEND=corescope:3000 \
+    SITE_ADDRESS=:80 \
+    XDG_DATA_HOME=/data \
+    XDG_CONFIG_HOME=/config
+EXPOSE 80 443
+VOLUME ["/data"]
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

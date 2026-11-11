@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Area Map</title>
 <link rel="stylesheet" href="vendor/leaflet-1.9.4/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="/>
+<script src="deployment.js?v=__BUST__"></script>
+<script src="api-base.js?v=__BUST__"></script>
 <script src="vendor/leaflet-1.9.4/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -142,7 +144,7 @@ function setStatus(msg, isErr) {
 
 // ---- load from server ----
 async function load() {
-  baseUrl = document.getElementById('base-url').value.replace(/\/$/, '');
+  baseUrl = (document.getElementById('base-url').value || window.CSApi.base).replace(/\/$/, '');
   setStatus('Loading…');
 
   Object.values(areaLayers).forEach(g => { map.removeLayer(g.poly); map.removeLayer(g.nodes); });
@@ -154,6 +156,7 @@ async function load() {
   document.getElementById('show-nodes').checked = false;
 
   try {
+    // eslint-disable-next-line no-restricted-syntax -- baseUrl is whichever server the page's Server field names, not necessarily CSApi's.
     const areasResp = await fetch(`${baseUrl}/api/config/areas/polygons`);
     if (!areasResp.ok) throw new Error(`areas/polygons: ${areasResp.status}`);
 
@@ -234,6 +237,7 @@ function escapeHtml(s) {
 async function fetchAllNodesPaged(extra) {
   const PAGE = 500, CAP = 10000, out = [];
   for (let off = 0; off < CAP; off += PAGE) {
+    // eslint-disable-next-line no-restricted-syntax -- baseUrl is whichever server the page's Server field names, not necessarily CSApi's.
     const r = await fetch(`${baseUrl}/api/nodes?limit=${PAGE}&offset=${off}${extra}`);
     if (!r.ok) throw new Error(`/api/nodes ${r.status} at offset ${off}`);
     const d = await r.json();

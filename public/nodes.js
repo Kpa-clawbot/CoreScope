@@ -1173,8 +1173,10 @@
         var panel = document.getElementById('node-affinity-debug');
         if (!show || !panel) return;
         panel.style.display = '';
+        var debugEl = document.getElementById('affinityDebugContent');
+        if (CSApi.anonymous) { if (debugEl) debugEl.innerHTML = CSBeta.classicOnlyHtml('Affinity debug'); return; }
         var apiKey = localStorage.getItem('meshcore-api-key') || '';
-        fetch('/api/debug/affinity?node=' + encodeURIComponent(n.public_key), { headers: { 'X-API-Key': apiKey } })
+        CSApi.fetch('/api/debug/affinity?node=' + encodeURIComponent(n.public_key), { headers: { 'X-API-Key': apiKey } })
           .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
           .then(function (data) {
             var el = document.getElementById('affinityDebugContent');

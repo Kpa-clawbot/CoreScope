@@ -5,6 +5,7 @@ Comprehensive guide to deploying and operating CoreScope. For a quick start, see
 ## Table of Contents
 
 - [System Requirements](#system-requirements)
+- [Deployment modes](#deployment-modes)
 - [Docker Deployment](#docker-deployment)
 - [Configuration Reference](#configuration-reference)
 - [MQTT Setup](#mqtt-setup)
@@ -30,6 +31,86 @@ Comprehensive guide to deploying and operating CoreScope. For a quick start, see
 The Dockerfile uses BuildKit features (`# syntax=` and `RUN --mount`). BuildKit is the default builder from Docker 23.0; on 20.10 to 22.x the legacy builder is used unless `DOCKER_BUILDKIT=1` is set, and it rejects `RUN --mount`.
 
 CoreScope runs well on Raspberry Pi 4/5 (ARM64). The Go server uses ~300 MB RAM for 56K+ packets.
+
+---
+
+## Deployment modes
+
+The UI is static files (`public/`) that call the server's API. The three modes
+differ only in what serves those files. The server container is the same image
+in all three, and it still serves the classic UI itself.
+
+| Mode | The UI is served by | API | Server CORS setting | Logins |
+|---|---|---|---|---|
+| [All-in-one container](#all-in-one-container) | the server container | same origin | none | yes |
+| [Split containers](#split-containers) | a web container (`Dockerfile.web`) that forwards the API | same origin | none | yes |
+| [Static host or CDN](#static-host-or-cdn) | Cloudflare Pages, a CDN or any web server | another origin | `CORS_ALLOWED_ORIGINS` | no, links to the classic UI |
+
+### All-in-one container
+
+The default, and what the rest of this guide describes: one image runs the
+server, the ingestor and, optionally, Mosquitto and Caddy. The server serves the
+UI from `/app/public` and the API on one origin. See
+[Docker Deployment](#docker-deployment).
+
+### Split containers
+
+`docker-compose.split.yml` runs the server image unchanged next to a web
+container built from `Dockerfile.web`. The web container is Caddy: it serves the
+UI, packaged by `scripts/static/build.sh` when the image is built, and forwards
+`/api/*` and `/ws` to the server. The browser sees one origin, so the server
+needs no CORS setting. Logins work as on the classic UI when account
+configuration uses the public web origin, as described below.
+
+```bash
+CORESCOPE_IMAGE=ghcr.io/kpa-clawbot/corescope:edge \
+  docker compose -f docker-compose.split.yml up -d --build
+```
+
+| Variable | Default | |
+|---|---|---|
+| `HTTP_PORT`, `HTTPS_PORT` | `80`, `443` | Published by the web container; 443 over TCP and UDP (HTTP/3) |
+| `SITE_ADDRESS` | `:80` | A domain name turns on Caddy's automatic HTTPS and HTTP/3. Keep the default ports then: certificate issuance and the HTTP/3 advertisement both assume 80 and 443 |
+| `CORESCOPE_IMAGE` | none, required | The server image of the same version as the checkout the web image is built from: `:edge` on `master`, `:vX.Y.Z` on a release tag |
+| `DATA_DIR` | `./data` | The server's data directory |
+| `GIT_COMMIT` | `build-<time>` | The UI's commit and cache buster, e.g. `$(git rev-parse --short HEAD)` |
+| `APP_VERSION` | none | The UI's version, e.g. `$(git describe --tags --match 'v*')`. With `GIT_COMMIT`, the nav drawer and `/perf` show the UI build next to the server's and flag two different builds |
+| `CHANNEL` | `static` | `beta`, `next` or `dev` shows a badge |
+| `MQTT_BIND`, `MQTT_PORT` | `127.0.0.1`, `1883` | Where the server's built-in broker is published. It accepts anonymous clients, so set `MQTT_BIND=0.0.0.0` only to let gateways on a network you trust publish to it |
+| `SPLIT_NET` | `172.30.83` | The compose network's /24, as its first three octets; the web container is `.200` in it. Change it only if Docker reports that the pool overlaps another network, and update `trustedProxies` to match |
+
+- When `userManagement.enabled` is true, set `userManagement.publicBaseUrl` in
+  the server's config to the public web origin, including its scheme and port
+  (for example, `http://localhost:8080` for a web container published on port
+  8080). Login and other state-changing requests compare the browser's `Origin`
+  or `Referer` with this configured origin; forwarding the public `Host` header
+  alone is not enough. This value also determines mail links. See
+  [account configuration](user-guide/accounts.md#2-configure).
+- The web container finds the server through `BACKEND` (`corescope:3000` in the
+  compose file). Port 3000 stays inside the compose network, and the server
+  still serves everything there, the classic UI included; publish it if you want
+  to reach that directly.
+- The web image is built from your checkout, so keep the checkout and
+  `CORESCOPE_IMAGE` on the same version: a newer UI may call endpoints an older
+  server lacks. To update only the UI, rebuild the web container:
+  `docker compose -f docker-compose.split.yml up -d --build web`.
+- Behind the web container, as behind the all-in-one image's Caddy, every
+  request reaches the server from the proxy's address, so per-IP limits are off
+  until `webSocket.trustedProxies` and `userManagement.trustedProxies` list it.
+  The compose file fixes that address at `172.30.83.200`: list it alone. Never
+  list the compose subnet. It also holds the gateway address, and a client that
+  reaches a published port 3000 through Docker's proxy (from the host itself or
+  over IPv6, for example) arrives from there, so its own `X-Forwarded-For`
+  would be believed.
+
+### Static host or CDN
+
+`make web` (or `scripts/static/build.sh`) writes the anonymous build to
+`dist/web` for Cloudflare Pages or any static host. It calls the server
+cross-origin, so the server lists the UI's origin in `CORS_ALLOWED_ORIGINS`.
+It sends no cookies; logins and admin pages link to the classic UI on the
+server. Setup, previews, server settings and rollback:
+[deploy/static/README.md](../deploy/static/README.md).
 
 ---
 

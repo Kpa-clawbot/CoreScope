@@ -3,11 +3,18 @@
 const vm = require('vm');
 const fs = require('fs');
 const assert = require('assert');
+const { loadApiBase } = require('./api-base-sandbox');
+const BUILD_INFO = fs.readFileSync('public/build-info.js', 'utf8');
 
 let passed = 0, failed = 0;
+// Tests run one after another and are awaited: most render the page, which
+// is async. (A synchronous runner reported them passed before their awaits,
+// and the process.exit at the end ended the run before any assertion.)
+let chain = Promise.resolve();
 function test(name, fn) {
-  try { fn(); passed++; console.log(`  ✅ ${name}`); }
-  catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
+  chain = chain.then(fn).then(
+    () => { passed++; console.log(`  ✅ ${name}`); },
+    (e) => { failed++; console.log(`  ❌ ${name}: ${e.message}`); });
 }
 
 // Minimal sandbox to run perf.js in a browser-like context
@@ -36,6 +43,10 @@ function makeSandbox() {
   };
   ctx.window.document = ctx.document;
   ctx.globalThis = ctx;
+  // perf.js fetches through CSApi, as in the browser: load the real
+  // deployment.js and api-base.js. Their fetch is this sandbox's fetch.
+  loadApiBase(ctx);
+  vm.runInContext(BUILD_INFO, ctx);
   return { ctx, pages, getHtml: () => capturedHtml };
 }
 
@@ -43,7 +54,7 @@ function makeSandbox() {
 function loadPerf() {
   const sb = makeSandbox();
   const code = fs.readFileSync('public/perf.js', 'utf8');
-  vm.runInNewContext(code, sb.ctx);
+  vm.runInContext(code, sb.ctx);
   return sb;
 }
 
@@ -151,14 +162,15 @@ test('Go engine shows goRuntime values', async () => {
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
-  assert.ok(html.includes('17'), 'goroutines value');
-  assert.ok(html.includes('31'), 'numGC value');
-  assert.ok(html.includes('2.1ms'), 'pauseTotalMs value');
-  assert.ok(html.includes('0.03ms'), 'lastPauseMs value');
-  assert.ok(html.includes('473MB'), 'heapAllocMB value');
-  assert.ok(html.includes('1035MB'), 'heapSysMB value');
-  assert.ok(html.includes('663MB'), 'heapInuseMB value');
-  assert.ok(html.includes('371MB'), 'heapIdleMB value');
+  // perf.js prints times and sizes to one decimal.
+  assert.ok(html.includes('>17<'), 'goroutines value');
+  assert.ok(html.includes('>31<'), 'numGC value');
+  assert.ok(html.includes('>2.1ms<'), 'pauseTotalMs value');
+  assert.ok(html.includes('>0.0ms<'), 'lastPauseMs value (0.03 to one decimal)');
+  assert.ok(html.includes('>473.0MB<'), 'heapAllocMB value');
+  assert.ok(html.includes('>1035.0MB<'), 'heapSysMB value');
+  assert.ok(html.includes('>663.0MB<'), 'heapInuseMB value');
+  assert.ok(html.includes('>371.0MB<'), 'heapIdleMB value');
 });
 
 test('Go engine does NOT show Event Loop labels', async () => {
@@ -254,7 +266,7 @@ test('Missing engine field shows Node UI', async () => {
 test('Version card shows version tag when health.version is set', async () => {
   const sb = loadPerf();
   const health = { ...goHealth, version: '3.8.2', commit: 'unknown' };
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -265,7 +277,7 @@ test('Version card shows version tag when health.version is set', async () => {
 test('Version card shows commit hash when version is unknown', async () => {
   const sb = loadPerf();
   const health = { ...goHealth, version: 'unknown', commit: 'abc1234def' };
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -276,7 +288,7 @@ test('Version card shows commit hash when version is unknown', async () => {
 test('Version card shows both version and commit when both are known', async () => {
   const sb = loadPerf();
   const health = { ...goHealth, version: 'v3.8.2', commit: 'deadbeef1234' };
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -287,7 +299,7 @@ test('Version card shows both version and commit when both are known', async () 
 test('Version card is absent when health has no version or commit', async () => {
   const sb = loadPerf();
   const health = { ...goHealth }; // no version/commit fields
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -297,7 +309,7 @@ test('Version card is absent when health has no version or commit', async () => 
 test('Version card is absent when both version and commit are "unknown"', async () => {
   const sb = loadPerf();
   const health = { ...goHealth, version: 'unknown', commit: 'unknown' };
-  stubFetch(sb, basePerf, health);
+  stubFetch(sb, { ...basePerf, goRuntime }, health);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();
@@ -320,6 +332,13 @@ test('renderVersionCard: commit link points to commit URL', () => {
   assert.ok(card.includes('href='), 'should contain an anchor tag');
 });
 
+test('renderVersionCard: a version that is not a release (edge) is text, not a broken release link', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: 'edge', commit: 'abc1234' });
+  assert.ok(!card.includes('releases/tag') && !card.includes('vedge'), card);
+  assert.ok(card.includes('edge · <a href') && card.includes('/commit/abc1234'), card);
+});
+
 test('renderVersionCard: returns empty string for null health', () => {
   const sb = loadPerf();
   assert.strictEqual(sb.ctx.renderVersionCard(null), '');
@@ -337,5 +356,47 @@ test('renderVersionCard: uses perf-num--small class (no inline style)', () => {
   assert.ok(!card.includes('font-size'), 'should not use inline font-size style');
 });
 
-console.log(`\n${passed} passed, ${failed} failed\n`);
-process.exit(failed ? 1 : 0);
+// --- UI build next to the server's (build-info.js) ---
+
+test('renderVersionCard takes a label', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: '3.8.2', commit: 'abc1234' }, 'Server version');
+  assert.ok(card.includes('perf-label">Server version<'), card);
+});
+
+test('renderUiVersionCard: release tags and commits are linked, other versions are text', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderUiVersionCard({ separate: true, mismatch: false,
+    ui: { version: 'v3.17.0', commit: 'abc1234def' }, server: { version: 'v3.17.0', commit: 'abc1234' } });
+  assert.ok(card.includes('releases/tag/v3.17.0') && card.includes('/commit/abc1234def'), card);
+  assert.ok(card.includes('perf-label">UI version<'), card);
+  const dev = sb.ctx.renderUiVersionCard({ separate: true, mismatch: false,
+    ui: { version: 'v3.16.0-21-gdac8d9f', commit: 'build-1794206204' }, server: { version: 'edge', commit: null } });
+  assert.ok(!dev.includes('releases/tag') && !dev.includes('/commit/'), dev);
+  assert.ok(dev.includes('v3.16.0-21-gdac8d9f') && dev.includes('build-1794206204'), dev);
+});
+
+test('renderUiVersionCard says when the UI and the server differ, and is empty for the embedded UI', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderUiVersionCard({ separate: true, mismatch: true,
+    ui: { version: null, commit: 'abc1234' }, server: { version: null, commit: 'def5678' } });
+  assert.ok(card.includes('perf-card--mismatch') && /differs from the server/.test(card), card);
+  assert.strictEqual(sb.ctx.renderUiVersionCard({ separate: false, ui: {}, server: {} }), '');
+  assert.strictEqual(sb.ctx.renderUiVersionCard(null), '');
+});
+
+test('the page shows the UI card next to the server card when BuildInfo says they are separate', async () => {
+  const sb = loadPerf();
+  sb.ctx.window.BuildInfo.describe = () => ({ separate: true, mismatch: false,
+    ui: { version: 'v3.17.0', commit: 'abc1234' }, server: { version: 'v3.17.0', commit: 'abc1234' } });
+  stubFetch(sb, { ...basePerf, goRuntime }, { ...goHealth, version: '3.17.0', commit: 'abc1234' });
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 50));
+  const html = sb.getHtml();
+  assert.ok(html.includes('perf-label">Server version<') && html.includes('perf-label">UI version<'), html.slice(0, 300));
+});
+
+chain.then(() => {
+  console.log(`\n${passed} passed, ${failed} failed\n`);
+  process.exit(failed ? 1 : 0);
+});

@@ -19,6 +19,7 @@
 'use strict';
 
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -32,28 +33,37 @@ async function test(name, fn) {
 
 const SRC = fs.readFileSync(path.join(REPO_ROOT, 'public/nav-drawer.js'), 'utf8');
 
-// Slice from the cached-promise declaration to the constants that follow
-// fillVersion. If either marker moves the slice fails loudly rather than
-// silently testing nothing.
+const BUILD_INFO = fs.readFileSync(path.join(REPO_ROOT, 'public/build-info.js'), 'utf8');
+// Slice fillVersion up to the constants that follow it. If either marker
+// moves the slice fails loudly rather than silently testing nothing.
 function sliceVersionFns() {
-  const start = SRC.indexOf('var versionPromise = null;');
+  const start = SRC.indexOf('function fillVersion(el)');
   const end = SRC.indexOf('var EDGE_PX');
-  assert.ok(start !== -1, 'could not find "var versionPromise = null;" in public/nav-drawer.js');
+  assert.ok(start !== -1, 'could not find "function fillVersion(el)" in public/nav-drawer.js');
   assert.ok(end !== -1 && end > start, 'could not find the "var EDGE_PX" boundary after fillVersion');
   return SRC.slice(start, end);
 }
 
-// Fresh evaluation per case: versionPromise caches for the page lifetime, so a
-// shared sandbox would hand the second case the first case's answer.
-function load(fetchImpl) {
+// Fresh evaluation per case: BuildInfo caches /api/health for the page
+// lifetime, so a shared sandbox would hand the second case the first case's
+// answer. deployment overrides deployment.js (a UI served apart from the
+// server has a channel other than classic, and its own commit and version).
+function load(fetchImpl, deployment) {
   const sandbox = { fetch: fetchImpl, console };
+  sandbox.window = sandbox;
   vm.createContext(sandbox);
+  loadApiBase(sandbox, deployment);
+  vm.runInContext(BUILD_INFO, sandbox);
   vm.runInContext(sliceVersionFns() + '\nthis.fillVersion = fillVersion;', sandbox);
   return sandbox.fillVersion;
 }
+const SPLIT = { channel: 'static', apiBase: '', auth: true, commit: 'dac8d9f5', version: 'v3.16.0-21-gdac8d9f' };
+const health = (h) => () => Promise.resolve({ ok: true, json: () => Promise.resolve(h) });
 
 function fakeLink() {
-  return { textContent: 'CoreScope', title: '', innerHTML: null };
+  const classes = new Set();
+  return { textContent: 'CoreScope', title: '', innerHTML: null,
+    classList: { add: (c) => classes.add(c), contains: (c) => classes.has(c) } };
 }
 
 // fillVersion does not return its promise, so settle the microtask queue.
@@ -113,6 +123,35 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
     fill(fakeLink()); fill(fakeLink()); fill(fakeLink());
     await settle();
     assert.strictEqual(calls, 1, 'the promise is cached for the page lifetime, got ' + calls + ' requests');
+  });
+
+  await test('a UI served apart from the server names both builds', async () => {
+    const el = fakeLink();
+    load(health({ version: 'edge', commit: 'dac8d9f', buildTime: '2026-11-09T06:00:00Z' }), SPLIT)(el);
+    await settle();
+    assert.strictEqual(el.textContent, 'CoreScope UI v3.16.0-21-gdac8d9f \u00B7 server edge');
+    assert.ok(!el.classList.contains('nav-drawer-version--mismatch'), 'the same commit is not a mismatch');
+    assert.ok(/dac8d9f5/.test(el.title) && /server commit dac8d9f/.test(el.title), el.title);
+    const unknownTime = fakeLink();
+    load(health({ version: 'edge', commit: 'dac8d9f', buildTime: 'unknown' }), SPLIT)(unknownTime);
+    await settle();
+    assert.ok(!/unknown/.test(unknownTime.title), 'an unknown build time is left out: ' + unknownTime.title);
+  });
+
+  await test('two different builds are flagged', async () => {
+    const el = fakeLink();
+    load(health({ version: 'v3.16.0', commit: 'abc1234' }), SPLIT)(el);
+    await settle();
+    assert.ok(el.classList.contains('nav-drawer-version--mismatch'));
+    assert.ok(/^The UI and the server are different builds/.test(el.title), el.title);
+    assert.strictEqual(el.innerHTML, null, 'innerHTML must never be touched');
+  });
+
+  await test('a separate UI still names itself when /api/health fails', async () => {
+    const el = fakeLink();
+    load(() => Promise.reject(new Error('offline')), SPLIT)(el);
+    await settle();
+    assert.strictEqual(el.textContent, 'CoreScope UI v3.16.0-21-gdac8d9f');
   });
 
   console.log(`\nTotal: ${passed} passed, ${failed} failed`);

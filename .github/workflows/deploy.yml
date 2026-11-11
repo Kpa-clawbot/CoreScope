@@ -553,6 +553,25 @@ jobs:
             sleep 1
           done
 
+      - name: Start split frontend (static build + API-only server)
+        # The anonymous static build on :8788 against a stock server on :13591
+        # that lists that origin in CORS_ALLOWED_ORIGINS, the way a static
+        # frontend (Cloudflare Pages) calls the containers. -public on a missing
+        # directory is API-only mode, so nothing is served same-origin.
+        if: matrix.shard == 1
+        run: |
+          CHANNEL=dev COMMIT=e2e API_BASE=http://localhost:13591 AUTH=false CLASSIC_URL=http://localhost:13591 bash scripts/static/build.sh
+          fuser -k 13591/tcp 8788/tcp 2>/dev/null || true
+          CORS_ALLOWED_ORIGINS=http://localhost:8788 ./corescope-server -port 13591 -db test-fixtures/e2e-fixture.db -public /nonexistent &
+          echo $! > .server-split.pid
+          node scripts/dev-static.mjs --root dist/web --port 8788 &
+          echo $! > .static-split.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:13591/api/healthz > /dev/null 2>&1 && curl -sf -o /dev/null http://localhost:8788/; then echo "split frontend ready after ${i}s"; break; fi
+            if [ "$i" -eq 30 ]; then echo "split frontend failed to start within 30s"; exit 1; fi
+            sleep 1
+          done
+
       - name: Run Playwright E2E tests (fail-fast)
         env:
           # On master pushes every suite records the frontend coverage of the
@@ -587,6 +606,8 @@ jobs:
           # Allowlist: tests/a11y-allowlist.yaml (0 entries — hard pass policy).
           # Per-viewport summary printed at the end; any net>0 fails the build.
           suite 1 test-a11y-axe-1668.js BASE_URL=$B AXE_SCREENSHOT_DIR=/tmp/axe-1668
+          # The static build on another origin than the API (scripts/static/build.sh).
+          suite 1 test-split-anonymous-e2e.js SPLIT_URL=http://localhost:8788 API_URL=http://localhost:13591
           suite 2 test-filter-ux-e2e.js BASE_URL=$B
           suite 2 test-radio-setting-1869-e2e.js BASE_URL=$B
           suite 2 test-observer-neighbors-2270-e2e.js BASE_URL=$B
@@ -719,6 +740,8 @@ jobs:
           suite 3 test-path-inspector-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-pr-1490-live-map-gpu-animations-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-region-quick-picks.js
+          # The lint rule that keeps network calls on CSApi (needs eslint).
+          suite 1 test-lint-network-calls.js
           suite 3 test-table-sort.js
           suite 1 test-touch-targets.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-live-dedup.js BASE_URL=$B
@@ -784,6 +807,9 @@ jobs:
             kill $(cat .server-um.pid) 2>/dev/null || true
             rm -f .server-um.pid
           fi
+          for f in .server-split.pid .static-split.pid; do
+            if [ -f "$f" ]; then kill $(cat "$f") 2>/dev/null || true; rm -f "$f"; fi
+          done
 
       - name: Upload shard results
         if: success()
@@ -944,8 +970,37 @@ jobs:
       - name: Validate staging compose file
         run: docker compose -f "$STAGING_COMPOSE_FILE" -p corescope-staging config --quiet
 
+      # Split containers: operators build the web image from their checkout and
+      # nothing publishes it, so without this a broken base image, package or
+      # Caddyfile would reach an operator first.
+      - name: Validate split compose file
+        run: CORESCOPE_IMAGE=corescope:check docker compose -f docker-compose.split.yml config --quiet
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Build and smoke the web image (Dockerfile.web)
+        env:
+          GIT_COMMIT: ${{ steps.meta.outputs.git_commit }}
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          docker buildx build . -f Dockerfile.web --load -t corescope-web:check \
+            --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg APP_VERSION="$APP_VERSION"
+          # BACKEND is a closed port: /api must reach it (502), not the file server (404).
+          docker run -d --name web-check -p 8080:80 -e BACKEND=127.0.0.1:9 corescope-web:check
+          trap 'docker logs web-check 2>&1 | tail -20; docker rm -f web-check >/dev/null' EXIT
+          for i in $(seq 1 30); do curl -fs -o /dev/null http://localhost:8080/ && break; sleep 1; done
+          page=$(curl -fsS -D headers.txt http://localhost:8080/)
+          echo "$page" | grep -q "app.js?v=$GIT_COMMIT" || { echo "::error::index.html is not busted with the commit"; exit 1; }
+          if echo "$page" | grep -q __BUST__; then echo "::error::index.html still has __BUST__"; exit 1; fi
+          grep -qi '^cache-control: no-cache' headers.txt || { echo "::error::index.html may be cached"; exit 1; }
+          dep=$(curl -fsS http://localhost:8080/deployment.js)
+          echo "$dep" | grep -q "apiBase: ''" || { echo "::error::deployment.js is not same-origin"; exit 1; }
+          echo "$dep" | grep -q "version: '$APP_VERSION'" || { echo "::error::deployment.js does not name version $APP_VERSION"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/healthz)
+          [ "$code" = 502 ] || { echo "::error::/api/healthz answered $code, not 502 from the closed BACKEND"; exit 1; }
+          echo "web image serves the packaged UI and forwards /api ✅"
 
       - name: Set up QEMU (arm64 runtime stage + arm64 smoke)
         uses: docker/setup-qemu-action@v3

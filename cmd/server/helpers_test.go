@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -445,6 +446,37 @@ func TestSpaHandlerCacheBust(t *testing.T) {
 			t.Errorf("__BUST__ placeholder was not replaced for /index.html: %s", body)
 		}
 	})
+}
+
+// Every top-level page gets the same cache buster as index.html, so a tool
+// page (area-map.html, geofilter-builder.html) served fresh never runs a
+// script cached from before the server started.
+func TestSpaHandlerBustsEveryTopLevelPage(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<script src="app.js?v=__BUST__"></script>`), 0644)
+	os.WriteFile(filepath.Join(dir, "tool.html"), []byte(`<script src="api-base.js?v=__BUST__"></script>`), 0644)
+	handler := spaHandler(dir, http.FileServer(http.Dir(dir)))
+
+	get := func(p string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
+		return w
+	}
+	bust := regexp.MustCompile(`v=(\d+)`)
+	index, tool := get("/"), get("/tool.html")
+	if strings.Contains(tool.Body.String(), "__BUST__") {
+		t.Fatalf("tool.html kept its placeholder: %s", tool.Body.String())
+	}
+	im, tm := bust.FindStringSubmatch(index.Body.String()), bust.FindStringSubmatch(tool.Body.String())
+	if im == nil || tm == nil || im[1] != tm[1] {
+		t.Errorf("tool.html buster %v, index.html buster %v: want the same timestamp", tm, im)
+	}
+	if got := tool.Header().Get("Cache-Control"); got != "no-cache, no-store, must-revalidate" {
+		t.Errorf("tool.html Cache-Control = %q", got)
+	}
+	if got := tool.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Errorf("tool.html Content-Type = %q", got)
+	}
 }
 
 func TestWriteJSON(t *testing.T) {

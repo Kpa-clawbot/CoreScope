@@ -1,6 +1,7 @@
 /* Unit tests for frontend helper functions (tested via VM sandbox) */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 const vm = require('vm');
 const fs = require('fs');
 const assert = require('assert');
@@ -86,6 +87,7 @@ function makeSandbox() {
     requestAnimationFrame: (cb) => setTimeout(cb, 0),
   };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   return ctx;
 }
 
@@ -3940,6 +3942,7 @@ console.log('\n=== channels.js: formatHashHex (issue #465) ===');
     const match = chSource.match(/function formatHashHex\(hash\)\s*\{[^}]+\}/);
     assert.ok(match, 'should extract formatHashHex');
     const ctx = vm.createContext({});
+    loadApiBase(ctx);
     vm.runInContext(match[0], ctx);
     const fmt = vm.runInContext('formatHashHex', ctx);
     assert.strictEqual(fmt(10), '0x0A');
@@ -5283,6 +5286,7 @@ console.log('\n=== app.js: routeTypeName/payloadTypeName edge cases ===');
   const helperSource = fs.readFileSync('public/packet-helpers.js', 'utf8');
   const helperCtx = { window: {}, JSON, Array, Object, console, process };
   vm.createContext(helperCtx);
+  loadApiBase(helperCtx);
   vm.runInContext(helperSource, helperCtx);
   const getParsedPath = helperCtx.window.getParsedPath;
   const getParsedDecoded = helperCtx.window.getParsedDecoded;
@@ -5458,6 +5462,7 @@ console.log('\n=== app.js: routeTypeName/payloadTypeName edge cases ===');
 
   const helperSource = fs.readFileSync('public/packet-helpers.js', 'utf8');
   const ctx = vm.createContext({ window: {}, console, JSON, Array, Object });
+  loadApiBase(ctx);
   vm.runInContext(helperSource, ctx);
   const getParsedPath = ctx.window.getParsedPath;
   const getParsedDecoded = ctx.window.getParsedDecoded;
@@ -6826,6 +6831,7 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
     sb.self = sb.window;
     sb.globalThis = sb.window;
     const ctx = vm.createContext(sb);
+    loadApiBase(ctx);
     const hopSrc = fs.readFileSync(REPO_ROOT + '/public/hop-display.js', 'utf8');
     vm.runInContext(hopSrc, ctx);
     return ctx;
@@ -6975,6 +6981,7 @@ console.log('\n=== roles.js: Map Tile Config Parsing ===');
   };
   sb.window.document = sb.document; sb.self = sb.window; sb.globalThis = sb.window;
   const ctx1504 = vm.createContext(sb);
+  loadApiBase(ctx1504);
   vm.runInContext(fs.readFileSync(REPO_ROOT + '/public/hop-display.js', 'utf8'), ctx1504);
   const HD = ctx1504.window.HopDisplay;
 
@@ -7579,6 +7586,7 @@ console.log('\n=== observers.js: healthStatus (configurable thresholds) ===');
     const ctx = { window: {}, Date };
     if (healthThresholds) ctx.window.HEALTH_THRESHOLDS = healthThresholds;
     vm.createContext(ctx);
+    loadApiBase(ctx);
     vm.runInContext(healthStatusSrc + '\n; result = healthStatus(lastSeen);', Object.assign(ctx, { lastSeen, result: null }));
     return ctx.result;
   }

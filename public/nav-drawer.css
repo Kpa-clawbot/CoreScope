@@ -197,3 +197,8 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* A UI served apart from the server, on a different build (build-info.js). */
+.nav-drawer-version--mismatch {
+  color: var(--nav-version-mismatch);
+}

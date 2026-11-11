@@ -7,6 +7,7 @@
  */
 'use strict';
 const fs = require('fs');
+const { loadApiBase } = require('./api-base-sandbox');
 const path = require('path');
 const vm = require('vm');
 
@@ -44,6 +45,7 @@ function load(hash, opts) {
   ctx.registerPage = (name, p) => { if (name === 'account') page = p; };
   ctx.window = Object.assign({ CSAuth, addEventListener(t, fn) { listeners[t] = fn; } }, {});
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(SRC, ctx);
   // The shared #app container, counting every render into it.
   const app = { writes: [], set innerHTML(v) { this.writes.push(v); this._html = v; }, get innerHTML() { return this._html; } };
