@@ -1159,8 +1159,11 @@
   function loadNodes() {
     var gen = pageGen;
     var p;
-    if (typeof api === 'function') {
-      var ttl = (typeof CLIENT_TTL !== 'undefined' && CLIENT_TTL && CLIENT_TTL.nodeList) || 60000;
+    var ttl = (typeof CLIENT_TTL !== 'undefined' && CLIENT_TTL && CLIENT_TTL.nodeList) || 60000;
+    if (typeof fetchAllNodes === 'function') {
+      // Pages through the server's node cap so no repeater is missing from the map.
+      p = fetchAllNodes('', { ttl: ttl });
+    } else if (typeof api === 'function') {
       p = api('/nodes?limit=2000', { ttl: ttl });
     } else {
       p = fetch('/api/nodes?limit=2000').then(function (r) {

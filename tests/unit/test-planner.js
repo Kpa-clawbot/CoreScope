@@ -76,6 +76,7 @@ function load(opts) {
     fetch: opts.fetch || makeFetch([]),
     AbortController, Map, Promise, Date
   };
+  Object.assign(ctx, opts.globals || {});
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(LOS_SRC, ctx);
@@ -466,6 +467,57 @@ async function main() {
     assert(outputs.serverError.includes('&lt;img'), 'a server error message is escaped');
     // The panel heading (showProfiles title) is set with textContent, never innerHTML.
     assert(/title\.textContent = P\.title;/.test(PLANNER_SRC) && !/\.mc-los-title'\)\.innerHTML/.test(PLANNER_SRC), 'panel heading is written with textContent');
+  }
+
+  console.log('\n=== loadNodes: fetchAllNodes pages through every node ===');
+  {
+    // Any property/call on the stub returns another stub, so mount() can run without a DOM or Leaflet.
+    const stub = () => new Proxy(function () {}, {
+      get: (t, k) => (k === Symbol.toPrimitive ? () => 0 : k === 'then' ? undefined
+        : k === 'length' ? 0 : /^(parent|next|previous|first|last)/.test(String(k)) ? null
+        : (k in t ? t[k] : stub())),
+      set: () => true,
+      apply: () => stub(),
+      construct: () => stub()
+    });
+    const repeaters = Array.from({ length: 2500 }, (_, i) => ({
+      public_key: 'pk' + String(i).padStart(4, '0'), name: 'R' + i, role: 'repeater',
+      lat: 40 + (i % 100) / 1000, lon: -120 + (i % 100) / 1000
+    }));
+    const mountWith = (globals, fetchImpl) => {
+      const pages = {};
+      const timers = fakeTimers();
+      const { I: II, ctx: cx } = load({
+        timers, fetch: fetchImpl,
+        globals: Object.assign({
+          L: stub(), document: stub(), MC_PLANNER_CFG: {},
+          addEventListener() {}, removeEventListener() {},
+          registerPage: (name, obj) => { pages[name] = obj; }
+        }, globals)
+      });
+      pages.planner.init(stub());
+      return { II, cx, pages };
+    };
+
+    const calls = [];
+    const fakeFetchAll = (q, o) => { calls.push({ q, o }); return Promise.resolve({ nodes: repeaters, counts: {}, total: repeaters.length }); };
+    const r1 = mountWith({ fetchAllNodes: fakeFetchAll, api: undefined }, makeFetch([]));
+    await flush(); await flush();
+    const st1 = r1.II.state();
+    assert(calls.length === 1, 'loadNodes calls fetchAllNodes once');
+    assert(calls[0] && calls[0].q === '' && calls[0].o && calls[0].o.ttl === 60000, 'fetchAllNodes gets empty extra query and the nodeList ttl');
+    assert(st1 && st1.nodesState === 'ready', 'planner reaches nodesState ready');
+    assert(st1 && st1.rawNodes.length === 2500, 'planner node list holds all 2500 repeaters');
+    assert(r1.cx.fetch.calls.filter(c => c.url.indexOf('/api/nodes') === 0).length === 0, 'fetchAllNodes path makes no direct /api/nodes fetch');
+
+    // Route by URL: mount() also fetches /api/config/map, which must not consume the nodes response.
+    const routed = (url) => url.indexOf('/api/nodes') === 0
+      ? Promise.resolve(res(200, { nodes: repeaters.slice(0, 3) }))
+      : Promise.reject(new Error('not routed: ' + url));
+    const fb = mountWith({ fetchAllNodes: undefined }, routed);
+    await flush(); await flush();
+    const st2 = fb.II.state();
+    assert(st2 && st2.nodesState === 'ready' && st2.rawNodes.length === 3, 'fallback: without fetchAllNodes, the single /api/nodes fetch still loads');
   }
 
   console.log('\n=== source checks ===');
