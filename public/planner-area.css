@@ -105,6 +105,7 @@
 .mc-pa-area { stroke: var(--accent); stroke-width: 2px; stroke-dasharray: 6 4; fill: var(--accent); fill-opacity: 0.06; }
 .mc-pa-area.mc-pa-drawing { fill-opacity: 0.15; }
 .mc-pa-drawing-map, .mc-pa-drawing-map .leaflet-interactive { cursor: crosshair; }
+.mc-pa-drawing-map { touch-action: none; }
 
 .mc-pa-node { stroke: var(--surface, var(--bg)); stroke-width: 1.5px; fill-opacity: 0.95; }
 .mc-pa-comp-0 { fill: var(--mc-pa-comp-0); }

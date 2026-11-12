@@ -328,7 +328,7 @@
     var resultLayer = L.layerGroup().addTo(root);
     var state = parseAreaParams(ctx.params, cfg);
     var data = null, siteLayers = {}, abort = null, runId = 0;
-    var drawing = null;                               // {start, rect}
+    var drawing = null;                               // {start, rect, pid, tapStart, ...}
     var dead = false;
     function stateKey(p) { return buildCoverageUrl(p, cfg) || 'none'; }
 
@@ -546,18 +546,21 @@
       });
     }
 
-    /* --- draw-area mode --- */
-    function onDown(e) {
-      if (!drawing || drawing.rect) return;
-      drawing.start = e.latlng;
-      drawing.rect = L.rectangle([e.latlng, e.latlng], { className: 'mc-pa-area mc-pa-drawing', interactive: false }).addTo(areaLayer);
+    /* --- draw-area mode (Pointer Events: mouse, touch and pen) --- */
+    var TAP_PX = 6;                                   // movement under this is a tap, not a drag
+    var DRAW_HINT = 'Drag, or tap two corners, to set the area. Esc cancels.';
+    function pointLatLng(e) { return map.mouseEventToLatLng(e); }
+    function resetGesture() {
+      if (!drawing) return;
+      if (drawing.rect) drawAreaRect();               // drop the rubber band, show the previous area
+      drawing.start = null; drawing.rect = null; drawing.pid = null; drawing.tapStart = false;
     }
-    function onMove(e) {
-      if (drawing && drawing.rect) drawing.rect.setBounds(L.latLngBounds(drawing.start, e.latlng));
+    function releaseCapture(e) {
+      var c = map.getContainer && map.getContainer();
+      try { if (c && c.releasePointerCapture) c.releasePointerCapture(e.pointerId); } catch (x) { /* already released */ }
     }
-    function onUp(e) {
-      if (!drawing || !drawing.rect) return;
-      var b = L.latLngBounds(drawing.start, e.latlng);
+    function finishDraw(e) {
+      var b = L.latLngBounds(drawing.start, pointLatLng(e));
       stopDraw();
       if (Math.abs(b.getNorth() - b.getSouth()) < 0.005 || Math.abs(b.getEast() - b.getWest()) < 0.005) {
         drawAreaRect();           // too small: ignore, restore previous
@@ -565,28 +568,66 @@
       }
       setBbox(bboxFromBounds(b));
     }
+    function onPtrDown(e) {
+      if (!drawing) return;
+      if (e.isPrimary === false) { resetGesture(); return; }       // second finger (pinch): cancel cleanly
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (drawing.pid !== null) return;
+      var c = drawing.container;
+      try { if (c.setPointerCapture) c.setPointerCapture(e.pointerId); } catch (x) { /* synthetic or lost pointer */ }
+      drawing.pid = e.pointerId;
+      drawing.px = e.clientX; drawing.py = e.clientY;
+      if (!drawing.rect) {
+        var ll = pointLatLng(e);
+        drawing.start = ll;
+        drawing.rect = L.rectangle([ll, ll], { className: 'mc-pa-area mc-pa-drawing', interactive: false }).addTo(areaLayer);
+      }
+    }
+    function onPtrMove(e) {
+      if (!drawing || !drawing.rect || e.isPrimary === false) return;
+      if (drawing.pid === e.pointerId || (drawing.tapStart && drawing.pid === null)) {
+        drawing.rect.setBounds(L.latLngBounds(drawing.start, pointLatLng(e)));
+      }
+    }
+    function onPtrUp(e) {
+      if (!drawing || drawing.pid === null || drawing.pid !== e.pointerId) return;
+      releaseCapture(e);
+      var moved = Math.max(Math.abs(e.clientX - drawing.px), Math.abs(e.clientY - drawing.py)) >= TAP_PX;
+      drawing.pid = null;
+      if (drawing.tapStart || moved) { finishDraw(e); return; }
+      drawing.tapStart = true;                         // first tap: corner set, wait for the second
+    }
+    function onPtrCancel(e) {
+      if (!drawing || drawing.pid !== e.pointerId) return;
+      releaseCapture(e);
+      resetGesture();
+    }
     function onKey(e) {
       if (e.key === 'Escape' && drawing) { stopDraw(); drawAreaRect(); }
     }
+    var PTR_EVENTS = [['pointerdown', onPtrDown], ['pointermove', onPtrMove], ['pointerup', onPtrUp], ['pointercancel', onPtrCancel]];
     function startDraw() {
       if (drawing) { stopDraw(); drawAreaRect(); return; }
-      drawing = { start: null, rect: null };
-      map.dragging.disable();
-      var c = map.getContainer && map.getContainer();
-      if (c && c.classList) c.classList.add('mc-pa-drawing-map');
-      map.on('mousedown', onDown); map.on('mousemove', onMove); map.on('mouseup', onUp);
+      var c = map.getContainer();
+      drawing = { start: null, rect: null, pid: null, tapStart: false, px: 0, py: 0, container: c,
+        wasDragging: map.dragging.enabled ? !!map.dragging.enabled() : true };
+      if (drawing.wasDragging) map.dragging.disable();
+      if (c.classList) c.classList.add('mc-pa-drawing-map');
+      PTR_EVENTS.forEach(function (p) { c.addEventListener(p[0], p[1]); });
       document.addEventListener('keydown', onKey);
+      f('areaText').textContent = DRAW_HINT;
       var b = panel.querySelector('[data-act="draw"]');
       b.setAttribute('aria-pressed', 'true'); b.textContent = 'Cancel drawing';
     }
     function stopDraw() {
       if (!drawing) return;
+      var d = drawing;
       drawing = null;
-      map.off('mousedown', onDown); map.off('mousemove', onMove); map.off('mouseup', onUp);
+      PTR_EVENTS.forEach(function (p) { d.container.removeEventListener(p[0], p[1]); });
       document.removeEventListener('keydown', onKey);
-      map.dragging.enable();
-      var c = map.getContainer && map.getContainer();
-      if (c && c.classList) c.classList.remove('mc-pa-drawing-map');
+      if (d.wasDragging) map.dragging.enable();
+      if (d.container.classList) d.container.classList.remove('mc-pa-drawing-map');
+      if (!dead) updateAreaInfo();
       var b = panel.querySelector('[data-act="draw"]');
       if (b) { b.setAttribute('aria-pressed', 'false'); b.textContent = 'Draw area'; }
     }

@@ -356,6 +356,127 @@ test('site links use clearance wording, with or without ctx.fmtClearance', () =>
   assert.strictEqual(I.fmtClearance(-100), 'terrain blocks the path');
 });
 
+/* ---- draw area: pointer events ---- */
+function drawMap(opts) {
+  const c = fakeEl();
+  const cls = new Set();
+  c.classList = { add: (x) => cls.add(x), remove: (x) => cls.delete(x), contains: (x) => cls.has(x) };
+  c._cls = cls; c._captured = [];
+  c.setPointerCapture = (id) => c._captured.push(id);
+  c.releasePointerCapture = () => {};
+  const st = { dragOn: !opts || opts.dragging !== false, log: [] };
+  const map = { getBounds: () => ({ getSouth: () => 30, getWest: () => -98, getNorth: () => 30.5, getEast: () => -97.5 }),
+    getContainer: () => c, fitBounds() {}, getZoom: () => 9, on() {}, off() {},
+    mouseEventToLatLng: (e) => ({ lat: e.lat, lng: e.lng }),
+    dragging: { enabled: () => st.dragOn, disable() { st.dragOn = false; st.log.push('off'); }, enable() { st.dragOn = true; st.log.push('on'); } } };
+  return { map, c, st };
+}
+function drawSetup(opts) {
+  const dm = drawMap(opts);
+  const calls = [];
+  const m = makeCtx({ map: dm.map, setParams(p) { calls.push(p); } });
+  const inst = m.api.mount(m.ctx);
+  m.panel._els['[data-act="draw"]'] = m.panel._els['[data-act="draw"]'] || fakeEl();
+  const btn = m.panel._els['[data-act="draw"]'];
+  const start = () => m.panel._l.click[0]({ target: { closest: () => ({ getAttribute: () => 'draw', disabled: false }) } });
+  const fire = (type, o) => (dm.c._l[type] || []).slice().forEach((fn) => fn(Object.assign(
+    { pointerId: 1, isPrimary: true, pointerType: 'mouse', button: 0, clientX: 0, clientY: 0, lat: 0, lng: 0 }, o)));
+  return Object.assign({ inst, calls, btn, start, fire, m }, dm);
+}
+const lastBbox = (d) => d.calls.length ? d.calls[d.calls.length - 1] : null;
+const nListeners = (d) => ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'].reduce((n, t) => n + (d.c._l[t] || []).length, 0);
+
+test('draw: mouse pointer drag produces the bbox', () => {
+  const d = drawSetup();
+  d.start();
+  assert.strictEqual(nListeners(d), 4);
+  d.fire('pointerdown', { clientX: 10, clientY: 10, lat: 30, lng: -98 });
+  d.fire('pointermove', { clientX: 60, clientY: 60, lat: 30.2, lng: -97.8 });
+  d.fire('pointerup', { clientX: 100, clientY: 100, lat: 30.4, lng: -97.6 });
+  assert.deepStrictEqual(d.c._captured, [1]);
+  assert(lastBbox(d) && JSON.stringify(lastBbox(d)).includes('30.4'), JSON.stringify(d.calls));
+  assert.strictEqual(nListeners(d), 0, 'draw mode ends after a rectangle');
+  d.inst.unmount();
+});
+
+test('draw: touch pointer drag produces the bbox', () => {
+  const d = drawSetup();
+  d.start();
+  const t = { pointerType: 'touch', pointerId: 7 };
+  d.fire('pointerdown', Object.assign({ clientX: 10, clientY: 10, lat: 30, lng: -98 }, t));
+  d.fire('pointermove', Object.assign({ clientX: 80, clientY: 80, lat: 30.3, lng: -97.7 }, t));
+  d.fire('pointerup', Object.assign({ clientX: 90, clientY: 90, lat: 30.45, lng: -97.55 }, t));
+  assert(lastBbox(d) && JSON.stringify(lastBbox(d)).includes('30.45'), JSON.stringify(d.calls));
+  d.inst.unmount();
+});
+
+test('draw: two taps pick the corners', () => {
+  const d = drawSetup();
+  d.start();
+  const t = { pointerType: 'touch', pointerId: 3 };
+  d.fire('pointerdown', Object.assign({ clientX: 10, clientY: 10, lat: 30, lng: -98 }, t));
+  d.fire('pointerup', Object.assign({ clientX: 12, clientY: 11, lat: 30, lng: -98 }, t));
+  assert.strictEqual(d.calls.length, 0, 'first tap only sets a corner');
+  assert.strictEqual(nListeners(d), 4);
+  d.fire('pointermove', { pointerId: 3, pointerType: 'touch', lat: 30.2, lng: -97.8 });   // rubber band follows
+  d.fire('pointerdown', Object.assign({ clientX: 200, clientY: 200, lat: 30.45, lng: -97.55 }, t));
+  d.fire('pointerup', Object.assign({ clientX: 200, clientY: 200, lat: 30.45, lng: -97.55 }, t));
+  assert(lastBbox(d) && JSON.stringify(lastBbox(d)).includes('30.45'), JSON.stringify(d.calls));
+  d.inst.unmount();
+});
+
+test('draw: a second pointer cancels the gesture; draw mode stays on', () => {
+  const d = drawSetup();
+  d.start();
+  d.fire('pointerdown', { pointerType: 'touch', pointerId: 1, clientX: 10, clientY: 10, lat: 30, lng: -98 });
+  d.fire('pointerdown', { pointerType: 'touch', pointerId: 2, isPrimary: false, clientX: 90, clientY: 90, lat: 30.4, lng: -97.6 });
+  d.fire('pointerup', { pointerType: 'touch', pointerId: 1, clientX: 100, clientY: 100, lat: 30.4, lng: -97.6 });
+  d.fire('pointerup', { pointerType: 'touch', pointerId: 2, isPrimary: false, clientX: 90, clientY: 90, lat: 30.4, lng: -97.6 });
+  assert.strictEqual(d.calls.length, 0, 'no bbox from a cancelled gesture');
+  assert.strictEqual(nListeners(d), 4);
+  d.fire('pointerdown', { clientX: 0, clientY: 0, lat: 30, lng: -98 });                    // can still draw afterwards
+  d.fire('pointerup', { clientX: 90, clientY: 90, lat: 30.4, lng: -97.6 });
+  assert.strictEqual(d.calls.length, 1);
+  d.inst.unmount();
+});
+
+test('draw: pointercancel aborts without a bbox', () => {
+  const d = drawSetup();
+  d.start();
+  d.fire('pointerdown', { clientX: 0, clientY: 0, lat: 30, lng: -98 });
+  d.fire('pointercancel', {});
+  d.fire('pointerup', { clientX: 90, clientY: 90, lat: 30.4, lng: -97.6 });
+  assert.strictEqual(d.calls.length, 0);
+  d.inst.unmount();
+});
+
+test('draw: map dragging is disabled while drawing and restored after', () => {
+  const d = drawSetup();
+  d.start();
+  assert.strictEqual(d.st.dragOn, false);
+  assert(d.c._cls.has('mc-pa-drawing-map'));
+  d.start();                                           // toggle off
+  assert.strictEqual(d.st.dragOn, true);
+  assert(!d.c._cls.has('mc-pa-drawing-map'));
+  d.inst.unmount();
+  const d2 = drawSetup({ dragging: false });          // was already off: stays off
+  d2.start();
+  d2.start();
+  assert.strictEqual(d2.st.dragOn, false);
+  assert.deepStrictEqual(d2.st.log, []);
+  d2.inst.unmount();
+});
+
+test('draw: unmount mid-draw removes every listener', () => {
+  const d = drawSetup();
+  d.start();
+  d.fire('pointerdown', { clientX: 0, clientY: 0, lat: 30, lng: -98 });
+  d.inst.unmount();
+  assert.strictEqual(nListeners(d), 0);
+  assert.strictEqual(d.st.dragOn, true);
+  assert(!d.c._cls.has('mc-pa-drawing-map'));
+});
+
 Promise.all(pending).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
