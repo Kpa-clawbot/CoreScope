@@ -30,20 +30,19 @@ type plannerEdge struct {
 
 // plannerNodeFilter carries the same filters /api/nodes applies.
 type plannerNodeFilter struct {
-	IsBlacklisted func(pubkey string) bool
-	IsNameHidden  func(name string) bool
-	SilentAfter   func(role string) time.Duration
-	// PassesGeo is the operator geo_filter /api/nodes applies (nil = no filter).
-	PassesGeo func(lat, lon float64) bool
+	// Visible is /api/nodes' hiding rule for one node (node_visibility.go);
+	// nil hides nothing.
+	Visible     func(n *nodeInfo) bool
+	SilentAfter func(role string) time.Duration
 }
 
 // plannerKmPerDeg is one degree of latitude on haversineKm's sphere.
 const plannerKmPerDeg = 6371.0 * math.Pi / 180
 
-// selectPlannerNodes picks repeaters/rooms with GPS (not 0,0), not
-// blacklisted or hidden, inside area expanded by marginKm, capped at
+// selectPlannerNodes picks repeaters/rooms with GPS (not 0,0) that f.Visible
+// keeps, inside area expanded by marginKm, capped at
 // plannerMaxNodes (in-area first, then nearest the centre). Stale is set from
-// max(LastSeen, lastHeard[pk]) vs SilentAfter(role). Nil filter funcs filter
+// max(LastSeen, lastHeard[pk]) vs SilentAfter(role). A nil Visible hides
 // nothing; a nil SilentAfter marks nothing stale. A pubkey listed twice
 // (case-insensitively) is kept once, so pubkeys identify nodes downstream.
 // Output: in-area first, then by pubkey.
@@ -64,13 +63,7 @@ func selectPlannerNodes(all []nodeInfo, lastHeard map[string]time.Time, area geo
 		if !ni.HasGPS || !plannerFiniteCoord(ni.Lat, ni.Lon) || (ni.Lat == 0 && ni.Lon == 0) {
 			continue
 		}
-		if f.IsBlacklisted != nil && f.IsBlacklisted(ni.PublicKey) {
-			continue
-		}
-		if f.IsNameHidden != nil && f.IsNameHidden(ni.Name) {
-			continue
-		}
-		if f.PassesGeo != nil && !f.PassesGeo(ni.Lat, ni.Lon) {
+		if f.Visible != nil && !f.Visible(ni) {
 			continue
 		}
 		if !plannerBBoxContains(outer, ni.Lat, ni.Lon) {

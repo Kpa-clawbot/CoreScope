@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 )
@@ -505,8 +504,7 @@ func TestSelectPlannerNodesFilters(t *testing.T) {
 		rptr("", cLat, cLon),
 	}
 	f := plannerNodeFilter{
-		IsBlacklisted: func(pk string) bool { return pk == "aa10" },
-		IsNameHidden:  func(name string) bool { return strings.HasPrefix(name, "Hidden") },
+		Visible: nodeVisibility{cfg: &Config{NodeBlacklist: []string{"aa10"}, HiddenNamePrefixes: []string{"Hidden"}}}.infoRule(nil),
 	}
 	got, trunc := selectPlannerNodes(all, nil, testArea, 30, f, now)
 	if trunc {
@@ -519,7 +517,7 @@ func TestSelectPlannerNodesFilters(t *testing.T) {
 		t.Fatalf("fields: %+v", got)
 	}
 
-	// Nil filter funcs filter nothing.
+	// A nil Visible hides nothing.
 	got, _ = selectPlannerNodes(all, nil, testArea, 30, plannerNodeFilter{}, now)
 	if want := []string{"aa01", "aa02", "aa10", "aa11"}; !slices.Equal(pubkeys(got), want) {
 		t.Fatalf("nil filters: got %v want %v", pubkeys(got), want)
@@ -835,7 +833,8 @@ func TestSelectPlannerNodesHonoursGeoFilter(t *testing.T) {
 		{PublicKey: "bb02", Name: "Filtered", Role: "repeater", Lat: 30.32, Lon: -97.70, HasGPS: true, LastSeen: now},
 	}
 	area := geoBBox{S: 30.2, W: -97.9, N: 30.4, E: -97.6}
-	f := plannerNodeFilter{PassesGeo: func(lat, lon float64) bool { return lon < -97.75 }}
+	gf := &GeoFilterConfig{Polygon: [][2]float64{{30.2, -97.9}, {30.2, -97.75}, {30.4, -97.75}, {30.4, -97.9}}}
+	f := plannerNodeFilter{Visible: nodeVisibility{geo: gf}.infoRule(nil)}
 	nodes, _ := selectPlannerNodes(all, nil, area, 0, f, now)
 	if len(nodes) != 1 || nodes[0].PubKey != "aa01" {
 		t.Fatalf("geo-filtered node leaked into planner nodes: %+v", nodes)

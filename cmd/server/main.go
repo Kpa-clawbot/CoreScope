@@ -477,6 +477,7 @@ func main() {
 			ns, _ := srv.store.getCachedNodesAndPM()
 			return ns
 		}
+		srv.elevation.visibility = srv
 		srv.elevation.ipr = &wsLimiter{state: map[string]*wsIPState{},
 			trustedProxies: parseCIDRList(cfg.WSTrustedProxies(), "webSocket.trustedProxies")}
 		srv.elevation.rl = newRateLimiter(elevIPTokens, time.Minute) // legs per client per minute

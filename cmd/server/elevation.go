@@ -18,7 +18,7 @@ package main
 //	         cached requests are never limited.
 //
 // Points rule: every point must be the position of a known node (GPS set,
-// not 0,0), matched at 5 decimals. This bounds the cache key space to real
+// not 0,0) that /api/nodes shows (node_visibility.go), matched at 5 decimals. This bounds the cache key space to real
 // node pairs so the endpoint cannot be used to drain the elevation quota.
 //
 // Per-leg failures never fail the request: the leg carries an error code
@@ -240,6 +240,15 @@ func (w *elevWindow) roll(now time.Time) {
 	}
 }
 
+// elevVisibility is the node-hiding rule /api/nodes applies; *Server
+// implements it (node_visibility.go).
+type elevVisibility interface {
+	// nodeVisibilityGen changes whenever the rule does.
+	nodeVisibilityGen() string
+	// visibleNodeInfo returns the current rule; called once per set rebuild.
+	visibleNodeInfo() func(n *nodeInfo) bool
+}
+
 // elevationService fetches and caches leg profiles. The cache is in-memory
 // only (the server never writes the DB).
 type elevationService struct {
@@ -255,6 +264,9 @@ type elevationService struct {
 	// nodes lists the known nodes; only their positions are valid leg
 	// endpoints. Nil means none (every leg is unknown_point).
 	nodes func() []nodeInfo
+	// visibility narrows nodes to those /api/nodes shows
+	// (node_visibility.go). Nil (unit tests) hides nothing.
+	visibility elevVisibility
 	// clientLimiter (ipr/rl) is the per-client limit in legs, charged one
 	// token per distinct uncached leg; nil ipr or rl disables it.
 	clientLimiter
@@ -264,16 +276,17 @@ type elevationService struct {
 
 	refreshMu sync.Mutex // serialises node-set rebuilds
 
-	mu        sync.Mutex
-	ll        *list.List
-	items     map[string]*list.Element
-	nodeSet   map[string]struct{}
-	nodeSetAt time.Time
-	fails     int       // consecutive upstream failures
-	coolTo    time.Time // upstream calls blocked until then
-	minute    elevWindow
-	hour      elevWindow
-	day       elevWindow
+	mu         sync.Mutex
+	ll         *list.List
+	items      map[string]*list.Element
+	nodeSet    map[string]struct{}
+	nodeSetAt  time.Time
+	nodeSetGen string    // visibility generation nodeSet was built under
+	fails      int       // consecutive upstream failures
+	coolTo     time.Time // upstream calls blocked until then
+	minute     elevWindow
+	hour       elevWindow
+	day        elevWindow
 }
 
 // newElevationService builds the service from the resolved config.
@@ -337,30 +350,31 @@ func reversedCopy(in []float64) []float64 {
 	return out
 }
 
-// known reports whether key is the position of a known node. The set is
-// rebuilt at most every elevNodeSetTTL, outside e.mu.
+// known reports whether key is the position of a known node that /api/nodes
+// shows. The set is rebuilt outside e.mu every elevNodeSetTTL, and at once
+// when the hiding rules change, so a node the operator hides stops being a
+// valid endpoint on the next request.
 func (e *elevationService) known(key string) bool {
 	if e.nodes == nil {
 		return false
 	}
+	gen := e.visibilityGen()
 	e.mu.Lock()
-	due := e.nodeSet == nil || e.now().Sub(e.nodeSetAt) >= elevNodeSetTTL
+	due := e.nodeSetDue(gen)
 	e.mu.Unlock()
 	if due {
 		e.refreshMu.Lock()
+		// Read the generation before the rule and the nodes: a rule change
+		// during the build then leaves a stale generation behind, which the
+		// next call rebuilds.
+		gen = e.visibilityGen()
 		e.mu.Lock()
-		due = e.nodeSet == nil || e.now().Sub(e.nodeSetAt) >= elevNodeSetTTL
+		due = e.nodeSetDue(gen)
 		e.mu.Unlock()
 		if due {
-			ns := e.nodes()
-			set := make(map[string]struct{}, len(ns))
-			for _, n := range ns {
-				if n.HasGPS && !(n.Lat == 0 && n.Lon == 0) {
-					set[elevKey(elevPoint{n.Lat, n.Lon})] = struct{}{}
-				}
-			}
+			set := e.buildNodeSet()
 			e.mu.Lock()
-			e.nodeSet, e.nodeSetAt = set, e.now()
+			e.nodeSet, e.nodeSetAt, e.nodeSetGen = set, e.now(), gen
 			e.mu.Unlock()
 		}
 		e.refreshMu.Unlock()
@@ -369,6 +383,39 @@ func (e *elevationService) known(key string) bool {
 	_, ok := e.nodeSet[key]
 	e.mu.Unlock()
 	return ok
+}
+
+func (e *elevationService) visibilityGen() string {
+	if e.visibility == nil {
+		return ""
+	}
+	return e.visibility.nodeVisibilityGen()
+}
+
+// nodeSetDue reports whether the set must be rebuilt. Caller holds e.mu.
+func (e *elevationService) nodeSetDue(gen string) bool {
+	return e.nodeSet == nil || e.nodeSetGen != gen || e.now().Sub(e.nodeSetAt) >= elevNodeSetTTL
+}
+
+// buildNodeSet keys the positions of the visible nodes with GPS (not 0,0).
+func (e *elevationService) buildNodeSet() map[string]struct{} {
+	var visible func(n *nodeInfo) bool
+	if e.visibility != nil {
+		visible = e.visibility.visibleNodeInfo()
+	}
+	ns := e.nodes()
+	set := make(map[string]struct{}, len(ns))
+	for i := range ns {
+		n := &ns[i]
+		if !n.HasGPS || (n.Lat == 0 && n.Lon == 0) {
+			continue
+		}
+		if visible != nil && !visible(n) {
+			continue
+		}
+		set[elevKey(elevPoint{n.Lat, n.Lon})] = struct{}{}
+	}
+	return set
 }
 
 // elevPlan is a leg after the checks that need no upstream: res carries the

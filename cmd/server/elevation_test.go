@@ -545,6 +545,80 @@ func TestElevationUnknownPoint(t *testing.T) {
 	}
 }
 
+// Review #2391 point 4: a node /api/nodes hides (blacklist, hidden name,
+// outside the geo_filter) is no valid endpoint, and a rule change applies to
+// the next request, not after elevNodeSetTTL.
+func TestElevationHiddenNodesAreUnknown(t *testing.T) {
+	f := newFakeElevUpstream(t)
+	srv, svc, _ := newElevTestServer(t, f, "")
+	srv.cfg.SetNodeBlacklist([]string{"bad1"})
+	srv.cfg.SetHiddenNamePrefixes([]string{"zz-"})
+	inside := &GeoFilterConfig{Polygon: [][2]float64{{0.5, 0.5}, {0.5, 1.35}, {1.35, 1.35}, {1.35, 0.5}}}
+	srv.setGeoFilter(inside)
+	svc.visibility = srv
+	nl := nodesOf(svc)
+	nl.mu.Lock()
+	nl.ns = []nodeInfo{
+		{PublicKey: "ok1", Name: "A", Lat: 1, Lon: 1, HasGPS: true},
+		{PublicKey: "ok2", Name: "B", Lat: 1.2, Lon: 1.2, HasGPS: true},
+		{PublicKey: "BAD1", Name: "C", Lat: 1.1, Lon: 1.1, HasGPS: true},
+		{PublicKey: "hid1", Name: "zz-x", Lat: 1.3, Lon: 1.3, HasGPS: true},
+		{PublicKey: "far1", Name: "D", Lat: 1.4, Lon: 1.4, HasGPS: true},
+	}
+	nl.mu.Unlock()
+	leg := func(pts string) ElevationLeg {
+		t.Helper()
+		code, resp, _ := getElevRaw(srv, pts)
+		if code != http.StatusOK || len(resp.Legs) != 1 {
+			t.Fatalf("%s: %d %+v", pts, code, resp)
+		}
+		return resp.Legs[0]
+	}
+	for name, pts := range map[string]string{
+		"blacklisted":        "1,1,1.1,1.1",
+		"hidden name":        "1,1,1.3,1.3",
+		"outside geo_filter": "1,1,1.4,1.4",
+		"hidden first":       "1.1,1.1,1,1",
+	} {
+		if l := leg(pts); l.Error != elevErrUnknownPoint || len(l.ElevM) != 0 {
+			t.Errorf("%s: %+v", name, l)
+		}
+	}
+	if f.count() != 0 {
+		t.Fatalf("hidden endpoints reached upstream: %d", f.count())
+	}
+	if l := leg("1,1,1.2,1.2"); l.Error != "" {
+		t.Fatalf("visible pair: %+v", l)
+	}
+
+	// Each rule change applies at once (the clock never moves), and a cached
+	// profile is not served for an endpoint that is now hidden.
+	steps := []struct {
+		name   string
+		change func()
+		pts    string
+		want   string
+	}{
+		{"blacklist ok2", func() { srv.cfg.SetNodeBlacklist([]string{"bad1", "OK2"}) }, "1,1,1.2,1.2", elevErrUnknownPoint},
+		{"unblacklist ok2", func() { srv.cfg.SetNodeBlacklist([]string{"bad1"}) }, "1,1,1.2,1.2", ""},
+		{"hide B", func() { srv.cfg.SetHiddenNamePrefixes([]string{"zz-", "B"}) }, "1,1,1.2,1.2", elevErrUnknownPoint},
+		{"unhide B", func() { srv.cfg.SetHiddenNamePrefixes([]string{"zz-"}) }, "1,1,1.2,1.2", ""},
+		{"shrink geo_filter", func() {
+			srv.setGeoFilter(&GeoFilterConfig{Polygon: [][2]float64{{0.5, 0.5}, {0.5, 1.1}, {1.1, 1.1}, {1.1, 0.5}}})
+		}, "1,1,1.2,1.2", elevErrUnknownPoint},
+		{"drop geo_filter", func() { srv.setGeoFilter(nil) }, "1,1,1.4,1.4", ""},
+	}
+	for _, st := range steps {
+		st.change()
+		if l := leg(st.pts); l.Error != st.want {
+			t.Fatalf("after %s: %s → %+v, want error %q", st.name, st.pts, l, st.want)
+		}
+	}
+	if f.count() != 2 {
+		t.Fatalf("upstream calls=%d want 2 (1,1→1.2,1.2 once, 1,1→1.4,1.4 once)", f.count())
+	}
+}
+
 func TestElevationUnknownPointFailClosed(t *testing.T) {
 	f := newFakeElevUpstream(t)
 	srv, svc, _ := newElevTestServer(t, f, "")

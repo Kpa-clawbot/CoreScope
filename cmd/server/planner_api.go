@@ -186,16 +186,11 @@ func (d serverPlannerData) filter() plannerNodeFilter {
 		return plannerNodeFilter{}
 	}
 	h := cfg.GetHealthThresholds()
-	// Same geo_filter /api/nodes applies (routes.go handleNodes): a node the
-	// operator filtered out of the API must not surface through the planner.
-	var passesGeo func(lat, lon float64) bool
-	if gf := d.s.getGeoFilter(); gf != nil {
-		passesGeo = func(lat, lon float64) bool { return NodePassesGeoFilter(lat, lon, gf) }
-	}
 	return plannerNodeFilter{
-		IsBlacklisted: cfg.IsBlacklisted,
-		IsNameHidden:  cfg.IsNameHidden,
-		PassesGeo:     passesGeo,
+		// Exactly what /api/nodes hides (node_visibility.go): a node the
+		// operator filtered out of the API must not surface through the
+		// planner, and a foreign one it shows is usable.
+		Visible: d.s.visibleNodeInfo(),
 		SilentAfter: func(role string) time.Duration {
 			_, silentMs := h.GetHealthMs(role)
 			return time.Duration(silentMs) * time.Millisecond
@@ -203,14 +198,7 @@ func (d serverPlannerData) filter() plannerNodeFilter {
 	}
 }
 
-func (d serverPlannerData) filterGen() string {
-	if d.s == nil || d.s.cfg == nil {
-		return ""
-	}
-	// The geo_filter is swapped as a whole pointer (setGeoFilter), so its
-	// address identifies the version.
-	return fmt.Sprintf("%d.%d.%p", d.s.cfg.BlacklistGeneration(), d.s.cfg.HiddenNamePrefixesGeneration(), d.s.getGeoFilter())
-}
+func (d serverPlannerData) filterGen() string { return d.s.nodeVisibilityGen() }
 
 // ─── Service ────────────────────────────────────────────────────────────────
 
@@ -1045,10 +1033,7 @@ func buildPlannerKnown(nodes []nodeInfo, f plannerNodeFilter, gen string, now ti
 		if !n.HasGPS || !plannerFiniteCoord(n.Lat, n.Lon) || (n.Lat == 0 && n.Lon == 0) {
 			continue
 		}
-		if (f.IsBlacklisted != nil && f.IsBlacklisted(n.PublicKey)) || (f.IsNameHidden != nil && f.IsNameHidden(n.Name)) {
-			continue
-		}
-		if f.PassesGeo != nil && !f.PassesGeo(n.Lat, n.Lon) {
+		if f.Visible != nil && !f.Visible(n) {
 			continue
 		}
 		k.byLat = append(k.byLat, geoPoint{Lat: n.Lat, Lon: n.Lon})
