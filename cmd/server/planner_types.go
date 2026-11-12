@@ -1,7 +1,7 @@
 package main
 
-// Repeater planner — shared contracts (CTO-owned; implementation tickets must
-// not change names, JSON tags or signatures here).
+// Repeater planner — shared types. The JSON tags here are the wire contract
+// public/planner.js and public/planner-area.js depend on: change them together.
 //
 // Three GET endpoints under /api/planner/ (planner_api.go), OPT-IN via the
 // "planner" config block. All terrain comes from SRTM 1° tiles (the "terrain"
@@ -72,9 +72,10 @@ const (
 	plannerGeoRadiusKm  = 50.0 // profile/relay points must be this close to a known node
 )
 
-// plannerRangesKm is the fixed set of allowed range values (security R6:
-// quantised cache keys). The UI offers those up to maxLegKm
-// (PlannerConfig.rangesKm).
+// plannerRangesKm is the fixed set of allowed range values: a small fixed
+// set keeps the result-cache key space small, so arbitrary ranges cannot
+// flood the cache or force a recompute per request. The UI offers those up
+// to maxLegKm (PlannerConfig.rangesKm).
 var plannerRangesKm = []float64{10, 15, 20, 30, 40, 50, 60}
 
 // PlannerClientConfig is /api/config/client "planner"; present only when enabled.
@@ -234,7 +235,8 @@ type PlannerSummary struct {
 	StaleExcluded    int `json:"stale_excluded"`
 }
 
-// PlannerNodeOut — only fields /api/nodes already exposes (security R21).
+// PlannerNodeOut — only fields /api/nodes already exposes, so the planner
+// reveals nothing about a node that the nodes list does not.
 type PlannerNodeOut struct {
 	PubKey    string  `json:"pubkey"`
 	Name      string  `json:"name"`

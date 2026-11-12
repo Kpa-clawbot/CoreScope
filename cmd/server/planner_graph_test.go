@@ -825,7 +825,7 @@ func TestPlannerGraphEdgeEvidence(t *testing.T) {
 }
 
 // The operator geo_filter /api/nodes applies must also hide nodes from the
-// planner (security R21: no node the API hides may surface here).
+// planner: no node the API hides may surface here.
 func TestSelectPlannerNodesHonoursGeoFilter(t *testing.T) {
 	now := time.Now()
 	all := []nodeInfo{
