@@ -532,6 +532,16 @@ async function main() {
     assert(hexes.length === 0, 'planner.css: no raw hex colours outside var(--x, #fallback)');
   }
 
+  {
+    console.log('\nRegion-neutral defaults');
+    const { I } = load();
+    assert(eq(I.fallbackView.center, [20, 0]) && I.fallbackView.zoom === 2, 'fallback view is the world view');
+    assert(I.coordHint([51.0512, 3.7249]) === 'coordinates like 51.05, 3.72', 'hint uses the configured center, 2 decimals');
+    const neutral = 'coordinates as latitude, longitude (e.g. 12.34, 56.78)';
+    assert(I.coordHint(null) === neutral && I.coordHint([200, 0]) === neutral, 'hint is neutral without a valid center');
+    assert(!/-122|37\.6|37\.77/.test(PLANNER_SRC), 'planner.js: no Bay Area coordinates remain');
+  }
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
 }

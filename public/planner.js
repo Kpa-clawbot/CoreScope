@@ -38,7 +38,10 @@
   var HEIGHT_MIN = 0;
   var HEIGHT_MAX = 100;
   var DATALIST_MAX = 1500;
-  var FALLBACK_VIEW = { center: [37.6, -122.1], zoom: 9 };
+  // World view, shown only until the saved view or /api/config/map answers.
+  var FALLBACK_VIEW = { center: [20, 0], zoom: 2 };
+  var CONFIG_ZOOM = 9;          // zoom for a configured map center that names none
+  var mapCenter = null;         // [lat, lon] from /api/config/map, once known
   var FOOTER = 'Terrain: SRTM ~90 m (may include some trees and buildings) · line of sight only, not a link budget · survey before you build';
   var READOUT_HINT = 'Move along a profile to read the terrain at each point';
   var CFG_DEFAULTS = {
@@ -1088,9 +1091,10 @@
     }
     var gen = pageGen;
     fetch('/api/config/map').then(function (r) { return r.ok ? r.json() : null; }).then(function (m) {
-      if (gen !== pageGen || !S || S.userMoved || !m) return;
+      if (gen !== pageGen || !S || !m) return;
       if (Array.isArray(m.center) && m.center.length === 2 && validLatLon(Number(m.center[0]), Number(m.center[1]))) {
-        S.map.setView([Number(m.center[0]), Number(m.center[1])], typeof m.zoom === 'number' ? m.zoom : FALLBACK_VIEW.zoom);
+        mapCenter = [Number(m.center[0]), Number(m.center[1])];
+        if (!S.userMoved) S.map.setView(mapCenter, typeof m.zoom === 'number' ? m.zoom : CONFIG_ZOOM);
       }
     }).catch(function () { /* keep the fallback view */ });
   }
@@ -1328,6 +1332,14 @@
     }
   }
 
+  // "coordinates like 51.05, 3.72" from the operator's map center, or neutral wording.
+  function coordHint(center) {
+    if (Array.isArray(center) && center.length === 2 && validLatLon(Number(center[0]), Number(center[1]))) {
+      return 'coordinates like ' + Number(center[0]).toFixed(2) + ', ' + Number(center[1]).toFixed(2);
+    }
+    return 'coordinates as latitude, longitude (e.g. 12.34, 56.78)';
+  }
+
   function onFindSubmit(e) {
     var form = e.target;
     if (!form || !form.dataset || !form.dataset.find) return;
@@ -1338,8 +1350,8 @@
     if (!hit) {
       input.setAttribute('aria-invalid', 'true');
       err.textContent = String(input.value).trim()
-        ? 'No node matches that name. Try another name, or enter coordinates like 37.77, -122.42.'
-        : 'Type a node name or coordinates like 37.77, -122.42.';
+        ? 'No node matches that name. Try another name, or enter ' + coordHint(mapCenter) + '.'
+        : 'Type a node name or ' + coordHint(mapCenter) + '.';
       return;
     }
     input.removeAttribute('aria-invalid');
@@ -2660,6 +2672,8 @@
       linkAnalysis: linkAnalysis,
       legResultFrom: legResultFrom,
       resolveQuery: resolveQuery,
+      coordHint: coordHint,
+      fallbackView: FALLBACK_VIEW,
       normNodes: normNodes,
       normCfg: normCfg,
       parseRetryAfter: parseRetryAfter,
