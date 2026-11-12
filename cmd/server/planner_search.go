@@ -53,9 +53,13 @@ const (
 	relayMinLegKm    = 0.1 // a relay this close to A or B is the endpoint itself
 	relayGridEnd     = 0.1 // progress when the open grid is sampled
 
-	planGridMaxSide = 512 // grid rows/cols cap: 100 km at 1 km, 160 km at 500 m fit
-	planCtxEvery    = 16  // profiles between ctx checks (≤ ~1 ms of work)
-	planStride0     = 16  // first stride of the coarse-to-fine profile walk
+	// planGridMaxSide caps grid rows/cols. A 250 km coverage area (the
+	// largest maxAreaKm) at 1 km fits, and so does a 200 km relay leg's
+	// corridor (the largest maxLegKm: 320 km at 500 m is 641 cells, a little
+	// more east-west at high latitude).
+	planGridMaxSide = 720
+	planCtxEvery    = 16 // profiles between ctx checks (≤ ~1 ms of work)
+	planStride0     = 16 // first stride of the coarse-to-fine profile walk
 )
 
 // ─── Backbone plan ─────────────────────────────────────────────────────────
@@ -123,7 +127,8 @@ func planCoverage(ctx context.Context, v terrainView, in planInputs, progress fu
 }
 
 // checkPlanInputs rejects what the API layer should never pass; the error
-// names the field, never a value.
+// names the field, never a value. Ranges are checked against the largest
+// planner.maxLegKm an operator can set: the API layer enforces the one set.
 func checkPlanInputs(v terrainView, in planInputs) error {
 	if v == nil {
 		return errors.New("planner: no terrain view")
@@ -144,7 +149,7 @@ func checkPlanInputs(v terrainView, in planInputs) error {
 	switch {
 	case p.Sites < 0 || p.Sites > plannerMaxSites:
 		return errors.New("planner: invalid sites")
-	case !(p.RangeKm > 0 && p.RangeKm <= plannerMaxLegKm):
+	case !(p.RangeKm > 0 && p.RangeKm <= plannerLegKmMax):
 		return errors.New("planner: invalid range")
 	case !planHeightOK(p.NewAntennaM) || !planHeightOK(p.ExistingAntennaM):
 		return errors.New("planner: invalid antenna height")
@@ -900,6 +905,10 @@ func runRelaySearch(ctx context.Context, v terrainView, nodes []plannerNode, p P
 	return resp, nil
 }
 
+// checkRelayParams rejects what the API layer should never pass. The leg and
+// range are checked against the largest planner.maxLegKm an operator can
+// set (planGridMaxSide fits its corridor): the API layer enforces the one
+// set.
 func checkRelayParams(v terrainView, p PlannerRelayParams) error {
 	if v == nil {
 		return errors.New("planner: no terrain view")
@@ -907,9 +916,9 @@ func checkRelayParams(v terrainView, p PlannerRelayParams) error {
 	switch {
 	case !planCoordOK(p.A.Lat, p.A.Lon) || !planCoordOK(p.B.Lat, p.B.Lon):
 		return errors.New("planner: invalid endpoint")
-	case !(haversineKm(p.A.Lat, p.A.Lon, p.B.Lat, p.B.Lon) <= plannerMaxLegKm):
+	case !(haversineKm(p.A.Lat, p.A.Lon, p.B.Lat, p.B.Lon) <= plannerLegKmMax):
 		return errors.New("planner: leg too long")
-	case !(p.RangeKm > 0 && p.RangeKm <= plannerMaxLegKm):
+	case !(p.RangeKm > 0 && p.RangeKm <= plannerLegKmMax):
 		return errors.New("planner: invalid range")
 	case !planHeightOK(p.AntennaAM) || !planHeightOK(p.AntennaBM) ||
 		!planHeightOK(p.RelayAntennaM) || !planHeightOK(p.ExistingAntennaM):

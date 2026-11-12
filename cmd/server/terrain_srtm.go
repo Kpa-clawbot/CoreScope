@@ -96,6 +96,7 @@ const (
 	srtmStep        = 3                             // keep every 3rd row and column
 	srtmSide        = (srtmRawSide-1)/srtmStep + 1  // 1201 samples per side at 3 arc-seconds
 	srtmCells       = srtmSide - 1                  // 1200 grid intervals per degree
+	srtmTileBytes   = srtmSide * srtmSide * 2       // one resident tile: ~2.9 MB
 	srtmVoid        = -32768                        // SRTM no-data value
 
 	srtmMaxGzipBytes  = 24 << 20 // real tiles reach ~17 MB (Sierra, Alps); raw is 25.9 MB

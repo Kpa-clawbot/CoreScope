@@ -42,6 +42,14 @@ type PlannerConfig struct {
 	DefaultRangeKm   float64 `json:"defaultRangeKm"`
 	NewAntennaM      float64 `json:"newAntennaM"`
 	ExistingAntennaM float64 `json:"existingAntennaM"`
+	// Size limits. They set how many terrain tiles one request may load
+	// (plannerTileCaps), and so the memory a view and the cache take.
+	// MaxAreaKm: coverage bbox side after snapping, 20-250.
+	MaxAreaKm float64 `json:"maxAreaKm"`
+	// NodeMarginKm: repeaters/rooms this far outside the bbox still count, 10-60.
+	NodeMarginKm float64 `json:"nodeMarginKm"`
+	// MaxLegKm: profile/relay A→B leg, 10-200. Ranges above it are not offered.
+	MaxLegKm float64 `json:"maxLegKm"`
 }
 
 const (
@@ -50,21 +58,30 @@ const (
 	defaultPlannerRangeKm      = 30.0
 	defaultPlannerNewAntennaM  = 10.0
 	defaultPlannerExistAntenna = 5.0
+	defaultPlannerMaxAreaKm    = 100.0
+	defaultPlannerNodeMarginKm = 30.0
+	defaultPlannerMaxLegKm     = 100.0
 
-	plannerMaxPoints    = 16    // profile: points per request
-	plannerMaxLegKm     = 100.0 // profile/relay: max A→B leg
-	plannerMaxAreaKm    = 100.0 // coverage: max bbox side after snapping
-	plannerMaxSites     = 10    // coverage: max suggested sites
-	plannerMaxNodes     = 300   // coverage: max repeaters/rooms considered
-	plannerMaxCands     = 500   // coverage: max candidate sites
-	plannerMaxEdgesOut  = 2000  // coverage: max edges in the response
-	plannerMinClearance = 0.6   // "solid" link: ≥ 60 % first-Fresnel clearance
-	plannerNodeMarginKm = 30.0  // nodes this far outside the bbox still count
-	plannerGeoRadiusKm  = 50.0  // profile/relay points must be this close to a known node
+	// Valid ranges of the size limits; outside them resolved() uses the default.
+	plannerAreaKmMin, plannerAreaKmMax = 20.0, 250.0
+	// The margin minimum is plannerAreaNodeKm: the "a repeater is near the box"
+	// check reaches that far, so a smaller margin could start a plan with no
+	// nodes in it.
+	plannerMarginKmMin, plannerMarginKmMax = 10.0, 60.0
+	plannerLegKmMin, plannerLegKmMax       = 10.0, 200.0
+
+	plannerMaxPoints    = 16   // profile: points per request
+	plannerMaxSites     = 10   // coverage: max suggested sites
+	plannerMaxNodes     = 300  // coverage: max repeaters/rooms considered
+	plannerMaxCands     = 500  // coverage: max candidate sites
+	plannerMaxEdgesOut  = 2000 // coverage: max edges in the response
+	plannerMinClearance = 0.6  // "solid" link: ≥ 60 % first-Fresnel clearance
+	plannerGeoRadiusKm  = 50.0 // profile/relay points must be this close to a known node
 )
 
 // plannerRangesKm is the fixed set of allowed range values (security R6:
-// quantised cache keys). The UI offers exactly these.
+// quantised cache keys). The UI offers those up to maxLegKm
+// (PlannerConfig.rangesKm).
 var plannerRangesKm = []float64{10, 15, 20, 30, 40, 50, 60}
 
 // PlannerClientConfig is /api/config/client "planner"; present only when enabled.
@@ -78,6 +95,7 @@ type PlannerClientConfig struct {
 	MaxPoints        int       `json:"maxPoints"`
 	MaxLegKm         float64   `json:"maxLegKm"`
 	MaxAreaKm        float64   `json:"maxAreaKm"`
+	NodeMarginKm     float64   `json:"nodeMarginKm"`
 	MaxSites         int       `json:"maxSites"`
 	MinClearance     float64   `json:"minClearance"`
 }

@@ -64,8 +64,17 @@ func TestPlannerWorstCaseTiles(t *testing.T) {
 	}
 }
 
+// plannerTestSizes are the size limits the property tests run at: the
+// defaults, the smallest and largest an operator can set, and one between.
+var plannerTestSizes = []struct{ area, margin, leg float64 }{
+	{defaultPlannerMaxAreaKm, defaultPlannerNodeMarginKm, defaultPlannerMaxLegKm},
+	{200, 50, 150},
+	{plannerAreaKmMax, plannerMarginKmMax, plannerLegKmMax},
+	{plannerAreaKmMin, plannerMarginKmMin, plannerLegKmMin},
+}
+
 func TestPlannerTileCapsDefaults(t *testing.T) {
-	got := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm)
+	got := plannerTileCaps(defaultPlannerMaxAreaKm, defaultPlannerNodeMarginKm, defaultPlannerMaxLegKm)
 	// 100 km box + 30 km margin = 160 km; 100 km leg + 2×30 km pad = 160 km:
 	// 3 × 4 tiles at the north edge of the SRTM band.
 	if want := (plannerTileLimits{Profile: 12, Relay: 12, Coverage: 12}); got != want {
@@ -75,7 +84,7 @@ func TestPlannerTileCapsDefaults(t *testing.T) {
 		t.Fatalf("max %d", got.max())
 	}
 	// Short legs keep the old floor of 6.
-	if c := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, 10); c.Relay != 6 || c.Profile != 6 {
+	if c := plannerTileCaps(defaultPlannerMaxAreaKm, defaultPlannerNodeMarginKm, 10); c.Relay != 6 || c.Profile != 6 {
 		t.Fatalf("10 km legs: %+v, want relay/profile 6", c)
 	}
 	if s := newSRTMSource(PlannerConfig{}); s.maxTiles != got.max() {
@@ -88,16 +97,41 @@ func TestPlannerTileCapsDefaults(t *testing.T) {
 	}
 }
 
+// The caps, the source's per-view cap and the cache floor follow the
+// operator's sizes.
+func TestPlannerTileCapsFromConfig(t *testing.T) {
+	cfg := PlannerConfig{Enabled: true, MaxAreaKm: 200, NodeMarginKm: 50, MaxLegKm: 150}
+	r, warns := cfg.resolved()
+	if len(warns) != 0 {
+		t.Fatalf("warnings %q", warns)
+	}
+	// 300 km: 2.7° (4 tiles) by 6.1° at 60.5° (8 tiles); 150 + 2×45 km:
+	// 2.2° (4) by 4.4° (6).
+	want := plannerTileLimits{Profile: 24, Relay: 24, Coverage: 28}
+	if got := r.tileLimits(); got != want {
+		t.Fatalf("caps %+v, want %+v", got, want)
+	}
+	p := newPlannerService(cfg, nil)
+	t.Cleanup(p.Close)
+	src := p.src.(*srtmSource)
+	if p.tiles != want || src.maxTiles != 28 || src.capacity != 28 {
+		t.Fatalf("service caps %+v, source max %d, cache %d", p.tiles, src.maxTiles, src.capacity)
+	}
+	if c := (PlannerConfig{TileCacheTiles: 100, MaxAreaKm: 200, NodeMarginKm: 50}).tileCache(); c != 100 {
+		t.Fatalf("a larger configured cache: %d", c)
+	}
+}
+
 // Review #2391 point 1: an 89 × 84 km box at 51° N needs 3 × 4 = 12 tiles
 // once the 30 km node margin is added, and was refused at a cap of 9.
 func TestPlannerCoverageReviewBoxAccepted(t *testing.T) {
 	const bbox = "50.2,3.4,51.0,4.6"
-	g, msg := plannerParseGridBox(bbox)
+	g, msg := plannerParseGridBox(bbox, defaultPlannerMaxAreaKm)
 	if msg != "" {
 		t.Fatalf("parse: %s", msg)
 	}
-	view := plannerExpandBBox(g.bbox(), plannerNodeMarginKm)
-	caps := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm)
+	view := plannerExpandBBox(g.bbox(), defaultPlannerNodeMarginKm)
+	caps := PlannerConfig{}.tileLimits()
 	src := newSRTMSource(PlannerConfig{})
 	if n := src.TileCount(view); n != 12 || n > caps.Coverage || n > src.maxTiles {
 		t.Fatalf("view %+v: %d tiles, coverage cap %d, source cap %d", view, n, caps.Coverage, src.maxTiles)
@@ -116,18 +150,19 @@ func TestPlannerCoverageReviewBoxAccepted(t *testing.T) {
 	}
 }
 
-// plannerTestCoverageBoxes calls fn with every coverage box at the size
-// limit that plannerParseGridBox accepts: each south edge on the 0.05° grid
-// within the band, each height, the widest box the width check allows at
-// that height, and every 0.05° west-edge alignment within a degree. A box
-// smaller than these at the same corner is inside one of them, so these are
-// the worst case for the tile count.
-func plannerTestCoverageBoxes(t *testing.T, fn func(area geoBBox)) {
+// plannerTestCoverageBoxes calls fn with the coverage boxes at the size
+// limit that plannerParseGridBox accepts: south edges on the 0.05° grid
+// within the band, every sStride-th (a stride prime to 20 still meets every
+// alignment to the degree lines), each height, the widest box the width
+// check allows at that height, and every 0.05° west-edge alignment within a
+// degree. A smaller box at the same corner lies inside one of these, so they
+// are the worst case for the tile count.
+func plannerTestCoverageBoxes(t *testing.T, maxAreaKm float64, sStride int, fn func(area geoBBox)) {
 	t.Helper()
 	parse := func(s, w, n, e int) bool {
 		raw := fmt.Sprintf("%g,%g,%g,%g", float64(s)/plannerGridPerDeg, float64(w)/plannerGridPerDeg,
 			float64(n)/plannerGridPerDeg, float64(e)/plannerGridPerDeg)
-		g, msg := plannerParseGridBox(raw)
+		g, msg := plannerParseGridBox(raw, maxAreaKm)
 		if msg == "" && g != (plannerGridBox{s, w, n, e}) {
 			t.Fatalf("%s snapped to %+v", raw, g)
 		}
@@ -135,15 +170,14 @@ func plannerTestCoverageBoxes(t *testing.T, fn func(area geoBBox)) {
 	}
 	sMin := int(plannerCoverageMinLat * plannerGridPerDeg)
 	nMax := int(plannerCoverageMaxLat * plannerGridPerDeg)
-	maxArea := plannerMaxAreaKm
-	hMax := int(maxArea / plannerKmPerDeg * plannerGridPerDeg)
+	hMax := int(maxAreaKm / plannerKmPerDeg * plannerGridPerDeg)
 	boxes := 0
-	for s := sMin; s < nMax; s++ {
+	for s := sMin; s < nMax; s += sStride {
 		for h := 1; h <= hMax && s+h <= nMax; h++ {
 			n := s + h
 			mid := (float64(s) + float64(n)) / 2 / plannerGridPerDeg
 			w0 := 20 // 1° E: any meridian will do, only the alignment matters
-			wd := int(maxArea/(plannerKmPerDeg*math.Cos(mid*math.Pi/180))*plannerGridPerDeg) + 1
+			wd := int(maxAreaKm/(plannerKmPerDeg*math.Cos(mid*math.Pi/180))*plannerGridPerDeg) + 1
 			for wd > 0 && !parse(s, w0, n, w0+wd) {
 				wd--
 			}
@@ -164,57 +198,95 @@ func plannerTestCoverageBoxes(t *testing.T, fn func(area geoBBox)) {
 	}
 }
 
-// Every coverage box the parser accepts fits the coverage cap, and the cap
-// is reached: it is the worst case, not a guess.
+// Every coverage box the parser accepts fits the coverage cap, at every
+// tested size, and the cap is reached: it is the worst case, not a guess.
 func TestPlannerCoverageTileCapHoldsEverywhere(t *testing.T) {
-	caps := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm)
-	worst := 0
-	plannerTestCoverageBoxes(t, func(area geoBBox) {
-		n := plannerTestTiles(plannerExpandBBox(area, plannerNodeMarginKm))
-		if n > caps.Coverage {
-			t.Fatalf("box %+v: view needs %d tiles, cap %d", area, n, caps.Coverage)
+	for i, sz := range plannerTestSizes {
+		caps := plannerTileCaps(sz.area, sz.margin, sz.leg)
+		stride := 1
+		if i > 0 {
+			stride = 3
 		}
-		worst = max(worst, n)
-	})
-	if worst != caps.Coverage {
-		t.Fatalf("largest view needs %d tiles, cap %d: the cap is not the worst case", worst, caps.Coverage)
+		worst := 0
+		plannerTestCoverageBoxes(t, sz.area, stride, func(area geoBBox) {
+			n := plannerTestTiles(plannerExpandBBox(area, sz.margin))
+			if n > caps.Coverage {
+				t.Fatalf("%+v: box %+v: view needs %d tiles, cap %d", sz, area, n, caps.Coverage)
+			}
+			worst = max(worst, n)
+		})
+		if worst != caps.Coverage {
+			t.Errorf("%+v: largest view needs %d tiles, cap %d: the cap is not the worst case", sz, worst, caps.Coverage)
+		}
 	}
 }
 
 // Every relay corridor and single profile leg of at most the maximum length,
-// with both ends in the band, fits its cap.
+// with both ends in the band, fits its cap, at every tested size.
 func TestPlannerRelayProfileTileCapsHoldEverywhere(t *testing.T) {
-	caps := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm)
-	legs := 0
-	for lat := plannerCoverageMinLat; lat <= plannerCoverageMaxLat; lat += 0.25 {
-		for off := 0.0; off < 1; off += 0.05 {
-			a := geoPoint{lat, 20 + off}
-			for bearing := 0.0; bearing < 360; bearing += 15 {
-				for _, km := range []float64{plannerMaxLegKm, plannerMaxLegKm / 2} {
-					b := plannerTestDest(a, bearing, km)
-					qa, ok1 := plannerLatLon(fmt.Sprint(a.Lat), fmt.Sprint(a.Lon))
-					qb, ok2 := plannerLatLon(fmt.Sprint(b.Lat), fmt.Sprint(b.Lon))
-					if !ok1 || !ok2 || qb.Lat < plannerCoverageMinLat || qb.Lat > plannerCoverageMaxLat {
-						continue
-					}
-					if d := geoDistKm(qa, qb); d > plannerMaxLegKm {
-						// Rounding to 0.001° lengthened it: the handler says too_long.
-						continue
-					}
-					legs++
-					if n := plannerTestTiles(plannerRelayView(qa, qb)); n > caps.Relay {
-						t.Fatalf("relay %+v → %+v: %d tiles, cap %d", qa, qb, n, caps.Relay)
-					}
-					pv := plannerProfileView(plannerBBoxAdd(geoBBox{qa.Lat, qa.Lon, qa.Lat, qa.Lon}, qb), plannerProfilePadDeg)
-					if n := plannerTestTiles(pv); n > caps.Profile {
-						t.Fatalf("profile %+v → %+v: %d tiles, cap %d", qa, qb, n, caps.Profile)
+	for i, sz := range plannerTestSizes {
+		caps := plannerTileCaps(sz.area, sz.margin, sz.leg)
+		pad := plannerProfilePad(sz.leg)
+		step := 0.25
+		if i > 0 {
+			step = 0.65
+		}
+		legs := 0
+		for lat := plannerCoverageMinLat; lat <= plannerCoverageMaxLat; lat += step {
+			for off := 0.0; off < 1; off += 0.05 {
+				a := geoPoint{lat, 20 + off}
+				for bearing := 0.0; bearing < 360; bearing += 15 {
+					for _, km := range []float64{sz.leg, sz.leg / 2} {
+						b := plannerTestDest(a, bearing, km)
+						qa, ok1 := plannerLatLon(fmt.Sprint(a.Lat), fmt.Sprint(a.Lon))
+						qb, ok2 := plannerLatLon(fmt.Sprint(b.Lat), fmt.Sprint(b.Lon))
+						if !ok1 || !ok2 || qb.Lat < plannerCoverageMinLat || qb.Lat > plannerCoverageMaxLat {
+							continue
+						}
+						if d := geoDistKm(qa, qb); d > sz.leg {
+							// Rounding to 0.001° lengthened it: the handler says too_long.
+							continue
+						}
+						legs++
+						if n := plannerTestTiles(plannerRelayView(qa, qb)); n > caps.Relay {
+							t.Fatalf("%+v: relay %+v → %+v: %d tiles, cap %d", sz, qa, qb, n, caps.Relay)
+						}
+						pv := plannerProfileView(plannerBBoxAdd(geoBBox{qa.Lat, qa.Lon, qa.Lat, qa.Lon}, qb), pad)
+						if n := plannerTestTiles(pv); n > caps.Profile {
+							t.Fatalf("%+v: profile %+v → %+v: %d tiles, cap %d", sz, qa, qb, n, caps.Profile)
+						}
 					}
 				}
 			}
 		}
+		if legs < 30000 {
+			t.Fatalf("%+v: only %d legs checked", sz, legs)
+		}
 	}
-	if legs < 100000 {
-		t.Fatalf("only %d legs checked", legs)
+}
+
+// The profile pad covers the great-circle bulge of the longest leg: every
+// point the profile samples lies inside its view.
+func TestPlannerProfilePadCoversBulge(t *testing.T) {
+	for _, c := range []struct{ leg, want float64 }{{10, 0.01}, {100, 0.01}, {150, 0.0225}, {200, 0.04}} {
+		if got := plannerProfilePad(c.leg); math.Abs(got-c.want) > 1e-12 {
+			t.Errorf("plannerProfilePad(%v) = %v, want %v", c.leg, got, c.want)
+		}
+	}
+	for _, sz := range plannerTestSizes {
+		pad := plannerProfilePad(sz.leg)
+		for lat := plannerCoverageMinLat; lat <= plannerCoverageMaxLat; lat += 1 {
+			for bearing := 0.0; bearing < 180; bearing += 15 {
+				a := geoPoint{lat, 20.5}
+				b := plannerTestDest(a, bearing, sz.leg)
+				view := plannerProfileView(plannerBBoxAdd(geoBBox{a.Lat, a.Lon, a.Lat, a.Lon}, b), pad)
+				for _, pt := range greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, planProfileSamples(sz.leg)) {
+					if !plannerBBoxContains(view, pt.lat, pt.lon) {
+						t.Fatalf("leg %v km from %+v on %v°: sample %+v outside %+v", sz.leg, a, bearing, pt, view)
+					}
+				}
+			}
+		}
 	}
 }
 

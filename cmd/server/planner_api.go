@@ -69,7 +69,7 @@ const (
 	plannerMaxAntennaM    = 100.0
 	plannerDefaultSites   = 3
 
-	plannerProfilePadDeg = 0.01 // covers the great-circle bulge of a 100 km leg
+	plannerProfilePadDeg = 0.01 // covers the great-circle bulge of a 100 km leg (plannerProfilePad)
 	plannerRelayPadFrac  = 0.3  // relay corridor: A,B ± max(0.3·D, 2 km)
 	plannerRelayPadMinKm = 2.0
 	plannerMinLegTiles   = 6    // profile/relay tile caps never go below this
@@ -385,7 +385,7 @@ func (p *plannerService) handleProfile(w http.ResponseWriter, r *http.Request) {
 		d := geoDistKm(pts[i], pts[i+1])
 		legs[i].DistanceKm = losRound(d, 1000)
 		switch {
-		case d > plannerMaxLegKm:
+		case d > p.cfg.MaxLegKm:
 			legs[i].Error = plannerErrTooLong
 			key.WriteByte('L')
 		case far[i] || far[i+1]:
@@ -410,7 +410,7 @@ func (p *plannerService) handleProfile(w http.ResponseWriter, r *http.Request) {
 		writePlannerResult(w, body)
 		return
 	}
-	bb = plannerProfileView(bb, plannerProfilePadDeg)
+	bb = plannerProfileView(bb, plannerProfilePad(p.cfg.MaxLegKm))
 	if p.src.TileCount(bb) > p.tiles.Profile {
 		plannerBadRequest(w, plannerErrTooManyTiles)
 		return
@@ -423,6 +423,15 @@ func (p *plannerService) handleProfile(w http.ResponseWriter, r *http.Request) {
 			return planProfileLegs(ctx, v, pts, legs, progress)
 		},
 	})
+}
+
+// plannerProfilePad is the profile view's margin in degrees for legs up to
+// maxLegKm. A great circle bulges poleward of its endpoints by about
+// tan(lat)·(d/R)²/8, so the 0.01° that covers a 100 km leg (0.003° at 60°,
+// 0.01° at 80°) scales with the square of the leg.
+func plannerProfilePad(maxLegKm float64) float64 {
+	scale := maxLegKm / defaultPlannerMaxLegKm
+	return plannerProfilePadDeg * math.Max(1, scale*scale)
 }
 
 // plannerProfileView is the terrain a profile over legs (the bbox of its
@@ -524,13 +533,13 @@ func (p *plannerService) handleRelay(w http.ResponseWriter, r *http.Request) {
 		}
 		heights[i] = h
 	}
-	rangeKm, ok := plannerOptRange(q, p.cfg.DefaultRangeKm)
+	rangeKm, ok := plannerOptRange(q, p.cfg.DefaultRangeKm, p.cfg.rangesKm())
 	if !ok {
-		plannerBadRequest(w, plannerRangeMsg())
+		plannerBadRequest(w, plannerRangeMsg(p.cfg.rangesKm()))
 		return
 	}
 	d := geoDistKm(a, b)
-	if d > plannerMaxLegKm {
+	if d > p.cfg.MaxLegKm {
 		plannerBadRequest(w, plannerErrTooLong)
 		return
 	}
@@ -611,7 +620,7 @@ func (p *plannerService) handleCoverage(w http.ResponseWriter, r *http.Request) 
 		plannerBadRequest(w, "bbox required")
 		return
 	}
-	grid, msg := plannerParseGridBox(raw)
+	grid, msg := plannerParseGridBox(raw, p.cfg.MaxAreaKm)
 	if msg != "" {
 		plannerBadRequest(w, msg)
 		return
@@ -625,9 +634,9 @@ func (p *plannerService) handleCoverage(w http.ResponseWriter, r *http.Request) 
 		}
 		sites = n
 	}
-	rangeKm, ok := plannerOptRange(q, p.cfg.DefaultRangeKm)
+	rangeKm, ok := plannerOptRange(q, p.cfg.DefaultRangeKm, p.cfg.rangesKm())
 	if !ok {
-		plannerBadRequest(w, plannerRangeMsg())
+		plannerBadRequest(w, plannerRangeMsg(p.cfg.rangesKm()))
 		return
 	}
 	hr, ok1 := plannerOptHeight(q, "hr", p.cfg.NewAntennaM)
@@ -654,12 +663,13 @@ func (p *plannerService) handleCoverage(w http.ResponseWriter, r *http.Request) 
 	}
 	area := grid.bbox()
 	known := p.knownSet()
-	hasNodes, fp := known.scan(area, plannerAreaNodeKm, plannerNodeMarginKm)
+	margin := p.cfg.NodeMarginKm
+	hasNodes, fp := known.scan(area, plannerAreaNodeKm, margin)
 	if !hasNodes {
 		plannerBadRequest(w, plannerErrNoNodes)
 		return
 	}
-	view := plannerExpandBBox(area, plannerNodeMarginKm)
+	view := plannerExpandBBox(area, margin)
 	if p.src.TileCount(view) > p.tiles.Coverage {
 		plannerBadRequest(w, plannerErrTooManyTiles)
 		return
@@ -683,7 +693,7 @@ func (p *plannerService) handleCoverage(w http.ResponseWriter, r *http.Request) 
 		view:     view,
 		compute: func(ctx context.Context, v terrainView, progress func(float64)) (any, error) {
 			now := p.now()
-			nodes, truncated := p.snapshotNodes(area, plannerNodeMarginKm, now)
+			nodes, truncated := p.snapshotNodes(area, margin, now)
 			pubkeys := make([]string, len(nodes))
 			for i := range nodes {
 				pubkeys[i] = nodes[i].PubKey
@@ -839,21 +849,23 @@ func plannerOptHeight(q map[string]string, key string, def float64) (float64, bo
 	return plannerHeight(v), true
 }
 
-func plannerOptRange(q map[string]string, def float64) (float64, bool) {
+// plannerOptRange is the "range" parameter, def when absent; it must be
+// one of allowed.
+func plannerOptRange(q map[string]string, def float64, allowed []float64) (float64, bool) {
 	s, ok := q["range"]
 	if !ok {
 		return def, true
 	}
 	v, ok := plannerFloat(s)
-	if !ok || !plannerRangeAllowed(v) {
+	if !ok || !slices.Contains(allowed, v) {
 		return 0, false
 	}
 	return v, true
 }
 
-func plannerRangeMsg() string {
-	s := make([]string, len(plannerRangesKm))
-	for i, r := range plannerRangesKm {
+func plannerRangeMsg(allowed []float64) string {
+	s := make([]string, len(allowed))
+	for i, r := range allowed {
 		s[i] = strconv.FormatFloat(r, 'f', -1, 64)
 	}
 	return "range must be one of " + strings.Join(s, ",")
@@ -869,9 +881,10 @@ func (g plannerGridBox) bbox() geoBBox {
 	}
 }
 
-// plannerParseGridBox parses "s,w,n,e" and snaps it outward to the grid. The
-// second return value is a 400 message, empty when valid.
-func plannerParseGridBox(raw string) (plannerGridBox, string) {
+// plannerParseGridBox parses "s,w,n,e" and snaps it outward to the grid;
+// neither side of the snapped box may exceed maxAreaKm. The second return
+// value is a 400 message, empty when valid.
+func plannerParseGridBox(raw string, maxAreaKm float64) (plannerGridBox, string) {
 	const bad = "bbox must be s,w,n,e in degrees"
 	if strings.Count(raw, ",") != 3 {
 		return plannerGridBox{}, bad
@@ -910,7 +923,7 @@ func plannerParseGridBox(raw string) (plannerGridBox, string) {
 	}
 	hKm := (bb.N - bb.S) * plannerKmPerDeg
 	wKm := (bb.E - bb.W) * plannerKmPerDeg * math.Cos((bb.S+bb.N)/2*math.Pi/180)
-	if hKm > plannerMaxAreaKm || wKm > plannerMaxAreaKm {
+	if hKm > maxAreaKm || wKm > maxAreaKm {
 		return plannerGridBox{}, plannerErrAreaTooLarge
 	}
 	return g, ""

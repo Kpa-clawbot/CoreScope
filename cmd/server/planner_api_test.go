@@ -341,13 +341,19 @@ const (
 
 func newPlannerHarness(t *testing.T) *plannerHarness {
 	t.Helper()
+	return newPlannerHarnessWith(t, PlannerConfig{Enabled: true})
+}
+
+// newPlannerHarnessWith is newPlannerHarness with its own planner block.
+func newPlannerHarnessWith(t *testing.T, pc PlannerConfig) *plannerHarness {
+	t.Helper()
 	cfg := &Config{
-		Planner:            &PlannerConfig{Enabled: true},
+		Planner:            &pc,
 		NodeBlacklist:      []string{"bad1", "bad2"},
 		HiddenNamePrefixes: []string{"zz-"},
 	}
 	srv := &Server{cfg: cfg}
-	p := newPlannerService(PlannerConfig{Enabled: true}, srv)
+	p := newPlannerService(pc, srv)
 	h := &plannerHarness{
 		srv:   srv,
 		p:     p,
@@ -617,7 +623,7 @@ func TestPlannerAPIQuantisationOneJob(t *testing.T) {
 		t.Fatalf("jobs=%d want 2", n)
 	}
 	// A value exactly on a grid line stays on it.
-	if g, msg := plannerParseGridBox("30,-97.2,30.35,-96.85"); msg != "" || g != (plannerGridBox{600, -1944, 607, -1937}) {
+	if g, msg := plannerParseGridBox("30,-97.2,30.35,-96.85", defaultPlannerMaxAreaKm); msg != "" || g != (plannerGridBox{600, -1944, 607, -1937}) {
 		t.Fatalf("on-grid box: %+v %q", g, msg)
 	}
 }
@@ -881,7 +887,7 @@ func TestPlannerAPICoverageInputs(t *testing.T) {
 	if len(in.Observed) != 1 || in.Observed[0].Class != "observed" {
 		t.Fatalf("observed %+v", in.Observed)
 	}
-	if v := h.src.lastBBox(); v != plannerExpandBBox(area, plannerNodeMarginKm) {
+	if v := h.src.lastBBox(); v != plannerExpandBBox(area, defaultPlannerNodeMarginKm) {
 		t.Fatalf("view %+v", v)
 	}
 	// Defaults.
@@ -1203,7 +1209,7 @@ func TestPlannerAPIFingerprint(t *testing.T) {
 	area := geoBBox{S: 30.0, W: -97.2, N: 30.35, E: -96.85}
 	f := plannerNodeFilter{}
 	fp := func(ns []nodeInfo) string {
-		_, s := buildPlannerKnown(ns, f, "", plannerTestStart).scan(area, plannerAreaNodeKm, plannerNodeMarginKm)
+		_, s := buildPlannerKnown(ns, f, "", plannerTestStart).scan(area, plannerAreaNodeKm, defaultPlannerNodeMarginKm)
 		return s
 	}
 	base := plannerTestNodes()
@@ -1575,7 +1581,7 @@ func TestPlannerAPIAbandonedJobNotRemembered(t *testing.T) {
 
 func TestPlannerAPITerrainBeforeSlot(t *testing.T) {
 	h := newPlannerHarness(t)
-	view1 := plannerExpandBBox(geoBBox{S: 30.0, W: -97.2, N: 30.35, E: -96.85}, plannerNodeMarginKm)
+	view1 := plannerExpandBBox(geoBBox{S: 30.0, W: -97.2, N: 30.35, E: -96.85}, defaultPlannerNodeMarginKm)
 	h.src.hold(view1) // the first job's terrain takes as long as we like
 	ip := "198.51.100.112"
 	if w := h.get(plannerCovPath, ip); w.Code != http.StatusAccepted {
@@ -1605,7 +1611,7 @@ func TestPlannerAPITerrainBeforeSlot(t *testing.T) {
 
 func TestPlannerAPILoadingJobsCountAsQueued(t *testing.T) {
 	h := newPlannerHarness(t)
-	view := plannerExpandBBox(geoBBox{S: 30.0, W: -97.2, N: 30.35, E: -96.85}, plannerNodeMarginKm)
+	view := plannerExpandBBox(geoBBox{S: 30.0, W: -97.2, N: 30.35, E: -96.85}, defaultPlannerNodeMarginKm)
 	h.src.hold(view)
 	ip := "198.51.100.113"
 	for s := 1; s <= plannerMaxQueuedCoverage; s++ {

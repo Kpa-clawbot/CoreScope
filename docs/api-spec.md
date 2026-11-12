@@ -1514,6 +1514,15 @@ These rules apply to all three planner endpoints: this one, [`/api/planner/relay
 - **Quantised input.** Points are rounded to 0.001°, antenna heights to 1 m, and `range` must be one of a fixed set. Coverage boxes are snapped outward to a 0.05° grid. Requests that round to the same values share one cache entry and one job.
 - **Unknown or repeated parameters.** A parameter the endpoint does not take, a repeated parameter, or a query longer than 512 bytes returns `400`.
 - **Terrain.** SRTM 1° tiles from AWS Open Data (`skadi` layout), downsampled to 3 arc-seconds (about 90 m) and held in server memory only. Nothing is written to disk or the database. Tiles are fetched on demand, at most `planner.tileCacheTiles` are kept in memory (but never fewer than one full view, 12 tiles at the default sizes), and downloads are budgeted at 20 per minute and 200 per hour. A tile that is missing upstream (ocean or no data) reads as 0 m.
+- **Size limits.** Three `config.json` keys set how large a request may be. A value of 0 or a missing key means the default. A value outside the valid range falls back to the default and logs a warning at startup.
+
+  | Key | Default | Valid | Limits |
+  |-----|---------|-------|--------|
+  | `planner.maxAreaKm` | 100 | 20 to 250 | Each side of a snapped coverage box |
+  | `planner.nodeMarginKm` | 30 | 10 to 60 | How far outside the coverage box repeaters and rooms are still read |
+  | `planner.maxLegKm` | 100 | 10 to 200 | The A to B leg of a profile or relay. Only `range` values up to it are accepted |
+
+  The server derives from these how many 1° terrain tiles one request may load, as the worst case anywhere within latitudes -56 to 60. At the defaults that is 12 tiles for each endpoint. Each resident tile takes about 2.9 MB, so larger limits cost memory. The startup log prints the tile counts and the memory one view and the cache can take. `/api/config/client` reports the sizes in effect.
 - **Caveat.** Results are line of sight against bare terrain. Trees, buildings and other clutter are not modelled. The output is not a link budget: it has no transmit power, gain or receiver sensitivity.
 
 ### Job protocol
@@ -1568,7 +1577,7 @@ Per-leg `error` codes (the request still returns `200`):
 
 | Code | Cause |
 |------|-------|
-| `too_long` | The leg is longer than 100 km. No terrain is loaded for it |
+| `too_long` | The leg is longer than `planner.maxLegKm` (100 km by default). No terrain is loaded for it |
 | `out_of_area` | An endpoint is not within 50 km of a known node. Legs touching that point are marked |
 | `no_terrain` | Terrain for the leg could not be read |
 
@@ -1604,9 +1613,9 @@ Each candidate is checked as two legs, A to relay and relay to B. Common rules a
 | `ha`    | number | `planner.newAntennaM` (10)    | Antenna height at A, metres. Rounded to 1 m and clamped to 1 to 100 |
 | `hb`    | number | `planner.newAntennaM` (10)    | Antenna height at B, metres. Same limits as `ha` |
 | `hr`    | number | `planner.newAntennaM` (10)    | Height of a new relay at an open site, metres. Same limits as `ha` |
-| `range` | number | `planner.defaultRangeKm` (30) | Largest distance in km from the relay to each end. One of `10,15,20,30,40,50,60` |
+| `range` | number | `planner.defaultRangeKm` (30) | Largest distance in km from the relay to each end. One of `10,15,20,30,40,50,60`, up to `planner.maxLegKm` (the client config's `rangesKm`) |
 
-The A to B distance is limited to 100 km. The existing-relay height comes from `planner.existingAntennaM` and is echoed in `params.he`. It is not a query parameter.
+The A to B distance is limited to `planner.maxLegKm` (100 km by default). The existing-relay height comes from `planner.existingAntennaM` and is echoed in `params.he`. It is not a query parameter.
 
 ### Response `200`
 
@@ -1704,8 +1713,8 @@ Abbreviated: the `elev_m` arrays in `direct`, `leg_a` and `leg_b` are truncated 
 | `a required`, `b required` | Point missing |
 | `a must be lat,lon within range`, `b must be lat,lon within range` | Point malformed or out of range |
 | `ha must be a number of metres`, `hb ...`, `hr ...` | Height is not a number |
-| `range must be one of 10,15,20,30,40,50,60` | Range not in the allowed set |
-| `too_long` | A to B is longer than 100 km |
+| `range must be one of 10,15,20,30,40,50,60` | Range not in the allowed set. The message lists the values allowed up to `planner.maxLegKm` |
+| `too_long` | A to B is longer than `planner.maxLegKm` (100 km by default) |
 | `out_of_area` | A or B is not within 50 km of a known node |
 | `too_many_tiles` | The corridor around A and B needs more 1° terrain tiles than the server loads for one request. Any leg up to the maximum length with both ends within latitudes -56 to 60 fits |
 
@@ -1741,15 +1750,15 @@ Each pick is the candidate that gives the best gain under this order, comparing 
 
 | Param      | Type   | Default                        | Description |
 |------------|--------|--------------------------------|-------------|
-| `bbox`     | string | -                              | **Required.** `s,w,n,e` in degrees. Snapped outward to a 0.05° grid. South below north, west below west-east (no antimeridian crossing). Latitude must be within -56 to 60 (SRTM coverage). The snapped box may be at most 100 km on either side |
+| `bbox`     | string | -                              | **Required.** `s,w,n,e` in degrees. Snapped outward to a 0.05° grid. South below north, west below west-east (no antimeridian crossing). Latitude must be within -56 to 60 (SRTM coverage). The snapped box may be at most `planner.maxAreaKm` (100 km by default) on either side |
 | `sites`    | int    | 3                              | Number of suggested sites, 1 to 10 |
-| `range`    | number | `planner.defaultRangeKm` (30)  | Largest link distance in km considered. One of `10,15,20,30,40,50,60` |
+| `range`    | number | `planner.defaultRangeKm` (30)  | Largest link distance in km considered. One of `10,15,20,30,40,50,60`, up to `planner.maxLegKm` |
 | `hr`       | number | `planner.newAntennaM` (10)     | Height of a new site, metres. Rounded to 1 m and clamped to 1 to 100 |
 | `he`       | number | `planner.existingAntennaM` (5) | Assumed mast height of existing repeaters and rooms, metres. Same limits as `hr` |
 | `baseline` | string | `predicted`                    | `predicted`: the backbone is every pair in range that terrain says is clear enough, plus observed links. `observed`: only links seen in real neighbour data (score × confidence of at least 0.1) |
 | `stale`    | string | `0`                            | `1` includes repeaters the node store marks as stale. `0` leaves them out and counts them in `stale_excluded` |
 
-The area must hold at least one repeater or room within 10 km of the box. Nodes are read from up to 30 km outside the box, at most 300 of them.
+The area must hold at least one repeater or room within 10 km of the box. Nodes are read from up to `planner.nodeMarginKm` (30 km by default) outside the box, at most 300 of them.
 
 ### Response `200`
 
@@ -1864,11 +1873,11 @@ The area must hold at least one repeater or room within 10 km of the box. Nodes 
 | `bbox must be s,w,n,e in degrees` | Wrong number of values, not a number, or out of range |
 | `bbox needs south below north and west below east (no antimeridian crossing)` | Degenerate or reversed box |
 | `bbox must lie within latitudes -56 to 60 (terrain coverage)` | Outside SRTM coverage |
-| `area_too_large` | The snapped box is over 100 km on a side |
-| `too_many_tiles` | The box plus the 30 km node margin needs more 1° terrain tiles than the server loads for one request. Never returned for a box the size check accepts; kept as a safeguard |
+| `area_too_large` | The snapped box is over `planner.maxAreaKm` (100 km by default) on a side |
+| `too_many_tiles` | The box plus the node margin needs more 1° terrain tiles than the server loads for one request. Never returned for a box the size check accepts; kept as a safeguard |
 | `no_nodes_in_area` | No repeater or room within 10 km of the box |
 | `sites must be an integer 1-10` | `sites` not an integer in range |
-| `range must be one of 10,15,20,30,40,50,60` | `range` not in the allowed set |
+| `range must be one of 10,15,20,30,40,50,60` | `range` not in the allowed set. The message lists the values allowed up to `planner.maxLegKm` |
 | `hr and he must be numbers of metres` | A height is not a number |
 | `baseline must be predicted or observed` | Unknown `baseline` value |
 | `stale must be 0 or 1` | Unknown `stale` value |
@@ -2886,7 +2895,7 @@ Client-side configuration values.
   "propagationBufferMs": number,         // default: 5000
   "clientRfSamples":    boolean,         // opt-in flag; gates /api/rf-noise
   "los":                object,          // omitted unless los.enabled is true: frequencyMhz, antennaHeightM, kFactor, samples, maxPoints, maxLegKm
-  "planner":            object,          // omitted unless planner.enabled is true: defaultRangeKm, rangesKm, newAntennaM, existingAntennaM, frequencyMhz, kFactor, maxPoints, maxLegKm, maxAreaKm, maxSites, minClearance
+  "planner":            object,          // omitted unless planner.enabled is true: defaultRangeKm, rangesKm (only those up to maxLegKm), newAntennaM, existingAntennaM, frequencyMhz, kFactor, maxPoints, maxLegKm, maxAreaKm, nodeMarginKm, maxSites, minClearance
   "clientRxAppUrl":     string           // omitted unless clientRxCoverage is on and clientRxCoverage.appUrl is an https URL
 }
 ```

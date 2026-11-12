@@ -839,7 +839,7 @@ func TestRelaySearchDeterministicAndCancellable(t *testing.T) {
 		t.Errorf("mid-run cancel: err %v after %v", err, time.Since(at))
 	}
 	bad := p
-	bad.B = geoPointJSON{p.A.Lat + 1, p.A.Lon} // 111 km
+	bad.B = geoPointJSON{p.A.Lat + 2, p.A.Lon} // 222 km: over the largest maxLegKm
 	if _, err := runRelaySearch(context.Background(), v, nodes, bad, nil); err == nil {
 		t.Error("over-long leg accepted")
 	}
@@ -847,6 +847,33 @@ func TestRelaySearchDeterministicAndCancellable(t *testing.T) {
 	bad.RangeKm = 0
 	if _, err := runRelaySearch(context.Background(), v, nodes, bad, nil); err == nil {
 		t.Error("zero range accepted")
+	}
+}
+
+// The longest leg an operator can allow (planner.maxLegKm 200) fits the
+// relay grid, north-south and east-west, up to the edge of the SRTM band.
+func TestRelaySearchLongestLegFitsGrid(t *testing.T) {
+	for _, c := range []struct{ a, b geoPoint }{
+		{geoPoint{58.2, 10}, geoPoint{59.99, 10}},                                        // north-south, 199 km
+		{geoPoint{60, 10}, geoPoint{60, 10 + 199/(plannerKmPerDeg*math.Cos(math.Pi/3))}}, // east-west at 60°
+		{geoPoint{-56, -70}, geoPoint{-56, -70 + 199/(plannerKmPerDeg*math.Cos(56*math.Pi/180))}},
+	} {
+		d := geoDistKm(c.a, c.b)
+		if d > plannerLegKmMax || d < plannerLegKmMax-2 {
+			t.Fatalf("%+v → %+v is %.1f km", c.a, c.b, d)
+		}
+		p := PlannerRelayParams{
+			A: geoPointJSON{c.a.Lat, c.a.Lon}, B: geoPointJSON{c.b.Lat, c.b.Lon},
+			AntennaAM: 10, AntennaBM: 10, RelayAntennaM: 10, ExistingAntennaM: 5, RangeKm: 60,
+			FrequencyMHz: 869.525, KFactor: 4.0 / 3.0,
+		}
+		resp, err := runRelaySearch(context.Background(), ptWaves{}, nil, p, nil)
+		if err != nil {
+			t.Fatalf("%.0f km leg from %+v: %v", d, c.a, err)
+		}
+		if math.Abs(resp.Direct.DistanceKm-d) > 0.01 {
+			t.Fatalf("direct %.3f km, want %.3f", resp.Direct.DistanceKm, d)
+		}
 	}
 }
 
@@ -937,7 +964,7 @@ func ptBenchPlanInputs() planInputs {
 	v := ptBenchTerrain()
 	rng := rand.New(rand.NewPCG(9, 9))
 	area := geoBBox{S: 44.55, W: -121.136, N: 45.45, E: -119.864}
-	outer := plannerExpandBBox(area, plannerNodeMarginKm)
+	outer := plannerExpandBBox(area, defaultPlannerNodeMarginKm)
 	var nodes []plannerNode
 	for len(nodes) < plannerMaxNodes {
 		in := len(nodes) < 220
