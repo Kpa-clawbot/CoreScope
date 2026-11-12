@@ -708,6 +708,7 @@ func TestElevationPollAfterRefusedIsFree(t *testing.T) {
 	// Once the budget has room again the refused tile downloads, charged
 	// once: the bucket refilled to 10, less 1.
 	et.clk.add(time.Minute)
+	et.svc.wait = 10 * time.Second // the download finishes well within it
 	if got := elevLegErrors(elevLegs(t, et.raw(pts, ip+":5000", nil))); !slices.Equal(got, []string{"", "", ""}) {
 		t.Fatalf("budget back: errors %q", got)
 	}

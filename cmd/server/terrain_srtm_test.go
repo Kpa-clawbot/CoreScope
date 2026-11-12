@@ -1116,6 +1116,125 @@ func TestSRTMSingleflight(t *testing.T) {
 	}
 }
 
+// srtmHeapObjects is the live heap object count after a full GC.
+func srtmHeapObjects() uint64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapObjects
+}
+
+// Security review #3 (#2391): every free 202 poll joined the tile's
+// singleflight call, which kept a result channel per call until the
+// download ended (up to minutes). A load is now one record whose done
+// channel waiters select on: pollers, cancelled or timed out, leave nothing
+// behind, and everyone waiting sees the one result.
+func TestSRTMWaitersHoldNothing(t *testing.T) {
+	k := srtmKey{30, -98}
+	gate := newSRTMGate()
+	tile := srtmGridTile(t)
+	s, u, _ := newSRTMTest(t, 0, func(w http.ResponseWriter, r *http.Request) {
+		if gate.wait(r) {
+			w.Write(tile)
+		}
+	})
+	t.Cleanup(gate.open)
+	keys := []srtmKey{k}
+	if got, failed := s.await(context.Background(), keys, time.Millisecond); len(got)+len(failed) != 0 {
+		t.Fatalf("gated tile finished: got %d, failed %d", len(got), len(failed))
+	}
+	srtmEventually(t, "the download", func() bool { return u.hitsFor(srtmPath(k)) == 1 })
+	s.mu.Lock()
+	ld := s.loading[k]
+	s.mu.Unlock()
+	if ld == nil {
+		t.Fatal("no running load")
+	}
+
+	// 50 pollers at once, 4000 polls in all, half cancelled before they
+	// wait, half timing out: none leaves an object behind. The first round
+	// only warms up the runtime's caches of goroutines and channel waiters,
+	// which a fixed number of pollers keeps the same size.
+	const workers, polls = 50, 4000
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	var wg sync.WaitGroup
+	poll := func() {
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				for i := w; i < polls; i += workers {
+					ctx := context.Background()
+					if i%2 == 0 {
+						ctx = cancelled
+					}
+					if got, failed := s.await(ctx, keys, time.Millisecond); len(got)+len(failed) != 0 {
+						t.Errorf("poll %d: got %d, failed %d", i, len(got), len(failed))
+					}
+					vctx, vcancel := context.WithTimeout(ctx, time.Millisecond)
+					if _, err := s.View(vctx, srtmBox(k)); err == nil {
+						t.Errorf("poll %d: View of a loading tile returned", i)
+					}
+					vcancel()
+				}
+			}(w)
+		}
+		wg.Wait()
+	}
+	poll()
+	before := srtmHeapObjects()
+	poll()
+	// Measuring leaves about 100 objects whatever the number of polls (500
+	// to 20000 alike, with or without -race); singleflight kept a channel
+	// per call, 2 a poll: 8000 here.
+	if grew := int64(srtmHeapObjects()) - int64(before); grew > 500 {
+		t.Fatalf("%d polls left %d heap objects behind", polls, grew)
+	}
+	s.mu.Lock()
+	same, n := s.loading[k] == ld, len(s.loading)
+	s.mu.Unlock()
+	if !same || n != 1 || u.total() != 1 {
+		t.Fatalf("loads: same record %v, %d running, %d downloads", same, n, u.total())
+	}
+
+	// Waiters through both paths share the one download and its grid.
+	const waiters = 50
+	grids := make([][]int16, 2*waiters)
+	for i := 0; i < waiters; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			got, _ := s.await(context.Background(), keys, time.Minute)
+			grids[i] = got[k]
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			if v, err := s.View(context.Background(), srtmBox(k)); err == nil {
+				grids[waiters+i] = v.(*srtmView).grids[0]
+			}
+		}(i)
+	}
+	time.Sleep(50 * time.Millisecond) // let them reach the wait
+	gate.open()
+	wg.Wait()
+	<-ld.done
+	if ld.err != nil || len(ld.grid) != srtmSide*srtmSide {
+		t.Fatalf("load: err %v, %d samples", ld.err, len(ld.grid))
+	}
+	for i, g := range grids {
+		if len(g) == 0 || &g[0] != &ld.grid[0] {
+			t.Fatalf("waiter %d did not get the load's grid", i)
+		}
+	}
+	s.mu.Lock()
+	n = len(s.loading)
+	s.mu.Unlock()
+	if n != 0 || u.total() != 1 || !s.Resident(srtmBox(k)) {
+		t.Fatalf("after: %d running, %d downloads, resident %v", n, u.total(), s.Resident(srtmBox(k)))
+	}
+}
+
 func TestSRTMViewContextDetached(t *testing.T) {
 	k := srtmKey{30, -98}
 	tile := srtmGridTile(t)

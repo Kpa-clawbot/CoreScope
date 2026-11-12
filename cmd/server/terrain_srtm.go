@@ -50,8 +50,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/singleflight"
 )
 
 // terrainView answers elevation queries over the tiles it was built for.
@@ -380,12 +378,10 @@ type srtmSource struct {
 	maxTiles  int           // max tiles in one load (terrainViewTiles)
 	sem       chan struct{} // fetch slots; srtmFetchSlots outside tests
 
-	sf singleflight.Group // one fetch per tile name
-
 	mu      sync.Mutex
 	cache   *lru[srtmKey, []int16] // decoded tiles; its cap is never below maxTiles
 	neg     map[srtmKey]time.Time  // known-missing tile → expiry
-	loading map[srtmKey]struct{}   // tiles whose load is running (loadChan)
+	loading map[srtmKey]*srtmLoad  // the one running load of each tile (startLocked)
 	fails   int                    // consecutive upstream failures
 	coolTo  time.Time              // no downloads before then
 	budget  srtmBudget
@@ -414,7 +410,7 @@ func newSRTMSource(cfg TerrainConfig, viewTiles int) *srtmSource {
 		sem:       srtmFetchSlots,
 		cache:     newLRU[srtmKey, []int16](cfg.cacheTiles(viewTiles), 0, nil),
 		neg:       make(map[srtmKey]time.Time),
-		loading:   make(map[srtmKey]struct{}),
+		loading:   make(map[srtmKey]*srtmLoad),
 		budget:    srtmBudgetFor(viewTiles),
 	}
 }
@@ -484,6 +480,7 @@ func (s *srtmSource) View(ctx context.Context, bb geoBBox) (terrainView, error) 
 	}
 	v := &srtmView{span: sp, grids: make([][]int16, sp.count())}
 	var missing []int
+	var loads []*srtmLoad
 	s.mu.Lock()
 	now := s.now()
 	for i := range v.grids {
@@ -495,6 +492,13 @@ func (s *srtmSource) View(ctx context.Context, bb geoBBox) (terrainView, error) 
 		v.grids[i] = g
 	}
 	cooling := now.Before(s.coolTo)
+	if len(missing) > 0 && !cooling {
+		// Start every load before waiting on any.
+		loads = make([]*srtmLoad, len(missing))
+		for j, i := range missing {
+			loads[j] = s.startLocked(sp.key(i))
+		}
+	}
 	s.mu.Unlock()
 	if len(missing) == 0 {
 		return v, nil
@@ -502,18 +506,14 @@ func (s *srtmSource) View(ctx context.Context, bb geoBBox) (terrainView, error) 
 	if cooling {
 		return nil, errTerrainBusy
 	}
-	// Start every fetch before waiting on any.
-	chans := make([]<-chan singleflight.Result, len(missing))
 	for j, i := range missing {
-		chans[j] = s.loadChan(sp.key(i))
-	}
-	for j, i := range missing {
+		ld := loads[j]
 		select {
-		case r := <-chans[j]:
-			if r.Err != nil {
-				return nil, r.Err
+		case <-ld.done:
+			if ld.err != nil {
+				return nil, ld.err
 			}
-			v.grids[i], _ = r.Val.([]int16)
+			v.grids[i] = ld.grid
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -597,26 +597,38 @@ func (s *srtmSource) tiles(keys []srtmKey) srtmTileSet {
 // await starts (or joins) the load of each key and waits until all are done,
 // ctx ends or wait passes. A finished key lands in got (its grid, or nil for
 // a tile without data) or, when its load failed (busy, unavailable), in
-// failed; a key in neither is still loading, and goes on loading.
+// failed; a key in neither is still loading, and goes on loading. Waiting
+// registers nothing with the load: a caller that leaves, by ctx or by wait,
+// leaves nothing behind, so free polls hold no memory.
 func (s *srtmSource) await(ctx context.Context, keys []srtmKey, wait time.Duration) (got map[srtmKey][]int16, failed map[srtmKey]bool) {
 	got, failed = make(map[srtmKey][]int16, len(keys)), make(map[srtmKey]bool)
-	chans := make([]<-chan singleflight.Result, len(keys))
+	loads := make([]*srtmLoad, len(keys))
+	s.mu.Lock()
+	now := s.now()
 	for i, k := range keys {
-		chans[i] = s.loadChan(k)
+		if g, ok := s.lookupLocked(k, now, true); ok {
+			got[k] = g // landed since the caller looked
+			continue
+		}
+		loads[i] = s.startLocked(k)
 	}
+	s.mu.Unlock()
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	waiting := true
 	for i, k := range keys {
-		var r singleflight.Result
+		ld := loads[i]
+		if ld == nil {
+			continue
+		}
 		select {
-		case r = <-chans[i]:
+		case <-ld.done:
 		default:
 			if !waiting {
 				continue // collect only what has already finished
 			}
 			select {
-			case r = <-chans[i]:
+			case <-ld.done:
 			case <-timer.C:
 				waiting = false
 				continue
@@ -625,30 +637,50 @@ func (s *srtmSource) await(ctx context.Context, keys []srtmKey, wait time.Durati
 				continue
 			}
 		}
-		if r.Err != nil {
+		if ld.err != nil {
 			failed[k] = true
 			continue
 		}
-		got[k], _ = r.Val.([]int16)
+		got[k] = ld.grid
 	}
 	return got, failed
 }
 
-// loadChan starts tile k's load, or joins the one running. It runs detached
-// from every caller, so one that gives up still leaves the tile cached for
-// its retry. While it runs, k is in s.loading (tiles counts no start for it).
-func (s *srtmSource) loadChan(k srtmKey) <-chan singleflight.Result {
-	return s.sf.DoChan(k.name(), func() (interface{}, error) {
-		s.mu.Lock()
-		s.loading[k] = struct{}{}
-		s.mu.Unlock()
-		defer func() {
-			s.mu.Lock()
-			delete(s.loading, k)
-			s.mu.Unlock()
-		}()
-		return s.load(k)
-	})
+// srtmLoad is one tile's running load. done is closed once, when the load
+// ends; grid and err are set before that and read only after. Waiters
+// select on done and register nothing, so a record's size is fixed however
+// many requests wait on it.
+type srtmLoad struct {
+	done chan struct{}
+	grid []int16 // nil with a nil err: a tile without data
+	err  error
+}
+
+// startLocked returns tile k's running load, starting one when none runs:
+// one load per tile, however many callers ask. Callers start one only after
+// lookupLocked missed under the same hold of s.mu, so no tile already cached
+// or known missing is loaded again. The load runs detached from every
+// caller, so one that gives up still leaves the tile cached for its retry.
+// While it runs, k is in s.loading (tiles counts no start for it). Caller
+// holds s.mu.
+func (s *srtmSource) startLocked(k srtmKey) *srtmLoad {
+	if ld := s.loading[k]; ld != nil {
+		return ld
+	}
+	ld := &srtmLoad{done: make(chan struct{})}
+	s.loading[k] = ld
+	go s.run(k, ld)
+	return ld
+}
+
+// run performs ld, then retires it. A tile it loaded is cached before k
+// leaves s.loading, so no caller in between starts it again.
+func (s *srtmSource) run(k srtmKey, ld *srtmLoad) {
+	ld.grid, ld.err = s.load(k)
+	s.mu.Lock()
+	delete(s.loading, k)
+	s.mu.Unlock()
+	close(ld.done)
 }
 
 // lookupLocked finds k in the cache (grid) or the negative cache (nil grid).
@@ -673,9 +705,8 @@ func (s *srtmSource) lookupLocked(k srtmKey, now time.Time, touch bool) ([]int16
 	return nil, false
 }
 
-// load fetches one tile. It runs as the tile's singleflight call, on a
-// goroutine singleflight starts, so it must never panic out. A nil grid with
-// a nil error is a known-missing tile.
+// load fetches one tile. It runs on the goroutine startLocked starts, so it
+// must never panic out. A nil grid with a nil error is a known-missing tile.
 func (s *srtmSource) load(k srtmKey) (grid []int16, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -683,13 +714,6 @@ func (s *srtmSource) load(k srtmKey) (grid []int16, err error) {
 			grid, err = nil, errTerrainUnavailable
 		}
 	}()
-	// A call that starts just after another stored the tile finds it here.
-	s.mu.Lock()
-	g, ok := s.lookupLocked(k, s.now(), true)
-	s.mu.Unlock()
-	if ok {
-		return g, nil
-	}
 	// Admission comes before the slot wait, so the number of queued
 	// fetches is bounded by the budget.
 	if !s.admit() {
