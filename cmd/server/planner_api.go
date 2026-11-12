@@ -1129,7 +1129,7 @@ type plannerJob struct {
 	key      string
 	endpoint string
 	heavy    bool   // coverage: its own slot and queue limit
-	client   string // log line only
+	client   string // clientLogID, for the log line only; never the IP
 	ctx      context.Context
 	cancel   context.CancelCauseFunc
 	done     chan struct{}
@@ -1277,7 +1277,7 @@ func (p *plannerService) attach(r *http.Request, spec plannerJobSpec, heavy bool
 	}
 	ctx, cancel := context.WithCancelCause(p.ctx)
 	j := &plannerJob{
-		key: spec.key, endpoint: spec.endpoint, heavy: heavy, client: client,
+		key: spec.key, endpoint: spec.endpoint, heavy: heavy, client: clientLogID(client),
 		ctx: ctx, cancel: cancel, done: make(chan struct{}), queued: true,
 	}
 	j.polledAt.Store(p.since(now))
