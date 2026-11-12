@@ -253,7 +253,8 @@ func TestTerrainConfigLog(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"terrain.tileCacheTiles must be within 4-200; using the default",
-		"[terrain] SRTM tiles from https://tiles.example.com for route LOS and the planner: up to 16 tiles per view, cache 24 tiles (up to 69 MB, 2.9 MB a tile)",
+		"[terrain] SRTM tiles from https://tiles.example.com for route LOS and the planner: up to 16 tiles per view, cache 24 tiles (69 MB, 2.9 MB a tile); " +
+			"views in use can briefly keep about 20 evicted tiles more (58 MB, a minute of downloads)",
 		"[terrain] tile downloads: 20/min and 200/hour for everyone; per client, 16 at once, then 10/min, at most 40/hour",
 	} {
 		if !strings.Contains(out, want) {
@@ -293,9 +294,9 @@ func TestTerrainClientBudget(t *testing.T) {
 				t.Fatalf("los %v, %+v: burst %d, hourly %d; largest view %d", los.enabled(), sz, burst, hourly, view)
 			}
 			// A token bucket lets a client take its cap and one refill in any
-			// hour: that still leaves most of the global hour to others.
-			if 2*hourly >= srtmPerHour {
-				t.Fatalf("%+v: a client may take %d of the %d downloads an hour", sz, 2*hourly, srtmPerHour)
+			// hour: that still leaves part of the global hour to others.
+			if global := srtmBudgetFor(view).perHour; 2*hourly >= global {
+				t.Fatalf("%+v: a client may take %d of the %d downloads an hour", sz, 2*hourly, global)
 			}
 			cfg := &Config{LOS: los, Planner: planner}
 			e, p := newTerrainServices(cfg, &Server{cfg: cfg})

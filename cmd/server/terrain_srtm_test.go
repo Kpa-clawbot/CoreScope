@@ -164,9 +164,15 @@ var srtmTestViewTiles = PlannerConfig{}.tileLimits().max()
 // its own fetch slots. cacheTiles 0 means the default.
 func newSRTMTest(t testing.TB, cacheTiles int, h http.HandlerFunc) (*srtmSource, *srtmUpstream, *elevClock) {
 	t.Helper()
+	return newSRTMTestViews(t, cacheTiles, srtmTestViewTiles, h)
+}
+
+// newSRTMTestViews is newSRTMTest for views of up to viewTiles tiles.
+func newSRTMTestViews(t testing.TB, cacheTiles, viewTiles int, h http.HandlerFunc) (*srtmSource, *srtmUpstream, *elevClock) {
+	t.Helper()
 	u := &srtmUpstream{hits: make(map[string]int), h: h}
 	u.ts = httptest.NewServer(u)
-	s := newSRTMSource(TerrainConfig{TileURL: u.ts.URL, TileCacheTiles: cacheTiles}, srtmTestViewTiles)
+	s := newSRTMSource(TerrainConfig{TileURL: u.ts.URL, TileCacheTiles: cacheTiles}, viewTiles)
 	s.sem = make(chan struct{}, srtmMaxConcurrent)
 	clk := &elevClock{t: time.Unix(1_700_000_000, 0)}
 	s.now = clk.now
@@ -947,17 +953,21 @@ func TestSRTMBudget(t *testing.T) {
 	s, u, clk := newSRTMTest(t, 0, srtmServe(nil)) // every tile 404s: cheap, no cooldown
 	key := func(i int) geoBBox { return srtmBox(srtmKey{-60 + i/300, -150 + i%300}) }
 	view := func(i int) error { _, err := s.View(context.Background(), key(i)); return err }
+	perMin, perHour := s.budget.perMinute, s.budget.perHour
+	if perMin != srtmPerMinute || perHour != srtmPerHour {
+		t.Fatalf("a source for %d-tile views has budget %d/%d, want the floors", s.maxTiles, perMin, perHour)
+	}
 
 	next := 0
-	for m := 0; m < srtmPerHour/srtmPerMinute; m++ {
-		for i := 0; i < srtmPerMinute; i++ {
+	for m := 0; m < perHour/perMin; m++ {
+		for i := 0; i < perMin; i++ {
 			if err := view(next); err != nil {
 				t.Fatalf("minute %d, download %d: %v", m, i, err)
 			}
 			next++
 		}
 		if err := view(next); !errors.Is(err, errTerrainBusy) {
-			t.Fatalf("minute %d: download %d err = %v, want errTerrainBusy", m, srtmPerMinute+1, err)
+			t.Fatalf("minute %d: download %d err = %v, want errTerrainBusy", m, perMin+1, err)
 		}
 		if m == 0 {
 			clk.add(59 * time.Second)
@@ -969,8 +979,8 @@ func TestSRTMBudget(t *testing.T) {
 		}
 		clk.add(time.Minute)
 	}
-	if u.total() != srtmPerHour {
-		t.Fatalf("requests = %d, want %d", u.total(), srtmPerHour)
+	if u.total() != perHour {
+		t.Fatalf("requests = %d, want %d", u.total(), perHour)
 	}
 	// 10 minutes in: the minute window is empty but the hour is spent.
 	if err := view(next); !errors.Is(err, errTerrainBusy) {
@@ -984,8 +994,24 @@ func TestSRTMBudget(t *testing.T) {
 	if err := view(next); err != nil {
 		t.Fatalf("at 60:00 err = %v", err)
 	}
-	if u.total() != srtmPerHour+1 {
-		t.Fatalf("requests = %d, want %d", u.total(), srtmPerHour+1)
+	if u.total() != perHour+1 {
+		t.Fatalf("requests = %d, want %d", u.total(), perHour+1)
+	}
+}
+
+// The download budget never starts below its floors, and grows to hold the
+// largest view in one minute (code review #2, #2391).
+func TestSRTMBudgetFor(t *testing.T) {
+	for _, c := range []struct{ view, perMin, perHour int }{
+		{0, 20, 200}, {12, 20, 200}, {16, 20, 200}, {20, 20, 200},
+		{28, 28, 200}, {40, 40, 200}, {41, 41, 205},
+	} {
+		if b := srtmBudgetFor(c.view); b.perMinute != c.perMin || b.perHour != c.perHour || b.starts != nil {
+			t.Errorf("srtmBudgetFor(%d) = %d/min, %d/hour; want %d, %d", c.view, b.perMinute, b.perHour, c.perMin, c.perHour)
+		}
+	}
+	if b := newSRTMSource(TerrainConfig{}, 40).budget; b.perMinute != 40 || b.perHour != 200 {
+		t.Fatalf("source budget %d/%d", b.perMinute, b.perHour)
 	}
 }
 
@@ -993,18 +1019,18 @@ func TestSRTMBudget(t *testing.T) {
 // downloads it admits (code review #1, #2391), the first ones first.
 func TestSRTMBudgetRoomAndStarts(t *testing.T) {
 	s, u, clk := newSRTMTest(t, 0, srtmServe(nil))
-	var b srtmBudget
+	b := srtmBudgetFor(s.maxTiles)
 	now := clk.now()
-	if r := b.room(now); r != srtmPerMinute {
+	if r := b.room(now); r != b.perMinute {
 		t.Fatalf("empty budget: room %d", r)
 	}
 	for i := 0; i < 5; i++ {
 		b.take(now)
 	}
-	if r := b.room(now); r != srtmPerMinute-5 || len(b.starts) != 5 {
+	if r := b.room(now); r != b.perMinute-5 || len(b.starts) != 5 {
 		t.Fatalf("after 5: room %d, %d starts (room must not record)", r, len(b.starts))
 	}
-	for i := 0; i < srtmPerHour-6; i++ { // spread over the hour: only the hour binds
+	for i := 0; i < b.perHour-6; i++ { // spread over the hour: only the hour binds
 		b.starts = append(b.starts, now.Add(time.Duration(i)*time.Second-time.Hour+time.Minute))
 	}
 	slices.SortFunc(b.starts, func(x, y time.Time) int { return x.Compare(y) })
@@ -1022,7 +1048,7 @@ func TestSRTMBudgetRoomAndStarts(t *testing.T) {
 		t.Fatalf("Starts = %d, want the 3 tiles not in memory", n)
 	}
 	s.mu.Lock()
-	for i := 0; i < srtmPerMinute-2; i++ {
+	for i := 0; i < s.budget.perMinute-2; i++ {
 		s.budget.starts = append(s.budget.starts, clk.now())
 	}
 	s.mu.Unlock()

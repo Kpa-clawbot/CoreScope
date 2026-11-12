@@ -525,3 +525,43 @@ func (tb *terrainBoth) liveJobs() int {
 	defer tb.p.mu.Unlock()
 	return len(tb.p.jobs)
 }
+
+// Code review #2 (#2391): at the largest sizes an operator may set, one cold
+// coverage view spans 40 tiles, twice the old 20-a-minute download budget,
+// so its first request always failed busy and the key was refused for 30 s.
+// The budget now fits the largest view, and such a view loads in one go.
+func TestPlannerLargestViewLoadsCold(t *testing.T) {
+	terrainQuietLog(t)
+	cfg := &PlannerConfig{Enabled: true, MaxAreaKm: plannerAreaKmMax, NodeMarginKm: plannerMarginKmMax, MaxLegKm: plannerLegKmMax}
+	r, warns := cfg.resolved()
+	if len(warns) != 0 {
+		t.Fatalf("warnings %q", warns)
+	}
+	g, msg := plannerParseGridBox("55.3,1.95,57.5,6", r.MaxAreaKm)
+	if msg != "" {
+		t.Fatal(msg)
+	}
+	view := plannerExpandBBox(g.bbox(), r.NodeMarginKm)
+	caps := r.tileLimits()
+	if n := plannerTestTiles(view); n != 40 || n != caps.Coverage || n <= srtmPerMinute {
+		t.Fatalf("view %+v: %d tiles, coverage cap %d", view, n, caps.Coverage)
+	}
+	// The shared source, as newTerrainServices builds it, budgets for it.
+	both := &Config{LOS: &LOSConfig{Enabled: true}, Planner: cfg}
+	_, p := newTerrainServices(both, &Server{cfg: both})
+	t.Cleanup(p.Close)
+	if b := p.src.(*srtmSource).budget; b.perMinute != 40 || b.perHour != 200 {
+		t.Fatalf("budget %d/min, %d/hour for 40-tile views", b.perMinute, b.perHour)
+	}
+
+	s, u, _ := newSRTMTestViews(t, 0, terrainViewTiles(both.LOS, cfg), srtmServe(nil)) // every tile 404s
+	if n := s.Starts(view); n != 40 {
+		t.Fatalf("Starts = %d, want all 40", n)
+	}
+	if _, err := s.View(context.Background(), view); err != nil {
+		t.Fatalf("cold 40-tile view: %v", err)
+	}
+	if u.total() != 40 || !s.Resident(view) {
+		t.Fatalf("%d downloads, resident %v", u.total(), s.Resident(view))
+	}
+}

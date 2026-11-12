@@ -568,7 +568,7 @@ func TestElevationTerrainUnavailable(t *testing.T) {
 	// Download budget used up.
 	et.clk.add(time.Minute)
 	et.src.mu.Lock()
-	for i := 0; i < srtmPerMinute; i++ {
+	for i := 0; i < et.src.budget.perMinute; i++ {
 		et.src.budget.starts = append(et.src.budget.starts, et.clk.now())
 	}
 	et.src.mu.Unlock()
@@ -667,7 +667,7 @@ func TestElevationPollAfterRefusedIsFree(t *testing.T) {
 	withElevLimit(et.svc, et.clk, 10)
 	// The download budget has room for one more start this minute.
 	et.src.mu.Lock()
-	for i := 0; i < srtmPerMinute-1; i++ {
+	for i := 0; i < et.src.budget.perMinute-1; i++ {
 		et.src.budget.starts = append(et.src.budget.starts, et.clk.now())
 	}
 	et.src.mu.Unlock()

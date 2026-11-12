@@ -42,8 +42,9 @@ const (
 // LOS and the planner, for a source whose largest view is viewTiles
 // (terrainViewTiles): burst tokens, so any single request can load in one
 // go, refilled at terrainClientTilesPerMin, under an hourly cap of hourly
-// tokens refilled at hourly an hour. hourly stays below the global
-// srtmPerHour at every size the planner allows (40 tiles: 80 of 200).
+// tokens refilled at hourly an hour. Even twice hourly (a full cap plus an
+// hour of refill) stays below the global hourly budget (srtmBudgetFor) at
+// every size the planner allows: 160 of 200 at 40 tiles a view.
 func terrainClientBudget(viewTiles int) (burst, hourly int) {
 	return viewTiles, max(terrainClientHourFloor, 2*viewTiles)
 }
@@ -149,13 +150,19 @@ func logTerrainConfig(c *TerrainConfig, los *LOSConfig, planner *PlannerConfig) 
 		log.Printf("[terrain] tileCacheTiles=%d is below one full view; keeping %d tiles resident",
 			r.TileCacheTiles, cache)
 	}
-	log.Printf("[terrain] SRTM tiles from %s for %s: up to %d tiles per view, cache %d tiles (up to %.0f MB, %.1f MB a tile)",
+	// A view keeps its own references, so tiles evicted while it is in use
+	// stay in memory until it is done. Every eviction is a download, so the
+	// extra is about one minute of the download budget.
+	budget := srtmBudgetFor(views)
+	log.Printf("[terrain] SRTM tiles from %s for %s: up to %d tiles per view, cache %d tiles (%.0f MB, %.1f MB a tile); "+
+		"views in use can briefly keep about %d evicted tiles more (%.0f MB, a minute of downloads)",
 		terrainTileHost(r.TileURL), terrainUsers(los, planner), views, cache,
-		float64(cache)*srtmTileBytes/1e6, float64(srtmTileBytes)/1e6)
+		float64(cache)*srtmTileBytes/1e6, float64(srtmTileBytes)/1e6,
+		budget.perMinute, float64(budget.perMinute)*srtmTileBytes/1e6)
 	burst, hourly := terrainClientBudget(views)
 	log.Printf("[terrain] tile downloads: %d/min and %d/hour for everyone; per client, %d at once, "+
 		"then %d/min, at most %d/hour",
-		srtmPerMinute, srtmPerHour, burst, terrainClientTilesPerMin, hourly)
+		budget.perMinute, budget.perHour, burst, terrainClientTilesPerMin, hourly)
 }
 
 // terrainTileHost is the tile URL reduced to scheme and host for logs: a

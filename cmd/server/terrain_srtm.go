@@ -23,9 +23,10 @@ package main
 //     CRC fails the tile. Decoding streams row by row, so no 26 MB raw buffer
 //     is ever held; a decompression bomb costs one 2.9 MB grid and stops.
 //   - At most srtmMaxConcurrent fetches run process-wide; at most
-//     srtmPerMinute / srtmPerHour start per rolling window. An upstream
-//     failure (429, 5xx, transport error) opens the srtmBackoff cooldown
-//     ladder, which pauses every download.
+//     srtmPerMinute / srtmPerHour start per rolling window, raised to fit the
+//     largest view (srtmBudgetFor). An upstream failure (429, 5xx, transport
+//     error) opens the srtmBackoff cooldown ladder, which pauses every
+//     download.
 //   - Failed or partial tiles are never cached as data. A tile the server
 //     does not have (404 for srtmNegTTL, 403 for srtmForbiddenTTL), a tile
 //     whose body is unusable (corrupt, oversized, truncated, wrong length,
@@ -119,8 +120,8 @@ const (
 	srtmDialTimeout   = 5 * time.Second
 	srtmSlotWait      = 2 * time.Minute // longest wait for a fetch slot once admitted
 	srtmMaxConcurrent = 2
-	srtmPerMinute     = 20
-	srtmPerHour       = 200
+	srtmPerMinute     = 20               // the download budget's floors (srtmBudgetFor)
+	srtmPerHour       = 200              // the download budget's floors (srtmBudgetFor)
 	srtmNegTTL        = 24 * time.Hour   // 404: the tile does not exist (ocean)
 	srtmForbiddenTTL  = time.Hour        // 403: S3's answer for absent keys, but also for a misconfigured bucket
 	srtmBadTTL        = 10 * time.Minute // unusable body: retry this tile soon, the others at once
@@ -322,10 +323,20 @@ func (v srtmTileView) ElevationAt(lat, lon float64) (float64, bool) {
 	return srtmBilinear(g, row, col, fy, fx), true
 }
 
-// srtmBudget is a sliding log of download starts: at most srtmPerMinute in
-// any rolling minute and srtmPerHour in any rolling hour.
+// srtmBudget is a sliding log of download starts: at most perMinute in any
+// rolling minute and perHour in any rolling hour.
 type srtmBudget struct {
-	starts []time.Time // oldest first, all within the last hour
+	perMinute, perHour int
+	starts             []time.Time // oldest first, all within the last hour
+}
+
+// srtmBudgetFor is the budget of a source whose largest view is viewTiles:
+// srtmPerMinute, or one full view when that is more, so a cold request at
+// the largest size the limits allow loads in one go; and srtmPerHour, or
+// five minutes of that when more.
+func srtmBudgetFor(viewTiles int) srtmBudget {
+	m := max(srtmPerMinute, viewTiles)
+	return srtmBudget{perMinute: m, perHour: max(srtmPerHour, 5*m)}
 }
 
 // take records a start at now when both windows allow it.
@@ -355,7 +366,7 @@ func (b *srtmBudget) room(now time.Time) int {
 			inMinute++
 		}
 	}
-	return max(0, min(srtmPerHour-inHour, srtmPerMinute-inMinute))
+	return max(0, min(b.perHour-inHour, b.perMinute-inMinute))
 }
 
 // srtmSource is the production terrainSource: an LRU of downsampled tiles in
@@ -382,7 +393,8 @@ type srtmSource struct {
 
 // newSRTMSource builds the source from the resolved terrain config.
 // viewTiles is the most tiles one load may span (terrainViewTiles): the
-// per-view cap, and the floor of the cache.
+// per-view cap, the floor of the cache and of the per-minute download
+// budget.
 func newSRTMSource(cfg TerrainConfig, viewTiles int) *srtmSource {
 	base := strings.TrimRight(cfg.TileURL, "/")
 	if base == "" {
@@ -403,6 +415,7 @@ func newSRTMSource(cfg TerrainConfig, viewTiles int) *srtmSource {
 		cache:     newLRU[srtmKey, []int16](cfg.cacheTiles(viewTiles), 0, nil),
 		neg:       make(map[srtmKey]time.Time),
 		loading:   make(map[srtmKey]struct{}),
+		budget:    srtmBudgetFor(viewTiles),
 	}
 }
 
