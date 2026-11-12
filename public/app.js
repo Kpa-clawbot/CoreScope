@@ -1157,18 +1157,38 @@ const pages = {};
 function registerPage(name, mod) { pages[name] = mod; }
 
 // Tools landing page — shows sub-menu with Trace and Path Inspector (spec §2.8, M1 fix).
+function toolsPlannerCardHtml() {
+  return '<a href="#/tools/planner" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Repeater Planner</h3><p>Line of sight between points, the best relay for a link, and where new repeaters would best join the backbone.</p></a>';
+}
+let toolsLandingGen = 0;
 registerPage('tools-landing', {
   init: function (container) {
+    var gen = ++toolsLandingGen;
     container.innerHTML =
       '<div class="tools-landing">' +
         '<h2>Tools</h2>' +
         '<div class="tools-menu">' +
           '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
+          (window.MC_PLANNER_CFG ? toolsPlannerCardHtml() : '') +
           '<a href="#/tools/trace/" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
         '</div>' +
       '</div>';
+    // Cold load: /api/config/client may not have answered yet, so the planner
+    // card is added once MeshConfigReady settles (same pattern as planner.js).
+    var ready = window.MeshConfigReady;
+    if (window.MC_PLANNER_CFG === undefined && ready && typeof ready.then === 'function') {
+      var addCard = function () {
+        if (gen !== toolsLandingGen || !window.MC_PLANNER_CFG) return;
+        var menu = container.querySelector && container.querySelector('.tools-menu');
+        if (!menu || menu.querySelector('a[href="#/tools/planner"]')) return;
+        var first = menu.firstElementChild;
+        if (first) first.insertAdjacentHTML('afterend', toolsPlannerCardHtml());
+        else menu.insertAdjacentHTML('beforeend', toolsPlannerCardHtml());
+      };
+      ready.then(addCard, function () {});
+    }
   },
-  destroy: function () {}
+  destroy: function () { toolsLandingGen++; }
 });
 
 let currentPage = null;
@@ -1196,7 +1216,7 @@ function routeTitle(page, param) {
     home: '', packets: 'Packets', nodes: 'Nodes', map: 'Map', live: 'Live',
     channels: 'Channels', observers: 'Observers', analytics: 'Analytics',
     'scope-audit': 'Scope Audit', perf: 'Performance', 'audio-lab': 'Audio Lab',
-    'tools-landing': 'Tools', traces: 'Packet Trace', 'path-inspector': 'Path Inspector',
+    'tools-landing': 'Tools', traces: 'Packet Trace', 'path-inspector': 'Path Inspector', planner: 'Repeater Planner',
     account: 'Account', admin: 'Admin', compare: 'Observer Comparison', 'rx-coverage': 'RX Coverage',
   };
   return Object.prototype.hasOwnProperty.call(names, page) ? names[page] : 'Not Found';
@@ -1291,6 +1311,10 @@ function navigate() {
     } else if (routeParam === 'path-inspector' || (routeParam && routeParam.startsWith('path-inspector'))) {
       basePage = 'path-inspector';
       routeParam = null;
+    } else if (routeParam === 'planner' || (routeParam && routeParam.startsWith('planner'))) {
+      // Repeater planner (#/tools/planner?mode=...); state lives in the hash query.
+      basePage = 'planner';
+      routeParam = null;
     } else if (!routeParam) {
       // Default tools landing shows menu with both entries.
       basePage = 'tools-landing';
@@ -1303,7 +1327,7 @@ function navigate() {
 
   // Update nav active state
   document.querySelectorAll('.nav-link[data-route]').forEach(el => {
-    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'traces' || basePage === 'path-inspector' || basePage === 'tools-landing')));
+    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'traces' || basePage === 'path-inspector' || basePage === 'planner' || basePage === 'tools-landing')));
   });
   // Update "More" button to show active state if a low-priority page is selected
   var moreBtn = document.getElementById('navMoreBtn');

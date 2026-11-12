@@ -8362,8 +8362,12 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 
 // --- Distance Analytics ---
 
+// earthRadiusKm is the sphere of every great-circle distance, sample and
+// earth bulge on the server (haversineKm, greatCircleSamples, analyzeLOS).
+const earthRadiusKm = 6371.0
+
 func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
-	const R = 6371.0
+	const R = earthRadiusKm
 	dLat := (lat2 - lat1) * math.Pi / 180
 	dLon := (lon2 - lon1) * math.Pi / 180
 	a := math.Sin(dLat/2)*math.Sin(dLat/2) +

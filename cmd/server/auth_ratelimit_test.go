@@ -66,6 +66,63 @@ func TestRateLimiterBucketCap(t *testing.T) {
 	}
 }
 
+// A capped limiter charges both buckets, all or nothing: the burst refills
+// in seconds, the cap only over the hour.
+func TestRateLimiterCapped(t *testing.T) {
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	l := newCappedRateLimiter(4, 10, time.Minute, 6, time.Hour)
+	l.now = func() time.Time { return now }
+	if ok, _ := l.takeN("k", 4); !ok {
+		t.Fatal("the burst refused")
+	}
+	if ok, wait := l.takeN("k", 1); ok || wait != 6*time.Second {
+		t.Fatalf("empty burst: ok=%v wait=%v, want one token in 6 s", ok, wait)
+	}
+	now = now.Add(time.Minute) // burst full again (4); cap 2 + 0.1
+	// 0.9 cap tokens short at 6 an hour: 9 minutes.
+	if ok, wait := l.takeN("k", 3); ok || (wait-9*time.Minute).Abs() > time.Millisecond {
+		t.Fatalf("over the cap: ok=%v wait=%v, want 9m", ok, wait)
+	}
+	if ok, _ := l.takeN("k", 2); !ok {
+		t.Fatal("within both refused: the refusal took tokens")
+	}
+	l.refundN("k", 2) // 4 and 2.1 again
+	if ok, _ := l.takeN("k", 3); ok {
+		t.Fatal("refund gave the cap bucket more than was taken")
+	}
+	if ok, _ := l.takeN("k", 2); !ok {
+		t.Fatal("refund lost tokens")
+	}
+	l.refundN("k", 100) // never above either size: 4 and 6
+	if ok, _ := l.takeN("k", 5); ok {
+		t.Fatal("refund raised the burst above its size")
+	}
+	if ok, _ := l.takeN("k", 4); !ok {
+		t.Fatal("refund did not fill the burst")
+	}
+	// A bucket is swept only once both have refilled.
+	now = now.Add(30 * time.Minute)
+	l.gc()
+	if l.buckets["k"] == nil {
+		t.Fatal("swept while the cap bucket was still refilling")
+	}
+	now = now.Add(time.Hour)
+	l.gc()
+	if len(l.buckets) != 0 {
+		t.Fatal("full buckets kept")
+	}
+	// An uncapped limiter is unchanged by the cap fields.
+	u := newRateLimiter(2, time.Minute)
+	u.now = l.now
+	u.refundN("x", 1)
+	if ok, _ := u.takeN("x", 2); !ok {
+		t.Fatal("uncapped limiter refused its burst")
+	}
+	if ok, _ := u.takeN("x", -3); !ok || u.buckets["x"].tokens != 0 {
+		t.Fatalf("a negative take added tokens: %v", u.buckets["x"].tokens)
+	}
+}
+
 func TestAllowKeysOnForwardedIP(t *testing.T) {
 	a, _ := newTestAuthService(t)
 	a.ipr.trustedProxies = parseCIDRList([]string{"10.0.0.0/8"}, "test")

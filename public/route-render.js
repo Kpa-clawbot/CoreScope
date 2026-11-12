@@ -153,7 +153,8 @@
     var base = 'Hop ' + (idx + 1) + ' of ' + total + ', ' + name + ', ' + role;
     if (p.isOrigin) base += ', originator';
     if (p.isDest) base += ', destination';
-    if (p.resolved === false) base += ', unresolved';
+    // A gpsless hop is identified, just missing coordinates.
+    if (p.resolved === false) base += p.gpsless ? ', no GPS coordinates' : ', unresolved';
     return base;
   }
 
@@ -187,7 +188,7 @@
     document.body.appendChild(svgNS);
   }
 
-  function buildLegend(container, resolvedCount, totalCount) {
+  function buildLegend(container, resolvedCount, totalCount, gpslessCount) {
     // Remove any prior legend
     var prior = container.querySelector('.mc-route-legend');
     if (prior) prior.remove();
@@ -207,11 +208,10 @@
           'Legend' +
         '</button>' +
         '<div id="mc-route-legend-body" class="mc-route-legend-body">' +
-          (resolvedCount < totalCount
-            ? '<div class="mc-route-resolved-badge" role="status">' +
-              resolvedCount + ' of ' + totalCount + ' hops resolved</div>'
-            : '<div class="mc-route-resolved-badge" role="status">' +
-              totalCount + ' of ' + totalCount + ' hops resolved</div>') +
+          '<div class="mc-route-resolved-badge" role="status">' +
+            resolvedCount + ' of ' + totalCount + ' hops resolved' +
+            (gpslessCount ? ' (' + gpslessCount + ' no GPS)' : '') +
+          '</div>' +
           '<ul class="mc-route-legend-list">' +
             '<li class="mc-route-legend-entry"><span class="mc-route-legend-glyph" aria-hidden="true">\u25B6</span><span>origin (originator)</span></li>' +
             '<li class="mc-route-legend-entry"><span class="mc-route-legend-glyph" aria-hidden="true">\u2691</span><span>destination</span></li>' +
@@ -268,6 +268,7 @@
     // last resolved hop becomes the destination.
     var total = positions.length;
     var resolvedCount = positions.filter(function (p) { return p.resolved !== false; }).length;
+    var gpslessCount = positions.filter(function (p) { return p.resolved === false && p.gpsless; }).length;
     positions.forEach(function (p, i) {
       if (i === 0 && !('isOrigin' in p)) p.isOrigin = true;
       if (i === total - 1 && !('isDest' in p)) p.isDest = true;
@@ -478,7 +479,7 @@
     // ── Overlay UI: legend + context label ──────────────────────────
     var container = mapRef.getContainer ? mapRef.getContainer() : document.getElementById('leaflet-map');
     if (container) {
-      buildLegend(container, resolvedCount, total);
+      buildLegend(container, resolvedCount, total, gpslessCount);
       buildContextLabel(container, opts.timestamp);
     }
   }

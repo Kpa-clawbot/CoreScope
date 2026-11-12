@@ -156,6 +156,10 @@ type Server struct {
 	// LoRa RF parameters from the MeshCore map (issue #1268). Nil unless
 	// rfParams.nodesUrl is configured.
 	rfParams *rfParamsCache
+	// elevation serves /api/elevation/profile; nil unless los.enabled.
+	elevation *elevationService
+	// planner serves /api/planner/*; nil unless planner.enabled.
+	planner *plannerService
 
 	// Optional user management (docs/specs/2026-10-06-user-management-design.md).
 	// Nil unless userManagement.enabled; see initUserManagement.
@@ -383,6 +387,10 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
 	r.HandleFunc("/api/known-channels", s.handleKnownChannels).Methods("GET")
 	r.HandleFunc("/api/rf-params", s.handleRfParams).Methods("GET")
+	r.HandleFunc("/api/elevation/profile", s.handleElevationProfile).Methods("GET")
+	r.HandleFunc("/api/planner/profile", s.handlePlannerProfile).Methods("GET")
+	r.HandleFunc("/api/planner/relay", s.handlePlannerRelay).Methods("GET")
+	r.HandleFunc("/api/planner/coverage", s.handlePlannerCoverage).Methods("GET")
 	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
@@ -563,6 +571,8 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		ClientRxAppURL:                 s.cfg.ClientRxAppURL(),
 		PathTrust:                      &pathTrust,
 		UserManagement:                 s.clientUserManagement(),
+		LOS:                            s.cfg.LOS.clientConfig(),
+		Planner:                        s.cfg.Planner.clientConfig(s.cfg.LOS),
 	})
 }
 
@@ -1702,45 +1712,24 @@ func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 			}
 		}
 	}
-	if s.cfg.GeoFilter != nil {
+	// The operator's hiding rules — blacklist, hidden name prefixes (#1181)
+	// and the geo_filter, which keeps foreign-flagged nodes (#730) — in one
+	// pass of the predicate the planner and the elevation proxy share
+	// (node_visibility.go). DB rows are preserved: this only drops them from
+	// the API surface, so observer history (paths, hops, distances) remains
+	// intact for analytics.
+	if vis := s.nodeVisibility(); vis.filters() {
 		filtered := nodes[:0]
 		for _, node := range nodes {
-			// Foreign-flagged nodes (#730) are kept even when their GPS lies
-			// outside the geofilter polygon — that's the whole point of the
-			// flag: operators need to SEE bridged/leaked nodes, not have them
-			// filtered away. The ingestor sets foreign_advert=1 when its
-			// configured geo_filter rejected the advert; the server must
-			// surface those.
-			if isForeign, _ := node["foreign"].(bool); isForeign {
-				filtered = append(filtered, node)
-				continue
-			}
-			if NodePassesGeoFilter(node["lat"], node["lon"], s.cfg.GeoFilter) {
-				filtered = append(filtered, node)
-			}
-		}
-		total = len(filtered)
-		nodes = filtered
-	}
-	// Filter blacklisted nodes
-	if len(s.cfg.NodeBlacklist) > 0 {
-		filtered := nodes[:0]
-		for _, node := range nodes {
-			if pk, ok := node["public_key"].(string); !ok || !s.cfg.IsBlacklisted(pk) {
-				filtered = append(filtered, node)
-			}
-		}
-		total = len(filtered)
-		nodes = filtered
-	}
-	// Filter nodes whose name starts with a hidden prefix (#1181). DB rows
-	// are preserved — this only drops them from the API surface so observer
-	// history (paths, hops, distances) remains intact for analytics.
-	if len(s.cfg.HiddenNamePrefixes) > 0 {
-		filtered := nodes[:0]
-		for _, node := range nodes {
+			pk, _ := node["public_key"].(string)
 			name, _ := node["name"].(string)
-			if !s.cfg.IsNameHidden(name) {
+			foreign, _ := node["foreign"].(bool)
+			lat, okLat := toFloat64(node["lat"])
+			lon, okLon := toFloat64(node["lon"])
+			if !okLat || !okLon {
+				lat, lon = 0, 0 // no fix: the geo_filter keeps it
+			}
+			if vis.Visible(pk, name, lat, lon, foreign) {
 				filtered = append(filtered, node)
 			}
 		}

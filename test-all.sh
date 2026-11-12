@@ -57,6 +57,7 @@ node tests/unit/test-theme-url-param-2236.js
 node tests/unit/test-fetch-all-nodes-pagination.js
 node tests/unit/test-fluid-scaffolding.js
 node tests/unit/test-frontend-helpers.js
+node tests/unit/test-tools-landing-planner.js
 node tests/unit/test-geofilter-draft.js
 node tests/unit/test-hash-color.js
 node tests/unit/test-health-status.js
@@ -85,6 +86,13 @@ node tests/unit/test-issue-1415-packets-layout.js
 node tests/unit/test-issue-1418-cb-preset-ramp.js
 node tests/unit/test-issue-1418-deeplink-hops-channels.js
 node tests/unit/test-map-deeplink-path-params.js
+node tests/unit/test-los.js
+node tests/unit/test-los-panel.js
+node tests/unit/test-route-view-ux-hints.js
+node tests/unit/test-route-los.js
+node tests/unit/test-planner-los-vectors.js
+node tests/unit/test-planner-area.js
+node tests/unit/test-planner.js
 node tests/unit/test-issue-1418-edge-weights.js
 node tests/unit/test-issue-1418-polish-review.js
 node tests/unit/test-issue-1418-raw-hex-extraction.js

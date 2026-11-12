@@ -464,6 +464,12 @@ func main() {
 			cfg.RfParams.NodesURL, cfg.RfParams.PresetsURL, cfg.RfParams.refresh(), cfg.RfParams.maxAge())
 	}
 
+	// Radio line-of-sight profiles and the repeater planner, over one shared
+	// SRTM terrain source. OPT-IN: without los.enabled /api/elevation/profile
+	// answers 404, without planner.enabled /api/planner/* does, and with
+	// neither no terrain tile is ever fetched.
+	srv.elevation, srv.planner = newTerrainServices(cfg, srv)
+
 	// Steady-state repeater-enrichment recomputer (issue #1262).
 	// Prewarms the bulk caches feeding handleNodes so the very first
 	// /api/nodes?limit=2000 from live.js's SPA bootstrap hits a
@@ -579,6 +585,12 @@ func main() {
 
 		// 3b. Close users.db (user management, opt-in; no-op when off).
 		srv.closeUserManagement()
+
+		// 3c. Cancel planner jobs and wait for them: they read the store,
+		// so before dbClose.
+		if srv.planner != nil {
+			srv.planner.Close()
+		}
 
 		// 4. Close database (release SQLite WAL lock)
 		if err := dbClose(); err != nil {

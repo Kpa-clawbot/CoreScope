@@ -36,6 +36,10 @@
 - [GET /api/channels](#get-apichannels)
 - [GET /api/channels/:hash/messages](#get-apichannelshashmessages)
 - [GET /api/rf-noise](#get-apirf-noise)
+- [GET /api/elevation/profile](#get-apielevationprofile)
+- [GET /api/planner/profile](#get-apiplannerprofile)
+- [GET /api/planner/relay](#get-apiplannerrelay)
+- [GET /api/planner/coverage](#get-apiplannercoverage)
 - [GET /api/analytics/rf](#get-apianalyticsrf)
 - [GET /api/analytics/topology](#get-apianalyticstopology)
 - [GET /api/analytics/retransmissions](#get-apianalyticsretransmissions)
@@ -1433,6 +1437,498 @@ Returned when `bbox` is missing or malformed.
 
 ---
 
+## GET /api/elevation/profile
+
+Terrain elevation along consecutive legs of a route, for the map's line-of-sight
+view. Only available when `los.enabled` is `true` in `config.json`; otherwise the
+endpoint returns `404`.
+
+The terrain is the repeater planner's: the same SRTM tiles (the shared [`terrain`](#terrain-tiles) block) sampled the same way as [`/api/planner/profile`](#get-apiplannerprofile), so a leg gets the same heights, and the same verdict, in both views.
+
+### Query Parameters
+
+| Param | Type   | Default | Description                                                              |
+|-------|--------|---------|--------------------------------------------------------------------------|
+| `pts` | string | -       | **Required.** Flat comma list `lat1,lon1,lat2,lon2,...`. 2 to 16 points. Lat in `[-90,90]`, lon in `[-180,180]` |
+
+### Response `200`
+
+```json
+{"source":"SRTM (AWS Open Data)","legs":[{"distance_km":12.345,"elev_m":[201.4,203.0,207.8,"... N values ..."]},{"distance_km":412.1,"error":"too_long"}]}
+```
+
+| Field         | Description                                                                                  |
+|---------------|----------------------------------------------------------------------------------------------|
+| `source`      | Terrain attribution: `"SRTM (AWS Open Data)"` for the default tiles, otherwise `"SRTM (<host of terrain.tileUrl>)"`. The planner reports the same string |
+| `legs[i]`     | The leg from `pts[i]` to `pts[i+1]`                                                          |
+| `distance_km` | Great-circle distance of the leg                                                             |
+| `elev_m`      | Terrain height in metres (0.1 m steps), evenly spaced along the great circle from the first point to the second, both ends included. The count varies with the leg: about one sample per 90 m, at least 64 and at most 600. Omitted on error |
+| `error`       | See below                                                                                    |
+
+Per-leg failures do not fail the request: a leg with an `error` has no `elev_m`. The codes, checked in this order:
+
+| Code | Meaning |
+|------|---------|
+| `too_long` | The leg is longer than 300 km. No terrain is loaded for it |
+| `unknown_point` | An endpoint is not a known node (see below). No terrain is loaded for it |
+| `too_many_tiles` | The leg's tiles would take the request past 16 distinct 1° terrain tiles. It loads nothing; later legs over tiles already in the request still fit. Split the route to check it |
+| `upstream` | A tile the leg needs could not be loaded: tile downloads are paused after a tile-server failure, over their budget, or the download failed. Worth retrying later |
+| `no_terrain` | A sample lies in a tile without data (open sea, or a tile the server lacks) |
+
+### Response `202`
+
+Some tiles the request needs are still downloading after the server waited about 1.5 s for them. The downloads carry on; re-poll the same URL after `retry_after_s`. Sent with `Retry-After` and `Cache-Control: no-store`.
+
+```json
+{"state":"loading_terrain","progress":0.5,"retry_after_s":2}
+```
+
+`progress` is the share of the request's tiles already in memory, from `0` to `1`.
+
+### Known-node rule
+
+Every point must be the position of a known node that `/api/nodes` shows (GPS set, not 0,0), matched at 5 decimals. A leg with any other endpoint answers `unknown_point` and loads no terrain. This bounds the tiles a client can make the server download to those under real node pairs. The node set is refreshed at most every 60 s, and at once when the node-hiding rules change.
+
+### Terrain tiles
+
+Route line of sight and the [repeater planner](#get-apiplannerprofile) read one shared terrain source, configured by the top-level `terrain` block in `config.json`. It is built only while `los.enabled` or `planner.enabled` is `true`.
+
+| Key | Default | Valid | Meaning |
+|-----|---------|-------|---------|
+| `terrain.tileUrl` | `https://s3.amazonaws.com/elevation-tiles-prod/skadi` (AWS Open Data) | `https` URL without a query | Base of an SRTM `skadi` tile tree: `<tileUrl>/N30/N30W098.hgt.gz` |
+| `terrain.tileCacheTiles` | 24 | 4 to 200 | Tiles kept in memory, about 2.9 MB each |
+
+A value of 0 or a missing key means the default; an invalid value falls back to the default and logs a warning at startup. The cache never holds fewer tiles than the largest single load of an enabled feature (16 for route line of sight, 12 for the planner at its default sizes), so a request never evicts its own tiles; a smaller `tileCacheTiles` is raised at startup and the log says so.
+
+Tiles are 1 arc-second SRTM, downsampled to 3 arc-seconds (about 90 m) and held in server memory only. Nothing is written to disk or the database. Downloads are shared by both features: at most 2 at a time, 20 per minute and 200 per hour. When the planner's size limits let one load span more than 20 tiles (up to 40 at the largest sizes), the per-minute limit is that many and the hourly one five times that, if more than 200, so the largest load can still download in one go. After a `429`, `5xx` or transport error from the tile server, every download pauses for 60 s, then 5 min, 30 min and 1 h for each further consecutive failure; a successful download resets this. A tile the server does not have (`404`, `403`), or one whose body is unusable or all void, has no terrain for a while instead.
+
+Each client IP also has one download budget for both features, so using both buys no more downloads. A route line-of-sight request, or a new planner job, takes one token for each tile download it starts, all or nothing, before any starts. Tiles already in memory or already downloading (for any client, or for either feature) cost nothing, and neither do downloads the server-wide limits above would refuse. The budget holds the largest single load of an enabled feature (16 tiles for route line of sight, 12 to 40 for the planner depending on its size limits), so any one request fits it, and refills at 10 tokens a minute. A second bucket caps it at 40 tokens an hour, or twice the largest load when that is more, refilled at the same number an hour. The startup log prints the numbers in effect.
+
+### Caching & limits
+
+- Terrain comes from SRTM 1° tiles held in server memory (see [Terrain tiles](#terrain-tiles)). Only the tiles the legs' samples fall in are loaded, not each leg's bounding box. A request loads at most 16 distinct tiles.
+- `Cache-Control: public, max-age=86400` when every leg is OK or `too_long`; otherwise `no-store`.
+- Per client IP, a request takes one token from the client's [download budget](#terrain-tiles), shared with the planner, for each tile download it starts, all or nothing, before any starts. A request that would start more downloads than its tokens allow answers `429` with `Retry-After` and starts none. Tiles already in memory or already downloading (for any client, or for the planner) cost nothing. So do tiles the server-wide download limits have no room for: they are not downloaded, and their legs answer `upstream`. A request whose tiles are all in memory is never limited, and a poll after `202` costs nothing unless the server-wide limits have since made room for a tile they refused.
+- The request query may not exceed 2048 bytes.
+- Data: SRTM terrain only; trees and buildings are not modelled.
+
+### Response `400`
+
+Returned when `pts` is missing, has an odd number of values, holds fewer than 2 or more than 16 points, contains a non-numeric value, or has a lat or lon out of range.
+
+### Response `404`
+
+Returned when `los.enabled` is not `true` in `config.json`.
+
+```json
+{ "error": "los disabled" }
+```
+
+### Response `429`
+
+Returned when the request would start more tile downloads than the client's [download budget](#terrain-tiles) allows. The budget is shared with the planner. The `Retry-After` header gives whole seconds to wait.
+
+```json
+{ "error": "rate limited" }
+```
+
+---
+
+## GET /api/planner/profile
+
+Line-of-sight profile along a chain of points, for the repeater planner at `#/tools/planner`. The server returns the terrain height along each consecutive leg. Only available when `planner.enabled` is `true` in `config.json`; otherwise the endpoint returns `404`.
+
+### Common rules
+
+These rules apply to all three planner endpoints: this one, [`/api/planner/relay`](#get-apiplannerrelay) and [`/api/planner/coverage`](#get-apiplannercoverage).
+
+- **Opt-in.** Only available when `planner.enabled` is `true`. Otherwise the endpoints return `404`, and `/api/config/client` omits the `planner` block.
+- **Quantised input.** Points are rounded to 0.001°, antenna heights to 1 m, and `range` must be one of a fixed set. Coverage boxes are snapped outward to a 0.05° grid. Requests that round to the same values share one cache entry and one job.
+- **Unknown or repeated parameters.** A parameter the endpoint does not take, a repeated parameter, or a query longer than 512 bytes returns `400`.
+- **Terrain.** SRTM 1° tiles, shared with route line of sight (see [Terrain tiles](#terrain-tiles)). A tile that is missing upstream (open sea or no data), unusable or all void has no terrain: relay and area searches skip every site and link that touches it, a profile leg across it is `no_terrain`, and a relay `direct` link across it carries `error: "no_terrain"` with no verdict.
+- **Size limits.** Three `config.json` keys set how large a request may be. A value of 0 or a missing key means the default. A value outside the valid range falls back to the default and logs a warning at startup.
+
+  | Key | Default | Valid | Limits |
+  |-----|---------|-------|--------|
+  | `planner.maxAreaKm` | 100 | 20 to 250 | Each side of a snapped coverage box |
+  | `planner.nodeMarginKm` | 30 | 10 to 60 | How far outside the coverage box repeaters and rooms are still read |
+  | `planner.maxLegKm` | 100 | 10 to 200 | The A to B leg of a profile or relay. Only `range` values up to it are accepted |
+
+  The server derives from these how many 1° terrain tiles one request may load, as the worst case anywhere within latitudes -56 to 60. At the defaults that is 12 tiles for each endpoint. Each resident tile takes about 2.9 MB, so larger limits cost memory, and the terrain cache never holds fewer tiles than one full view. The startup log prints the tile counts, the memory one view and the cache take, and how many tiles the cache has dropped that views still in use may briefly keep in memory (about a minute of downloads). `/api/config/client` reports the sizes in effect.
+- **Caveat.** Results are line of sight against bare terrain. Trees, buildings and other clutter are not modelled. The output is not a link budget: it has no transmit power, gain or receiver sensitivity.
+
+### Job protocol
+
+The planner runs each request as a background job, one per cache key. A request waits up to about 1.5 s for its job. If the job is still running, the response is `202` and the client re-polls the same URL.
+
+| Status | Body | Meaning |
+|--------|------|---------|
+| `200`  | The endpoint's result | Finished. Cached on the server for about 10 minutes. Sent with `Cache-Control: public, max-age=300`. |
+| `202`  | `{"state":"computing","progress":0.42,"retry_after_s":1}` | Job still running. The `Retry-After` header carries the same wait. Re-poll the same URL after `retry_after_s` seconds. |
+| `400`  | `{"error":"..."}` | Bad input. See the endpoint's error codes. |
+| `404`  | `{"error":"planner disabled"}` | `planner.enabled` is not `true`. |
+| `429`  | `{"error":"rate limited"}` | Per-IP limit of 6 new jobs per minute. A new job also takes one token from the client's [download budget](#terrain-tiles), shared with route line of sight, for each tile download its terrain view starts, all or nothing; tiles in memory or already downloading cost nothing. The `Retry-After` header gives whole seconds to wait. Cache hits and polls of a live job are never limited. |
+| `503`  | `{"error":"planner busy"}` | Too many jobs are live or queued (`planner busy`). The server is shutting down (`planner unavailable`). The terrain fetch for this key failed and is cooling down (`terrain busy`). The `Retry-After` header gives whole seconds to wait. |
+
+`state` is one of `queued`, `loading_terrain` or `computing`. `progress` runs from `0` to `1`. A job that no client has polled for 15 s is cancelled.
+
+### Query Parameters
+
+| Param | Type   | Default | Description |
+|-------|--------|---------|-------------|
+| `pts` | string | -       | **Required.** Flat comma list `lat1,lon1,lat2,lon2,...`. 2 to 16 points. Lat in `[-90,90]`, lon in `[-180,180]`. |
+
+### Response `200`
+
+```json
+{"source":"SRTM (AWS Open Data)","legs":[{"distance_km":12.345,"elev_m":[201.4,203.0,207.8,"... N values ..."]},{"distance_km":118.9,"error":"too_long"}]}
+```
+
+| Field         | Description |
+|---------------|-------------|
+| `source`      | Terrain attribution: `"SRTM (AWS Open Data)"` for the default tiles, otherwise `"SRTM (<host of terrain.tileUrl>)"`. Route line of sight reports the same string |
+| `legs[i]`     | The leg from `pts[i]` to `pts[i+1]`. One entry per leg, in order |
+| `distance_km` | Great-circle distance of the leg, rounded to 3 decimals |
+| `elev_m`      | Terrain height in metres at evenly spaced points along the great circle, both endpoints included, rounded to 0.1 m. The count depends on the leg length (about one sample per 90 m, between 64 and 600). Omitted on error |
+| `error`       | Omitted on success. Per-leg code, see below |
+
+Per-leg failures do not fail the request. A leg with an `error` has no `elev_m`.
+
+### Error codes
+
+Whole-request `400` messages:
+
+| Message | Cause |
+|---------|-------|
+| `pts required` | `pts` is missing |
+| `pts must hold 2 to 16 lat,lon points` | Odd number of values, fewer than 2 points or more than 16 |
+| `pts contains an invalid or out-of-range number` | A value is not a number, or lat or lon is out of range |
+| `too_many_tiles` | The chain needs more 1° terrain tiles than the server loads for one request. Any single leg up to the maximum length within latitudes -56 to 60 fits. Long multi-leg chains may not |
+
+Per-leg `error` codes (the request still returns `200`):
+
+| Code | Cause |
+|------|-------|
+| `too_long` | The leg is longer than `planner.maxLegKm` (100 km by default). No terrain is loaded for it |
+| `out_of_area` | An endpoint is not within 50 km of a known node. Legs touching that point are marked |
+| `no_terrain` | Terrain for the leg could not be read |
+
+### Response `400`
+
+```json
+{ "error": "pts must hold 2 to 16 lat,lon points" }
+```
+
+### Response `404`
+
+```json
+{ "error": "planner disabled" }
+```
+
+---
+
+## GET /api/planner/relay
+
+Best relay for a link from point A to point B. The server analyses the direct path, then ranks candidate relay sites in two lists:
+
+- `existing`: known repeaters and rooms from the node store, with an assumed mast height (`planner.existingAntennaM`).
+- `open`: sites picked from the terrain, with the new-relay height `hr`.
+
+Each candidate is checked as two legs, A to relay and relay to B. Common rules and the job protocol are described under [`/api/planner/profile`](#get-apiplannerprofile).
+
+### Query Parameters
+
+| Param   | Type   | Default                       | Description |
+|---------|--------|-------------------------------|-------------|
+| `a`     | string | -                             | **Required.** Point A as `lat,lon`. Must be within 50 km of a known node |
+| `b`     | string | -                             | **Required.** Point B as `lat,lon`. Same rule as `a` |
+| `ha`    | number | `planner.newAntennaM` (10)    | Antenna height at A, metres. Rounded to 1 m and clamped to 1 to 100 |
+| `hb`    | number | `planner.newAntennaM` (10)    | Antenna height at B, metres. Same limits as `ha` |
+| `hr`    | number | `planner.newAntennaM` (10)    | Height of a new relay at an open site, metres. Same limits as `ha` |
+| `range` | number | `planner.defaultRangeKm` (30) | Largest distance in km from the relay to each end. One of `10,15,20,30,40,50,60`, up to `planner.maxLegKm` (the client config's `rangesKm`) |
+
+The A to B distance is limited to `planner.maxLegKm` (100 km by default). The existing-relay height comes from `planner.existingAntennaM` and is echoed in `params.he`. It is not a query parameter.
+
+### Response `200`
+
+```json
+{
+  "source": "SRTM (AWS Open Data)",
+  "direct": {
+    "distance_km": 24.812,
+    "clearance_pct": -35.2,
+    "verdict": "blocked",
+    "worst_km": 9.4,
+    "obstruction_m": 38.6,
+    "elev_m": [212.0, 240.5, "... up to 200 values ..."]
+  },
+  "existing": [
+    {
+      "kind": "existing",
+      "pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "name": "Example Hilltop",
+      "lat": 30.1,
+      "lon": -97.7,
+      "elev_m": 312,
+      "antenna_m": 5,
+      "leg_a": {"distance_km": 12.1, "clearance_pct": 74.0, "verdict": "clear60", "worst_km": 6.0, "obstruction_m": -8.2},
+      "leg_b": {"distance_km": 12.7, "clearance_pct": 61.5, "verdict": "clear60", "worst_km": 5.1, "obstruction_m": -4.0},
+      "bottleneck_pct": 61.5
+    }
+  ],
+  "open": [
+    {
+      "kind": "open",
+      "lat": 30.2,
+      "lon": -97.6,
+      "elev_m": 298,
+      "antenna_m": 10,
+      "leg_a": {"distance_km": 11.8, "clearance_pct": 88.0, "verdict": "clear", "worst_km": 4.2, "obstruction_m": -20.1},
+      "leg_b": {"distance_km": 12.9, "clearance_pct": 66.3, "verdict": "clear60", "worst_km": 6.7, "obstruction_m": -6.5},
+      "bottleneck_pct": 66.3
+    }
+  ],
+  "params": {
+    "a": {"lat": 30.1, "lon": -97.7},
+    "b": {"lat": 30.2, "lon": -97.5},
+    "ha": 10,
+    "hb": 10,
+    "hr": 10,
+    "he": 5,
+    "range_km": 30,
+    "frequency_mhz": 910.525,
+    "k_factor": 1.333
+  },
+  "warnings": []
+}
+```
+
+Abbreviated: the `elev_m` arrays in `direct`, `leg_a` and `leg_b` are truncated for readability. A real response includes them in full, and `leg_a`/`leg_b` carry an `elev_m` array as well.
+
+| Field | Description |
+|-------|-------------|
+| `source` | Terrain attribution |
+| `direct` | The A to B link, see *Link object* below |
+| `existing` | Up to 5 known repeaters and rooms, ranked by `bottleneck_pct`, then by total distance |
+| `open` | Up to 5 terrain sites, ranked the same way |
+| `params` | The quantised inputs the result was computed with, and the mast heights used |
+| `warnings` | Human-readable notes, for example `No relay gives a clear first Fresnel zone`. Always an array |
+
+**Option object** (`existing[]` and `open[]`):
+
+| Field | Description |
+|-------|-------------|
+| `kind` | `existing` or `open` |
+| `pubkey` | Node public key. Present only for `existing` |
+| `name` | Node name. Present only for `existing`, when the node has one |
+| `lat`, `lon` | Site position |
+| `elev_m` | Terrain height at the site, metres |
+| `antenna_m` | Mast height used at the site: `he` for existing, `hr` for open |
+| `leg_a`, `leg_b` | Link objects for A to site and site to B. Each carries its own `elev_m` profile |
+| `bottleneck_pct` | The weaker of `leg_a.clearance_pct` and `leg_b.clearance_pct` |
+
+**Link object** (`direct`, `leg_a`, `leg_b`):
+
+| Field | Description |
+|-------|-------------|
+| `distance_km` | Great-circle distance of the link |
+| `clearance_pct` | 100 × the worst first-Fresnel clearance along the path. Negative means terrain crosses the line |
+| `verdict` | `clear` (100% or more), `clear60` (60% or more), `marginal` (0% or more) or `blocked` (below 0%). Empty when `error` is set |
+| `worst_km` | Distance along the link to the point with the worst clearance |
+| `obstruction_m` | Height of the highest terrain point above the line of sight, metres. Negative means it clears the line |
+| `elev_m` | Terrain profile, decimated to at most 200 samples. Present on `direct` and on the option legs, absent when `error` is set |
+| `error` | Present only when the link could not be measured: `no_terrain` (part of it has no terrain data). `verdict` is then empty, `clearance_pct`, `worst_km` and `obstruction_m` are 0, and `warnings` says so. Only `direct` can carry it: an option whose leg would is not offered |
+
+### Error codes
+
+| Message or code | Cause |
+|-----------------|-------|
+| `a required`, `b required` | Point missing |
+| `a must be lat,lon within range`, `b must be lat,lon within range` | Point malformed or out of range |
+| `ha must be a number of metres`, `hb ...`, `hr ...` | Height is not a number |
+| `range must be one of 10,15,20,30,40,50,60` | Range not in the allowed set. The message lists the values allowed up to `planner.maxLegKm` |
+| `too_long` | A to B is longer than `planner.maxLegKm` (100 km by default) |
+| `out_of_area` | A or B is not within 50 km of a known node |
+| `too_many_tiles` | The corridor around A and B needs more 1° terrain tiles than the server loads for one request. Any leg up to the maximum length with both ends within latitudes -56 to 60 fits |
+
+### Response `400`
+
+```json
+{ "error": "too_long" }
+```
+
+### Response `404`
+
+```json
+{ "error": "planner disabled" }
+```
+
+---
+
+## GET /api/planner/coverage
+
+Repeater backbone plan for an area. The server reads the repeaters and rooms in a bounding box, builds the backbone graph between them, and suggests up to `sites` new sites that would strengthen it. The result is a suggestion, not an optimum. Common rules and the job protocol are described under [`/api/planner/profile`](#get-apiplannerprofile).
+
+### Objective
+
+Sites are picked greedily, one at a time, against a fixed order of goals:
+
+1. **Fewer separate clusters.** Reduce the number of backbone components. An isolated repeater counts as a component of its own. Ties go to a larger largest component.
+2. **Fewer single points of failure.** Reduce cut vertices, the repeaters whose loss would split the backbone. Each is weighted by the size of the smaller side it separates.
+3. **Reach.** Add repeaters that have no solid link to the rest, so more of the area is covered at solid quality.
+
+Each pick is the candidate that gives the best gain under this order, comparing the goals in turn. Candidates are local high points on a 1 km grid, and no two picks sit closer than 2 km. Each pick links to nearby repeaters and earlier picks within `range`.
+
+### Query Parameters
+
+| Param      | Type   | Default                        | Description |
+|------------|--------|--------------------------------|-------------|
+| `bbox`     | string | -                              | **Required.** `s,w,n,e` in degrees. Snapped outward to a 0.05° grid. South below north, west below west-east (no antimeridian crossing). Latitude must be within -56 to 60 (SRTM coverage). The snapped box may be at most `planner.maxAreaKm` (100 km by default) on either side |
+| `sites`    | int    | 3                              | Number of suggested sites, 1 to 10 |
+| `range`    | number | `planner.defaultRangeKm` (30)  | Largest link distance in km considered. One of `10,15,20,30,40,50,60`, up to `planner.maxLegKm` |
+| `hr`       | number | `planner.newAntennaM` (10)     | Height of a new site, metres. Rounded to 1 m and clamped to 1 to 100 |
+| `he`       | number | `planner.existingAntennaM` (5) | Assumed mast height of existing repeaters and rooms, metres. Same limits as `hr` |
+| `baseline` | string | `predicted`                    | `predicted`: the backbone is every pair in range that terrain says is clear enough, plus observed links. `observed`: only links seen in real neighbour data (score × confidence of at least 0.1) |
+| `stale`    | string | `0`                            | `1` includes repeaters the node store marks as stale. `0` leaves them out and counts them in `stale_excluded` |
+
+The area must hold at least one repeater or room within 10 km of the box. Nodes are read from up to `planner.nodeMarginKm` (30 km by default) outside the box, at most 300 of them.
+
+### Response `200`
+
+```json
+{
+  "area": {"s": 30.10, "w": -97.80, "n": 30.35, "e": -97.55},
+  "params": {
+    "sites": 3,
+    "range_km": 30,
+    "hr": 10,
+    "he": 5,
+    "baseline": "predicted",
+    "stale": false,
+    "frequency_mhz": 910.525,
+    "k_factor": 1.333,
+    "min_clearance": 0.6
+  },
+  "source": "SRTM (AWS Open Data)",
+  "status": "improved",
+  "baseline": {"repeaters": 9, "components": 3, "largest_component": 5, "isolated": 1, "cut_vertices": 2, "stale_excluded": 0},
+  "final": {"repeaters": 9, "components": 1, "largest_component": 9, "isolated": 0, "cut_vertices": 0, "stale_excluded": 0},
+  "nodes": [
+    {"pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "name": "Example Hilltop", "role": "repeater", "lat": 30.12, "lon": -97.74, "stale": false, "in_area": true, "component": 0}
+  ],
+  "edges": [
+    {"a": 0, "b": 1, "class": "observed", "distance_km": 8.4, "clearance_pct": 112.0}
+  ],
+  "sites": [
+    {
+      "step": 1,
+      "lat": 30.24,
+      "lon": -97.66,
+      "elev_m": 301,
+      "antenna_m": 10,
+      "reason": "joins",
+      "gain": {"components_joined": 2, "cut_vertices_removed": 0, "repeaters_reached": 1},
+      "after": {"repeaters": 9, "components": 2, "largest_component": 6, "isolated": 0, "cut_vertices": 2, "stale_excluded": 0},
+      "links": [
+        {"node": 4, "distance_km": 9.7, "clearance_pct": 64.2, "class": "solid"},
+        {"node": -1, "peer_step": 0, "distance_km": 6.1, "clearance_pct": 71.0, "class": "solid"}
+      ],
+      "joins_components": [1, 2]
+    }
+  ],
+  "warnings": [],
+  "truncated": false,
+  "computed_at": "2026-11-11T12:00:00Z"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `area` | The snapped bounding box actually analysed |
+| `params` | The quantised inputs. `hr`, `he`, `baseline` and `stale` are echoed here |
+| `source` | Terrain attribution |
+| `status` | `improved`: at least one site was picked and the backbone changed. `connected`: the baseline backbone was already a single component, so the sites added redundancy. `no_gain`: no candidate improved anything |
+| `baseline` | Backbone summary before any site is added |
+| `final` | Backbone summary after the last site |
+| `nodes[]` | Repeaters and rooms considered. Fields come from the same data `/api/nodes` shows. `component` is the baseline component id, `0` being the largest |
+| `edges[]` | Backbone links. `a` and `b` are indexes into `nodes`. Capped at 2000 edges |
+| `sites[]` | Greedy picks in order. See the site object below |
+| `warnings` | Human-readable notes, for example `Area has no candidate high ground with a usable link`. Always an array |
+| `truncated` | `true` when the node or candidate set was capped (300 nodes, 500 candidates) |
+| `computed_at` | When the plan was computed (UTC) |
+
+**Summary object** (`baseline`, `final`, `sites[].after`):
+
+| Field | Description |
+|-------|-------------|
+| `repeaters` | In-area repeaters and rooms counted |
+| `components` | Number of backbone components. An isolated repeater counts as one |
+| `largest_component` | Size of the largest component |
+| `isolated` | Repeaters with no backbone link |
+| `cut_vertices` | Single points of failure |
+| `stale_excluded` | Stale repeaters left out of the plan |
+
+**Edge class** (`edges[].class`):
+
+| Class | Meaning |
+|-------|---------|
+| `observed` | A link seen in real neighbour data, with a score × confidence of at least 0.1 |
+| `solid` | A terrain-predicted link with at least 60% first-Fresnel clearance (`min_clearance`) |
+| `marginal` | A terrain-predicted link with clearance from 0% up to 60%. The line clears the terrain but not by much |
+
+**Site object** (`sites[]`):
+
+| Field | Description |
+|-------|-------------|
+| `step` | 1-based greedy order |
+| `lat`, `lon` | Suggested position |
+| `elev_m` | Terrain height at the site, metres |
+| `antenna_m` | Mast height used, `hr` |
+| `reason` | Why this site was picked (see below) |
+| `gain` | What the pick improved: `components_joined`, `cut_vertices_removed`, `repeaters_reached` |
+| `after` | Backbone summary after this pick |
+| `links[]` | Links from the site. `node` is an index into `nodes`, or `-1` when the peer is an earlier site, in which case `peer_step` gives its step. `class` is `solid` or `marginal` |
+| `joins_components` | Baseline component ids this site connects |
+
+**Site reason** (`sites[].reason`):
+
+| Reason | Meaning |
+|--------|---------|
+| `joins` | The site connects two or more separate backbone components |
+| `redundancy` | No components joined, but the site removes a single point of failure or otherwise reduces fragility |
+| `reach` | Neither of the above. The site brings in repeaters that had no solid link |
+
+### Error codes
+
+| Message or code | Cause |
+|-----------------|-------|
+| `bbox required` | `bbox` missing |
+| `bbox must be s,w,n,e in degrees` | Wrong number of values, not a number, or out of range |
+| `bbox needs south below north and west below east (no antimeridian crossing)` | Degenerate or reversed box |
+| `bbox must lie within latitudes -56 to 60 (terrain coverage)` | Outside SRTM coverage |
+| `area_too_large` | The snapped box is over `planner.maxAreaKm` (100 km by default) on a side |
+| `too_many_tiles` | The box plus the node margin needs more 1° terrain tiles than the server loads for one request. Never returned for a box the size check accepts; kept as a safeguard |
+| `no_nodes_in_area` | No repeater or room within 10 km of the box |
+| `sites must be an integer 1-10` | `sites` not an integer in range |
+| `range must be one of 10,15,20,30,40,50,60` | `range` not in the allowed set. The message lists the values allowed up to `planner.maxLegKm` |
+| `hr and he must be numbers of metres` | A height is not a number |
+| `baseline must be predicted or observed` | Unknown `baseline` value |
+| `stale must be 0 or 1` | Unknown `stale` value |
+
+### Response `400`
+
+```json
+{ "error": "no_nodes_in_area" }
+```
+
+### Response `404`
+
+```json
+{ "error": "planner disabled" }
+```
+
+---
+
 ## GET /api/analytics/topology
 
 Network topology analytics.
@@ -2431,6 +2927,8 @@ Client-side configuration values.
   "externalUrls":       object | null,
   "propagationBufferMs": number,         // default: 5000
   "clientRfSamples":    boolean,         // opt-in flag; gates /api/rf-noise
+  "los":                object,          // omitted unless los.enabled is true: frequencyMhz, antennaHeightM, kFactor, maxPoints, maxLegKm. frequencyMhz 910.525 is the US default; use 869.618 for EU/UK meshes (set los.frequencyMhz to your mesh's frequency). The planner reads frequencyMhz and kFactor from the los block even when los.enabled is false.
+  "planner":            object,          // omitted unless planner.enabled is true: defaultRangeKm, rangesKm (only those up to maxLegKm), newAntennaM, existingAntennaM, frequencyMhz, kFactor, maxPoints, maxLegKm, maxAreaKm, nodeMarginKm, maxSites, minClearance
   "clientRxAppUrl":     string           // omitted unless clientRxCoverage is on and clientRxCoverage.appUrl is an https URL
 }
 ```
