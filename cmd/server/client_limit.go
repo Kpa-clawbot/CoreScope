@@ -2,9 +2,13 @@ package main
 
 // Per-client token bucket for public endpoints whose requests cost terrain
 // tile downloads or heavy compute (/api/elevation/profile, /api/planner/*).
-// Clients are told apart by wsLimiter.clientIP, so X-Forwarded-For is
-// believed only from webSocket.trustedProxies (see ws_limits.go). When
-// clients cannot be told apart, every request shares one bucket and a
+// Clients are told apart by wsLimiter.clientIPRightmost: X-Forwarded-For is
+// believed only from webSocket.trustedProxies, and is read from the right, so
+// the client is the last hop no trusted proxy vouches for and a forged
+// leftmost entry buys nothing (these limits protect an upstream quota).
+// Operators behind a CDN must list the CDN's ranges in
+// webSocket.trustedProxies, or every client behind it looks like the CDN.
+// When clients cannot be told apart, every request shares one bucket and a
 // one-time warning tells the operator what to configure.
 
 import (
@@ -37,7 +41,7 @@ func (c *clientLimiter) clientKey(r *http.Request) string {
 	if c.ipr == nil {
 		return clientSharedKey
 	}
-	ip, distinct := c.ipr.clientIP(r)
+	ip, distinct := c.ipr.clientIPRightmost(r)
 	if distinct && ip != nil {
 		return ip.String()
 	}

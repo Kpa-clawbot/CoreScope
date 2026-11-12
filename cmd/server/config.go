@@ -613,6 +613,10 @@ type WebSocketConfig struct {
 	// X-Forwarded-For may be believed. REQUIRED for the limits to do anything
 	// behind nginx/Caddy/Traefik/ingress: without it every visitor shares the
 	// proxy's address, so the limits are skipped and a warning is logged.
+	// /ws takes the leftmost X-Forwarded-For entry; the terrain-backed
+	// /api/elevation/profile and /api/planner/* limits take the rightmost
+	// entry that is not a trusted proxy, so behind a CDN list the CDN's
+	// ranges here too, or every client looks like the CDN.
 	// Never list an address you do not control; anyone reaching the server
 	// from a trusted address can name any client IP they like.
 	TrustedProxies []string `json:"trustedProxies,omitempty"`
