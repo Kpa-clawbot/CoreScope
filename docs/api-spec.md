@@ -700,7 +700,9 @@ Per-node analytics over a time range.
   "activityTimeline": [
     { "bucket": string (ISO),  "count": number }   // hourly buckets
   ],
-  "snrTrend": [
+  "snrTrend": [                     // direct receptions by fixed observers only
+                                     // (see heardBy), newest 500 in the window,
+                                     // oldest first
     {
       "timestamp":     string (ISO),
       "snr":           number,
@@ -709,10 +711,29 @@ Per-node analytics over a time range.
       "observer_name": string | null
     }
   ],
+  "heardBy": [                      // fixed observers that heard this node itself:
+                                     // the last path hop names it with 2 or more
+                                     // bytes and no other node shares that prefix,
+                                     // or a zero-hop advert. Sorted by medianSnr,
+                                     // best first; rows without an SNR last.
+    {
+      "observer_id":      string,
+      "observer_name":    string,
+      "count":            number,        // direct receptions in the window
+      "medianSnr":        number | null, // null: no reception carried an SNR
+      "p10Snr":           number | null,
+      "p90Snr":           number | null,
+      "recentMedianSnr":  number | null, // last 24 h; both change medians are
+      "earlierMedianSnr": number | null  // null unless the window is >= 3 days
+                                         // and each part has >= 3 receptions
+    }
+  ],
   "packetTypeBreakdown": [
     { "payload_type": number, "count": number }
   ],
-  "observerCoverage": [
+  "observerCoverage": [              // deprecated: every observer that saw a
+                                     // packet attributed to this node, relayed
+                                     // or not. The analytics page uses heardBy.
     {
       "observer_id":   string,
       "observer_name": string | null,
@@ -741,17 +762,22 @@ Per-node analytics over a time range.
     "availabilityPct":    number,     // 0–100
     "longestSilenceMs":   number,
     "longestSilenceStart": string (ISO) | null,
-    "signalGrade":        string,     // "A", "A-", "B+", "B", "C", "D"
-    "snrMean":            number,
-    "snrStdDev":          number,
+    "signalGrade":        string,     // "A", "A-", "B+", "B", "C", "D", from
+                                      // snrMean and snrStdDev
+    "snrMean":            number,     // mean of heardBy medianSnr: each observer
+                                      // counts once; 0 when there is none
+    "snrStdDev":          number,     // spread of those medians
     "relayPct":           number,     // % of packets with >1 hop
     "totalPackets":       number,
-    "uniqueObservers":    number,
+    "uniqueObservers":    number,     // fixed observers in heardBy
     "uniquePeers":        number,
     "avgPacketsPerDay":   number
   }
 }
 ```
+
+`hopDistribution`, `peerInteractions` and `computedStats.relayPct` are
+deprecated: the analytics page will stop showing them.
 
 ### Response `404`
 
