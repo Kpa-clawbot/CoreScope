@@ -875,3 +875,82 @@ func TestElevationUserAgent(t *testing.T) {
 		}
 	}
 }
+
+func elevBucketTokens(svc *elevationService, ip string) float64 {
+	svc.rl.mu.Lock()
+	defer svc.rl.mu.Unlock()
+	return svc.rl.buckets[ip].tokens
+}
+
+func TestElevationBudgetChargedPerUncachedLeg(t *testing.T) {
+	f := newFakeElevUpstream(t)
+	srv, svc, clk := newElevTestServer(t, f, "")
+	withElevLimit(svc, clk, 10)
+	ip := "192.0.2.20"
+	remote := ip + ":5000"
+	// 4 points = 3 distinct uncached legs.
+	if w := getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3", remote, nil); w.Code != 200 {
+		t.Fatalf("code=%d", w.Code)
+	}
+	if got := elevBucketTokens(svc, ip); got != 7 {
+		t.Fatalf("tokens=%v want 7 (3 legs charged)", got)
+	}
+	// Same route again: all cached, free. Extend by one leg: 1 charged.
+	getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3", remote, nil)
+	if got := elevBucketTokens(svc, ip); got != 7 {
+		t.Fatalf("cached legs charged: tokens=%v", got)
+	}
+	if w := getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3,1.4,1.4", remote, nil); w.Code != 200 {
+		t.Fatalf("code=%d", w.Code)
+	}
+	if got := elevBucketTokens(svc, ip); got != 6 {
+		t.Fatalf("tokens=%v want 6", got)
+	}
+	// Duplicate legs in one request (A-B-A-B) are one leg, one token.
+	if w := getElevFrom(srv, "5,1,5.1,1.1,5,1,5.1,1.1", remote, nil); w.Code != 200 {
+		t.Fatalf("code=%d", w.Code)
+	}
+	if got := elevBucketTokens(svc, ip); got != 5 {
+		t.Fatalf("duplicate legs: tokens=%v want 5", got)
+	}
+}
+
+func TestElevationBudgetAllOrNothing(t *testing.T) {
+	f := newFakeElevUpstream(t)
+	srv, svc, clk := newElevTestServer(t, f, "")
+	withElevLimit(svc, clk, 3)
+	ip := "192.0.2.21"
+	remote := ip + ":5000"
+	before := f.count()
+	// 4 uncached legs, 3 tokens: refused, nothing taken, nothing fetched.
+	w := getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3,1.4,1.4", remote, nil)
+	if w.Code != 429 {
+		t.Fatalf("code=%d want 429", w.Code)
+	}
+	if ra, _ := strconv.Atoi(w.Header().Get("Retry-After")); ra < 1 {
+		t.Fatalf("Retry-After=%q", w.Header().Get("Retry-After"))
+	}
+	if f.count() != before {
+		t.Fatal("refused request reached upstream")
+	}
+	if got := elevBucketTokens(svc, ip); got != 3 {
+		t.Fatalf("refused request consumed tokens: %v", got)
+	}
+	// A 3-leg request still fits.
+	if w := getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3", remote, nil); w.Code != 200 {
+		t.Fatalf("code=%d", w.Code)
+	}
+}
+
+func TestRateLimiterTakeN(t *testing.T) {
+	l := newRateLimiter(5, time.Minute)
+	if ok, _ := l.takeN("k", 3); !ok {
+		t.Fatal("3 of 5 refused")
+	}
+	if ok, wait := l.takeN("k", 3); ok || wait <= 0 {
+		t.Fatalf("ok=%v wait=%v", ok, wait)
+	}
+	if ok, _ := l.takeN("k", 2); !ok {
+		t.Fatal("refusal took tokens")
+	}
+}

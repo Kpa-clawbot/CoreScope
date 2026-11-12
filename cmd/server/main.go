@@ -479,7 +479,7 @@ func main() {
 		}
 		srv.elevation.ipr = &wsLimiter{state: map[string]*wsIPState{},
 			trustedProxies: parseCIDRList(cfg.WSTrustedProxies(), "webSocket.trustedProxies")}
-		srv.elevation.rl = newRateLimiter(10, time.Minute)
+		srv.elevation.rl = newRateLimiter(elevIPTokens, time.Minute) // legs per client per minute
 	}
 
 	// Repeater planner. OPT-IN: without planner.enabled no terrain tile is

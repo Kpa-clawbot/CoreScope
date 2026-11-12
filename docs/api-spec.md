@@ -1476,7 +1476,7 @@ Every point must be the position of a known node (GPS set, not 0,0), matched at 
 - `Cache-Control: public, max-age=86400` when no leg has an error other than `too_long`; otherwise `no-store`.
 - Upstream fetches are capped at 4 concurrent and, by default, 40 per minute, 300 per hour and 700 per day (`los.legsPerMinute`, `los.legsPerHour`, `los.legsPerDay`). Over budget, a leg answers `upstream`.
 - After a `429`, `5xx`, `400`, `401`, `403` or transport error from the elevation service, upstream fetches pause for 60 s, then 5 min, 30 min, and 1 h for each further consecutive failure. A successful fetch resets this.
-- Per client IP, a request that needs at least one upstream fetch takes one of 10 tokens per minute (see `429`). Fully cached requests are never limited.
+- Per client IP, a request takes one of 30 tokens per minute for each distinct uncached leg (a leg and its reverse count once), all or nothing. A request that needs more tokens than remain answers `429` with `Retry-After` and takes none. Cached legs cost nothing, so fully cached requests are never limited.
 - The request query may not exceed 2048 bytes.
 - Data: Copernicus DEM GLO-90 via Open-Meteo. Terrain only; trees and buildings are not modelled.
 

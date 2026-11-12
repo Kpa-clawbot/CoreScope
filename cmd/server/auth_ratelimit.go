@@ -38,6 +38,14 @@ func newRateLimiter(n int, per time.Duration) *rateLimiter {
 // take consumes one token for key. When none is left it reports how long
 // until the next one.
 func (l *rateLimiter) take(key string) (bool, time.Duration) {
+	return l.takeN(key, 1)
+}
+
+// takeN consumes n tokens for key, all or nothing: when fewer than n are left
+// it takes none and reports how long until n are available (never, in effect,
+// when n exceeds the burst). n < 1 takes nothing.
+func (l *rateLimiter) takeN(key string, n int) (bool, time.Duration) {
+	need := float64(n)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -57,11 +65,11 @@ func (l *rateLimiter) take(key string) (bool, time.Duration) {
 	}
 	b.tokens = math.Min(l.burst, b.tokens+now.Sub(b.last).Seconds()*l.rate)
 	b.last = now
-	if b.tokens >= 1 {
-		b.tokens--
+	if b.tokens >= need {
+		b.tokens -= need
 		return true, 0
 	}
-	return false, time.Duration((1 - b.tokens) / l.rate * float64(time.Second))
+	return false, time.Duration((need - b.tokens) / l.rate * float64(time.Second))
 }
 
 // refund gives back one token taken from key (a charge for work that was then

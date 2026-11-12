@@ -88,7 +88,9 @@ const (
 	elevSamePointRadians = 1e-9
 	elevMaxRawQuery      = 2048
 	elevNodeSetTTL       = 60 * time.Second
-	elevIPTokens         = 10
+	// elevIPTokens is the per-client budget in legs per minute; it must cover
+	// one full route (losMaxPoints-1 = 15 legs).
+	elevIPTokens = 30
 )
 
 // elevBackoff is the cooldown after the 1st, 2nd, 3rd... consecutive upstream
@@ -111,14 +113,17 @@ func (s *Server) handleElevationProfile(w http.ResponseWriter, r *http.Request) 
 	}
 	e := s.elevation
 	plans := make([]elevPlan, len(pts)-1)
-	needsFetch := false
+	// The client is charged one token per distinct uncached leg (a leg and
+	// its reverse share a key), all or nothing, so a route cannot spend the
+	// upstream budget at one token per request.
+	uncached := map[string]struct{}{}
 	for i := range plans {
 		plans[i] = e.plan(pts[i], pts[i+1])
 		if plans[i].res.Error == "" && !e.cached(plans[i].key) {
-			needsFetch = true
+			uncached[plans[i].key] = struct{}{}
 		}
 	}
-	if needsFetch && !e.allow(w, r) {
+	if len(uncached) > 0 && !e.allowN(w, r, len(uncached)) {
 		return
 	}
 	legs := make([]ElevationLeg, len(plans))
@@ -250,8 +255,8 @@ type elevationService struct {
 	// nodes lists the known nodes; only their positions are valid leg
 	// endpoints. Nil means none (every leg is unknown_point).
 	nodes func() []nodeInfo
-	// clientLimiter (ipr/rl) is the per-client limit, charged only by
-	// requests that need an upstream fetch; nil ipr or rl disables it.
+	// clientLimiter (ipr/rl) is the per-client limit in legs, charged one
+	// token per distinct uncached leg; nil ipr or rl disables it.
 	clientLimiter
 
 	sf  singleflight.Group
