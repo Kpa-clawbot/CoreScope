@@ -1,5 +1,11 @@
 # Repeater Liveness — Design Spec
 
+> **Archived plan.** Historical planning material; proposals, status claims, and
+> instructions below may be outdated or unimplemented. The proposed `relaying`
+> status and helper signature are not current. For current liveness guidance,
+> see [AGENTS.md](../../AGENTS.md#last_heard-vs-last_seen) and the
+> [status helpers](../../public/roles.js).
+
 **Issue:** Kpa-clawbot/CoreScope#662
 **Date:** 2026-04-15
 **Status:** Approved
