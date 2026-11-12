@@ -107,6 +107,93 @@
   }
   window.NodeAnalyticsTimeline = { series: timelineSeries, fill: fillTimeline };
 
+  // "Heard by observers": one row per fixed observer that heard this node
+  // itself in the window (heardBy from the analytics API).
+  const HEARD_ROWS = 10;
+  const HEARD_CHANGE_DB = 3;
+  const HEARD_SCALE_DB = 20;
+
+  function stripPct(v) {
+    return Math.max(0, Math.min(100, (v + HEARD_SCALE_DB) / (2 * HEARD_SCALE_DB) * 100));
+  }
+
+  function changeCell(recent, earlier) {
+    if (recent == null || earlier == null) return { text: '', cls: '' };
+    const d = recent - earlier;
+    if (Math.abs(d) < HEARD_CHANGE_DB) return { text: '=', cls: '' };
+    return { text: (d > 0 ? '+' : '') + d.toFixed(1), cls: d > 0 ? 'status-ok' : 'status-warn' };
+  }
+
+  function dotClass(median) {
+    if (median == null) return '';
+    if (median >= 0) return 'na-heard-good';
+    if (median >= -10) return 'na-heard-fair';
+    return 'na-heard-weak';
+  }
+
+  function dbText(v) {
+    return v == null ? '' : Number(v).toFixed(1) + ' dB';
+  }
+
+  function heardStrip(r) {
+    if (r.medianSnr == null) return '';
+    const lo = stripPct(r.p10Snr), hi = stripPct(r.p90Snr);
+    return '<div class="na-heard-strip" title="' + escapeHtml('p10 ' + dbText(r.p10Snr) + ', median ' + dbText(r.medianSnr) + ', p90 ' + dbText(r.p90Snr)) + '">' +
+      '<span class="na-heard-zero"></span>' +
+      '<span class="na-heard-range" style="left:' + lo.toFixed(1) + '%;width:' + (hi - lo).toFixed(1) + '%"></span>' +
+      '<span class="na-heard-dot ' + dotClass(r.medianSnr) + '" style="left:' + stripPct(r.medianSnr).toFixed(1) + '%"></span>' +
+      '</div>';
+  }
+
+  function mobileGroup(m, pubkey) {
+    if (!m) return '';
+    const parts = [m.receptions + ' reception' + (m.receptions === 1 ? '' : 's'), m.receivers + ' receiver' + (m.receivers === 1 ? '' : 's')];
+    if (m.medianSnr != null) parts.push('median ' + dbText(m.medianSnr));
+    if (m.maxDistanceKm != null) parts.push('furthest ' + Number(m.maxDistanceKm).toFixed(1) + ' km');
+    return '<details class="na-heard-mobile"><summary>Mobile receptions (' + m.receptions + ')</summary>' +
+      '<div class="na-heard-mobile-row">' + escapeHtml(parts.join(' · ')) +
+      ' · <a href="#/nodes/' + encodeURIComponent(pubkey) + '/reach">Reach</a></div>' +
+      '<div class="analytics-chart-desc">Phones with a companion radio that heard this node directly. Not part of the stats above.</div>' +
+      '</details>';
+  }
+
+  function heardByHtml(data, opts) {
+    const pubkey = opts.pubkey;
+    const rows = data.heardBy || [];
+    const nodeLink = '<a href="#/nodes/' + encodeURIComponent(pubkey) + '?section=node-observers">Heard By, direct</a>';
+    let body;
+    if (!rows.length) {
+      body = '<div class="na-heard-empty">No observer heard this node directly in this window. ' +
+        'Only a zero-hop advert or a flood packet whose last hop names this node with 2 or more bytes, shared with no other node, proves who was heard. ' +
+        'An empty list is missing evidence, not proof of missing coverage.</div>';
+    } else {
+      const shown = opts.showAll ? rows : rows.slice(0, HEARD_ROWS);
+      const withChange = rows.some(r => r.recentMedianSnr != null);
+      body = '<div class="analytics-table-scroll"><table class="na-heard-table">' +
+        '<thead><tr><th scope="col">Observer</th><th scope="col" class="num">Receptions</th>' +
+        '<th scope="col">SNR, -20 to +20 dB (bar p10 to p90, dot median)</th><th scope="col" class="num">Median</th>' +
+        (withChange ? '<th scope="col" class="num" title="Median of the last 24 h minus the median of the rest of the window">24 h change</th>' : '') +
+        '</tr></thead><tbody>' +
+        shown.map(r => {
+          const c = changeCell(r.recentMedianSnr, r.earlierMedianSnr);
+          return '<tr data-testid="heard-by-row">' +
+            '<td><a href="#/observers/' + encodeURIComponent(r.observer_id) + '">' + escapeHtml(r.observer_name || r.observer_id) + '</a></td>' +
+            '<td class="num">' + r.count + '</td>' +
+            '<td class="na-heard-strip-cell">' + heardStrip(r) + '</td>' +
+            '<td class="num">' + dbText(r.medianSnr) + '</td>' +
+            (withChange ? '<td class="num ' + c.cls + '">' + c.text + '</td>' : '') +
+            '</tr>';
+        }).join('') +
+        '</tbody></table></div>' +
+        (rows.length > shown.length ? '<button type="button" class="na-heard-showall" data-action="heard-show-all">Show all ' + rows.length + '</button>' : '');
+    }
+    return body +
+      '<div class="analytics-chart-desc">Same evidence as the node page’s ' + nodeLink + ' table.</div>' +
+      mobileGroup(data.mobileReceptions, pubkey);
+  }
+
+  window.NodeAnalyticsHeardBy = { html: heardByHtml, stripPct, changeCell, dotClass };
+
   async function loadAnalytics(container, pubkey, days) {
     const gen = viewGeneration();
     const seq = ++loadSeq;
@@ -157,7 +244,7 @@
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Signal Grade</div>
             <div class="analytics-stat-value" style="color:${GRADE_COLORS[s.signalGrade]||'var(--text)'}">${s.signalGrade}</div>
-            <div class="analytics-stat-desc">A–F based on average SNR across all observers</div>
+            <div class="analytics-stat-desc">From the median SNR of each observer that heard this node directly; each observer counts once</div>
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Packets / Day</div>
@@ -167,7 +254,7 @@
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Observers</div>
             <div class="analytics-stat-value">${s.uniqueObservers}</div>
-            <div class="analytics-stat-desc">Distinct stations that heard this node</div>
+            <div class="analytics-stat-desc">Fixed observers that heard this node directly</div>
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Relay %</div>
@@ -187,20 +274,15 @@
             <div class="analytics-chart-desc">Packet count per time bucket. Certain: can only be this node. Uncertain: a hop prefix this node shares with others, so possibly another node.</div>
             <canvas id="activityChart" role="img" aria-label="Activity timeline chart"></canvas>
           </div>
-          <div class="analytics-chart-card">
-            <h4>SNR Trend</h4>
-            <div class="analytics-chart-desc">Signal-to-noise ratio over time — higher is better reception</div>
-            <canvas id="snrChart" role="img" aria-label="SNR trend chart"></canvas>
+          <div class="analytics-chart-card full" id="heardByCard">
+            <h4>Heard by observers</h4>
+            <div class="analytics-chart-desc">Fixed observers that received this node's own transmissions in this window, with the spread of their SNR. Relayed copies are left out: they measure the relay, not this node.</div>
+            <div id="heardByBody">${heardByHtml(data, { pubkey: n.public_key })}</div>
           </div>
           <div class="analytics-chart-card">
             <h4>Packet Types</h4>
             <div class="analytics-chart-desc">Breakdown of advert, position, text, and other packet types</div>
             <canvas id="packetTypeChart" role="img" aria-label="Packet types chart"></canvas>
-          </div>
-          <div class="analytics-chart-card">
-            <h4>Observer Coverage</h4>
-            <div class="analytics-chart-desc">Which stations hear this node and how often</div>
-            <canvas id="observerChart" role="img" aria-label="Observer coverage chart"></canvas>
           </div>
           <div class="analytics-chart-card">
             <h4>Hop Distribution</h4>
@@ -248,9 +330,12 @@
 
     // Build charts
     buildActivityChart(data);
-    buildSnrChart(data);
     buildPacketTypeChart(data);
-    buildObserverChart(data);
+    const heardBody = document.getElementById('heardByBody');
+    if (heardBody) heardBody.addEventListener('click', e => {
+      if (!e.target.closest('[data-action="heard-show-all"]')) return;
+      heardBody.innerHTML = heardByHtml(data, { pubkey: n.public_key, showAll: true });
+    });
     buildHopChart(data);
     buildHeatmap(data);
     loadBatteryChart(pubkey, currentDays, isCurrent);
@@ -285,38 +370,6 @@
     charts.push(c);
   }
 
-  function buildSnrChart(data) {
-    const ctx = document.getElementById('snrChart');
-    if (!ctx) return;
-    // Group by observer
-    const byObs = {};
-    data.snrTrend.forEach(p => {
-      const key = p.observer_id || 'unknown';
-      if (!byObs[key]) byObs[key] = { name: p.observer_name || key, points: [] };
-      byObs[key].points.push({ x: new Date(p.timestamp), y: p.snr });
-    });
-    const datasets = Object.values(byObs).map((obs, i) => ({
-      label: obs.name, data: obs.points.map(p => p.y), borderColor: CHART_COLORS[i % CHART_COLORS.length],
-      backgroundColor: 'transparent', pointRadius: 1, borderWidth: 1.5, tension: 0.3
-    }));
-    // Use labels from the observer with most points
-    const longestObs = Object.values(byObs).sort((a, b) => b.points.length - a.points.length)[0];
-    const labels = longestObs ? longestObs.points.map(p => {
-      const d = p.x;
-      return (typeof formatChartAxisLabel === 'function') ? formatChartAxisLabel(d, false) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }) : [];
-    const c = new Chart(ctx, {
-      type: 'line',
-      data: { labels, datasets },
-      options: {
-        responsive: true,
-        scales: { x: { display: false }, y: { title: { display: true, text: 'SNR (dB)' } } },
-        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } }
-      }
-    });
-    charts.push(c);
-  }
-
   function buildPacketTypeChart(data) {
     const ctx = document.getElementById('packetTypeChart');
     if (!ctx) return;
@@ -328,25 +381,6 @@
         datasets: [{ data: items.map(i => i.count), backgroundColor: items.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]) }]
       },
       options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } } }
-    });
-    charts.push(c);
-  }
-
-  function buildObserverChart(data) {
-    const ctx = document.getElementById('observerChart');
-    if (!ctx) return;
-    const obs = data.observerCoverage;
-    const c = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: obs.map(o => (o.observer_name || o.observer_id || '?').slice(0, 20)),
-        datasets: [{ label: 'Packets', data: obs.map(o => o.packetCount), backgroundColor: obs.map(o => {
-          const snr = o.avgSnr || 0;
-          const alpha = Math.min(1, Math.max(0.3, snr / 20));
-          return `rgba(74,158,255,${alpha})`;
-        }) }]
-      },
-      options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }
     });
     charts.push(c);
   }
