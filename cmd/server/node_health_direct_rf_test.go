@@ -111,7 +111,8 @@ func BenchmarkBuildDirectHeardIndex(b *testing.B) {
 	for i := 0; i < txCount; i++ {
 		obsList := make([]*StoreObs, 0, perTx)
 		for j := 0; j < perTx; j++ {
-			obsList = append(obsList, &StoreObs{ObserverID: "obs", PathJSON: path})
+			snr := float64((i+j)%40) - 20
+			obsList = append(obsList, &StoreObs{ObserverID: "obs", PathJSON: path, SNR: &snr, Timestamp: benchObsTime(i*perTx + j)})
 		}
 		packets = append(packets, &StoreTx{
 			RouteType:    &routeFlood,
@@ -124,6 +125,11 @@ func BenchmarkBuildDirectHeardIndex(b *testing.B) {
 		_ = buildDirectHeardIndex(packets, pm)
 	}
 	_ = hopCount
+}
+
+// benchObsTime spreads benchmark observations over 7 days, one every 0.2 s.
+func benchObsTime(i int) string {
+	return time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * 200 * time.Millisecond).Format(time.RFC3339)
 }
 
 func hexDigit(v int) byte {

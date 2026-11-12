@@ -3,6 +3,7 @@ package main
 import (
 	"strconv"
 	"testing"
+	"time"
 )
 
 // Coverage for the direct-RF attribution rule behind the node detail
@@ -384,7 +385,8 @@ func BenchmarkBuildDirectHeardIndex_MixedHops(b *testing.B) {
 			tx = dhTx(RouteFlood, PayloadTXT_MSG, "")
 		}
 		for j := 0; j < 10; j++ {
-			tx.Observations = append(tx.Observations, &StoreObs{ObserverID: "obs" + strconv.Itoa(j), PathJSON: path})
+			snr := float64((i+j)%40) - 20
+			tx.Observations = append(tx.Observations, &StoreObs{ObserverID: "obs" + strconv.Itoa(j), PathJSON: path, SNR: &snr, Timestamp: benchObsTime(i*10 + j)})
 		}
 		packets = append(packets, tx)
 	}
@@ -422,5 +424,52 @@ func TestDirectHeardNode_RetiredPrefixCreditsNobody(t *testing.T) {
 	}
 	if got := directHeardNode(tx, &StoreObs{ObserverID: "obs1", PathJSON: `["66","BB1122"]`}, pm); got != dhUnique {
 		t.Fatalf("directHeardNode = %q, want %q: the 3-byte hop is not retired", got, dhUnique)
+	}
+}
+
+// TestBuildDirectHeardIndex_HoursAndRecent: the pass keeps hourly SNR
+// histograms and a ring of the newest receptions per (node, observer).
+func TestBuildDirectHeardIndex_HoursAndRecent(t *testing.T) {
+	pm := buildPrefixMap(directHeardNodes)
+	h := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	snr := func(v float64) *float64 { return &v }
+	mk := func(at time.Time, s *float64) *StoreTx {
+		tx := dhTx(RouteFlood, PayloadTXT_MSG, "")
+		tx.Observations = []*StoreObs{{ObserverID: "obs1", PathJSON: `["BB11"]`, SNR: s, Timestamp: at.Format(time.RFC3339)}}
+		return tx
+	}
+	packets := []*StoreTx{
+		mk(h.Add(5*time.Minute), snr(-4.5)),
+		mk(h.Add(10*time.Minute), snr(-4.5)),
+		mk(h.Add(70*time.Minute), snr(2)),
+		mk(h.Add(80*time.Minute), nil),
+	}
+	agg := buildDirectHeardIndex(packets, pm)[dhUnique]["obs1"]
+	if agg == nil {
+		t.Fatal("no aggregate for obs1")
+	}
+	if len(agg.Hours) != 2 {
+		t.Fatalf("hours = %d, want 2", len(agg.Hours))
+	}
+	var n uint32
+	var hist snrHist
+	for _, x := range agg.Hours {
+		n += x.N
+		hist.addHour(x)
+	}
+	if n != 4 || hist.total != 3 {
+		t.Fatalf("receptions %d (want 4), SNR samples %d (want 3)", n, hist.total)
+	}
+	if len(agg.Recent) != 4 || agg.Recent[3].T != uint32(h.Add(80*time.Minute).Unix()) {
+		t.Fatalf("recent = %+v, want 4 entries, newest last", agg.Recent)
+	}
+
+	packets = packets[:0]
+	for i := 0; i < 600; i++ {
+		packets = append(packets, mk(h.Add(time.Duration(i)*time.Second), snr(1)))
+	}
+	agg = buildDirectHeardIndex(packets, pm)[dhUnique]["obs1"]
+	if len(agg.Recent) != heardRecentMax || agg.Recent[0].T != uint32(h.Add(100*time.Second).Unix()) || agg.Recent[len(agg.Recent)-1].T != uint32(h.Add(599*time.Second).Unix()) {
+		t.Fatalf("ring holds %d entries from %d to %d, want the newest 500", len(agg.Recent), agg.Recent[0].T, agg.Recent[len(agg.Recent)-1].T)
 	}
 }
