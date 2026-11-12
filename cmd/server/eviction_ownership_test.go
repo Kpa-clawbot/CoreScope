@@ -236,6 +236,59 @@ func TestPathHopRemovalReleasesTail(t *testing.T) {
 	}
 }
 
+func TestEvictionCopiesOnlyAffectedDistanceArrays(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		hopsAffected  bool
+		pathsAffected bool
+	}{
+		{name: "neither"},
+		{name: "hops-only", hopsAffected: true},
+		{name: "paths-only", pathsAffected: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			s := makeTestStore(4, now.Add(-30*time.Minute), 0)
+			s.retentionHours = 1
+			s.packets[0].FirstSeen = now.Add(-2 * time.Hour).Format(time.RFC3339)
+			wantHops := slices.Clone(s.distHops[1:])
+			wantPaths := slices.Clone(s.distPaths[1:])
+			if tc.hopsAffected {
+				// Removals may follow a live prefix and occur more than once.
+				s.distHops = []distHopRecord{s.distHops[1], s.distHops[0], s.distHops[2], s.distHops[0], s.distHops[3]}
+			} else {
+				s.distHops = slices.Clone(wantHops)
+			}
+			if tc.pathsAffected {
+				s.distPaths = []distPathRecord{s.distPaths[1], s.distPaths[2], s.distPaths[3], s.distPaths[0]}
+			} else {
+				s.distPaths = slices.Clone(wantPaths)
+			}
+
+			s.mu.RLock()
+			hops, paths := s.snapshotDistanceIndexLocked()
+			s.mu.RUnlock()
+			beforeHops, beforePaths := slices.Clone(hops), slices.Clone(paths)
+			if got := s.RunEviction(); got != 1 {
+				t.Fatalf("evicted %d packets, want 1", got)
+			}
+			if !reflect.DeepEqual(s.distHops, wantHops) || !reflect.DeepEqual(s.distPaths, wantPaths) {
+				t.Fatal("eviction did not preserve the surviving distance records")
+			}
+			if !reflect.DeepEqual(hops, beforeHops) || !reflect.DeepEqual(paths, beforePaths) {
+				t.Error("eviction modified a distance snapshot borrowed by an unlocked reader")
+			}
+			// Equal contents alone would miss an unnecessary full-array allocation.
+			if !tc.hopsAffected && &s.distHops[0] != &hops[0] {
+				t.Error("eviction copied the unaffected distance hop array")
+			}
+			if !tc.pathsAffected && &s.distPaths[0] != &paths[0] {
+				t.Error("eviction copied the unaffected distance path array")
+			}
+		})
+	}
+}
+
 func TestEvictionPreservesDistanceSnapshots(t *testing.T) {
 	for _, operation := range []string{"eviction", "path-update"} {
 		t.Run(operation, func(t *testing.T) {
