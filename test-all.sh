@@ -87,6 +87,7 @@ node tests/unit/test-issue-1418-cb-preset-ramp.js
 node tests/unit/test-issue-1418-deeplink-hops-channels.js
 node tests/unit/test-map-deeplink-path-params.js
 node tests/unit/test-los.js
+node tests/unit/test-los-panel.js
 node tests/unit/test-route-view-ux-hints.js
 node tests/unit/test-route-los.js
 node tests/unit/test-planner-los-vectors.js

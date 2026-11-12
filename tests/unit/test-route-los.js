@@ -1,7 +1,7 @@
 /**
- * Line of sight on the map route view: loads the REAL public/los.js and
- * public/route-los.js in a vm context with a stub window, a minimal fake DOM,
- * a stub Leaflet and a stub fetch.
+ * Line of sight on the map route view: loads the REAL public/los.js,
+ * public/los-panel.js and public/route-los.js in a vm context with a stub
+ * window, a minimal fake DOM, a stub Leaflet and a stub fetch.
  *
  * Covers the pure helpers (_internals), the update() flow (no fetch while
  * disabled, waiting on MeshConfigReady, one request per contiguous run,
@@ -23,6 +23,7 @@ function assert(cond, msg) {
 }
 const read = f => fs.readFileSync(path.join(REPO_ROOT, 'public', f), 'utf8');
 const LOS_SRC = read('los.js');
+const PANEL_SRC = read('los-panel.js');
 const RLOS_SRC = read('route-los.js');
 const flush = (ms = 15) => new Promise(r => setTimeout(r, ms));
 
@@ -255,6 +256,7 @@ function load(opts) {
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(LOS_SRC, ctx);
+  vm.runInContext(PANEL_SRC, ctx);
   vm.runInContext(RLOS_SRC, ctx);
   return { ctx, R: ctx.MeshRouteLOS, I: ctx.MeshRouteLOS._internals, made, warnings, replaced, store };
 }
@@ -291,7 +293,6 @@ async function main() {
       body: I.panelBodyHtml(leg, an, null),
       bodyError: I.panelBodyHtml(leg, null, { error: 'upstream' }),
       bodyLoading: I.panelBodyHtml(leg, null, null),
-      meta: I.metaHtml(leg, an, null),
       readout: I.readoutHtml(leg, an, 50)
     };
     // Escaped text still contains " onerror=" as characters, so check structure:
@@ -710,12 +711,11 @@ async function main() {
     assert(f.calls.length === 2 && ptsOf(f.calls[0]).length === 16 && ptsOf(f.calls[1]).length === 5,
       '19 legs, maxPoints 16 → 2 requests of 16 + 5 points');
     await flush();
-    for (let i = 0; i < t.I.CACHE_MAX + 20; i++) {
-      t.I.cache.set('k' + i, {});
-      while (t.I.cache.size > t.I.CACHE_MAX) t.I.cache.delete(t.I.cache.keys().next().value);
-    }
-    assert(/var CACHE_MAX = 300;/.test(RLOS_SRC) && /while \(cache\.size >= CACHE_MAX\) cache\.delete\(cache\.keys\(\)\.next\(\)\.value\);/.test(RLOS_SRC),
-      'cache is capped at 300 entries, oldest evicted first');
+    const cached = t.I.cache.size();
+    assert(cached === 19, '19 legs cached (got ' + cached + ')');
+    for (let i = 0; i < t.I.CACHE_MAX + 20; i++) t.I.cache.put('k' + i, {});
+    assert(t.I.CACHE_MAX === 300 && t.I.cache.size() === 300, 'cache is capped at 300 entries');
+    assert(!t.I.cache.has('k19') && t.I.cache.has('k20') && t.I.cache.has('k319'), '...the oldest evicted first');
   }
 
   console.log('\n=== update(): row/seq mismatch, settings ===');

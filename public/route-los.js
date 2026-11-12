@@ -8,10 +8,13 @@
  * whose chart drives a crosshair on the map; its antenna and frequency inputs
  * re-analyse every leg locally, with no refetch.
  *
- * The maths and the SVG live in los.js (window.MeshLOS). This file owns the
- * fetching, caching and UI. Inert while window.MC_LOS_CFG is null (the server
- * has LOS off). route-view.js calls update() whenever its rows change and
- * clear() on teardown. Exposes window.MeshRouteLOS.
+ * The maths and the SVG live in los.js (window.MeshLOS); the panel shell, the
+ * profile markup, the crosshair and the leg cache in los-panel.js
+ * (window.MeshLOSPanel, shared with the planner). This file owns the
+ * fetching, the chips and markers, and its own wording. Inert while
+ * window.MC_LOS_CFG is null (the server has LOS off). route-view.js calls
+ * update() whenever its rows change and clear() on teardown. Exposes
+ * window.MeshRouteLOS.
  */
 (function () {
   'use strict';
@@ -22,8 +25,6 @@
   var POLL_MAX_S = 10;
   var MAX_POLLS = 30;           // re-polls of one request before it reads as unavailable
   var DEFAULT_MAX_POINTS = 16;
-  var MOBILE_MAX_W = 767;
-  var SPRITE = '/icons/phosphor-sprite.svg';
   var LS_KEYS = { antA: 'mc-los-ant-a', antB: 'mc-los-ant-b', freq: 'mc-los-freq' };
   var LIMITS = { antA: [0, 300], antB: [0, 300], freq: [100, 6000] };
   var FIELD_ERRORS = {
@@ -44,10 +45,13 @@
   // Errors worth a manual retry (never retried automatically).
   var RETRYABLE = { upstream: true, rate_limited: true };
 
+  var UI = window.MeshLOSPanel;
+  var esc = UI.esc, fmtKm = UI.fmtKm, fmtObstruction = UI.fmtObstruction;
+
   // Leg results keyed by both endpoints, direction-aware. Only terrain
   // (elev_m) and the deterministic too_long and no_terrain errors are cached:
   // any other error is retried by the next update().
-  var cache = new Map();
+  var cache = UI.createLRU(CACHE_MAX);
   var inflight = new Map(); // key -> Promise<result>, so a refetch never doubles up
 
   var S = {
@@ -59,7 +63,8 @@
     source: null,     // terrain attribution from the last response
     open: null,       // { idx, key } of the leg shown in the panel
     panel: null, legLine: null, cursorMarker: null,
-    cursorT: null, ptr: null, rafId: 0, debounce: 0,
+    crosshair: null,  // MeshLOSPanel.bindCrosshair() handle of the panel
+    cursorT: null, debounce: 0,
     pendingLos: null, // &los= row index waiting for its leg's data
     sheetCollapsed: false,
     cfgWaiting: false, cfgWaited: false, waitCtx: null,
@@ -67,21 +72,6 @@
   };
 
   // ─── Pure helpers (exported via _internals for tests) ───────────────────
-
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
-
-  function fmtKm(km) {
-    var d = Number(km);
-    if (!isFinite(d)) return '?';
-    return d < 10 ? d.toFixed(2) : d < 100 ? d.toFixed(1) : String(Math.round(d));
-  }
-
-  // Whole metres, never "0 m" for a real (positive) obstruction.
-  function fmtObstruction(m) { return String(Math.max(1, Math.round(m))); }
 
   // Fresnel clearance ratio as text. Below zero the terrain is above the
   // line itself, where a percentage of the zone means nothing.
@@ -204,7 +194,7 @@
 
   function errorReason(r) {
     if (r.error === 'too_long') {
-      return 'Too far for a terrain check' + (r.distanceKm != null ? ' (' + fmtKm(r.distanceKm) + ' km)' : '');
+      return 'Too far for a terrain check' + (r.distanceKm != null ? ' (' + fmtKm(r.distanceKm) + ')' : '');
     }
     return ERROR_REASONS[r.error] || ERROR_REASONS.upstream;
   }
@@ -241,7 +231,7 @@
     var ant = ' at ' + antennaNote(an);
     if (an.verdict === 'blocked') {
       var head = an.obstructionM > 0
-        ? 'terrain ' + fmtObstruction(an.obstructionM) + ' m above the line' + ant
+        ? 'terrain ' + fmtObstruction(an.obstructionM) + ' above the line' + ant
         : 'terrain in path' + ant;
       return head + '. ' + HEARD_ANYWAY;
     }
@@ -260,8 +250,8 @@
   function markerText(an, nameA) {
     var ant = ' at ' + antennaNote(an);
     if (an.obstructionM > 0) {
-      return 'Terrain ' + fmtObstruction(an.obstructionM) + ' m above line of sight' + ant + ', ' +
-        fmtKm(an.worstKm) + ' km from ' + nameA + '. Heard on this hop anyway.';
+      return 'Terrain ' + fmtObstruction(an.obstructionM) + ' above line of sight' + ant + ', ' +
+        fmtKm(an.worstKm) + ' from ' + nameA + '. Heard on this hop anyway.';
     }
     return 'Fresnel zone ' + Math.round(an.clearance * 100) + '% clear' + ant;
   }
@@ -307,21 +297,7 @@
     return out;
   }
 
-  // ─── Cache + fetch ──────────────────────────────────────────────────────
-
-  function cacheGet(key) {
-    if (!cache.has(key)) return null;
-    var v = cache.get(key);
-    cache.delete(key); // LRU bump
-    cache.set(key, v);
-    return v;
-  }
-
-  function cachePut(key, v) {
-    if (cache.has(key)) cache.delete(key);
-    while (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
-    cache.set(key, v);
-  }
+  // ─── Fetch ──────────────────────────────────────────────────────────────
 
   // Seconds to wait before re-polling a 202 body.
   function pollDelayS(body) {
@@ -395,7 +371,7 @@
       req.legs.forEach(function (leg, i) {
         var one = all.then(function (results) {
           var res = results[i] || { error: 'upstream' };
-          if (isCacheable(res)) cachePut(leg.key, res);
+          if (isCacheable(res)) cache.put(leg.key, res);
           inflight.delete(leg.key);
           return res;
         });
@@ -512,29 +488,16 @@
     var tone = chipTone(an);
     if (tone !== 'warn' && tone !== 'bad') return;
     var ll = window.MeshLOS.intermediatePoint(leg.a, leg.b, an.worstT);
-    var text = markerText(an, leg.nameA);
-    var icon = L.divIcon({
-      className: 'mc-los-obstruction mc-los-tone-' + tone,
-      html: '<svg class="ph-icon" aria-hidden="true"><use href="' + SPRITE + '#ph-warning"/></svg>',
-      iconSize: [28, 28],
-      iconAnchor: [14, 14]
-    });
-    var mk = L.marker([ll.lat, ll.lon], { icon: icon, keyboard: true, riseOnHover: true, zIndexOffset: 400 });
-    mk.bindTooltip(esc(text), { direction: 'top', offset: [0, -16] });
-    mk.on('click', function () { openPanel(leg.idx, { focus: true }); });
-    mk.addTo(S.layer);
-    var el = mk.getElement && mk.getElement();
-    if (el) el.setAttribute('aria-label', text + '. Show terrain profile');
-    leg.marker = mk;
+    leg.marker = UI.obstructionMarker(ll, tone, markerText(an, leg.nameA), {
+      onClick: function () { openPanel(leg.idx, { focus: true }); }
+    }).addTo(S.layer);
   }
 
   function drawLegLine(leg) {
     removeFromLayer(S.legLine);
     S.legLine = null;
     if (!leg || !S.layer) return;
-    S.legLine = L.polyline([[leg.a.lat, leg.a.lon], [leg.b.lat, leg.b.lon]], {
-      className: 'mc-los-leg-active', weight: 4, opacity: 1, dashArray: '10 8', interactive: false
-    }).addTo(S.layer);
+    S.legLine = UI.legLine(leg.a, leg.b).addTo(S.layer);
   }
 
   // ─── Analysis ───────────────────────────────────────────────────────────
@@ -594,15 +557,11 @@
     } catch (e) { /* history unavailable */ }
   }
 
-  function raf(fn) {
-    return typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame(fn) : setTimeout(fn, 16);
-  }
-
   // Deferred a frame so a deep-linked path isolation queued by render() wins.
   function schedulePending() {
     if (S.pendingLos == null) return;
     var gen = S.gen;
-    raf(function () {
+    UI.raf(function () {
       if (gen !== S.gen || S.pendingLos == null) return;
       var leg = legByIdx(S.pendingLos);
       if (!leg) {
@@ -616,10 +575,6 @@
 
   // ─── Panel ──────────────────────────────────────────────────────────────
 
-  function icon(name) {
-    return '<svg class="ph-icon" aria-hidden="true"><use href="' + SPRITE + '#' + name + '"/></svg>';
-  }
-
   function field(name, label, min, max, step) {
     return '<div class="mc-los-field">' +
       '<label for="mc-los-in-' + name + '">' + label + '</label>' +
@@ -629,45 +584,26 @@
   }
 
   function buildPanel() {
-    var el = document.createElement('div');
-    el.className = 'mc-los-panel';
-    el.setAttribute('role', 'dialog');
-    el.setAttribute('aria-label', 'Line of sight');
-    el.tabIndex = -1;
-    el.innerHTML =
-      '<div class="mc-los-head">' +
-        '<h2 class="mc-los-title"></h2>' +
-        '<div class="mc-los-nav">' +
-          '<button type="button" class="mc-los-btn mc-los-prev" aria-label="Previous link">' + icon('ph-caret-left') + '</button>' +
-          '<span class="mc-los-pos"></span>' +
-          '<button type="button" class="mc-los-btn mc-los-next" aria-label="Next link">' + icon('ph-caret-right') + '</button>' +
-          '<button type="button" class="mc-los-btn mc-los-close" aria-label="Close line of sight">' + icon('ph-x') + '</button>' +
-        '</div>' +
-      '</div>' +
-      '<div class="mc-los-body"></div>' +
-      '<div class="mc-los-controls">' +
-        field('antA', 'Antenna A (m)', 0, 300, 0.5) +
-        field('antB', 'Antenna B (m)', 0, 300, 0.5) +
-        field('freq', 'Frequency (MHz)', 100, 6000, 'any') +
-        '<div class="mc-los-field mc-los-k" title="Effective Earth-radius factor for refraction, set by the server">' +
-          '<span class="mc-los-k-label">k-factor</span><span class="mc-los-k-val"></span>' +
-        '</div>' +
-        '<button type="button" class="mc-los-reset" title="Reset antenna heights and frequency to the server defaults">Reset</button>' +
-        '<p class="mc-los-input-err" id="mc-los-input-err" aria-live="polite"></p>' +
-      '</div>' +
-      '<p class="mc-los-foot"></p>';
-
-    el.querySelector('.mc-los-prev').addEventListener('click', function () { step(-1); });
-    el.querySelector('.mc-los-next').addEventListener('click', function () { step(1); });
-    el.querySelector('.mc-los-close').addEventListener('click', function () { closePanel({ restoreFocus: true }); });
-    el.querySelector('.mc-los-reset').addEventListener('click', resetSettings);
-    el.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        e.preventDefault();
-        closePanel({ restoreFocus: true });
-      }
+    var close = function () { closePanel({ restoreFocus: true }); };
+    var el = UI.buildPanel({
+      ariaLabel: 'Line of sight',
+      prevLabel: 'Previous link', nextLabel: 'Next link', closeLabel: 'Close line of sight',
+      bodyHtml: '<div class="mc-los-body"></div>' +
+        '<div class="mc-los-controls">' +
+          field('antA', 'Antenna A (m)', 0, 300, 0.5) +
+          field('antB', 'Antenna B (m)', 0, 300, 0.5) +
+          field('freq', 'Frequency (MHz)', 100, 6000, 'any') +
+          '<div class="mc-los-field mc-los-k" title="Effective Earth-radius factor for refraction, set by the server">' +
+            '<span class="mc-los-k-label">k-factor</span><span class="mc-los-k-val"></span>' +
+          '</div>' +
+          '<button type="button" class="mc-los-reset" title="Reset antenna heights and frequency to the server defaults">Reset</button>' +
+          '<p class="mc-los-input-err" id="mc-los-input-err" aria-live="polite"></p>' +
+        '</div>',
+      onStep: step,
+      onClose: close,
+      onEscape: close
     });
+    el.querySelector('.mc-los-reset').addEventListener('click', resetSettings);
     Array.prototype.forEach.call(el.querySelectorAll('input[data-los-field]'), function (inp) {
       inp.value = String(S.settings[inp.getAttribute('data-los-field')]);
       inp.addEventListener('input', function () {
@@ -677,46 +613,21 @@
       inp.addEventListener('change', function () { clearTimeout(S.debounce); applyInputs(true); });
     });
     el.querySelector('.mc-los-k-val').textContent = (Math.round(kFactor() * 100) / 100).toFixed(2);
-    // Clicks, drags and wheel inside the panel must not pan or zoom the map.
-    if (L.DomEvent) {
-      L.DomEvent.disableClickPropagation(el);
-      L.DomEvent.disableScrollPropagation(el);
-    }
     return el;
   }
 
-  function metaHtml(leg, an, st) {
-    var km = an ? an.distanceKm : (leg.result && leg.result.distanceKm != null ? leg.result.distanceKm : legKm(leg));
-    var items = [
-      '<span title="Link length">' + fmtKm(km) + ' km</span>',
-      '<span title="Bearing from ' + esc(leg.nameA) + '">' + (Math.round(window.MeshLOS.bearingDeg(leg.a, leg.b)) % 360) + '°</span>'
-    ];
-    if (an) {
-      items.push('<span title="Free-space path loss">FSPL ' + an.fsplDb.toFixed(1) + ' dB</span>');
-      items.push('<span title="Worst clearance of the first Fresnel zone">F1 clearance ' + fmtClearance(an.clearance) + '</span>');
-    }
-    var pill;
-    if (an) {
-      var v = verdicts()[an.verdict];
-      var blk = an.verdict === 'blocked';
-      pill = '<span class="mc-los-pill mc-los-tone-' + chipTone(an) + '" title="' +
-        esc(blk ? v.detail + ' ' + HEARD_ANYWAY : v.detail) + '">' + esc(blk ? SOFT_BLOCKED : v.label) + '</span>';
-    } else {
-      pill = '<span class="mc-los-pill mc-los-tone-muted' + (st ? '' : ' mc-los-loading') + '">' + (st ? 'n/a' : 'Checking…') + '</span>';
-    }
-    return '<p class="mc-los-meta">' + items.join('<span class="mc-los-sep" aria-hidden="true">·</span>') + pill + '</p>';
+  // The verdict pill; a blocked leg keeps the soft wording (see SOFT_BLOCKED).
+  function pillFor(an) {
+    var v = verdicts()[an.verdict];
+    var blk = an.verdict === 'blocked';
+    return { tone: chipTone(an), label: blk ? SOFT_BLOCKED : v.label, title: blk ? v.detail + ' ' + HEARD_ANYWAY : v.detail };
   }
 
-  function chartStateHtml(leg, st) {
-    if (!st) {
-      return '<div class="mc-los-chart-state" role="status">Loading terrain profile…</div>';
-    }
+  // Contents of the chart box for a failed leg (st: its error result).
+  function chartErrorFor(st) {
     var retry = RETRYABLE[st.error]
       ? '<button type="button" class="mc-los-retry">Try again</button>' : '';
-    return '<div class="mc-los-chart-state mc-los-chart-error" role="status">' +
-      '<strong>No terrain profile for this link</strong>' +
-      '<span>' + esc(errorReason(st)) + '.</span>' + retry +
-      '</div>';
+    return UI.chartErrorHtml('No terrain profile for this link', errorReason(st), retry);
   }
 
   var READOUT_HINT = 'Move along the profile to read the terrain at each point';
@@ -727,25 +638,26 @@
   }
 
   // The panel body. Every node-controlled string (leg.nameA/nameB) goes
-  // through esc() here or in MeshLOS.renderProfileSvg; test-route-los.js
-  // renders hostile names through this and asserts they stay inert.
+  // through esc() here, in MeshLOSPanel or in MeshLOS.renderProfileSvg;
+  // test-route-los.js renders hostile names through this and asserts they
+  // stay inert.
   function panelTitleHtml(leg) {
     return 'Line of sight <span aria-hidden="true">·</span> <span class="mc-los-ends">' +
       esc(leg.nameA) + ' → ' + esc(leg.nameB) + '</span>';
   }
 
   function panelBodyHtml(leg, an, st) {
-    var body = metaHtml(leg, an, st);
-    if (an && an.obstructionM > 0) {
-      body += '<p class="mc-los-obst">Terrain rises ' + fmtObstruction(an.obstructionM) +
-        ' m above the line of sight ' + fmtKm(an.worstKm) + ' km from ' + esc(leg.nameA) + '.</p>';
-    }
-    // Loading reserves the chart's full box; an error needs far less room.
-    body += '<div class="mc-los-chart' + (an ? '' : st ? ' mc-los-chart-err' : ' mc-los-chart-wait') + '">' +
-      (an ? window.MeshLOS.renderProfileSvg(an, { nameA: leg.nameA, nameB: leg.nameB }) : chartStateHtml(leg, st)) +
-      '</div>';
-    if (an) body += '<p class="mc-los-readout">' + READOUT_HINT + '</p>';
-    return body;
+    return UI.profileHtml({
+      an: an,
+      km: leg.result && leg.result.distanceKm != null ? leg.result.distanceKm : legKm(leg),
+      nameA: leg.nameA,
+      nameB: leg.nameB,
+      meta: ['<span title="Bearing from ' + esc(leg.nameA) + '">' + (Math.round(window.MeshLOS.bearingDeg(leg.a, leg.b)) % 360) + '°</span>'],
+      clearance: an ? 'F1 clearance ' + fmtClearance(an.clearance) : '',
+      pill: an ? pillFor(an) : null,
+      error: an || !st ? null : chartErrorFor(st),
+      hint: READOUT_HINT
+    });
   }
 
   function renderPanel() {
@@ -753,27 +665,16 @@
     var p = S.panel;
     if (!leg || !p) return;
     var an = leg.analysis, st = legState(leg);
-    var pos = S.legs.indexOf(leg);
     var title = p.querySelector('.mc-los-title');
     title.innerHTML = panelTitleHtml(leg);
     title.title = leg.nameA + ' → ' + leg.nameB;
     p.setAttribute('aria-label', 'Line of sight from ' + leg.nameA + ' to ' + leg.nameB);
-    var many = S.legs.length > 1;
-    p.querySelector('.mc-los-nav').classList.toggle('mc-los-single', !many);
-    p.querySelector('.mc-los-prev').disabled = pos <= 0;
-    p.querySelector('.mc-los-next').disabled = pos >= S.legs.length - 1;
-    p.querySelector('.mc-los-pos').textContent = many ? 'Link ' + (pos + 1) + ' of ' + S.legs.length : '';
+    UI.setNav(p, S.legs.indexOf(leg), S.legs.length, 'Link');
 
     p.querySelector('.mc-los-body').innerHTML = panelBodyHtml(leg, an, st);
 
     var retryBtn = p.querySelector('.mc-los-retry');
     if (retryBtn) retryBtn.addEventListener('click', retry);
-    var hit = p.querySelector('.mc-los-hit');
-    if (hit) {
-      hit.addEventListener('pointermove', onPointer);
-      hit.addEventListener('pointerdown', onPointer);
-      hit.addEventListener('pointerleave', onPointerLeave);
-    }
     p.querySelector('.mc-los-foot').textContent = footText(S.source);
 
     S.legs.forEach(function (l) {
@@ -788,28 +689,31 @@
     var container = S.map && S.map.getContainer ? S.map.getContainer() : null;
     if (!container) return null;
     if (S.panel && S.panel.parentNode === container) return S.panel;
-    if (S.panel && S.panel.parentNode) S.panel.parentNode.removeChild(S.panel);
+    if (S.crosshair) S.crosshair.cancel();
+    UI.unmountPanel(S.panel);
     S.panel = buildPanel();
-    container.appendChild(S.panel);
+    S.crosshair = UI.bindCrosshair(S.panel, {
+      move: function (_, t) { setCursorT(t); },
+      leave: function () {
+        S.cursorT = null;
+        if (S.panel) UI.hideChartCursor(S.panel, READOUT_HINT);
+        hideMapCursor();
+      }
+    });
+    UI.mountPanel(S.panel, container);
     return S.panel;
   }
-
-  function isMobile() { return window.innerWidth <= MOBILE_MAX_W; }
 
   // On a phone the route sidebar is a bottom sheet that, expanded, leaves the
   // map a strip. Collapse it (through its own handle) while the panel is open.
   function collapseSheet() {
     var sb = S.sidebar;
-    if (!isMobile() || !sb || !sb.classList.contains('mc-rt-mobile-expanded')) return false;
+    if (!UI.isMobile() || !sb || !sb.classList.contains('mc-rt-mobile-expanded')) return false;
     var handle = sb.querySelector('.mc-rt-mobile-handle');
     if (!handle) return false;
     handle.click();
     S.sheetCollapsed = true;
     return true;
-  }
-
-  function reducedMotion() {
-    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
   }
 
   // Fit the leg into the map area the panel leaves free.
@@ -823,15 +727,7 @@
       return;
     }
     try {
-      var size = map.getSize();
-      var ph = S.panel.offsetHeight || 0;
-      var pad = Math.max(0, Math.min(ph + 24, size.y - 120));
-      var opts = isMobile()
-        ? { paddingTopLeft: [24, pad + 16], paddingBottomRight: [24, 24] }
-        : { paddingTopLeft: [48, 48], paddingBottomRight: [48, pad + 40] };
-      opts.maxZoom = 14;
-      opts.animate = !reducedMotion();
-      map.fitBounds(L.latLngBounds([[leg.a.lat, leg.a.lon], [leg.b.lat, leg.b.lon]]), opts);
+      map.fitBounds(L.latLngBounds([[leg.a.lat, leg.a.lon], [leg.b.lat, leg.b.lon]]), UI.fitOptions(map, S.panel));
     } catch (e) { console.warn('[route-los] fit:', e); }
   }
 
@@ -843,7 +739,6 @@
     if (!ensurePanel()) return;
     S.open = { idx: leg.idx, key: leg.key };
     S.cursorT = null;
-    S.map.getContainer().classList.add('mc-los-open');
     document.body.classList.add('mc-los-panel-open');
     renderPanel();
     writeLosParam(leg.idx);
@@ -866,9 +761,6 @@
     renderPanel();
     writeLosParam(next.idx);
     fitLeg(next);
-    // Stepping onto the last link disables the button that had focus.
-    var active = document.activeElement;
-    if (active && active.disabled && S.panel) S.panel.focus({ preventScroll: true });
   }
 
   function closePanel(opts) {
@@ -877,15 +769,13 @@
     var wasOpen = !!S.open;
     S.open = null;
     S.cursorT = null;
-    cancelCursorFrame();
+    if (S.crosshair) S.crosshair.cancel();
+    S.crosshair = null;
     removeFromLayer(S.legLine);
     removeFromLayer(S.cursorMarker);
     S.legLine = null;
     S.cursorMarker = null;
-    if (S.panel && S.panel.parentNode) {
-      if (S.panel.parentNode.classList) S.panel.parentNode.classList.remove('mc-los-open');
-      S.panel.parentNode.removeChild(S.panel);
-    }
+    UI.unmountPanel(S.panel);
     S.panel = null;
     if (document.body) document.body.classList.remove('mc-los-panel-open');
     S.legs.forEach(function (l) { if (l.chip) l.chip.setAttribute('aria-expanded', 'false'); });
@@ -949,90 +839,21 @@
     reanalyzeAll();
   }
 
-  // ─── Chart ↔ map crosshair ──────────────────────────────────────────────
-
-  function onPointer(e) {
-    S.ptr = { x: e.clientX };
-    if (!S.rafId) S.rafId = raf(drawCursorFromPointer);
-  }
-
-  function onPointerLeave(e) {
-    // A touch ends with pointerleave; keep the last reading on screen.
-    if (e.pointerType === 'touch') return;
-    S.cursorT = null;
-    cancelCursorFrame();
-    hideChartCursor();
-    hideMapCursor();
-  }
-
-  function cancelCursorFrame() {
-    if (S.rafId) {
-      if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(S.rafId);
-      else clearTimeout(S.rafId);
-    }
-    S.rafId = 0;
-    S.ptr = null;
-  }
-
-  function drawCursorFromPointer() {
-    S.rafId = 0;
-    var svg = S.panel && S.panel.querySelector('.mc-los-svg');
-    if (!svg || !S.ptr) return;
-    var rect = svg.getBoundingClientRect();
-    if (!rect.width) return;
-    var x = (S.ptr.x - rect.left) / rect.width * window.MeshLOS.PLOT.W;
-    setCursorT(window.MeshLOS.tAtViewX(x));
-  }
+  // ─── Chart ↔ map crosshair (pointer tracking: see ensurePanel) ─────────
 
   // Hover readout for sample i of the open leg.
   function readoutHtml(leg, an, i) {
-    var ts = i / (an.n - 1);
-    var edge = i === 0 || i === an.n - 1;
-    var clr = edge ? '—' : fmtClearance((an.losM[i] - an.terrainM[i]) / an.fresnelM[i]);
-    return [
-      '<b>' + fmtKm(ts * an.distanceKm) + ' km</b> from ' + esc(leg.nameA),
-      'terrain <b>' + Math.round(an.terrainM[i]) + ' m</b>',
-      'LOS <b>' + Math.round(an.losM[i]) + ' m</b>',
-      'clearance <b>' + clr + '</b>'
-    ].map(function (s) { return '<span class="mc-los-ri">' + s + '</span>'; })
-      .join('<span class="mc-los-sep" aria-hidden="true">·</span>');
+    return UI.readoutHtml(an, i, leg.nameA, fmtClearance);
   }
 
-  // Snap to the nearest sample so the readout matches the plotted point.
   function setCursorT(t) {
     var leg = openLeg();
     var an = leg && leg.analysis;
     if (!an || !S.panel) return;
-    var i = Math.round(t * (an.n - 1));
-    var ts = i / (an.n - 1);
-    S.cursorT = ts;
-    var cur = S.panel.querySelector('.mc-los-cursor');
-    if (cur) {
-      var vx = String(Math.round(window.MeshLOS.viewXAtT(ts) * 100) / 100);
-      cur.setAttribute('x1', vx);
-      cur.setAttribute('x2', vx);
-      cur.setAttribute('visibility', 'visible');
-    }
-    var ro = S.panel.querySelector('.mc-los-readout');
-    if (ro) ro.innerHTML = readoutHtml(leg, an, i);
-    var ll = window.MeshLOS.intermediatePoint(leg.a, leg.b, ts);
-    if (!S.cursorMarker) {
-      S.cursorMarker = L.marker([ll.lat, ll.lon], {
-        icon: L.divIcon({ className: 'mc-los-cursor-marker', html: '', iconSize: [16, 16], iconAnchor: [8, 8] }),
-        interactive: false, keyboard: false, zIndexOffset: 1000
-      });
-    } else {
-      S.cursorMarker.setLatLng([ll.lat, ll.lon]);
-    }
-    if (S.layer && !S.layer.hasLayer(S.cursorMarker)) S.layer.addLayer(S.cursorMarker);
-  }
-
-  function hideChartCursor() {
-    if (!S.panel) return;
-    var cur = S.panel.querySelector('.mc-los-cursor');
-    if (cur) cur.setAttribute('visibility', 'hidden');
-    var ro = S.panel.querySelector('.mc-los-readout');
-    if (ro) ro.textContent = READOUT_HINT;
+    var s = UI.snap(an, t);
+    S.cursorT = s.t;
+    UI.showChartCursor(S.panel, s.t, readoutHtml(leg, an, s.i));
+    S.cursorMarker = UI.placeCursorMarker(S.cursorMarker, S.layer, window.MeshLOS.intermediatePoint(leg.a, leg.b, s.t));
   }
 
   function hideMapCursor() {
@@ -1122,7 +943,7 @@
 
     fetchMissing(legs);
     legs.forEach(function (leg) {
-      var hit = cacheGet(leg.key);
+      var hit = cache.get(leg.key);
       if (hit) { applyResult(leg, hit); return; }
       renderChip(leg);
       var p = inflight.get(leg.key);
@@ -1177,7 +998,6 @@
       panelTitleHtml: panelTitleHtml,
       panelBodyHtml: panelBodyHtml,
       readoutHtml: readoutHtml,
-      metaHtml: metaHtml,
       rowsFor: rowsFor,
       cache: cache,
       CACHE_MAX: CACHE_MAX,

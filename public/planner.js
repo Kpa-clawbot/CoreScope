@@ -15,14 +15,15 @@
  * fetchJob() implements it once, for this page and the area module.
  *
  * The maths and the profile SVG live in los.js (window.MeshLOS); the profile
- * panel reuses route-los.css's mc-los-* look. Shows a "not enabled" page while
+ * panel's shell, markup and crosshair, the formatters and the leg cache in
+ * los-panel.js (window.MeshLOSPanel, shared with route line of sight), with
+ * route-los.css's mc-los-* look. Shows a "not enabled" page while
  * window.MC_PLANNER_CFG is null. Exposes window.MeshPlanner; registers page
  * 'planner'.
  */
 (function () {
   'use strict';
 
-  var SPRITE = '/icons/phosphor-sprite.svg';
   var BASE_HASH = '#/tools/planner';
   var MODES = ['chain', 'relay', 'area'];
   var MODE_LABELS = { chain: 'Chain', relay: 'Relay', area: 'Area' };
@@ -31,7 +32,6 @@
   var POLL_MIN_S = 1;
   var POLL_MAX_S = 5;
   var MAX_POLLS = 360;          // ≥ 6 min of 202s before giving up
-  var MOBILE_MAX_W = 767;
   var LEG_CACHE_MAX = 200;
   var SNAP_PX = 14;             // a dragged point dropped this close to a node snaps to it
   var COORD_DP = 5;             // ~1 m: URL and cache-key precision
@@ -67,13 +67,10 @@
   var ROLE_NAMES = { repeater: 'Repeater', room: 'Room server', companion: 'Companion', sensor: 'Sensor', observer: 'Observer' };
   var NUM_RE = /^-?\d{1,3}(\.\d+)?$/;
 
-  // ─── Pure helpers (exported via _internals for tests) ───────────────────
+  var UI = window.MeshLOSPanel;
+  var esc = UI.esc, fmtKm = UI.fmtKm, fmtM = UI.fmtM, fmtObstruction = UI.fmtObstruction, icon = UI.icon;
 
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
+  // ─── Pure helpers (exported via _internals for tests) ───────────────────
 
   function hasOwn(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
 
@@ -85,14 +82,6 @@
 
   function fmtCoord(x) { return String(round(x)); }
   function fmtLatLon(p) { return fmtCoord(p.lat) + ', ' + fmtCoord(p.lon); }
-
-  // "12.3 km"; '—' when unknown.
-  function fmtKm(x) {
-    var d = Number(x);
-    if (x == null || x === '' || !isFinite(d)) return '—';
-    var a = Math.abs(d);
-    return (a < 10 ? d.toFixed(2) : a < 100 ? d.toFixed(1) : String(Math.round(d))) + ' km';
-  }
 
   // x is already a percentage (clearance_pct = 100 × Fresnel clearance):
   // "62%", "−45%" (terrain crosses the line), ">999%"; '—' when unknown.
@@ -123,11 +112,6 @@
   // "F1 clearance 62%" or the plain phrase for the sentinels.
   function clearanceMeta(x) {
     return isClearanceWord(x) ? fmtClearance(x) : 'F1 clearance ' + fmtClearance(x);
-  }
-
-  function fmtM(x) {
-    var v = Number(x);
-    return x != null && x !== '' && isFinite(v) ? Math.round(v) + ' m' : '—';
   }
 
   function fmtH(h) { return String(round(h, 1)); }
@@ -300,7 +284,7 @@
     var v = verdictOf(an.verdict);
     if (!v) return 'No verdict';
     if (an.verdict === 'blocked' && an.obstructionM > 0) {
-      return v.label + ': terrain ' + Math.max(1, Math.round(an.obstructionM)) + ' m above the line of sight';
+      return v.label + ': terrain ' + fmtObstruction(an.obstructionM) + ' above the line of sight';
     }
     if (an.clearance == null || !isFinite(an.clearance)) return v.label + ': ' + v.detail;
     if (isClearanceWord(an.clearance * 100)) return v.label + ': ' + fmtClearance(an.clearance * 100);
@@ -509,10 +493,6 @@
 
   // ─── HTML builders (pure; every mesh-controlled string goes through esc) ─
 
-  function icon(name) {
-    return '<svg class="ph-icon" aria-hidden="true"><use href="' + SPRITE + '#' + name + '"/></svg>';
-  }
-
   function nodeTooltipHtml(n) {
     return '<b>' + esc(nodeLabel(n)) + '</b> <span class="mc-pl-tip-role">' + esc(roleName(n.role)) + '</span>';
   }
@@ -626,7 +606,7 @@
           ? 'The direct link is marginal; a relay can make it dependable.'
           : 'Terrain blocks the direct link, so a relay is needed.';
     var obst = an.verdict === 'blocked' && an.obstructionM > 0
-      ? ' Terrain rises ' + Math.max(1, Math.round(an.obstructionM)) + ' m above the line ' + fmtKm(an.worstKm) + ' from ' + nameA + '.'
+      ? ' Terrain rises ' + fmtObstruction(an.obstructionM) + ' above the line ' + fmtKm(an.worstKm) + ' from ' + nameA + '.'
       : '';
     return '<section class="mc-pl-card mc-pl-direct" aria-labelledby="mc-pl-direct-h">' +
       '<div class="mc-pl-card-head"><h3 id="mc-pl-direct-h">Direct link</h3>' + chipSpan(chip, 'Direct link') + '</div>' +
@@ -655,58 +635,37 @@
       '</div></div>';
   }
 
-  // One stacked profile: title "A → B", meta (distance, FSPL, F1 clearance,
-  // verdict), obstruction note, chart (or its loading/error state), readout.
+  // A failed leg's chart box; no_terrain needs no headline of its own.
+  function profileErrorHtml(code) {
+    return code === 'no_terrain'
+      ? UI.chartErrorHtml(errorReason(code))
+      : UI.chartErrorHtml('No terrain profile for this leg', errorReason(code));
+  }
+
+  // One stacked profile: title "A → B", then MeshLOSPanel's meta (distance,
+  // FSPL, F1 clearance, verdict), obstruction note, chart (or its
+  // loading/error state) and readout.
   function profileSectionHtml(leg, k) {
     var an = leg.an;
-    var km = an ? an.distanceKm : leg.distanceKm;
-    var items = ['<span title="Link length">' + esc(fmtKm(km)) + '</span>'];
-    if (an) {
-      items.push('<span title="Free-space path loss">FSPL ' + an.fsplDb.toFixed(1) + ' dB</span>');
-      items.push('<span title="Worst clearance of the first Fresnel zone">' +
-        esc(an.clearance === Infinity ? 'F1 clearance —' : clearanceMeta(an.clearance * 100)) + '</span>');
-    }
-    var pill;
-    if (an) {
-      var v = verdictOf(an.verdict) || { label: an.verdict, detail: '', tone: 'muted' };
-      pill = '<span class="mc-los-pill mc-los-tone-' + v.tone + '" title="' + esc(v.detail) + '">' + esc(v.label) + '</span>';
-    } else {
-      pill = '<span class="mc-los-pill mc-los-tone-muted' + (leg.error ? '' : ' mc-los-loading') + '">' + (leg.error ? 'n/a' : 'Checking…') + '</span>';
-    }
-    var html = '<section class="mc-pl-prof" data-prof="' + k + '">' +
+    var v = an ? (verdictOf(an.verdict) || { label: an.verdict, detail: '', tone: 'muted' }) : null;
+    return '<section class="mc-pl-prof" data-prof="' + k + '">' +
       '<h3 class="mc-pl-prof-title" title="' + esc(leg.a.name + ' → ' + leg.b.name) + '">' + esc(leg.a.name) + ' <span aria-hidden="true">→</span><span class="sr-only"> to </span> ' + esc(leg.b.name) + '</h3>' +
-      '<p class="mc-los-meta">' + items.join('<span class="mc-los-sep" aria-hidden="true">·</span>') + pill + '</p>';
-    if (an && an.obstructionM > 0) {
-      html += '<p class="mc-los-obst">Terrain rises ' + Math.max(1, Math.round(an.obstructionM)) + ' m above the line of sight ' +
-        esc(fmtKm(an.worstKm)) + ' from ' + esc(leg.a.name) + '.</p>';
-    }
-    if (an) {
-      html += '<div class="mc-los-chart">' + window.MeshLOS.renderProfileSvg(an, { nameA: leg.a.name, nameB: leg.b.name }) + '</div>' +
-        '<p class="mc-los-readout">' + READOUT_HINT + '</p>';
-    } else if (leg.error) {
-      html += '<div class="mc-los-chart mc-los-chart-err"><div class="mc-los-chart-state mc-los-chart-error" role="status">' +
-        (leg.error === 'no_terrain'
-          ? '<strong>' + esc(errorReason(leg.error)) + '</strong>'
-          : '<strong>No terrain profile for this leg</strong><span>' + esc(errorReason(leg.error)) + '.</span>') +
-        '</div></div>';
-    } else {
-      html += '<div class="mc-los-chart mc-los-chart-wait"><div class="mc-los-chart-state" role="status">Loading terrain profile…</div></div>';
-    }
-    return html + '</section>';
+      UI.profileHtml({
+        an: an,
+        km: leg.distanceKm,
+        nameA: leg.a.name,
+        nameB: leg.b.name,
+        clearance: !an ? '' : an.clearance === Infinity ? 'F1 clearance —' : clearanceMeta(an.clearance * 100),
+        pill: v && { tone: v.tone, label: v.label, title: v.detail },
+        error: an || !leg.error ? null : profileErrorHtml(leg.error),
+        hint: READOUT_HINT
+      }) +
+      '</section>';
   }
 
   // Hover readout for sample i of a profile leg.
   function readoutHtml(leg, an, i) {
-    var ts = i / (an.n - 1);
-    var edge = i === 0 || i === an.n - 1;
-    var c = (an.losM[i] - an.terrainM[i]) / an.fresnelM[i];
-    return [
-      '<b>' + esc(fmtKm(ts * an.distanceKm)) + '</b> from ' + esc(leg.a.name),
-      'terrain <b>' + Math.round(an.terrainM[i]) + ' m</b>',
-      'LOS <b>' + Math.round(an.losM[i]) + ' m</b>',
-      'clearance <b>' + (edge ? '—' : esc(fmtClearance(c * 100))) + '</b>'
-    ].map(function (s) { return '<span class="mc-los-ri">' + s + '</span>'; })
-      .join('<span class="mc-los-sep" aria-hidden="true">·</span>');
+    return UI.readoutHtml(an, i, leg.a.name, function (c) { return fmtClearance(c * 100); });
   }
 
   function legDistanceKm(leg) {
@@ -715,21 +674,7 @@
 
   // ─── Leg cache (terrain per leg, LRU) ───────────────────────────────────
 
-  var legCache = new Map();
-
-  function cacheGet(key) {
-    if (!legCache.has(key)) return null;
-    var v = legCache.get(key);
-    legCache.delete(key);
-    legCache.set(key, v);
-    return v;
-  }
-
-  function cachePut(key, v) {
-    if (legCache.has(key)) legCache.delete(key);
-    while (legCache.size >= LEG_CACHE_MAX) legCache.delete(legCache.keys().next().value);
-    legCache.set(key, v);
-  }
+  var legCache = UI.createLRU(LEG_CACHE_MAX);
 
   function isCacheable(r) { return !!r && (!!r.elevM || hasOwn(CACHEABLE_ERRORS, r.error || '')); }
 
@@ -757,21 +702,6 @@
 
   function defaultHeight(node) {
     return node ? S.cfg.existingAntennaM : S.cfg.newAntennaM;
-  }
-
-  function isMobile() { return window.innerWidth <= MOBILE_MAX_W; }
-
-  function reducedMotion() {
-    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
-  }
-
-  function raf(fn) {
-    return typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame(fn) : setTimeout(fn, 16);
-  }
-
-  function caf(id) {
-    if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(id);
-    else clearTimeout(id);
   }
 
   function listen(target, type, fn, opts) {
@@ -978,7 +908,7 @@
       area: { handle: null, layer: null, waiting: false },
       panel: {
         el: null, legs: [], title: '', owner: null, nav: null, ctrl: null, opener: null,
-        cursor: null, ptr: null, rafId: 0, layer: null, cursorMarker: null
+        cursor: null, crosshair: null, layer: null, cursorMarker: null
       }
     };
     restoreChain(p.chain);
@@ -1006,7 +936,7 @@
       s.unlisten.forEach(function (fn) { try { fn(); } catch (e) { /* already gone */ } });
       if (s.themeObs) s.themeObs.disconnect();
       if (s.ro) s.ro.disconnect();
-      if (s.roRaf) caf(s.roRaf);
+      if (s.roRaf) UI.caf(s.roRaf);
       if (s.map) { s.map.off(); s.map.remove(); }
     } catch (e) {
       console.warn('[planner] destroy:', e);
@@ -1085,7 +1015,7 @@
     if (typeof ResizeObserver === 'function') {
       S.ro = new ResizeObserver(function () {
         if (!S || S.roRaf) return;
-        S.roRaf = raf(function () { if (!S) return; S.roRaf = 0; S.map.invalidateSize({ pan: false }); });
+        S.roRaf = UI.raf(function () { if (!S) return; S.roRaf = 0; S.map.invalidateSize({ pan: false }); });
       });
       S.ro.observe(S.els.map);
     } else {
@@ -1121,7 +1051,7 @@
     var lls = pts.map(function (p) { return [p.lat, p.lon]; });
     try {
       if (lls.length === 1) S.map.setView(lls[0], Math.max(S.map.getZoom(), 11), { animate: !!animate });
-      else S.map.fitBounds(L.latLngBounds(lls), { padding: [48, 48], maxZoom: 14, animate: !!animate && !reducedMotion() });
+      else S.map.fitBounds(L.latLngBounds(lls), { padding: [48, 48], maxZoom: 14, animate: !!animate && !UI.reducedMotion() });
     } catch (e) { /* map not sized yet */ }
   }
 
@@ -1519,7 +1449,7 @@
 
   function rebuildChainLegs() {
     S.chain.legs = legsFromPoints(S.chain.pts);
-    S.chain.legs.forEach(function (leg) { attachResult(leg, cacheGet(leg.key)); });
+    S.chain.legs.forEach(function (leg) { attachResult(leg, legCache.get(leg.key)); });
   }
 
   function addChainPoint(pt) {
@@ -1609,7 +1539,7 @@
     var keep = {};
     S.chain.legs.forEach(function (l) { keep[l.key] = l.result; });
     S.chain.legs = legsFromPoints(S.chain.pts);
-    S.chain.legs.forEach(function (l) { attachResult(l, keep[l.key] || cacheGet(l.key)); });
+    S.chain.legs.forEach(function (l) { attachResult(l, keep[l.key] || legCache.get(l.key)); });
     writeChainUrl();
     updateChainLegRows();
     drawChainLegs();
@@ -1679,7 +1609,7 @@
       keys.forEach(function (k, j) {
         var r = legResultFrom(legs[j]);
         fresh[k] = r;
-        if (isCacheable(r)) cachePut(k, r);
+        if (isCacheable(r)) legCache.put(k, r);
       });
       c.legs.forEach(function (l) { if (!l.result && hasOwn(fresh, l.key)) attachResult(l, fresh[l.key]); });
       setChainStatus(null);
@@ -1818,21 +1748,12 @@
   function obstructionMarker(leg, an, tone, onClick) {
     var ll = window.MeshLOS.intermediatePoint(leg.a, leg.b, an.worstT);
     var text = an.obstructionM > 0
-      ? 'Terrain ' + Math.max(1, Math.round(an.obstructionM)) + ' m above line of sight, ' + fmtKm(an.worstKm) + ' from ' + leg.a.name
+      ? 'Terrain ' + fmtObstruction(an.obstructionM) + ' above line of sight, ' + fmtKm(an.worstKm) + ' from ' + leg.a.name
       : (isClearanceWord(an.clearance * 100) ? fmtClearance(an.clearance * 100) : 'First Fresnel zone ' + fmtClearance(an.clearance * 100) + ' clear');
-    var mk = L.marker([ll.lat, ll.lon], {
-      icon: L.divIcon({
-        className: 'mc-los-obstruction mc-los-tone-' + tone,
-        html: icon('ph-warning'),
-        iconSize: [28, 28],
-        iconAnchor: [14, 14]
-      }),
-      keyboard: true, riseOnHover: true, zIndexOffset: 400
+    return UI.obstructionMarker(ll, tone, text, {
+      tipClass: 'mc-pl-tip',
+      onClick: function (e) { stopEvent(e); onClick(); }
     });
-    mk.bindTooltip(esc(text), { direction: 'top', offset: [0, -16], className: 'mc-pl-tip' });
-    mk.on('click', function (e) { stopEvent(e); onClick(); });
-    mk.on('add', function () { labelMarker(mk, text + '. Show terrain profile'); });
-    return mk;
   }
 
   function chainProfileLeg(leg) {
@@ -2365,37 +2286,31 @@
     if (opts.fetchMissing !== false) fetchPanelMissing();
   }
 
+  // Escape closes the panel from anywhere on the page (onDocKey).
   function ensurePanel() {
     var P = S.panel;
     if (P.el && P.el.parentNode === S.els.map) return;
-    var el = document.createElement('div');
-    el.className = 'mc-los-panel mc-pl-profile';
-    el.setAttribute('role', 'dialog');
-    el.tabIndex = -1;
-    el.innerHTML =
-      '<div class="mc-los-head">' +
-        '<h2 class="mc-los-title"></h2>' +
-        '<div class="mc-los-nav">' +
-          '<button type="button" class="mc-los-btn mc-los-prev" aria-label="Previous leg">' + icon('ph-caret-left') + '</button>' +
-          '<span class="mc-los-pos"></span>' +
-          '<button type="button" class="mc-los-btn mc-los-next" aria-label="Next leg">' + icon('ph-caret-right') + '</button>' +
-          '<button type="button" class="mc-los-btn mc-los-close" aria-label="Close terrain profile">' + icon('ph-x') + '</button>' +
-        '</div>' +
-      '</div>' +
-      '<div class="mc-pl-profs"></div>' +
-      '<p class="mc-los-foot"></p>';
-    el.querySelector('.mc-los-prev').addEventListener('click', function () { stepPanel(-1); });
-    el.querySelector('.mc-los-next').addEventListener('click', function () { stepPanel(1); });
-    el.querySelector('.mc-los-close').addEventListener('click', function () { closePanel({ restoreFocus: true }); });
-    el.addEventListener('pointermove', onPanelPointer);
-    el.addEventListener('pointerdown', onPanelPointer);
-    el.addEventListener('pointerout', onPanelPointerOut);
-    if (L.DomEvent) {
-      L.DomEvent.disableClickPropagation(el);
-      L.DomEvent.disableScrollPropagation(el);
-    }
-    S.els.map.appendChild(el);
-    S.els.map.classList.add('mc-los-open');
+    var el = UI.buildPanel({
+      className: 'mc-pl-profile',
+      prevLabel: 'Previous leg', nextLabel: 'Next leg', closeLabel: 'Close terrain profile',
+      bodyHtml: '<div class="mc-pl-profs"></div>',
+      onStep: stepPanel,
+      onClose: function () { closePanel({ restoreFocus: true }); }
+    });
+    if (P.crosshair) P.crosshair.cancel();
+    P.crosshair = UI.bindCrosshair(el, {
+      keyOf: function (hit) {
+        var sec = hit.closest('[data-prof]');
+        return sec ? Number(sec.getAttribute('data-prof')) : null;
+      },
+      svgOf: function (k) {
+        var cur = S && S.panel.el;
+        return cur ? cur.querySelector('[data-prof="' + k + '"] .mc-los-svg') : null;
+      },
+      move: setCursor,
+      leave: hideCursor
+    });
+    UI.mountPanel(el, S.els.map);
     P.el = el;
   }
 
@@ -2405,13 +2320,7 @@
     title.textContent = P.title;
     title.title = P.title;
     el.setAttribute('aria-label', P.title + ': terrain profile');
-    var nav = el.querySelector('.mc-los-nav');
-    nav.classList.toggle('mc-los-single', !P.nav);
-    if (P.nav) {
-      el.querySelector('.mc-los-prev').disabled = P.nav.pos <= 0;
-      el.querySelector('.mc-los-next').disabled = P.nav.pos >= P.nav.count - 1;
-      el.querySelector('.mc-los-pos').textContent = 'Leg ' + (P.nav.pos + 1) + ' of ' + P.nav.count;
-    }
+    UI.setNav(el, P.nav ? P.nav.pos : 0, P.nav ? P.nav.count : 1, 'Leg');
     el.classList.toggle('mc-pl-profile-multi', P.legs.length > 1);
     var profs = el.querySelector('.mc-pl-profs');
     profs.classList.toggle('mc-pl-profs-grid', P.legs.length > 1);
@@ -2425,8 +2334,6 @@
     var next = P.nav.pos + d;
     if (next < 0 || next >= P.nav.count) return;
     P.nav.step(d);
-    var active = document.activeElement;
-    if (active && active.disabled && P.el) P.el.focus({ preventScroll: true });
   }
 
   function closePanel(opts) {
@@ -2434,17 +2341,15 @@
     if (!S) return;
     var P = S.panel;
     if (P.ctrl) { P.ctrl.abort(); P.ctrl = null; }
-    if (P.rafId) { caf(P.rafId); P.rafId = 0; }
+    if (P.crosshair) { P.crosshair.cancel(); P.crosshair = null; }
     var wasOpen = !!P.el;
     var shown = [];
     P.legs.forEach(function (l) { shown.push(l.a, l.b); });
-    if (P.el && P.el.parentNode) P.el.parentNode.removeChild(P.el);
-    if (S.els && S.els.map) S.els.map.classList.remove('mc-los-open');
+    UI.unmountPanel(P.el, S.els && S.els.map);
     P.el = null;
     if (P.layer) P.layer.clearLayers();
     P.cursorMarker = null;
     P.cursor = null;
-    P.ptr = null;
     var owner = P.owner;
     P.owner = null;
     P.legs = [];
@@ -2471,11 +2376,7 @@
     var P = S.panel;
     P.layer.clearLayers();
     P.cursorMarker = null;
-    P.legs.forEach(function (leg) {
-      L.polyline([[leg.a.lat, leg.a.lon], [leg.b.lat, leg.b.lon]], {
-        className: 'mc-los-leg-active', weight: 4, opacity: 1, dashArray: '10 8', interactive: false
-      }).addTo(P.layer);
-    });
+    P.legs.forEach(function (leg) { UI.legLine(leg.a, leg.b).addTo(P.layer); });
   }
 
   // Fit the legs into the map area the panel leaves free.
@@ -2486,15 +2387,7 @@
       map.invalidateSize({ pan: false });
       var pts = [];
       legs.forEach(function (l) { pts.push([l.a.lat, l.a.lon], [l.b.lat, l.b.lon]); });
-      var size = map.getSize();
-      var ph = P.el.offsetHeight || 0;
-      var pad = Math.max(0, Math.min(ph + 24, size.y - 120));
-      var o = isMobile()
-        ? { paddingTopLeft: [24, pad + 16], paddingBottomRight: [24, 24] }
-        : { paddingTopLeft: [48, 48], paddingBottomRight: [48, pad + 40] };
-      o.maxZoom = 14;
-      o.animate = !reducedMotion();
-      map.fitBounds(L.latLngBounds(pts), o);
+      map.fitBounds(L.latLngBounds(pts), UI.fitOptions(map, P.el));
     } catch (e) { console.warn('[planner] fit:', e); }
   }
 
@@ -2505,7 +2398,7 @@
     var need = [], hits = 0;
     P.legs.forEach(function (leg, k) {
       if (leg.elevM || leg.error) return;
-      var hit = cacheGet(leg.key);
+      var hit = legCache.get(leg.key);
       if (hit) { applyPanelResult(k, hit); hits++; return; }
       need.push(k);
     });
@@ -2530,7 +2423,7 @@
           if (body && body.source) S.source = String(body.source);
           run.ks.forEach(function (k, j) {
             var res = arr ? legResultFrom(arr[j]) : { error: 'request' };
-            if (isCacheable(res)) cachePut(P.legs[k].key, res);
+            if (isCacheable(res)) legCache.put(P.legs[k].key, res);
             applyPanelResult(k, res);
           });
           renderPanelSections();
@@ -2562,85 +2455,25 @@
     if (P.cursor) setCursor(P.cursor.k, P.cursor.t);
   }
 
-  // ─── Profile ↔ map crosshair ────────────────────────────────────────────
+  // ─── Profile ↔ map crosshair (pointer tracking: see ensurePanel) ───────
 
-  function onPanelPointer(e) {
-    var hit = e.target && e.target.closest ? e.target.closest('.mc-los-hit') : null;
-    if (!hit) return;
-    var sec = hit.closest('[data-prof]');
-    if (!sec) return;
-    var P = S.panel;
-    P.ptr = { k: Number(sec.getAttribute('data-prof')), x: e.clientX };
-    if (!P.rafId) P.rafId = raf(drawCursorFromPointer);
-  }
-
-  function onPanelPointerOut(e) {
-    // A touch ends with pointerout; keep the last reading on screen.
-    if (e.pointerType === 'touch') return;
-    var to = e.relatedTarget;
-    if (to && to.closest && to.closest('.mc-los-hit')) return;
-    if (!e.target || !e.target.closest || !e.target.closest('.mc-los-hit')) return;
-    hideCursor();
-  }
-
-  function drawCursorFromPointer() {
-    var P = S && S.panel;
-    if (!P) return;
-    P.rafId = 0;
-    if (!P.ptr || !P.el) return;
-    var svg = P.el.querySelector('[data-prof="' + P.ptr.k + '"] .mc-los-svg');
-    if (!svg) return;
-    var rect = svg.getBoundingClientRect();
-    if (!rect.width) return;
-    var x = (P.ptr.x - rect.left) / rect.width * window.MeshLOS.PLOT.W;
-    setCursor(P.ptr.k, window.MeshLOS.tAtViewX(x));
-  }
-
-  // Snap to the nearest sample so the readout matches the plotted point.
   function setCursor(k, t) {
     var P = S.panel, leg = P.legs[k], an = leg && leg.an;
     if (!an || !P.el) return;
-    var i = Math.round(t * (an.n - 1));
-    var ts = i / (an.n - 1);
-    P.cursor = { k: k, t: ts };
+    var s = UI.snap(an, t);
+    P.cursor = { k: k, t: s.t };
     Array.prototype.forEach.call(P.el.querySelectorAll('[data-prof]'), function (sec) {
-      var mine = Number(sec.getAttribute('data-prof')) === k;
-      var cur = sec.querySelector('.mc-los-cursor');
-      var ro = sec.querySelector('.mc-los-readout');
-      if (!mine) {
-        if (cur) cur.setAttribute('visibility', 'hidden');
-        if (ro) ro.textContent = READOUT_HINT;
-        return;
-      }
-      if (cur) {
-        var vx = String(Math.round(window.MeshLOS.viewXAtT(ts) * 100) / 100);
-        cur.setAttribute('x1', vx);
-        cur.setAttribute('x2', vx);
-        cur.setAttribute('visibility', 'visible');
-      }
-      if (ro) ro.innerHTML = readoutHtml(leg, an, i);
+      if (Number(sec.getAttribute('data-prof')) === k) UI.showChartCursor(sec, s.t, readoutHtml(leg, an, s.i));
+      else UI.hideChartCursor(sec, READOUT_HINT);
     });
-    var ll = window.MeshLOS.intermediatePoint(leg.a, leg.b, ts);
-    if (!P.cursorMarker) {
-      P.cursorMarker = L.marker([ll.lat, ll.lon], {
-        icon: L.divIcon({ className: 'mc-los-cursor-marker', html: '', iconSize: [16, 16], iconAnchor: [8, 8] }),
-        interactive: false, keyboard: false, zIndexOffset: 1000
-      }).addTo(P.layer);
-    } else {
-      P.cursorMarker.setLatLng([ll.lat, ll.lon]);
-    }
+    P.cursorMarker = UI.placeCursorMarker(P.cursorMarker, P.layer, window.MeshLOS.intermediatePoint(leg.a, leg.b, s.t));
   }
 
   function hideCursor() {
     var P = S && S.panel;
     if (!P) return;
     P.cursor = null;
-    P.ptr = null;
-    if (P.rafId) { caf(P.rafId); P.rafId = 0; }
-    if (P.el) {
-      Array.prototype.forEach.call(P.el.querySelectorAll('.mc-los-cursor'), function (c) { c.setAttribute('visibility', 'hidden'); });
-      Array.prototype.forEach.call(P.el.querySelectorAll('.mc-los-readout'), function (r) { r.textContent = READOUT_HINT; });
-    }
+    if (P.el) UI.hideChartCursor(P.el, READOUT_HINT);
     if (P.cursorMarker) { P.layer.removeLayer(P.cursorMarker); P.cursorMarker = null; }
   }
 
@@ -2660,7 +2493,7 @@
 
   // On a phone the open sheet leaves the map a strip; fold it while a profile shows.
   function collapseSheetForPanel() {
-    if (!isMobile() || S.els.side.classList.contains('mc-pl-collapsed')) return;
+    if (!UI.isMobile() || S.els.side.classList.contains('mc-pl-collapsed')) return;
     setSheet(false);
     S.sheetAuto = true;
   }

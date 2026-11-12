@@ -110,6 +110,8 @@
     };
   }
 
+  // HTML-escapes text and attribute values. The only copy: MeshLOSPanel.esc
+  // (los-panel.js) re-exports it for route-los.js and planner.js.
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -212,6 +214,7 @@
     fsplDb: fsplDb,
     verdictFor: verdictFor,
     analyze: analyze,
+    esc: esc,
     renderProfileSvg: renderProfileSvg,
     viewXAtT: viewXAtT,
     tAtViewX: tAtViewX

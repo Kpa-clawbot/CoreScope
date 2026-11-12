@@ -1,7 +1,7 @@
 /**
- * Repeater planner (#/tools/planner): loads the REAL public/los.js and
- * public/planner.js in a vm context with a stub window, location/history,
- * fake timers and a stub fetch.
+ * Repeater planner (#/tools/planner): loads the REAL public/los.js,
+ * public/los-panel.js and public/planner.js in a vm context with a stub
+ * window, location/history, fake timers and a stub fetch.
  *
  * Covers the window.MeshPlanner surface the area module builds on (fetchJob's
  * job protocol, params/setParams, fmt*, esc) and the pure helpers in
@@ -22,6 +22,7 @@ function assert(cond, msg) {
 }
 const read = f => fs.readFileSync(path.join(REPO_ROOT, 'public', f), 'utf8');
 const LOS_SRC = read('los.js');
+const PANEL_SRC = read('los-panel.js');
 const PLANNER_SRC = read('planner.js');
 const flush = () => new Promise(r => setImmediate(r));
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -80,6 +81,7 @@ function load(opts) {
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(LOS_SRC, ctx);
+  vm.runInContext(PANEL_SRC, ctx);
   vm.runInContext(PLANNER_SRC, ctx);
   return { ctx, MP: ctx.MeshPlanner, I: ctx.MeshPlanner._internals, LOS: ctx.MeshLOS, timers, replaced };
 }
