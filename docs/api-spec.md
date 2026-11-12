@@ -2894,7 +2894,7 @@ Client-side configuration values.
   "externalUrls":       object | null,
   "propagationBufferMs": number,         // default: 5000
   "clientRfSamples":    boolean,         // opt-in flag; gates /api/rf-noise
-  "los":                object,          // omitted unless los.enabled is true: frequencyMhz, antennaHeightM, kFactor, samples, maxPoints, maxLegKm
+  "los":                object,          // omitted unless los.enabled is true: frequencyMhz, antennaHeightM, kFactor, samples, maxPoints, maxLegKm. frequencyMhz 910.525 is the US default; use 869.618 for EU/UK meshes (set los.frequencyMhz to your mesh's frequency). The planner reads frequencyMhz and kFactor from the los block even when los.enabled is false.
   "planner":            object,          // omitted unless planner.enabled is true: defaultRangeKm, rangesKm (only those up to maxLegKm), newAntennaM, existingAntennaM, frequencyMhz, kFactor, maxPoints, maxLegKm, maxAreaKm, nodeMarginKm, maxSites, minClearance
   "clientRxAppUrl":     string           // omitted unless clientRxCoverage is on and clientRxCoverage.appUrl is an https URL
 }
