@@ -222,18 +222,10 @@ test('mount with bbox in params auto-runs; unmount aborts the job and clears lay
   assert.strictEqual((m.panel._l.click || []).length, 0);
 });
 
-test('mount without bbox does not run; onParams with a new bbox runs and aborts the previous job', () => {
+test('mount without bbox does not run a job', () => {
   const m = makeCtx();
   const inst = m.api.mount(m.ctx);
   assert.strictEqual(m.jobs.length, 0);
-  inst.onParams({ bbox: '30,-98,30.5,-97.5' });
-  assert.strictEqual(m.jobs.length, 1);
-  inst.onParams({ bbox: '31,-98,31.5,-97.5' });
-  assert.strictEqual(m.jobs.length, 2);
-  assert.strictEqual(m.jobs[0].signal.aborted, true);
-  assert.strictEqual(m.jobs[1].signal.aborted, false);
-  inst.onParams({ bbox: '31,-98,31.5,-97.5' });            // same state: no re-run
-  assert.strictEqual(m.jobs.length, 2);
   inst.unmount();
 });
 
@@ -318,10 +310,11 @@ test('toggle re-renders edges only: no refetch, no refit, hash gets marginal', (
       m.panel._l.change[0]({ target: box });
       assert.strictEqual(edgeCount(m), 2);
       assert.strictEqual(sets[sets.length - 1].marginal, '0');
-      inst.onParams({ bbox: '30,-98,30.5,-97.5', marginal: '1' });   // hash edit by hand
-      assert.strictEqual(edgeCount(m), 4);
-      assert.strictEqual(m.jobs.length, 1);
       inst.unmount();
+      return mountedWith({ marginal: '1' }).then(({ m: m2, inst: inst2 }) => {
+        assert.strictEqual(edgeCount(m2), 4);
+        inst2.unmount();
+      });
     });
 });
 

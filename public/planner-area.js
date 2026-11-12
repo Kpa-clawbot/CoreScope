@@ -1,7 +1,7 @@
 /* Repeater Planner — "Area" mode.
  *
  * Self-contained module mounted by the planner page:
- *   var inst = MeshPlannerArea.mount(ctx);   // -> { unmount(), onParams(params) }
+ *   var inst = MeshPlannerArea.mount(ctx);   // -> { unmount() }
  * The user picks an area on the map; GET /api/planner/coverage suggests where
  * new repeaters would best join the existing backbone. Everything drawn goes
  * into ctx.layer; everything in the side panel goes into ctx.panel.
@@ -333,7 +333,6 @@
     var data = null, siteLayers = {}, abort = null, runId = 0;
     var drawing = null;                               // {start, rect, pid, tapStart, ...}
     var dead = false;
-    function stateKey(p) { return buildCoverageUrl(p, cfg) || 'none'; }
 
     panel.innerHTML = controlsHtml(cfg);
     function f(name) { return panel.querySelector('[data-f="' + name + '"]'); }
@@ -690,30 +689,11 @@
     panel.addEventListener('focusin', onOver);
     panel.addEventListener('focusout', onOut);
 
-    /* --- hash params --- */
-    function applyParams(params, fit) {
-      var next = parseAreaParams(params, cfg);
-      if (stateKey(next) === stateKey(state)) { // echo of our own hash write, or a view-only change
-        if (next.marginal !== state.marginal) {
-          state.marginal = next.marginal;
-          if (data) renderEdges(data);
-          syncMarginalUi();
-        }
-        return;
-      }
-      state = next;
-      syncControls();
-      drawAreaRect();
-      if (state.bbox) { run({ fit: fit }); }
-      else { cancelRun(); clearResults(); }
-    }
-
     syncControls();
     drawAreaRect();
     if (state.bbox) run({ fit: true });
 
     return {
-      onParams: function (params) { if (!dead) applyParams(params || {}, true); },
       unmount: function () {
         if (dead) return;
         dead = true;
