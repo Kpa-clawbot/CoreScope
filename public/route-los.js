@@ -2,7 +2,8 @@
  *
  * Every leg between two placed hops gets a clear / marginal / blocked chip in
  * the route sidebar, from ONE terrain request per contiguous run of legs
- * (GET /api/elevation/profile). Blocked or marginal legs get an obstruction
+ * (GET /api/elevation/profile; a 202 while the server loads terrain tiles is
+ * re-polled, see fetchRequest). Blocked or marginal legs get an obstruction
  * marker on the map. A chip or marker opens a docked terrain-profile panel
  * whose chart drives a crosshair on the map; its antenna and frequency inputs
  * re-analyse every leg locally, with no refetch.
@@ -17,6 +18,9 @@
 
   var CACHE_MAX = 300;
   var DEBOUNCE_MS = 150;
+  var POLL_MIN_S = 1;           // 202 → re-poll after retry_after_s, clamped to these
+  var POLL_MAX_S = 10;
+  var MAX_POLLS = 30;           // re-polls of one request before it reads as unavailable
   var DEFAULT_MAX_POINTS = 16;
   var MOBILE_MAX_W = 767;
   var SPRITE = '/icons/phosphor-sprite.svg';
@@ -28,18 +32,21 @@
     freq: 'Frequency must be 100–6000 MHz.'
   };
   // Per-leg error codes from the server, plus the client-side whole-request
-  // failures (rate_limited = HTTP 429, upstream = anything else).
+  // failures (rate_limited = HTTP 429, upstream = anything else, including a
+  // 202 that never finished).
   var ERROR_REASONS = {
     unknown_point: 'Node location unknown to the server',
-    rate_limited: 'Elevation lookups are rate-limited; try again shortly',
-    upstream: 'Elevation service unavailable'
+    no_terrain: 'No terrain data for this leg',
+    too_many_tiles: 'Route crosses too much terrain for one check',
+    rate_limited: 'Terrain lookups are rate-limited; try again shortly',
+    upstream: 'Terrain data unavailable'
   };
   // Errors worth a manual retry (never retried automatically).
   var RETRYABLE = { upstream: true, rate_limited: true };
 
   // Leg results keyed by both endpoints, direction-aware. Only terrain
-  // (elev_m) and the deterministic too_long error are cached: a transient
-  // error is retried by the next update().
+  // (elev_m) and the deterministic too_long and no_terrain errors are cached:
+  // any other error is retried by the next update().
   var cache = new Map();
   var inflight = new Map(); // key -> Promise<result>, so a refetch never doubles up
 
@@ -49,7 +56,7 @@
     legs: [],         // see buildLegs(); plus row, chip, result, analysis, marker
     layer: null,      // own L.layerGroup: obstruction markers, leg highlight, cursor
     settings: null,   // { antA, antB, freq }
-    source: null,     // elevation host from the last response, for attribution
+    source: null,     // terrain attribution from the last response
     open: null,       // { idx, key } of the leg shown in the panel
     panel: null, legLine: null, cursorMarker: null,
     cursorT: null, ptr: null, rafId: 0, debounce: 0,
@@ -191,7 +198,7 @@
     return { distanceKm: dist, elevM: e };
   }
 
-  function isCacheable(r) { return !!r && (!!r.elevM || r.error === 'too_long'); }
+  function isCacheable(r) { return !!r && (!!r.elevM || r.error === 'too_long' || r.error === 'no_terrain'); }
 
   function verdicts() { return window.MeshLOS.VERDICTS; }
 
@@ -316,25 +323,62 @@
     cache.set(key, v);
   }
 
-  // One GET for one request; resolves (never rejects) to a result per leg.
-  function fetchRequest(req) {
-    function failAll(code) { return req.legs.map(function () { return { error: code }; }); }
-    var p;
-    try {
-      p = fetch(requestUrl(req), { headers: { Accept: 'application/json' } });
-    } catch (e) {
-      p = Promise.reject(e);
+  // Seconds to wait before re-polling a 202 body.
+  function pollDelayS(body) {
+    var s = Number(body && body.retry_after_s);
+    if (!isFinite(s)) s = POLL_MIN_S;
+    return Math.min(POLL_MAX_S, Math.max(POLL_MIN_S, s));
+  }
+
+  // Whether the route on screen still shows a leg of req. Every update()
+  // bumps S.gen; one for the same route keeps its legs, while a new route
+  // or clear() drops them.
+  function stillWanted(req, gen) {
+    if (gen === S.gen) return true;
+    for (var i = 0; i < S.legs.length; i++) {
+      for (var j = 0; j < req.legs.length; j++) if (S.legs[i].key === req.legs[j].key) return true;
     }
-    return Promise.resolve(p).then(function (r) {
-      if (r.status === 429) return failAll('rate_limited');
-      if (!r.ok) return failAll('upstream');
-      return r.json().then(function (body) {
-        var legs = body && Array.isArray(body.legs) ? body.legs : null;
-        if (!legs || legs.length !== req.legs.length) return failAll('upstream');
-        if (body.source) S.source = String(body.source);
-        return req.legs.map(function (leg, i) { return legResultFrom(legs[i]); });
-      });
-    }).catch(function () { return failAll('upstream'); });
+    return false;
+  }
+
+  // One request; resolves (never rejects) to a result per leg. A 202 means
+  // the server is still loading terrain tiles: re-poll the same URL after
+  // pollDelayS, at most MAX_POLLS times (the chips stay loading). Polling
+  // stops once the route no longer shows the request's legs (stillWanted);
+  // a stopped or exhausted request reads as upstream, which is not cached.
+  function fetchRequest(req) {
+    var url = requestUrl(req);
+    var gen = S.gen;
+    var polls = 0;
+    function failAll(code) { return req.legs.map(function () { return { error: code }; }); }
+    function attempt() {
+      var p;
+      try {
+        p = fetch(url, { headers: { Accept: 'application/json' } });
+      } catch (e) {
+        p = Promise.reject(e);
+      }
+      return Promise.resolve(p).then(function (r) {
+        if (r.status === 429) return failAll('rate_limited');
+        if (r.status === 202) {
+          if (polls >= MAX_POLLS) return failAll('upstream');
+          polls++;
+          return Promise.resolve().then(function () { return r.json(); }).catch(function () { return null; })
+            .then(function (st) {
+              return new Promise(function (resolve) { setTimeout(resolve, pollDelayS(st) * 1000); });
+            })
+            .then(function () { return stillWanted(req, gen) ? attempt() : failAll('upstream'); });
+        }
+        if (!r.ok) return failAll('upstream');
+        return r.json().then(function (body) {
+          var legs = body && Array.isArray(body.legs) ? body.legs : null;
+          if (!legs || legs.length !== req.legs.length) return failAll('upstream');
+          if (body.source) S.source = String(body.source);
+          return req.legs.map(function (leg, i) { return legResultFrom(legs[i]); });
+        });
+      }).catch(function () { return failAll('upstream'); });
+    }
+    return attempt();
   }
 
   // Start one fetch per run of legs not cached or already in flight.
@@ -677,6 +721,11 @@
 
   var READOUT_HINT = 'Move along the profile to read the terrain at each point';
 
+  // Panel footer: the terrain attribution the server sent (body.source).
+  function footText(source) {
+    return 'Elevation: ' + (source || 'SRTM') + ' · terrain only, trees and buildings are not modelled';
+  }
+
   // The panel body. Every node-controlled string (leg.nameA/nameB) goes
   // through esc() here or in MeshLOS.renderProfileSvg; test-route-los.js
   // renders hostile names through this and asserts they stay inert.
@@ -725,8 +774,7 @@
       hit.addEventListener('pointerdown', onPointer);
       hit.addEventListener('pointerleave', onPointerLeave);
     }
-    p.querySelector('.mc-los-foot').textContent = 'Elevation: Copernicus GLO-90 via ' +
-      (S.source || 'the elevation service') + ' · terrain only, trees and buildings are not modelled';
+    p.querySelector('.mc-los-foot').textContent = footText(S.source);
 
     S.legs.forEach(function (l) {
       if (l.chip) l.chip.setAttribute('aria-expanded', l === leg ? 'true' : 'false');
@@ -1117,6 +1165,9 @@
       withLosParam: withLosParam,
       legResultFrom: legResultFrom,
       isCacheable: isCacheable,
+      pollDelayS: pollDelayS,
+      footText: footText,
+      MAX_POLLS: MAX_POLLS,
       chipText: chipText,
       chipTitle: chipTitle,
       chipTone: chipTone,

@@ -5,56 +5,51 @@ package main
 // /api/elevation/profile answers 404 and /api/config/client omits "los", so
 // the frontend shows no LOS UI at all.
 //
-// The server only supplies terrain elevation along each leg (elevation.go,
-// cached in memory, never written to the DB). Earth curvature, the Fresnel
-// zone and the verdict are computed in the browser (public/los.js) so the
-// antenna-height and frequency inputs re-render instantly.
+// The server only supplies terrain elevation along each leg (elevation.go),
+// read from the SRTM tiles the planner uses (terrain_config.go: one shared
+// source, in memory, never written to disk or the DB). Earth curvature, the
+// Fresnel zone and the verdict are computed in the browser (public/los.js) so
+// the antenna-height and frequency inputs re-render instantly.
 
 import (
 	"log"
-	"net/url"
+	"time"
 )
 
 const (
-	defaultLOSElevationURL = "https://api.open-meteo.com/v1/elevation"
 	defaultLOSFrequencyMHz = 910.525
 	defaultLOSAntennaM     = 5.0
 	defaultLOSKFactor      = 4.0 / 3.0
 
-	// Upstream leg-fetch budgets (one leg = one 100-coordinate request, about
-	// 10 Open-Meteo "calls" against the free tier's 600/min, 5,000/h and
-	// 10,000/day per IP). Cached legs cost nothing.
-	defaultLOSLegsPerMinute = 40
-	defaultLOSLegsPerHour   = 300
-	defaultLOSLegsPerDay    = 700
-	maxLOSLegsPerWindow     = 1000000
-
-	// losSamples is the number of elevation samples per leg, both endpoints
-	// included, evenly spaced along the great circle.
-	losSamples = 100
 	// losMaxPoints caps the route points in one profile request (so at most
-	// losMaxPoints-1 legs, each one upstream batch of losSamples).
+	// losMaxPoints-1 legs).
 	losMaxPoints = 16
 	// losMaxLegKm: longer legs are not real LoRa links worth a profile; they
-	// come back with error "too_long" and cost no upstream call.
+	// come back with error "too_long" and load no terrain.
 	losMaxLegKm = 300.0
+	// losMaxTiles caps the distinct 1° SRTM tiles one profile request may
+	// load; a leg that would take the request past it is "too_many_tiles".
+	// A 300 km leg's samples fall in about 10 tiles within the SRTM band. The
+	// shared source keeps at least this many resident (terrainViewTiles).
+	losMaxTiles = 16
+	// losTileWait is how long a request waits for its tiles before it
+	// answers 202; the downloads carry on without it.
+	losTileWait = 1500 * time.Millisecond
+	// losPollAfterS is the 202's retry_after_s.
+	losPollAfterS = 2
+	// losClientTilesPerMin is the per-client limit in tile downloads per
+	// minute: a request is charged one token per download it starts. It
+	// covers one full request (losMaxTiles).
+	losClientTilesPerMin = 20
 )
 
-// LOSConfig is the "los" block in config.json.
+// LOSConfig is the "los" block in config.json. Terrain tiles come from the
+// "terrain" block (TerrainConfig).
 type LOSConfig struct {
-	Enabled bool `json:"enabled"`
-	// ElevationURL is an Open-Meteo-compatible elevation endpoint
-	// (?latitude=a,b&longitude=c,d → {"elevation":[...]}). Point it at a
-	// self-hosted Open-Meteo to keep traffic off the public API.
-	ElevationURL   string  `json:"elevationUrl"`
+	Enabled        bool    `json:"enabled"`
 	FrequencyMHz   float64 `json:"frequencyMhz"`
 	AntennaHeightM float64 `json:"antennaHeightM"`
 	KFactor        float64 `json:"kFactor"`
-	// Upstream leg fetches allowed per fixed minute/hour/day window. 0 =
-	// default. Raise them for a self-hosted elevation server.
-	LegsPerMinute int `json:"legsPerMinute"`
-	LegsPerHour   int `json:"legsPerHour"`
-	LegsPerDay    int `json:"legsPerDay"`
 }
 
 func (c *LOSConfig) enabled() bool { return c != nil && c.Enabled }
@@ -63,27 +58,15 @@ func (c *LOSConfig) enabled() bool { return c != nil && c.Enabled }
 // replaced by their default (logged once at startup by the caller).
 func (c *LOSConfig) resolved() (LOSConfig, []string) {
 	out := LOSConfig{
-		ElevationURL:   defaultLOSElevationURL,
 		FrequencyMHz:   defaultLOSFrequencyMHz,
 		AntennaHeightM: defaultLOSAntennaM,
 		KFactor:        defaultLOSKFactor,
-
-		LegsPerMinute: defaultLOSLegsPerMinute,
-		LegsPerHour:   defaultLOSLegsPerHour,
-		LegsPerDay:    defaultLOSLegsPerDay,
 	}
 	var warns []string
 	if c == nil {
 		return out, nil
 	}
 	out.Enabled = c.Enabled
-	if c.ElevationURL != "" {
-		if u, err := url.Parse(c.ElevationURL); err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
-			out.ElevationURL = c.ElevationURL
-		} else {
-			warns = append(warns, "los.elevationUrl must be an http(s) URL; using the default")
-		}
-	}
 	if c.FrequencyMHz != 0 {
 		if c.FrequencyMHz >= 100 && c.FrequencyMHz <= 6000 {
 			out.FrequencyMHz = c.FrequencyMHz
@@ -105,24 +88,6 @@ func (c *LOSConfig) resolved() (LOSConfig, []string) {
 			warns = append(warns, "los.kFactor must be within 0.5-10; using the default")
 		}
 	}
-	for _, l := range []struct {
-		name string
-		in   int
-		out  *int
-	}{
-		{"legsPerMinute", c.LegsPerMinute, &out.LegsPerMinute},
-		{"legsPerHour", c.LegsPerHour, &out.LegsPerHour},
-		{"legsPerDay", c.LegsPerDay, &out.LegsPerDay},
-	} {
-		if l.in == 0 {
-			continue
-		}
-		if l.in >= 1 && l.in <= maxLOSLegsPerWindow {
-			*l.out = l.in
-		} else {
-			warns = append(warns, "los."+l.name+" must be within 1-1000000; using the default")
-		}
-	}
 	return out, warns
 }
 
@@ -131,7 +96,6 @@ type LOSClientConfig struct {
 	FrequencyMHz   float64 `json:"frequencyMhz"`
 	AntennaHeightM float64 `json:"antennaHeightM"`
 	KFactor        float64 `json:"kFactor"`
-	Samples        int     `json:"samples"`
 	MaxPoints      int     `json:"maxPoints"`
 	MaxLegKm       float64 `json:"maxLegKm"`
 }
@@ -145,7 +109,6 @@ func (c *LOSConfig) clientConfig() *LOSClientConfig {
 		FrequencyMHz:   r.FrequencyMHz,
 		AntennaHeightM: r.AntennaHeightM,
 		KFactor:        r.KFactor,
-		Samples:        losSamples,
 		MaxPoints:      losMaxPoints,
 		MaxLegKm:       losMaxLegKm,
 	}
@@ -160,17 +123,6 @@ func logLOSConfig(c *LOSConfig) {
 	for _, w := range warns {
 		log.Printf("[los] %s", w)
 	}
-	log.Printf("[los] enabled (elevation=%s, %.3f MHz, antenna=%.1f m, k=%.3f, legs/min=%d, legs/h=%d, legs/day=%d)",
-		redactURL(r.ElevationURL), r.FrequencyMHz, r.AntennaHeightM, r.KFactor,
-		r.LegsPerMinute, r.LegsPerHour, r.LegsPerDay)
-}
-
-// redactURL keeps scheme://host/path only: the query (an operator's apikey)
-// and any userinfo never reach the logs.
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return "(invalid url)"
-	}
-	return u.Scheme + "://" + u.Host + u.Path
+	log.Printf("[los] enabled (%.3f MHz, antenna=%.1f m, k=%.3f, up to %d terrain tiles a request, %d tile downloads/min per client)",
+		r.FrequencyMHz, r.AntennaHeightM, r.KFactor, losMaxTiles, losClientTilesPerMin)
 }

@@ -124,11 +124,19 @@ func planProfileSamples(distKm float64) int {
 // circle (t = i/(n-1)); ok=false if any sample has no terrain (outside the
 // view, or on a tile without data).
 func sampleTerrainProfile(v terrainView, a, b geoPoint, n int) ([]float64, bool) {
-	if v == nil || n < 2 {
+	if n < 2 {
 		return nil, false
 	}
-	pts := greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, n)
-	out := make([]float64, n)
+	return sampleTerrainAt(v, greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, n))
+}
+
+// sampleTerrainAt returns the elevation at each point; ok=false if any has
+// no terrain.
+func sampleTerrainAt(v terrainView, pts []elevPoint) ([]float64, bool) {
+	if v == nil {
+		return nil, false
+	}
+	out := make([]float64, len(pts))
 	for i, p := range pts {
 		e, ok := v.ElevationAt(p.lat, p.lon)
 		if !ok {
@@ -137,6 +145,28 @@ func sampleTerrainProfile(v terrainView, a, b geoPoint, n int) ([]float64, bool)
 		out[i] = e
 	}
 	return out, true
+}
+
+// legSamplePoints is where a profile reads the terrain of leg a→b:
+// planProfileSamples(km) points along the great circle, both ends included.
+func legSamplePoints(a, b geoPoint) []elevPoint {
+	return greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, planProfileSamples(geoDistKm(a, b)))
+}
+
+// sampleLegProfile is leg a→b's terrain as both profile endpoints serve it
+// (/api/planner/profile and /api/elevation/profile): the elevation at each
+// of legSamplePoints, rounded to 0.1 m. One helper, so the same leg over the
+// same tiles gets the same heights, and so the same verdict, in both views.
+// ok=false if any sample has no terrain.
+func sampleLegProfile(v terrainView, a, b geoPoint) ([]float64, bool) {
+	elev, ok := sampleTerrainAt(v, legSamplePoints(a, b))
+	if !ok {
+		return nil, false
+	}
+	for i := range elev {
+		elev[i] = losRound(elev[i], 10)
+	}
+	return elev, true
 }
 
 func geoDistKm(a, b geoPoint) float64 { return haversineKm(a.Lat, a.Lon, b.Lat, b.Lon) }

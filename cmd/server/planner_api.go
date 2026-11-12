@@ -56,7 +56,6 @@ import (
 )
 
 const (
-	plannerSourceName   = "SRTM (AWS Open Data)"
 	plannerCacheControl = "public, max-age=300"
 
 	plannerMaxRawQuery    = 512
@@ -208,6 +207,7 @@ type plannerService struct {
 	freqMHz float64       // radio defaults from the los block, like the LOS tool
 	kFactor float64
 	tiles   plannerTileLimits
+	source  string // terrain attribution in every response (terrainSourceName)
 
 	src      terrainSource
 	data     plannerData
@@ -250,10 +250,15 @@ type plannerRecent struct {
 	msg   string
 }
 
-// newPlannerService builds the service from the resolved config. It starts
-// no goroutine; each job brings its own and Close stops them.
-func newPlannerService(cfg PlannerConfig, s *Server) *plannerService {
+// newPlannerService builds the service from the resolved config over terrain,
+// the SRTM source it shares with route LOS (newTerrainServices); nil builds a
+// private default one sized for this planner (tests). It starts no
+// goroutine; each job brings its own and Close stops them.
+func newPlannerService(cfg PlannerConfig, s *Server, terrain *srtmSource) *plannerService {
 	rc, _ := cfg.resolved()
+	if terrain == nil {
+		terrain = newSRTMSource(TerrainConfig{}, rc.tileLimits().max())
+	}
 	var los *LOSConfig
 	var trusted []string
 	if s != nil && s.cfg != nil {
@@ -267,7 +272,8 @@ func newPlannerService(cfg PlannerConfig, s *Server) *plannerService {
 		freqMHz:  radio.FrequencyMHz,
 		kFactor:  radio.KFactor,
 		tiles:    rc.tileLimits(),
-		src:      newSRTMSource(rc),
+		source:   terrain.source,
+		src:      terrain,
 		data:     serverPlannerData{s},
 		coverage: runCoveragePlan,
 		relay:    runRelaySearch,
@@ -390,7 +396,7 @@ func (p *plannerService) handleProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if valid == 0 {
 		// Nothing to sample: the answer is fully decided here, no job.
-		body, err := plannerEncode(PlannerProfileResponse{Source: plannerSourceName, Legs: legs})
+		body, err := plannerEncode(PlannerProfileResponse{Source: p.source, Legs: legs})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "planner failed")
 			return
@@ -408,7 +414,9 @@ func (p *plannerService) handleProfile(w http.ResponseWriter, r *http.Request) {
 		key:      key.String(),
 		view:     bb,
 		compute: func(ctx context.Context, v terrainView, progress func(float64)) (any, error) {
-			return planProfileLegs(ctx, v, pts, legs, progress)
+			res, err := planProfileLegs(ctx, v, pts, legs, progress)
+			res.Source = p.source
+			return res, err
 		},
 	})
 }
@@ -429,13 +437,14 @@ func plannerProfileView(legs geoBBox, padDeg float64) geoBBox {
 	return geoBBox{S: legs.S - padDeg, W: legs.W - padDeg, N: legs.N + padDeg, E: legs.E + padDeg}
 }
 
-// planProfileLegs samples every leg without an error; legs is the request's
-// pre-checked template and is not modified. A leg with any sample on a tile
-// without data is no_terrain (terrain has no elevation there, never a 0 m
-// valley), and the response carries the terrain warning.
+// planProfileLegs samples every leg without an error (sampleLegProfile, as
+// route LOS does); legs is the request's pre-checked template and is not
+// modified. A leg with any sample on a tile without data is no_terrain
+// (terrain has no elevation there, never a 0 m valley), and the response
+// carries the terrain warning. The caller sets Source.
 func planProfileLegs(ctx context.Context, v terrainView, pts []geoPoint, legs []PlannerProfileLeg,
 	progress func(float64)) (PlannerProfileResponse, error) {
-	out := PlannerProfileResponse{Source: plannerSourceName, Legs: slices.Clone(legs)}
+	out := PlannerProfileResponse{Legs: slices.Clone(legs)}
 	if w := plannerTerrainWarning(v); w != "" {
 		out.Warnings = []string{w}
 	}
@@ -444,11 +453,7 @@ func planProfileLegs(ctx context.Context, v terrainView, pts []geoPoint, legs []
 			return PlannerProfileResponse{}, err
 		}
 		if leg := &out.Legs[i]; leg.Error == "" {
-			n := planProfileSamples(geoDistKm(pts[i], pts[i+1]))
-			if elev, ok := sampleTerrainProfile(v, pts[i], pts[i+1], n); ok {
-				for j := range elev {
-					elev[j] = losRound(elev[j], 10)
-				}
+			if elev, ok := sampleLegProfile(v, pts[i], pts[i+1]); ok {
 				leg.ElevM = elev
 			} else {
 				leg.Error = plannerErrNoTerrain
@@ -551,9 +556,7 @@ func (p *plannerService) handleRelay(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return nil, err
 			}
-			if res.Source == "" {
-				res.Source = plannerSourceName
-			}
+			res.Source = p.source
 			if res.Params == (PlannerRelayParams{}) {
 				res.Params = params
 			}
@@ -684,9 +687,7 @@ func (p *plannerService) handleCoverage(w http.ResponseWriter, r *http.Request) 
 			if res.Params == (PlannerPlanParams{}) {
 				res.Params = params
 			}
-			if res.Source == "" {
-				res.Source = plannerSourceName
-			}
+			res.Source = p.source
 			if res.ComputedAt.IsZero() {
 				res.ComputedAt = now.UTC()
 			}

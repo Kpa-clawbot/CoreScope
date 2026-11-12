@@ -5,9 +5,10 @@
  *
  * Covers the pure helpers (_internals), the update() flow (no fetch while
  * disabled, waiting on MeshConfigReady, one request per contiguous run,
- * chunking, cache vs. no-cache of errors, 429, chips, obstruction markers,
- * row↔seq mapping) and source assertions for the route-view.js hooks and the
- * colour rules of route-los.css. The panel itself is covered in the browser.
+ * chunking, cache vs. no-cache of errors, 429, 202 polling and when it stops,
+ * chips, obstruction markers, row↔seq mapping) and source assertions for the
+ * route-view.js hooks and the colour rules of route-los.css. The panel itself
+ * is covered in the browser.
  */
 'use strict';
 const fs = require('fs');
@@ -189,25 +190,41 @@ function ptsOf(url) {
   for (let i = 0; i < raw.length; i += 2) pts.push([raw[i], raw[i + 1]]);
   return pts;
 }
-// legFor(fromPt, toPt) → body leg; status() can force a whole-request status.
-function makeFetch(legFor, status) {
+// legFor(fromPt, toPt) → body leg; status() can force a whole-request
+// status. A 202 answers loading (the server's PlannerJobStatus), with
+// retry_after_s from loading() when given.
+function makeFetch(legFor, status, loading) {
   const calls = [];
   const f = url => {
     calls.push(url);
     const st = status ? status(calls.length) : 200;
+    if (st === 202) {
+      const body = Object.assign({ state: 'loading_terrain', progress: 0.5, retry_after_s: 2 }, loading ? loading(calls.length) : {});
+      return Promise.resolve({ ok: true, status: 202, json: () => Promise.resolve(body) });
+    }
     if (st !== 200) return Promise.resolve({ ok: false, status: st, json: () => Promise.resolve({ error: 'rate limited' }) });
     const pts = ptsOf(url);
     const legs = [];
     for (let i = 1; i < pts.length; i++) legs.push(legFor(pts[i - 1], pts[i]));
-    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ samples: N, source: 'api.open-meteo.com', legs }) });
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ source: 'SRTM (AWS Open Data)', legs }) });
   };
   f.calls = calls;
   return f;
 }
 
+// A setTimeout the test runs by hand: polls wait on it.
+function makeTimers() {
+  const q = [];
+  const st = (fn, ms) => { q.push({ fn, ms }); return q.length; };
+  st.delays = () => q.map(x => x.ms);
+  st.pending = () => q.length;
+  st.runAll = () => { q.splice(0).forEach(x => x.fn()); };
+  return st;
+}
+
 // ─── Context loader ───────────────────────────────────────────────────────
 
-const CFG = { frequencyMhz: 910.525, antennaHeightM: 30, kFactor: 1.333, samples: 100, maxPoints: 16, maxLegKm: 300 };
+const CFG = { frequencyMhz: 910.525, antennaHeightM: 30, kFactor: 1.333, maxPoints: 16, maxLegKm: 300 };
 
 function load(opts) {
   opts = opts || {};
@@ -217,7 +234,7 @@ function load(opts) {
   const store = new Map(Object.entries(opts.storage || {}));
   const ctx = {
     console: { log() {}, error() {}, warn: m => warnings.push(String(m)) },
-    setTimeout, clearTimeout,
+    setTimeout: opts.setTimeout || setTimeout, clearTimeout,
     requestAnimationFrame: fn => setTimeout(fn, 0),
     cancelAnimationFrame: clearTimeout,
     innerWidth: 1280,
@@ -381,13 +398,20 @@ async function main() {
     const upstream = { error: 'upstream' };
     const unknown = { error: 'unknown_point', distanceKm: 3 };
     const limited = { error: 'rate_limited' };
-    [tooLong, upstream, unknown, limited].forEach(e => {
+    const noTerrain = { error: 'no_terrain', distanceKm: 8 };
+    const tooMany = { error: 'too_many_tiles', distanceKm: 280 };
+    [tooLong, upstream, unknown, limited, noTerrain, tooMany].forEach(e => {
       assert(I.chipText(e) === 'LOS n/a' && I.chipTone(e) === 'muted', e.error + ': "LOS n/a", muted');
     });
     assert(/too far for a terrain check \(412 km\)$/i.test(I.chipTitle(tooLong, 'X')), 'too_long title says too far, with the distance');
-    assert(/Elevation service unavailable$/.test(I.chipTitle(upstream, 'X')), 'upstream title says the elevation service is unavailable');
+    assert(/: n\/a — Terrain data unavailable$/.test(I.chipTitle(upstream, 'X')), 'upstream title: "Terrain data unavailable"');
     assert(/Node location unknown to the server$/.test(I.chipTitle(unknown, 'X')), 'unknown_point title: "Node location unknown to the server"');
-    assert(/Elevation lookups are rate-limited; try again shortly$/.test(I.chipTitle(limited, 'X')), 'rate_limited title: "Elevation lookups are rate-limited; try again shortly"');
+    assert(/: n\/a — Terrain lookups are rate-limited; try again shortly$/.test(I.chipTitle(limited, 'X')), 'rate_limited title: "Terrain lookups are rate-limited; try again shortly"');
+    assert(/: n\/a — No terrain data for this leg$/.test(I.chipTitle(noTerrain, 'X')), 'no_terrain title: "No terrain data for this leg"');
+    assert(/: n\/a — Route crosses too much terrain for one check$/.test(I.chipTitle(tooMany, 'X')), 'too_many_tiles title: "Route crosses too much terrain for one check"');
+    const retryOf = st => /mc-los-retry/.test(I.panelBodyHtml(I.buildLegs([A, B])[0], null, st));
+    assert(retryOf(upstream) && retryOf(limited) && !retryOf(noTerrain) && !retryOf(tooMany) && !retryOf(unknown),
+      'only upstream and rate_limited offer "Try again"');
     assert(I.chipTitle(null, 'X') === 'Line of sight from X: checking terrain', 'loading title');
     assert(/^Terrain \d+ m above line of sight at 5 m \/ 5 m antennas, [\d.]+ km from Hill\. Heard on this hop anyway\.$/.test(I.markerText(blocked, 'Hill')), 'obstruction marker tooltip (obstructionM > 0)');
     assert(/^Fresnel zone \d+% clear at 5 m \/ 5 m antennas$/.test(I.markerText(marginal, 'Hill')), 'marginal marker tooltip (no obstruction)');
@@ -406,12 +430,17 @@ async function main() {
     assert(ok.distanceKm === 2.5 && ok.elevM.length === N, 'elev_m leg → terrain result');
     assert(I.legResultFrom({ distance_km: 3, error: 'unknown_point' }).error === 'unknown_point', 'unknown_point kept');
     assert(I.legResultFrom({ distance_km: 400, error: 'too_long' }).error === 'too_long', 'too_long kept');
+    assert(I.legResultFrom({ distance_km: 3, error: 'no_terrain' }).error === 'no_terrain', 'no_terrain kept');
+    assert(I.legResultFrom({ distance_km: 280, error: 'too_many_tiles' }).error === 'too_many_tiles', 'too_many_tiles kept');
+    const long = I.legResultFrom({ distance_km: 50, elev_m: Array.from({ length: 557 }, (_, i) => i) });
+    assert(long.elevM && long.elevM.length === 557, 'any sample count (the server sends ~90 m spacing, 64–600)');
     assert(I.legResultFrom({ distance_km: 3, error: 'mystery' }).error === 'upstream', 'an unknown code reads as unavailable');
     assert(I.legResultFrom({ distance_km: 3, elev_m: [1, null, 3] }).error === 'upstream', 'non-numeric elevation → unavailable');
     assert(I.legResultFrom(null).error === 'upstream', 'missing leg → unavailable');
-    assert(I.isCacheable(ok) && I.isCacheable({ error: 'too_long' }), 'terrain and too_long are cacheable');
-    assert(!I.isCacheable({ error: 'upstream' }) && !I.isCacheable({ error: 'unknown_point' }) && !I.isCacheable({ error: 'rate_limited' }),
-      'upstream / unknown_point / rate_limited are not cached');
+    assert(I.isCacheable(ok) && I.isCacheable({ error: 'too_long' }) && I.isCacheable({ error: 'no_terrain' }),
+      'terrain, too_long and no_terrain are cacheable');
+    assert(!I.isCacheable({ error: 'upstream' }) && !I.isCacheable({ error: 'unknown_point' }) && !I.isCacheable({ error: 'rate_limited' }) &&
+      !I.isCacheable({ error: 'too_many_tiles' }), 'upstream / unknown_point / rate_limited / too_many_tiles are not cached');
   }
 
   console.log('\n=== parseSetting ===');
@@ -565,11 +594,110 @@ async function main() {
     t.R.update({ map, sidebar: sb2, seq: [C, D, E] });
     await flush(40);
     const c = chipOf(rowsOf(sb2)[2]);
-    assert(c.textContent === 'LOS n/a' && /Elevation lookups are rate-limited; try again shortly/.test(c.title), '429 → "LOS n/a", rate-limited title');
+    assert(c.textContent === 'LOS n/a' && /Terrain lookups are rate-limited; try again shortly/.test(c.title), '429 → "LOS n/a", rate-limited title');
     assert(f.calls.length === 2, '429 is not retried automatically');
     status = 200;
     t.R.update({ map, sidebar: sb2, seq: [C, D, E] });
     assert(f.calls.length === 3, 'a later update() tries the rate-limited legs again');
+  }
+
+  console.log('\n=== update(): no_terrain cached ===');
+  {
+    const f = makeFetch(() => ({ distance_km: 8, error: 'no_terrain' }));
+    const t = load({ fetch: f });
+    const sb = makeSidebar([A, B]);
+    const map = makeMap();
+    t.R.update({ map, sidebar: sb, seq: [A, B] });
+    await flush();
+    const c = chipOf(rowsOf(sb)[1]);
+    assert(c.textContent === 'LOS n/a' && /No terrain data for this leg$/.test(c.title), 'no_terrain → "LOS n/a", no-terrain title');
+    t.R.update({ map, sidebar: sb, seq: [A, B] });
+    assert(f.calls.length === 1, 'no_terrain is cached (no refetch)');
+  }
+
+  console.log('\n=== update(): 202 polling ===');
+  {
+    assert(I.pollDelayS({ retry_after_s: 2 }) === 2 && I.pollDelayS({ retry_after_s: 0 }) === 1 &&
+      I.pollDelayS({ retry_after_s: 99 }) === 10 && I.pollDelayS({ retry_after_s: 'x' }) === 1 && I.pollDelayS(null) === 1,
+      'retry_after_s clamped to 1–10 s; missing or garbage → 1 s');
+
+    // 202 → wait retry_after_s → the same URL again → 200.
+    const timers = makeTimers();
+    const f = makeFetch(() => ({ distance_km: 2.7, elev_m: flat(20) }), n => (n === 1 ? 202 : 200), () => ({ retry_after_s: 0 }));
+    const t = load({ fetch: f, setTimeout: timers });
+    const sb = makeSidebar([A, B, C]);
+    const map = makeMap();
+    t.R.update({ map, sidebar: sb, seq: [A, B, C] });
+    await flush();
+    assert(f.calls.length === 1 && timers.delays().join() === '1000', '202 → one re-poll scheduled, retry_after_s 0 clamped to 1 s');
+    const c1 = chipOf(rowsOf(sb)[1]);
+    assert(c1.textContent === 'LOS…' && /mc-los-loading/.test(c1.className), 'chips stay loading during the 202');
+    // A re-render of the same route while the poll waits keeps it going.
+    t.R.update({ map, sidebar: sb, seq: [A, B, C] });
+    assert(f.calls.length === 1, 'same-route update(): no second request while one polls');
+    timers.runAll();
+    await flush();
+    assert(f.calls.length === 2 && f.calls[1] === f.calls[0], 're-polls the same URL');
+    assert(chipOf(rowsOf(sb)[1]).textContent === 'LOS clear' && chipOf(rowsOf(sb)[2]).textContent === 'LOS clear',
+      'the 200 after the poll renders every leg');
+    assert(timers.pending() === 0, 'nothing more scheduled');
+  }
+  {
+    // The server keeps answering 202: give up after MAX_POLLS re-polls.
+    const timers = makeTimers();
+    const f = makeFetch(() => ({ distance_km: 1, elev_m: flat(1) }), () => 202, () => ({ retry_after_s: 99 }));
+    const t = load({ fetch: f, setTimeout: timers });
+    const sb = makeSidebar([A, B]);
+    t.R.update({ map: makeMap(), sidebar: sb, seq: [A, B] });
+    await flush();
+    assert(timers.delays().join() === '10000', 'retry_after_s 99 clamped to 10 s');
+    for (let i = 0; i < 40 && timers.pending(); i++) {
+      timers.runAll();
+      await flush(2);
+    }
+    await flush();
+    assert(t.I.MAX_POLLS === 30 && f.calls.length === 31, 'gives up after 30 re-polls (31 requests, got ' + f.calls.length + ')');
+    const c = chipOf(rowsOf(sb)[1]);
+    assert(c.textContent === 'LOS n/a' && /Terrain data unavailable$/.test(c.title), 'an exhausted poll reads as "Terrain data unavailable"');
+    assert(!t.I.cache.has(t.I.cacheKey(A, B)), '...and is not cached');
+  }
+  {
+    // clear() (teardown) and a new route stop the polling of the old one.
+    const timers = makeTimers();
+    let status = 202;
+    const f = makeFetch(() => ({ distance_km: 1, elev_m: flat(1) }), () => status);
+    const t = load({ fetch: f, setTimeout: timers });
+    const map = makeMap();
+    t.R.update({ map, sidebar: makeSidebar([A, B]), seq: [A, B] });
+    await flush();
+    t.R.clear();
+    timers.runAll();
+    await flush();
+    assert(f.calls.length === 1 && timers.pending() === 0, 'clear(): the waiting poll fetches nothing and stops');
+    assert(!t.I.cache.has(t.I.cacheKey(A, B)), 'clear(): nothing cached');
+    t.R.update({ map, sidebar: makeSidebar([A, B]), seq: [A, B] });
+    await flush();
+    assert(f.calls.length === 2, 'the route shown again starts a fresh request');
+
+    const sbCD = makeSidebar([C, D]);
+    t.R.update({ map, sidebar: sbCD, seq: [C, D] }); // the user moves to another route
+    await flush();
+    assert(f.calls.length === 3 && timers.pending() === 2, 'new route: its own request, both waiting to poll');
+    status = 200;
+    timers.runAll();
+    await flush();
+    assert(f.calls.length === 4 && ptsOf(f.calls[3])[0][0] === String(C.lat), 'only the shown route polls again');
+    assert(chipOf(rowsOf(sbCD)[1]).textContent === 'LOS clear', 'the shown route renders');
+    assert(!t.I.cache.has(t.I.cacheKey(A, B)) && t.I.cache.has(t.I.cacheKey(C, D)), 'the dropped poll caches nothing');
+  }
+
+  console.log('\n=== panel footer ===');
+  {
+    assert(I.footText('SRTM (AWS Open Data)') === 'Elevation: SRTM (AWS Open Data) · terrain only, trees and buildings are not modelled',
+      'footer names the source the server sent');
+    assert(I.footText(null) === 'Elevation: SRTM · terrain only, trees and buildings are not modelled', 'footer before any response');
+    assert(/textContent = footText\(S\.source\)/.test(RLOS_SRC), 'the panel footer uses footText (as text, never HTML)');
+    assert(!/Copernicus|GLO-90|open-meteo/i.test(RLOS_SRC), 'no trace of the old elevation service');
   }
 
   console.log('\n=== update(): chunked run, cache cap ===');

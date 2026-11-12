@@ -4,7 +4,8 @@
  * The fixture server does not enable LOS, so the test stubs the two network
  * calls it depends on:
  *   GET /api/config/client          → real JSON plus a `los` block
- *   GET /api/elevation/profile?pts= → three canned legs (clear, ridge, n/a)
+ *   GET /api/elevation/profile?pts= → 202 (terrain loading) once, then three
+ *                                     canned legs (clear, ridge, n/a)
  * A negative case runs without the config stub (LOS off → inert).
  *
  * Route setup has no URL param: hops go in sessionStorage 'map-route-hops',
@@ -24,7 +25,8 @@ const HOPS = [
   '4ca3dcec6fdfe37fee1215f4e3ac36ec4af75ec3c81572d6568e8fdac96fe367',
   '1e598d0f11783a33c04d701ff3151fd8d8c0a96686d88267df70993f59ef760c',
 ];
-const LOS_CFG = { frequencyMhz: 910.525, antennaHeightM: 5, kFactor: 1.3333, samples: 100, maxPoints: 16, maxLegKm: 300 };
+const LOS_CFG = { frequencyMhz: 910.525, antennaHeightM: 5, kFactor: 1.3333, maxPoints: 16, maxLegKm: 300 };
+const SOURCE = 'SRTM (AWS Open Data)';
 
 let passed = 0, failed = 0;
 async function step(name, fn) {
@@ -36,16 +38,29 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 function flat() { return Array.from({ length: 100 }, () => 10); }
 function ridge() { const a = flat(); for (let i = 45; i <= 55; i++) a[i] = 900; return a; }
 
-// Stubs the elevation endpoint; returns a live record of the calls.
-async function stubElevation(page) {
-  const rec = { count: 0, pts: [] };
+// Stubs the elevation endpoint; returns a live record of the calls. With
+// loadingFirst the first call answers 202 (terrain still loading), as the
+// server does while it downloads tiles; count is the 200s, polls the 202s.
+async function stubElevation(page, opts) {
+  const rec = { count: 0, polls: 0, pts: [], polledPts: [] };
   await page.route('**/api/elevation/profile*', async (route) => {
+    const pts = new URL(route.request().url()).searchParams.get('pts');
+    if (opts && opts.loadingFirst && rec.polls === 0) {
+      rec.polls++;
+      rec.polledPts.push(pts);
+      await route.fulfill({
+        status: 202, contentType: 'application/json',
+        headers: { 'Retry-After': '1', 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ state: 'loading_terrain', progress: 0.5, retry_after_s: 1 }),
+      });
+      return;
+    }
     rec.count++;
-    rec.pts.push(new URL(route.request().url()).searchParams.get('pts'));
+    rec.pts.push(pts);
     await route.fulfill({
       status: 200, contentType: 'application/json',
       body: JSON.stringify({
-        samples: 100, source: 'e2e-stub',
+        source: SOURCE,
         legs: [
           { distance_km: 0.5, elev_m: flat() },
           { distance_km: 20.1, elev_m: ridge() },
@@ -112,12 +127,16 @@ const chipInfo = (page) => page.evaluate(() =>
   page.setDefaultTimeout(10000);
   page.on('pageerror', (e) => errors.push(e));
   await seedHops(page);
-  const rec = await stubElevation(page);
+  const rec = await stubElevation(page, { loadingFirst: true });
   await stubLosConfig(page);
 
   await openRoute(page);
   await page.waitForSelector('button.mc-los-chip', { timeout: 15000 });
   await page.waitForSelector('.mc-los-obstruction', { state: 'attached', timeout: 15000 });
+
+  await step('a 202 is re-polled at the same URL, then exactly 1 answer', async () => {
+    assert(rec.polls === 1 && rec.polledPts[0] === rec.pts[0], '202 polls: ' + rec.polls + ', pts ' + JSON.stringify(rec.polledPts));
+  });
 
   await step('exactly 1 elevation request with unrounded coordinates', async () => {
     assert(rec.count === 1, 'expected 1 request, got ' + rec.count);
@@ -146,6 +165,8 @@ const chipInfo = (page) => page.evaluate(() =>
     await page.waitForSelector('.mc-los-panel svg.mc-los-svg');
     const obst = await page.locator('.mc-los-panel .mc-los-obst').textContent();
     assert(/Terrain rises/.test(obst), 'obst text: ' + obst);
+    const foot = await page.locator('.mc-los-panel .mc-los-foot').textContent();
+    assert(foot === 'Elevation: ' + SOURCE + ' · terrain only, trees and buildings are not modelled', 'footer: ' + foot);
     assert(await page.locator('.mc-rt-detail-panel').count() === 0, 'hop detail panel should be absent');
     assert(/los=2/.test(await hash(page)), 'hash: ' + await hash(page));
   });

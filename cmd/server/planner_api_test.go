@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -350,7 +348,7 @@ func newPlannerHarnessWith(t *testing.T, pc PlannerConfig) *plannerHarness {
 		HiddenNamePrefixes: []string{"zz-"},
 	}
 	srv := &Server{cfg: cfg}
-	p := newPlannerService(pc, srv)
+	p := newPlannerService(pc, srv, nil)
 	h := &plannerHarness{
 		srv:   srv,
 		p:     p,
@@ -456,7 +454,7 @@ func decodeStatus(t *testing.T, w *httptest.ResponseRecorder) PlannerJobStatus {
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 func TestPlannerAPIDisabled(t *testing.T) {
-	off := newPlannerService(PlannerConfig{}, nil)
+	off := newPlannerService(PlannerConfig{}, nil, nil)
 	t.Cleanup(off.Close)
 	for _, srv := range []*Server{
 		{cfg: &Config{}},
@@ -664,7 +662,7 @@ func TestPlannerAPIProtocol(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.Source != plannerSourceName || plan.Params.Sites != 2 || plan.ComputedAt.IsZero() ||
+	if plan.Source != terrainDefaultSource || plan.Params.Sites != 2 || plan.ComputedAt.IsZero() ||
 		plan.Area != (geoBBoxJSON{S: 30.0, W: -97.2, N: 30.35, E: -96.85}) {
 		t.Fatalf("plan %+v", plan)
 	}
@@ -708,7 +706,7 @@ func TestPlannerAPIFastPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := geoDistKm(geoPoint{30.1, -97.1}, geoPoint{30.2, -97.0})
-	if prof.Source != plannerSourceName || len(prof.Legs) != 1 || prof.Legs[0].Error != "" ||
+	if prof.Source != terrainDefaultSource || len(prof.Legs) != 1 || prof.Legs[0].Error != "" ||
 		len(prof.Legs[0].ElevM) != planProfileSamples(d) || prof.Legs[0].DistanceKm != losRound(d, 1000) {
 		t.Fatalf("profile %+v", prof)
 	}
@@ -806,7 +804,7 @@ func TestPlannerAPIRelayParams(t *testing.T) {
 	}
 	var resp PlannerRelayResponse
 	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.Params != want || resp.Source != plannerSourceName || resp.Open == nil || resp.Warnings == nil {
+	if resp.Params != want || resp.Source != terrainDefaultSource || resp.Open == nil || resp.Warnings == nil {
 		t.Fatalf("response %+v", resp)
 	}
 	// Nodes: in the corridor, visible, repeaters/rooms only.
@@ -1262,7 +1260,7 @@ func TestPlannerAPIFingerprint(t *testing.T) {
 func TestPlannerAPIDefaultDataSource(t *testing.T) {
 	cfg := &Config{Planner: &PlannerConfig{Enabled: true}, LOS: &LOSConfig{FrequencyMHz: 915, KFactor: 1.2}}
 	srv := &Server{cfg: cfg}
-	p := newPlannerService(PlannerConfig{Enabled: true}, srv)
+	p := newPlannerService(PlannerConfig{Enabled: true}, srv, nil)
 	t.Cleanup(p.Close)
 	srv.planner = p
 	if p.freqMHz != 915 || p.kFactor != 1.2 {
@@ -1693,25 +1691,5 @@ func TestPlannerAPIMissingTerrainWarnings(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &plan)
 	if len(plan.Warnings) != 0 {
 		t.Fatalf("complete terrain coverage warnings %q", plan.Warnings)
-	}
-}
-
-func TestPlannerConfigLogRedactsTileURL(t *testing.T) {
-	var buf bytes.Buffer
-	prev, flags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(prev); log.SetFlags(flags) })
-	logPlannerConfig(&PlannerConfig{Enabled: true, TileURL: "https://user:s3cret@tiles.example.com/tok-123/skadi"})
-	out := buf.String()
-	if !strings.Contains(out, "tiles=https://tiles.example.com,") {
-		t.Fatalf("log %q", out)
-	}
-	for _, leak := range []string{"user", "s3cret", "tok-123", "skadi"} {
-		if strings.Contains(out, leak) {
-			t.Fatalf("log leaks %q: %q", leak, out)
-		}
-	}
-	if got := plannerTileHost("not a url"); got != "(invalid)" {
-		t.Fatalf("plannerTileHost = %q", got)
 	}
 }

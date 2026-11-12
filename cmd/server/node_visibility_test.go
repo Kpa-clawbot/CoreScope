@@ -310,7 +310,7 @@ func TestNodeVisibilityAgreesAcrossSurfaces(t *testing.T) {
 	}
 
 	// Elevation proxy: only visible nodes' positions are valid endpoints.
-	svc := newElevationService(LOSConfig{Enabled: true, ElevationURL: "http://127.0.0.1:1/v1/elevation"})
+	svc := newElevationService(nil)
 	svc.nodes = func() []nodeInfo { ns, _ := srv.store.getCachedNodesAndPM(); return ns }
 	svc.visibility = srv
 	var elevKeys []string

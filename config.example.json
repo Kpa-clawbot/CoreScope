@@ -379,27 +379,26 @@
     "_comment": "Issue #1268. OPT-IN LoRa radio settings (frequency, SF, bandwidth, coding rate) per node, which never travel in packets. Empty nodesUrl (default) = DISABLED: nothing is fetched and /api/rf-params reports enabled=false. To enable set nodesUrl to \"https://map.meshcore.io/api/v1/nodes\" and presetsUrl to \"https://api.meshcore.nz/api/v1/config\" (named presets; optional). The map payload is about 50 MB of JSON (17 MB gzipped); it is fetched after a random 0-60 s startup delay and then every refreshHours, stream-decoded with a 128 MB cap, validated per field, and kept in memory only for adverts younger than maxAgeDays. A failed fetch keeps the previous data; until the first fetch succeeds it is retried after 1, 2, 4, 8 and 16 min, then every 30 min. Adverts dated more than 10 min in the future are dropped. Shown in the node detail panel and on the full node page."
   },
   "los": {
-    "_comment": "Radio line-of-sight on the map packet-route view. OPT-IN. elevationUrl: Open-Meteo-compatible elevation API (self-hostable). frequencyMhz/antennaHeightM/kFactor are the default inputs viewers can change in the profile panel. frequencyMhz: 910.525 is the US default; use 869.618 for EU/UK meshes (set it to your mesh's frequency). The planner reads frequencyMhz and kFactor from this block even when los.enabled is false.",
+    "_comment": "Radio line-of-sight on the map packet-route view. OPT-IN. Terrain comes from the terrain block (SRTM tiles shared with the planner); one profile request loads at most 16 tiles and each client may start 20 tile downloads a minute. frequencyMhz/antennaHeightM/kFactor are the default inputs viewers can change in the profile panel. frequencyMhz: 910.525 is the US default; use 869.618 for EU/UK meshes (set it to your mesh's frequency). The planner reads frequencyMhz and kFactor from this block even when los.enabled is false.",
     "enabled": false,
-    "elevationUrl": "https://api.open-meteo.com/v1/elevation",
     "frequencyMhz": 910.525,
     "antennaHeightM": 5,
-    "kFactor": 1.333,
-    "legsPerMinute": 40,
-    "legsPerHour": 300,
-    "legsPerDay": 700
+    "kFactor": 1.333
   },
   "planner": {
-    "_comment": "Repeater planner at #/tools/planner (line of sight between points, best relay site, backbone site suggestions for an area). OPT-IN. Terrain: SRTM 1° tiles (~5.6 MB each) fetched on demand from AWS Open Data into server memory only (no disk, no DB); budget 20 tiles/min, 200/h. tileCacheTiles caps resident tiles (~2.9 MB each), 4-200; the cache never holds fewer than one full view (12 tiles at the default sizes), so a smaller value is raised at startup. Size limits: maxAreaKm is the largest coverage box side (20-250), nodeMarginKm how far outside the box repeaters still count (10-60), maxLegKm the longest profile/relay leg (10-200). Raise them for sparse regions; the terrain one request may load grows with them (the startup log prints the tile counts and memory). defaultRangeKm must be one of 10,15,20,30,40,50,60 and at most maxLegKm. Antenna heights are the defaults viewers can change. Frequency and k-factor come from the los block (set los.frequencyMhz even if route LOS stays off).",
+    "_comment": "Repeater planner at #/tools/planner (line of sight between points, best relay site, backbone site suggestions for an area). OPT-IN. Terrain comes from the terrain block (SRTM tiles shared with route LOS). Size limits: maxAreaKm is the largest coverage box side (20-250), nodeMarginKm how far outside the box repeaters still count (10-60), maxLegKm the longest profile/relay leg (10-200). Raise them for sparse regions; the terrain one request may load grows with them (the startup log prints the tile counts and memory). defaultRangeKm must be one of 10,15,20,30,40,50,60 and at most maxLegKm. Antenna heights are the defaults viewers can change. Frequency and k-factor come from the los block (set los.frequencyMhz even if route LOS stays off).",
     "enabled": false,
-    "tileUrl": "https://s3.amazonaws.com/elevation-tiles-prod/skadi",
-    "tileCacheTiles": 24,
     "defaultRangeKm": 30,
     "newAntennaM": 10,
     "existingAntennaM": 5,
     "maxAreaKm": 100,
     "nodeMarginKm": 30,
     "maxLegKm": 100
+  },
+  "terrain": {
+    "_comment": "SRTM terrain shared by route line-of-sight (los) and the repeater planner, so both read the same tiles and give a leg the same verdict. Used only while los.enabled or planner.enabled is true. 1° tiles (~5.6 MB each) are fetched on demand into server memory only (no disk, no DB); downloads are budgeted at 20 tiles/min, 200/h for both features together. tileUrl: base of an SRTM skadi tile tree (<tileUrl>/N30/N30W098.hgt.gz), https without a query; the default is AWS Open Data. tileCacheTiles caps resident tiles (~2.9 MB each), 4-200; the cache never holds fewer than the largest single load of an enabled feature (16 tiles for route LOS, 12 for the planner at its default sizes), so a smaller value is raised at startup.",
+    "tileUrl": "https://s3.amazonaws.com/elevation-tiles-prod/skadi",
+    "tileCacheTiles": 24
   },
   "_comment_knownChannels": "Issue #1323. OPT-IN community-maintained hashtag-channels catalogue. Empty string (default) = DISABLED: no background HTTP fetch is started and GET /api/known-channels returns an empty snapshot. To enable, set knownChannelsUrl to a pinned-SHA URL such as \"https://raw.githubusercontent.com/marcelverdult/meshcore-channels/072bc25b6fc983aa2aa7e9d399a97a5f4899ea71/channels-by-country.json\". The URL should point at the channels-by-country.json shape: {generated_at, license, countries:{cc:[{channel,description,key?}]}}. Always pin to a specific commit SHA (not the moving 'main' branch) so a hostile or compromised future upstream commit cannot be silently fetched by your deployment; periodically bump the pin after reviewing upstream diffs. Fetched in the background every knownChannelsRefreshMs (default 86400000 = 24h). Stored in-memory only — no DB, no disk cache. Surfaced over GET /api/known-channels?region=XX. Cache is fail-soft: a failed refresh keeps the last-known snapshot in place. No credentials are sent.",
   "batteryThresholds": {

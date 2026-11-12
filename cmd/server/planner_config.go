@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"net/url"
 )
 
 func (c *PlannerConfig) enabled() bool { return c != nil && c.Enabled }
@@ -11,8 +10,6 @@ func (c *PlannerConfig) enabled() bool { return c != nil && c.Enabled }
 // resolved applies defaults; invalid values fall back with a warning.
 func (c *PlannerConfig) resolved() (PlannerConfig, []string) {
 	out := PlannerConfig{
-		TileURL:          defaultPlannerTileURL,
-		TileCacheTiles:   defaultPlannerTileCache,
 		DefaultRangeKm:   defaultPlannerRangeKm,
 		NewAntennaM:      defaultPlannerNewAntennaM,
 		ExistingAntennaM: defaultPlannerExistAntenna,
@@ -25,20 +22,6 @@ func (c *PlannerConfig) resolved() (PlannerConfig, []string) {
 	}
 	var warns []string
 	out.Enabled = c.Enabled
-	if c.TileURL != "" {
-		if u, err := url.Parse(c.TileURL); err == nil && u.Scheme == "https" && u.Host != "" && u.RawQuery == "" {
-			out.TileURL = c.TileURL
-		} else {
-			warns = append(warns, "planner.tileUrl must be an https URL without a query; using the default")
-		}
-	}
-	if c.TileCacheTiles != 0 {
-		if c.TileCacheTiles >= 4 && c.TileCacheTiles <= 200 {
-			out.TileCacheTiles = c.TileCacheTiles
-		} else {
-			warns = append(warns, "planner.tileCacheTiles must be within 4-200; using the default")
-		}
-	}
 	if c.DefaultRangeKm != 0 {
 		if plannerRangeAllowed(c.DefaultRangeKm) {
 			out.DefaultRangeKm = c.DefaultRangeKm
@@ -112,18 +95,6 @@ func (c PlannerConfig) tileLimits() plannerTileLimits {
 		or(c.MaxLegKm, defaultPlannerMaxLegKm))
 }
 
-// tileCache is the terrain cache size in tiles: TileCacheTiles (0 = the
-// default), raised to one full view when it is smaller. A smaller cache
-// would evict a view's own tiles while loading it, so the next job on the
-// same area downloads them again.
-func (c PlannerConfig) tileCache() int {
-	n := c.TileCacheTiles
-	if n <= 0 {
-		n = defaultPlannerTileCache
-	}
-	return max(n, c.tileLimits().max())
-}
-
 func plannerRangeAllowed(km float64) bool {
 	for _, r := range plannerRangesKm {
 		if r == km {
@@ -165,27 +136,11 @@ func logPlannerConfig(c *PlannerConfig) {
 	for _, w := range warns {
 		log.Printf("[planner] %s", w)
 	}
-	cache, lim := r.tileCache(), r.tileLimits()
-	if cache > r.TileCacheTiles {
-		log.Printf("[planner] tileCacheTiles=%d is below one full view; keeping %d tiles resident",
-			r.TileCacheTiles, cache)
-	}
-	log.Printf("[planner] enabled (tiles=%s, cache=%d tiles, range=%.0f km, new=%.0f m, existing=%.0f m, "+
+	lim := r.tileLimits()
+	log.Printf("[planner] enabled (range=%.0f km, new=%.0f m, existing=%.0f m, "+
 		"maxArea=%g km, nodeMargin=%g km, maxLeg=%g km)",
-		plannerTileHost(r.TileURL), cache, r.DefaultRangeKm, r.NewAntennaM, r.ExistingAntennaM,
-		r.MaxAreaKm, r.NodeMarginKm, r.MaxLegKm)
-	mb := func(tiles int) float64 { return float64(tiles) * srtmTileBytes / 1e6 }
+		r.DefaultRangeKm, r.NewAntennaM, r.ExistingAntennaM, r.MaxAreaKm, r.NodeMarginKm, r.MaxLegKm)
 	log.Printf("[planner] terrain tiles per request: coverage %d, relay %d, profile %d; "+
-		"one view takes up to %.0f MB and the cache up to %.0f MB (%.1f MB a tile)",
-		lim.Coverage, lim.Relay, lim.Profile, mb(lim.max()), mb(cache), mb(1))
-}
-
-// plannerTileHost is the tile URL reduced to scheme and host for logs: a
-// self-hosted tile server's path or userinfo may carry a token.
-func plannerTileHost(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return "(invalid)"
-	}
-	return u.Scheme + "://" + u.Host
+		"one view takes up to %.0f MB (%.1f MB a tile)",
+		lim.Coverage, lim.Relay, lim.Profile, float64(lim.max())*srtmTileBytes/1e6, float64(srtmTileBytes)/1e6)
 }

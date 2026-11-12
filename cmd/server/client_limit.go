@@ -1,11 +1,11 @@
 package main
 
-// Per-client token bucket for public endpoints whose requests cost upstream
-// fetches or heavy compute (/api/elevation/profile, /api/planner/*). Clients
-// are told apart by wsLimiter.clientIP, so X-Forwarded-For is believed only
-// from webSocket.trustedProxies (see ws_limits.go). When clients cannot be
-// told apart, every request shares one bucket and a one-time warning tells
-// the operator what to configure.
+// Per-client token bucket for public endpoints whose requests cost terrain
+// tile downloads or heavy compute (/api/elevation/profile, /api/planner/*).
+// Clients are told apart by wsLimiter.clientIP, so X-Forwarded-For is
+// believed only from webSocket.trustedProxies (see ws_limits.go). When
+// clients cannot be told apart, every request shares one bucket and a
+// one-time warning tells the operator what to configure.
 
 import (
 	"log"
@@ -23,7 +23,7 @@ type clientLimiter struct {
 	rl   *rateLimiter
 	warn sync.Once
 	// tag is the log prefix ("los"); what names the limit in the warning
-	// ("elevation").
+	// ("terrain tile").
 	tag, what string
 }
 

@@ -464,32 +464,11 @@ func main() {
 			cfg.RfParams.NodesURL, cfg.RfParams.PresetsURL, cfg.RfParams.refresh(), cfg.RfParams.maxAge())
 	}
 
-	// Radio line-of-sight elevation profiles. OPT-IN: without los.enabled
-	// nothing is fetched and /api/elevation/profile answers 404.
-	if cfg.LOS.enabled() {
-		logLOSConfig(cfg.LOS)
-		losCfg, _ := cfg.LOS.resolved()
-		srv.elevation = newElevationService(losCfg)
-		srv.elevation.nodes = func() []nodeInfo {
-			if srv.store == nil {
-				return nil
-			}
-			ns, _ := srv.store.getCachedNodesAndPM()
-			return ns
-		}
-		srv.elevation.visibility = srv
-		srv.elevation.ipr = &wsLimiter{state: map[string]*wsIPState{},
-			trustedProxies: parseCIDRList(cfg.WSTrustedProxies(), "webSocket.trustedProxies")}
-		srv.elevation.rl = newRateLimiter(elevIPTokens, time.Minute) // legs per client per minute
-	}
-
-	// Repeater planner. OPT-IN: without planner.enabled no terrain tile is
-	// fetched and /api/planner/* answers 404.
-	if cfg.Planner.enabled() {
-		logPlannerConfig(cfg.Planner)
-		plannerCfg, _ := cfg.Planner.resolved()
-		srv.planner = newPlannerService(plannerCfg, srv)
-	}
+	// Radio line-of-sight profiles and the repeater planner, over one shared
+	// SRTM terrain source. OPT-IN: without los.enabled /api/elevation/profile
+	// answers 404, without planner.enabled /api/planner/* does, and with
+	// neither no terrain tile is ever fetched.
+	srv.elevation, srv.planner = newTerrainServices(cfg, srv)
 
 	// Steady-state repeater-enrichment recomputer (issue #1262).
 	// Prewarms the bulk caches feeding handleNodes so the very first

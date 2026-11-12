@@ -244,6 +244,10 @@ type Config struct {
 	// Repeater planner (#/tools/planner, planner_types.go). OPT-IN: nil or
 	// enabled=false fetches no terrain tiles and /api/planner/* answers 404.
 	Planner *PlannerConfig `json:"planner,omitempty"`
+
+	// SRTM terrain tiles shared by route LOS and the planner
+	// (terrain_config.go). Read only while one of them is enabled.
+	Terrain *TerrainConfig `json:"terrain,omitempty"`
 }
 
 // CustomizerConfig holds operator-side knobs for the in-app customizer modal.

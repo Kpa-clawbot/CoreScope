@@ -134,8 +134,7 @@ func TestPlannerConfigLogSizes(t *testing.T) {
 	for _, want := range []string{
 		"maxArea=200 km, nodeMargin=50 km, maxLeg=150 km",
 		"terrain tiles per request: coverage 28, relay 24, profile 24",
-		"one view takes up to 81 MB and the cache up to 81 MB (2.9 MB a tile)",
-		"tileCacheTiles=24 is below one full view; keeping 28 tiles resident",
+		"one view takes up to 81 MB (2.9 MB a tile)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q:\n%s", want, out)

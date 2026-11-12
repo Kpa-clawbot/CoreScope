@@ -16,6 +16,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -155,13 +156,17 @@ func (u *srtmUpstream) total() int {
 	return n
 }
 
+// srtmTestViewTiles is a test source's per-view cap: the planner's at its
+// default sizes, as when only the planner is enabled.
+var srtmTestViewTiles = PlannerConfig{}.tileLimits().max()
+
 // newSRTMTest builds a source against a local upstream with a fake clock and
 // its own fetch slots. cacheTiles 0 means the default.
-func newSRTMTest(t *testing.T, cacheTiles int, h http.HandlerFunc) (*srtmSource, *srtmUpstream, *elevClock) {
+func newSRTMTest(t testing.TB, cacheTiles int, h http.HandlerFunc) (*srtmSource, *srtmUpstream, *elevClock) {
 	t.Helper()
 	u := &srtmUpstream{hits: make(map[string]int), h: h}
 	u.ts = httptest.NewServer(u)
-	s := newSRTMSource(PlannerConfig{TileURL: u.ts.URL, TileCacheTiles: cacheTiles})
+	s := newSRTMSource(TerrainConfig{TileURL: u.ts.URL, TileCacheTiles: cacheTiles}, srtmTestViewTiles)
 	s.sem = make(chan struct{}, srtmMaxConcurrent)
 	clk := &elevClock{t: time.Unix(1_700_000_000, 0)}
 	s.now = clk.now
@@ -324,14 +329,14 @@ func TestSRTMTileNaming(t *testing.T) {
 		}
 	}
 
-	s := newSRTMSource(PlannerConfig{TileURL: "https://tiles.example/skadi/"})
+	s := newSRTMSource(TerrainConfig{TileURL: "https://tiles.example/skadi/"}, srtmTestViewTiles)
 	if got, want := s.tileURL(srtmKey{30, -98}), "https://tiles.example/skadi/N30/N30W098.hgt.gz"; got != want {
 		t.Errorf("tileURL = %s, want %s", got, want)
 	}
 	if got, want := s.tileURL(srtmKey{-1, -50}), "https://tiles.example/skadi/S01/S01W050.hgt.gz"; got != want {
 		t.Errorf("tileURL = %s, want %s", got, want)
 	}
-	if got := newSRTMSource(PlannerConfig{}).baseURL; got != defaultPlannerTileURL {
+	if got := newSRTMSource(TerrainConfig{}, srtmTestViewTiles).baseURL; got != defaultTerrainTileURL {
 		t.Errorf("default base = %s", got)
 	}
 }
@@ -1276,7 +1281,7 @@ func TestSRTMClientConfig(t *testing.T) {
 	if c.CheckRedirect == nil || c.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
 		t.Error("redirects are followed")
 	}
-	if s := newSRTMSource(PlannerConfig{}); s.sem != srtmFetchSlots || cap(s.sem) != 2 || s.capacity != defaultPlannerTileCache {
+	if s := newSRTMSource(TerrainConfig{}, srtmTestViewTiles); s.sem != srtmFetchSlots || cap(s.sem) != 2 || s.capacity != defaultTerrainTileCache {
 		t.Errorf("source: %d slots (shared %v), %d tiles", cap(s.sem), s.sem == srtmFetchSlots, s.capacity)
 	}
 }
@@ -1365,13 +1370,124 @@ func FuzzSRTMPixel(f *testing.F) {
 	})
 }
 
+// ─── Tile sets (route LOS) ─────────────────────────────────────────────────
+
+// srtmTileView reads each point from the tile srtmKeyOf names: a point on a
+// degree line from the tile north or east of it, which shares that edge.
+func TestSRTMTileView(t *testing.T) {
+	sw, nw, se := srtmKey{30, -98}, srtmKey{31, -98}, srtmKey{30, -97}
+	v := srtmTileView{
+		sw: elevFieldGrid(sw, elevLinear),
+		nw: elevFieldGrid(nw, elevLinear),
+		se: nil, // known missing
+	}
+	for _, p := range [][2]float64{
+		{30.5, -97.5}, {30.123, -97.987}, // inside
+		{31, -97.5},     // on the 31st parallel: the north tile's south edge
+		{31.999, -98},   // on the 98th meridian
+		{30, -98},       // the south-west corner of the set
+		{31.5, -97.001}, // just inside the north-west tile's east edge
+	} {
+		got, ok := v.ElevationAt(p[0], p[1])
+		if !ok || math.Abs(got-elevLinear(p[0], p[1])) > 1e-6 {
+			t.Errorf("ElevationAt(%v, %v) = %v, %v; want %v", p[0], p[1], got, ok, elevLinear(p[0], p[1]))
+		}
+	}
+	for _, p := range [][2]float64{
+		{30.5, -96.5}, // tile without data
+		{30.5, -97},   // its west edge belongs to it, not to the tile west of it
+		{32.5, -97.5}, // tile not in the set
+		{29.9, -97.5},
+		{math.NaN(), -97.5}, {30.5, math.NaN()}, {91, 0}, {0, -181},
+	} {
+		if got, ok := v.ElevationAt(p[0], p[1]); ok {
+			t.Errorf("ElevationAt(%v, %v) = %v, want no terrain", p[0], p[1], got)
+		}
+	}
+	// The poles and the antimeridian clamp onto the last tile.
+	edge := srtmTileView{{89, 179}: elevFlatGrid(7)}
+	if got, ok := edge.ElevationAt(90, 180); !ok || got != 7 {
+		t.Errorf("ElevationAt(90, 180) = %v, %v", got, ok)
+	}
+}
+
+// tiles reports what is resident and how many downloads loading the rest
+// would start; await loads them detached and waits a bounded time.
+func TestSRTMTilesAndAwait(t *testing.T) {
+	gated, gone, here, broken := srtmKey{40, 10}, srtmKey{40, 11}, srtmKey{40, 12}, srtmKey{40, 13}
+	gate := newSRTMGate()
+	tile := srtmConstTile(t, 77, srtmRawBytes, gzip.BestSpeed)
+	s, u, clk := newSRTMTest(t, 0, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case srtmPath(gated):
+			if gate.wait(r) {
+				w.Write(tile)
+			}
+		case srtmPath(broken):
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	t.Cleanup(gate.open)
+	s.put(here, elevFlatGrid(5))
+
+	keys := []srtmKey{gated, gone, here}
+	ts := s.tiles(keys)
+	if len(ts.grids) != 1 || ts.grids[here] == nil || !slices.Equal(ts.need, []srtmKey{gated, gone}) || ts.starts != 2 || ts.cooling {
+		t.Fatalf("first look: %d resident, need %v, starts %d, cooling %v", len(ts.grids), ts.need, ts.starts, ts.cooling)
+	}
+	got, failed := s.await(context.Background(), ts.need, 200*time.Millisecond)
+	if g, ok := got[gone]; !ok || g != nil || len(failed) != 0 {
+		t.Fatalf("404 tile: got %v (%v), failed %v", g, ok, failed)
+	}
+	if _, ok := got[gated]; ok {
+		t.Fatal("a gated tile finished")
+	}
+
+	// Still downloading: known missing counts as resident, and loading the
+	// gated tile again would start nothing.
+	srtmEventually(t, "the gated download", func() bool { return u.hitsFor(srtmPath(gated)) == 1 })
+	ts = s.tiles(keys)
+	if len(ts.grids) != 2 || !slices.Equal(ts.need, []srtmKey{gated}) || ts.starts != 0 {
+		t.Fatalf("second look: %d resident, need %v, starts %d", len(ts.grids), ts.need, ts.starts)
+	}
+	// A caller that went away returns at once, and the download goes on.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if got, failed := s.await(ctx, []srtmKey{gated}, time.Minute); len(got) != 0 || len(failed) != 0 || time.Since(start) > 5*time.Second {
+		t.Fatalf("cancelled: got %d, failed %d after %s", len(got), len(failed), time.Since(start))
+	}
+	gate.open()
+	got, _ = s.await(context.Background(), []srtmKey{gated}, 10*time.Second)
+	if g := got[gated]; len(g) != srtmSide*srtmSide || g[0] != 77 || u.hitsFor(srtmPath(gated)) != 1 {
+		t.Fatalf("gated tile: %d samples, fetched %d times", len(g), u.hitsFor(srtmPath(gated)))
+	}
+	if ts = s.tiles(keys); len(ts.need) != 0 || ts.starts != 0 {
+		t.Fatalf("all resident: need %v", ts.need)
+	}
+
+	// A failed download is reported as failed and pauses every download.
+	if _, failed := s.await(context.Background(), []srtmKey{broken}, 10*time.Second); !failed[broken] {
+		t.Fatalf("503 tile not failed: %v", failed)
+	}
+	if ts = s.tiles([]srtmKey{broken, srtmKey{41, 10}}); !ts.cooling || ts.starts != 2 {
+		t.Fatalf("after a 503: cooling %v, starts %d", ts.cooling, ts.starts)
+	}
+	clk.add(srtmBackoff[0])
+	if ts = s.tiles([]srtmKey{broken}); ts.cooling {
+		t.Fatal("cooldown did not lapse")
+	}
+}
+
 // ─── Real tile server (opt-in) ─────────────────────────────────────────────
 
 func TestSRTMRealBucketAustin(t *testing.T) {
 	if os.Getenv("CORESCOPE_NET_TESTS") != "1" {
 		t.Skip("set CORESCOPE_NET_TESTS=1 to fetch a real SRTM tile")
 	}
-	s := newSRTMSource(PlannerConfig{})
+	s := newSRTMSource(TerrainConfig{}, srtmTestViewTiles)
 	s.sem = make(chan struct{}, srtmMaxConcurrent)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

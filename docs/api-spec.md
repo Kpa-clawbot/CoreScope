@@ -1443,6 +1443,8 @@ Terrain elevation along consecutive legs of a route, for the map's line-of-sight
 view. Only available when `los.enabled` is `true` in `config.json`; otherwise the
 endpoint returns `404`.
 
+The terrain is the repeater planner's: the same SRTM tiles (the shared [`terrain`](#terrain-tiles) block) sampled the same way as [`/api/planner/profile`](#get-apiplannerprofile), so a leg gets the same heights, and the same verdict, in both views.
+
 ### Query Parameters
 
 | Param | Type   | Default | Description                                                              |
@@ -1452,33 +1454,61 @@ endpoint returns `404`.
 ### Response `200`
 
 ```json
-{"samples":100,"source":"api.open-meteo.com","legs":[{"distance_km":12.345,"elev_m":[201.0,"... 100 values ..."]},{"distance_km":412.1,"error":"too_long"}]}
+{"source":"SRTM (AWS Open Data)","legs":[{"distance_km":12.345,"elev_m":[201.4,203.0,207.8,"... N values ..."]},{"distance_km":412.1,"error":"too_long"}]}
 ```
 
 | Field         | Description                                                                                  |
 |---------------|----------------------------------------------------------------------------------------------|
-| `samples`     | Elevation samples per leg, including both endpoints                                          |
-| `source`      | Elevation host, for attribution                                                              |
+| `source`      | Terrain attribution: `"SRTM (AWS Open Data)"` for the default tiles, otherwise `"SRTM (<host of terrain.tileUrl>)"`. The planner reports the same string |
 | `legs[i]`     | The leg from `pts[i]` to `pts[i+1]`                                                          |
 | `distance_km` | Great-circle distance of the leg                                                             |
-| `elev_m`      | Terrain height in metres, evenly spaced along the great circle from the first point to the second. Omitted on error |
-| `error`       | `too_long` (leg longer than 300 km, no upstream fetch), `unknown_point` (an endpoint is not a known node, no upstream fetch) or `upstream` (elevation service failed, cooling down, or over budget) |
+| `elev_m`      | Terrain height in metres (0.1 m steps), evenly spaced along the great circle from the first point to the second, both ends included. The count varies with the leg: about one sample per 90 m, at least 64 and at most 600. Omitted on error |
+| `error`       | See below                                                                                    |
 
-Per-leg failures do not fail the request: a leg with an `error` has no `elev_m`.
+Per-leg failures do not fail the request: a leg with an `error` has no `elev_m`. The codes, checked in this order:
+
+| Code | Meaning |
+|------|---------|
+| `too_long` | The leg is longer than 300 km. No terrain is loaded for it |
+| `unknown_point` | An endpoint is not a known node (see below). No terrain is loaded for it |
+| `too_many_tiles` | The leg's tiles would take the request past 16 distinct 1° terrain tiles. It loads nothing; later legs over tiles already in the request still fit. Split the route to check it |
+| `upstream` | A tile the leg needs could not be loaded: tile downloads are paused after a tile-server failure, over their budget, or the download failed. Worth retrying later |
+| `no_terrain` | A sample lies in a tile without data (open sea, or a tile the server lacks) |
+
+### Response `202`
+
+Some tiles the request needs are still downloading after the server waited about 1.5 s for them. The downloads carry on; re-poll the same URL after `retry_after_s`. Sent with `Retry-After` and `Cache-Control: no-store`.
+
+```json
+{"state":"loading_terrain","progress":0.5,"retry_after_s":2}
+```
+
+`progress` is the share of the request's tiles already in memory, from `0` to `1`.
 
 ### Known-node rule
 
-Every point must be the position of a known node (GPS set, not 0,0), matched at 5 decimals. A leg with any other endpoint answers `unknown_point` and costs no upstream call. This bounds the cache to real node pairs. The node set is refreshed at most every 60 s.
+Every point must be the position of a known node that `/api/nodes` shows (GPS set, not 0,0), matched at 5 decimals. A leg with any other endpoint answers `unknown_point` and loads no terrain. This bounds the tiles a client can make the server download to those under real node pairs. The node set is refreshed at most every 60 s, and at once when the node-hiding rules change.
+
+### Terrain tiles
+
+Route line of sight and the [repeater planner](#get-apiplannerprofile) read one shared terrain source, configured by the top-level `terrain` block in `config.json`. It is built only while `los.enabled` or `planner.enabled` is `true`.
+
+| Key | Default | Valid | Meaning |
+|-----|---------|-------|---------|
+| `terrain.tileUrl` | `https://s3.amazonaws.com/elevation-tiles-prod/skadi` (AWS Open Data) | `https` URL without a query | Base of an SRTM `skadi` tile tree: `<tileUrl>/N30/N30W098.hgt.gz` |
+| `terrain.tileCacheTiles` | 24 | 4 to 200 | Tiles kept in memory, about 2.9 MB each |
+
+A value of 0 or a missing key means the default; an invalid value falls back to the default and logs a warning at startup. The cache never holds fewer tiles than the largest single load of an enabled feature (16 for route line of sight, 12 for the planner at its default sizes), so a request never evicts its own tiles; a smaller `tileCacheTiles` is raised at startup and the log says so.
+
+Tiles are 1 arc-second SRTM, downsampled to 3 arc-seconds (about 90 m) and held in server memory only. Nothing is written to disk or the database. Downloads are shared by both features: at most 2 at a time, 20 per minute and 200 per hour. After a `429`, `5xx` or transport error from the tile server, every download pauses for 60 s, then 5 min, 30 min and 1 h for each further consecutive failure; a successful download resets this. A tile the server does not have (`404`, `403`), or one whose body is unusable or all void, has no terrain for a while instead.
 
 ### Caching & limits
 
-- Leg profiles are cached in server memory (4096 legs, LRU, no database writes). The cache is keyed by the endpoint pair, so a leg and its reverse share one entry.
-- `Cache-Control: public, max-age=86400` when no leg has an error other than `too_long`; otherwise `no-store`.
-- Upstream fetches are capped at 4 concurrent and, by default, 40 per minute, 300 per hour and 700 per day (`los.legsPerMinute`, `los.legsPerHour`, `los.legsPerDay`). Over budget, a leg answers `upstream`.
-- After a `429`, `5xx`, `400`, `401`, `403` or transport error from the elevation service, upstream fetches pause for 60 s, then 5 min, 30 min, and 1 h for each further consecutive failure. A successful fetch resets this.
-- Per client IP, a request takes one of 30 tokens per minute for each distinct uncached leg (a leg and its reverse count once), all or nothing. A request that needs more tokens than remain answers `429` with `Retry-After` and takes none. Cached legs cost nothing, so fully cached requests are never limited.
+- Terrain comes from SRTM 1° tiles held in server memory (see [Terrain tiles](#terrain-tiles)). Only the tiles the legs' samples fall in are loaded, not each leg's bounding box. A request loads at most 16 distinct tiles.
+- `Cache-Control: public, max-age=86400` when every leg is OK or `too_long`; otherwise `no-store`.
+- Per client IP, a request takes one of 20 tokens per minute for each tile download it starts, all or nothing, before any starts. A request that would start more downloads than its tokens allow answers `429` with `Retry-After` and starts none. Tiles already in memory or already downloading (for any client, or for the planner) cost nothing, so a poll after `202`, or a request whose tiles are all in memory, is never limited.
 - The request query may not exceed 2048 bytes.
-- Data: Copernicus DEM GLO-90 via Open-Meteo. Terrain only; trees and buildings are not modelled.
+- Data: SRTM terrain only; trees and buildings are not modelled.
 
 ### Response `400`
 
@@ -1494,7 +1524,7 @@ Returned when `los.enabled` is not `true` in `config.json`.
 
 ### Response `429`
 
-Returned when the client's per-IP tokens are used up and the request needs an upstream fetch. The `Retry-After` header gives whole seconds to wait.
+Returned when the request would start more tile downloads than the client's per-IP tokens allow. The `Retry-After` header gives whole seconds to wait.
 
 ```json
 { "error": "rate limited" }
@@ -1513,7 +1543,7 @@ These rules apply to all three planner endpoints: this one, [`/api/planner/relay
 - **Opt-in.** Only available when `planner.enabled` is `true`. Otherwise the endpoints return `404`, and `/api/config/client` omits the `planner` block.
 - **Quantised input.** Points are rounded to 0.001°, antenna heights to 1 m, and `range` must be one of a fixed set. Coverage boxes are snapped outward to a 0.05° grid. Requests that round to the same values share one cache entry and one job.
 - **Unknown or repeated parameters.** A parameter the endpoint does not take, a repeated parameter, or a query longer than 512 bytes returns `400`.
-- **Terrain.** SRTM 1° tiles from AWS Open Data (`skadi` layout), downsampled to 3 arc-seconds (about 90 m) and held in server memory only. Nothing is written to disk or the database. Tiles are fetched on demand, at most `planner.tileCacheTiles` are kept in memory (but never fewer than one full view, 12 tiles at the default sizes), and downloads are budgeted at 20 per minute and 200 per hour. A tile that is missing upstream (open sea or no data), unusable or all void has no terrain: relay and area searches skip every site and link that touches it, a profile leg across it is `no_terrain`, and a relay `direct` link across it carries `error: "no_terrain"` with no verdict.
+- **Terrain.** SRTM 1° tiles, shared with route line of sight (see [Terrain tiles](#terrain-tiles)). A tile that is missing upstream (open sea or no data), unusable or all void has no terrain: relay and area searches skip every site and link that touches it, a profile leg across it is `no_terrain`, and a relay `direct` link across it carries `error: "no_terrain"` with no verdict.
 - **Size limits.** Three `config.json` keys set how large a request may be. A value of 0 or a missing key means the default. A value outside the valid range falls back to the default and logs a warning at startup.
 
   | Key | Default | Valid | Limits |
@@ -1522,7 +1552,7 @@ These rules apply to all three planner endpoints: this one, [`/api/planner/relay
   | `planner.nodeMarginKm` | 30 | 10 to 60 | How far outside the coverage box repeaters and rooms are still read |
   | `planner.maxLegKm` | 100 | 10 to 200 | The A to B leg of a profile or relay. Only `range` values up to it are accepted |
 
-  The server derives from these how many 1° terrain tiles one request may load, as the worst case anywhere within latitudes -56 to 60. At the defaults that is 12 tiles for each endpoint. Each resident tile takes about 2.9 MB, so larger limits cost memory. The startup log prints the tile counts and the memory one view and the cache can take. `/api/config/client` reports the sizes in effect.
+  The server derives from these how many 1° terrain tiles one request may load, as the worst case anywhere within latitudes -56 to 60. At the defaults that is 12 tiles for each endpoint. Each resident tile takes about 2.9 MB, so larger limits cost memory, and the terrain cache never holds fewer tiles than one full view. The startup log prints the tile counts and the memory one view and the cache can take. `/api/config/client` reports the sizes in effect.
 - **Caveat.** Results are line of sight against bare terrain. Trees, buildings and other clutter are not modelled. The output is not a link budget: it has no transmit power, gain or receiver sensitivity.
 
 ### Job protocol
@@ -1554,7 +1584,7 @@ The planner runs each request as a background job, one per cache key. A request 
 
 | Field         | Description |
 |---------------|-------------|
-| `source`      | Terrain attribution, `"SRTM (AWS Open Data)"` |
+| `source`      | Terrain attribution: `"SRTM (AWS Open Data)"` for the default tiles, otherwise `"SRTM (<host of terrain.tileUrl>)"`. Route line of sight reports the same string |
 | `legs[i]`     | The leg from `pts[i]` to `pts[i+1]`. One entry per leg, in order |
 | `distance_km` | Great-circle distance of the leg, rounded to 3 decimals |
 | `elev_m`      | Terrain height in metres at evenly spaced points along the great circle, both endpoints included, rounded to 0.1 m. The count depends on the leg length (about one sample per 90 m, between 64 and 600). Omitted on error |
@@ -2895,7 +2925,7 @@ Client-side configuration values.
   "externalUrls":       object | null,
   "propagationBufferMs": number,         // default: 5000
   "clientRfSamples":    boolean,         // opt-in flag; gates /api/rf-noise
-  "los":                object,          // omitted unless los.enabled is true: frequencyMhz, antennaHeightM, kFactor, samples, maxPoints, maxLegKm. frequencyMhz 910.525 is the US default; use 869.618 for EU/UK meshes (set los.frequencyMhz to your mesh's frequency). The planner reads frequencyMhz and kFactor from the los block even when los.enabled is false.
+  "los":                object,          // omitted unless los.enabled is true: frequencyMhz, antennaHeightM, kFactor, maxPoints, maxLegKm. frequencyMhz 910.525 is the US default; use 869.618 for EU/UK meshes (set los.frequencyMhz to your mesh's frequency). The planner reads frequencyMhz and kFactor from the los block even when los.enabled is false.
   "planner":            object,          // omitted unless planner.enabled is true: defaultRangeKm, rangesKm (only those up to maxLegKm), newAntennaM, existingAntennaM, frequencyMhz, kFactor, maxPoints, maxLegKm, maxAreaKm, nodeMarginKm, maxSites, minClearance
   "clientRxAppUrl":     string           // omitted unless clientRxCoverage is on and clientRxCoverage.appUrl is an https URL
 }

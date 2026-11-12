@@ -1,13 +1,18 @@
 package main
 
-// SRTM terrain for the repeater planner.
+// SRTM terrain for route line-of-sight and the repeater planner: ONE source
+// serves both (terrain_config.go), so they read the same tiles.
 //
-// CONTRACT (planner_search.go / planner_api.go depend on it; keep signatures):
+// CONTRACT (planner_search.go / planner_api.go / elevation.go depend on it;
+// keep signatures):
 //   - Tiles: <TileURL>/<N30>/<N30W098>.hgt.gz, gzipped raw big-endian int16,
 //     3601×3601, row 0 = north edge, 1 arc-second. Downsampled in memory to
 //     3 arc-seconds (1201×1201). Missing (404/ocean) tiles have no elevation:
 //     never 0 m, which would read as sea level.
 //   - terrainView is immutable and safe for concurrent use without locks.
+//   - The planner loads a rectangle of tiles (View); route LOS loads only the
+//     tiles its legs' samples fall in (tiles + await, read through an
+//     srtmTileView). Both share the cache, the downloads and the budget.
 //
 // Safety model (this runs inside a public web server; nothing touches disk):
 //   - Tile names and URLs are built only from clamped integer indices.
@@ -17,7 +22,7 @@ package main
 //     is ever held; a decompression bomb costs one 2.9 MB grid and stops.
 //   - At most srtmMaxConcurrent fetches run process-wide; at most
 //     srtmPerMinute / srtmPerHour start per rolling window. An upstream
-//     failure (429, 5xx, transport error) opens the elevBackoff cooldown
+//     failure (429, 5xx, transport error) opens the srtmBackoff cooldown
 //     ladder, which pauses every download.
 //   - Failed or partial tiles are never cached as data. A tile the server
 //     does not have (404 for srtmNegTTL, 403 for srtmForbiddenTTL), a tile
@@ -90,6 +95,7 @@ var (
 	_ terrainSource   = (*srtmSource)(nil)
 	_ terrainView     = (*srtmView)(nil)
 	_ terrainCoverage = (*srtmView)(nil)
+	_ terrainView     = srtmTileView(nil)
 )
 
 const (
@@ -120,6 +126,15 @@ const (
 // srtmFetchSlots bounds concurrent tile fetches (and so decode memory) for
 // the whole process, however many sources exist.
 var srtmFetchSlots = make(chan struct{}, srtmMaxConcurrent)
+
+// srtmBackoff is the download pause after the 1st, 2nd, 3rd... consecutive
+// upstream failure; the last step repeats.
+var srtmBackoff = []time.Duration{60 * time.Second, 5 * time.Minute, 30 * time.Minute, time.Hour}
+
+// srtmHTTPDoer is the slice of *http.Client the source needs (test seam).
+type srtmHTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
 
 // srtmKey is a 1° tile by its south-west corner: lat -90..89, lon -180..179.
 type srtmKey struct{ lat, lon int }
@@ -279,6 +294,28 @@ func (v *srtmView) ElevationAt(lat, lon float64) (float64, bool) {
 	return srtmBilinear(g, row, col, fy, fx), true
 }
 
+// srtmTileView is an immutable set of tiles that need not form a rectangle:
+// the tiles a route's leg samples fall in (elevation.go). A point is looked
+// up in the tile srtmKeyOf names, the one legTiles loads for it, so a point
+// on a degree line reads the edge row or column of the tile north or east of
+// it, which SRTM tiles share with their neighbour. Like srtmView it takes no
+// lock and holds its own grid references.
+type srtmTileView map[srtmKey][]int16 // nil grid: tile without data
+
+func (v srtmTileView) ElevationAt(lat, lon float64) (float64, bool) {
+	// Written so that NaN fails too.
+	if !(lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+		return 0, false
+	}
+	k := srtmKeyOf(lat, lon)
+	g := v[k]
+	if g == nil {
+		return 0, false
+	}
+	row, col, fy, fx := srtmPixel(lat, lon, k)
+	return srtmBilinear(g, row, col, fy, fx), true
+}
+
 // srtmBudget is a sliding log of download starts: at most srtmPerMinute in
 // any rolling minute and srtmPerHour in any rolling hour.
 type srtmBudget struct {
@@ -315,29 +352,33 @@ type srtmEntry struct {
 // memory, filled from the tile server on demand.
 type srtmSource struct {
 	baseURL   string
+	source    string // attribution for responses (terrainSourceName)
 	userAgent string
-	client    elevHTTPDoer
+	client    srtmHTTPDoer
 	now       func() time.Time
 	capacity  int           // max cached tiles; never below maxTiles
-	maxTiles  int           // max tiles in one view: the largest planner tile cap
+	maxTiles  int           // max tiles in one load (terrainViewTiles)
 	sem       chan struct{} // fetch slots; srtmFetchSlots outside tests
 
 	sf singleflight.Group // one fetch per tile name
 
-	mu     sync.Mutex
-	ll     *list.List // *srtmEntry, most recently used first
-	items  map[srtmKey]*list.Element
-	neg    map[srtmKey]time.Time // known-missing tile → expiry
-	fails  int                   // consecutive upstream failures
-	coolTo time.Time             // no downloads before then
-	budget srtmBudget
+	mu      sync.Mutex
+	ll      *list.List // *srtmEntry, most recently used first
+	items   map[srtmKey]*list.Element
+	neg     map[srtmKey]time.Time // known-missing tile → expiry
+	loading map[srtmKey]struct{}  // tiles whose load is running (loadChan)
+	fails   int                   // consecutive upstream failures
+	coolTo  time.Time             // no downloads before then
+	budget  srtmBudget
 }
 
-// newSRTMSource builds the source from the resolved planner config.
-func newSRTMSource(cfg PlannerConfig) *srtmSource {
+// newSRTMSource builds the source from the resolved terrain config.
+// viewTiles is the most tiles one load may span (terrainViewTiles): the
+// per-view cap, and the floor of the cache.
+func newSRTMSource(cfg TerrainConfig, viewTiles int) *srtmSource {
 	base := strings.TrimRight(cfg.TileURL, "/")
 	if base == "" {
-		base = defaultPlannerTileURL
+		base = defaultTerrainTileURL
 	}
 	ua := "CoreScope"
 	if Version != "" {
@@ -345,15 +386,17 @@ func newSRTMSource(cfg PlannerConfig) *srtmSource {
 	}
 	return &srtmSource{
 		baseURL:   base,
+		source:    terrainSourceName(base),
 		userAgent: ua,
 		client:    newSRTMHTTPClient(),
 		now:       time.Now,
-		capacity:  cfg.tileCache(),
-		maxTiles:  cfg.tileLimits().max(),
+		capacity:  cfg.cacheTiles(viewTiles),
+		maxTiles:  viewTiles,
 		sem:       srtmFetchSlots,
 		ll:        list.New(),
 		items:     make(map[srtmKey]*list.Element),
 		neg:       make(map[srtmKey]time.Time),
+		loading:   make(map[srtmKey]struct{}),
 	}
 }
 
@@ -440,12 +483,10 @@ func (s *srtmSource) View(ctx context.Context, bb geoBBox) (terrainView, error) 
 	if cooling {
 		return nil, errTerrainBusy
 	}
-	// Start every fetch before waiting on any. Each runs detached from ctx,
-	// so a caller that gives up still leaves the tile cached for its retry.
+	// Start every fetch before waiting on any.
 	chans := make([]<-chan singleflight.Result, len(missing))
 	for j, i := range missing {
-		k := sp.key(i)
-		chans[j] = s.sf.DoChan(k.name(), func() (interface{}, error) { return s.load(k) })
+		chans[j] = s.loadChan(sp.key(i))
 	}
 	for j, i := range missing {
 		select {
@@ -459,6 +500,92 @@ func (s *srtmSource) View(ctx context.Context, bb geoBBox) (terrainView, error) 
 		}
 	}
 	return v, nil
+}
+
+// srtmTileSet is a set of tiles as tiles found them.
+type srtmTileSet struct {
+	grids   map[srtmKey][]int16 // resident: the grid, or nil for a tile without data
+	need    []srtmKey           // neither cached nor known missing, in keys order
+	starts  int                 // of need, those no load is running for: the downloads loading need would start
+	cooling bool                // downloads are paused, so need cannot load now
+}
+
+// tiles looks keys up in one pass, marking the cached ones used. It starts
+// nothing, so the caller can charge for starts before calling await.
+func (s *srtmSource) tiles(keys []srtmKey) srtmTileSet {
+	ts := srtmTileSet{grids: make(map[srtmKey][]int16, len(keys))}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for _, k := range keys {
+		if g, ok := s.lookupLocked(k, now, true); ok {
+			ts.grids[k] = g
+			continue
+		}
+		ts.need = append(ts.need, k)
+		if _, running := s.loading[k]; !running {
+			ts.starts++
+		}
+	}
+	ts.cooling = now.Before(s.coolTo)
+	return ts
+}
+
+// await starts (or joins) the load of each key and waits until all are done,
+// ctx ends or wait passes. A finished key lands in got (its grid, or nil for
+// a tile without data) or, when its load failed (busy, unavailable), in
+// failed; a key in neither is still loading, and goes on loading.
+func (s *srtmSource) await(ctx context.Context, keys []srtmKey, wait time.Duration) (got map[srtmKey][]int16, failed map[srtmKey]bool) {
+	got, failed = make(map[srtmKey][]int16, len(keys)), make(map[srtmKey]bool)
+	chans := make([]<-chan singleflight.Result, len(keys))
+	for i, k := range keys {
+		chans[i] = s.loadChan(k)
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	waiting := true
+	for i, k := range keys {
+		var r singleflight.Result
+		select {
+		case r = <-chans[i]:
+		default:
+			if !waiting {
+				continue // collect only what has already finished
+			}
+			select {
+			case r = <-chans[i]:
+			case <-timer.C:
+				waiting = false
+				continue
+			case <-ctx.Done():
+				waiting = false
+				continue
+			}
+		}
+		if r.Err != nil {
+			failed[k] = true
+			continue
+		}
+		got[k], _ = r.Val.([]int16)
+	}
+	return got, failed
+}
+
+// loadChan starts tile k's load, or joins the one running. It runs detached
+// from every caller, so one that gives up still leaves the tile cached for
+// its retry. While it runs, k is in s.loading (tiles counts no start for it).
+func (s *srtmSource) loadChan(k srtmKey) <-chan singleflight.Result {
+	return s.sf.DoChan(k.name(), func() (interface{}, error) {
+		s.mu.Lock()
+		s.loading[k] = struct{}{}
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			delete(s.loading, k)
+			s.mu.Unlock()
+		}()
+		return s.load(k)
+	})
 }
 
 // lookupLocked finds k in the cache (grid) or the negative cache (nil grid).
@@ -485,7 +612,7 @@ func (s *srtmSource) lookupLocked(k srtmKey, now time.Time, touch bool) ([]int16
 func (s *srtmSource) load(k srtmKey) (grid []int16, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[planner] terrain tile %s: panic: %v", k.name(), r)
+			log.Printf("[terrain] tile %s: panic: %v", k.name(), r)
 			grid, err = nil, errTerrainUnavailable
 		}
 	}()
@@ -534,7 +661,7 @@ func (s *srtmSource) cooling() bool {
 }
 
 // openCooldown records an upstream failure and blocks downloads for the next
-// step of the elevBackoff ladder, returning how long they stay blocked.
+// step of the srtmBackoff ladder, returning how long they stay blocked.
 // Failures landing inside a running cooldown do not escalate it.
 func (s *srtmSource) openCooldown() time.Duration {
 	s.mu.Lock()
@@ -543,7 +670,7 @@ func (s *srtmSource) openCooldown() time.Duration {
 	if now.Before(s.coolTo) {
 		return s.coolTo.Sub(now)
 	}
-	d := elevBackoff[min(s.fails, len(elevBackoff)-1)]
+	d := srtmBackoff[min(s.fails, len(srtmBackoff)-1)]
 	s.fails++
 	s.coolTo = now.Add(d)
 	return d
@@ -609,7 +736,7 @@ func (s *srtmSource) fetchAndStore(k srtmKey) ([]int16, error) {
 	case err == nil:
 	case srtmUpstreamFailed(status, err):
 		d := s.openCooldown()
-		log.Printf("[planner] terrain tile %s: %v; tile downloads paused for %s", k.name(), err, d)
+		log.Printf("[terrain] tile %s: %v; tile downloads paused for %s", k.name(), err, d)
 		return nil, errTerrainUnavailable
 	default:
 		// The server answered, but not with a usable tile. Only this tile
@@ -617,10 +744,10 @@ func (s *srtmSource) fetchAndStore(k srtmKey) ([]int16, error) {
 		return s.missing(k, srtmBadTTL, err.Error())
 	}
 	if frac := float64(voids) / (srtmSide * srtmSide); frac > srtmVoidWarnFrac {
-		log.Printf("[planner] terrain tile %s is %.0f%% void (filled from neighbours or 0 m)", k.name(), frac*100)
+		log.Printf("[terrain] tile %s is %.0f%% void (filled from neighbours or 0 m)", k.name(), frac*100)
 	}
 	s.put(k, grid)
-	log.Printf("[planner] terrain tile %s loaded in %s", k.name(), time.Since(start).Round(time.Millisecond))
+	log.Printf("[terrain] tile %s loaded in %s", k.name(), time.Since(start).Round(time.Millisecond))
 	return grid, nil
 }
 
@@ -628,7 +755,7 @@ func (s *srtmSource) fetchAndStore(k srtmKey) ([]int16, error) {
 // elevation there, and logs why.
 func (s *srtmSource) missing(k srtmKey, ttl time.Duration, why string) ([]int16, error) {
 	s.putMissing(k, ttl)
-	log.Printf("[planner] terrain tile %s: %s; no terrain there for %s", k.name(), why, ttl)
+	log.Printf("[terrain] tile %s: %s; no terrain there for %s", k.name(), why, ttl)
 	return nil, nil
 }
 

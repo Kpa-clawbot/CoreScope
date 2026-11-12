@@ -4,9 +4,9 @@ package main
 // not change names, JSON tags or signatures here).
 //
 // Three GET endpoints under /api/planner/ (planner_api.go), OPT-IN via the
-// "planner" config block. All terrain comes from SRTM 1° tiles fetched from
-// AWS Open Data and kept in memory (terrain_srtm.go): no DB, no disk — the
-// server stays read-only.
+// "planner" config block. All terrain comes from SRTM 1° tiles (the "terrain"
+// block, shared with route LOS: terrain_config.go) kept in memory
+// (terrain_srtm.go): no DB, no disk — the server stays read-only.
 //
 //	/api/planner/profile  ?pts=lat,lon,lat,lon[,...]           multi-point LOS chain
 //	/api/planner/relay    ?a=lat,lon&b=lat,lon&ha=&hb=&hr=&range=  best relay for A→B
@@ -30,15 +30,10 @@ type geoBBox struct{ S, W, N, E float64 }
 // ─── Config ────────────────────────────────────────────────────────────────
 
 // PlannerConfig is the "planner" block in config.json. OPT-IN: nil or
-// enabled=false → endpoints 404, /api/config/client omits "planner".
+// enabled=false → endpoints 404, /api/config/client omits "planner". Terrain
+// tiles come from the "terrain" block (TerrainConfig).
 type PlannerConfig struct {
-	Enabled bool `json:"enabled"`
-	// TileURL is the base of an SRTM "skadi" tile tree:
-	// <TileURL>/N30/N30W098.hgt.gz. Default AWS Open Data elevation-tiles-prod.
-	TileURL string `json:"tileUrl"`
-	// TileCacheTiles caps resident downsampled tiles (~2.9 MB each). The
-	// effective cache never goes below one full view (tileCache).
-	TileCacheTiles   int     `json:"tileCacheTiles"`
+	Enabled          bool    `json:"enabled"`
 	DefaultRangeKm   float64 `json:"defaultRangeKm"`
 	NewAntennaM      float64 `json:"newAntennaM"`
 	ExistingAntennaM float64 `json:"existingAntennaM"`
@@ -53,8 +48,6 @@ type PlannerConfig struct {
 }
 
 const (
-	defaultPlannerTileURL      = "https://s3.amazonaws.com/elevation-tiles-prod/skadi"
-	defaultPlannerTileCache    = 24
 	defaultPlannerRangeKm      = 30.0
 	defaultPlannerNewAntennaM  = 10.0
 	defaultPlannerExistAntenna = 5.0
@@ -111,7 +104,7 @@ type PlannerJobStatus struct {
 
 // PlannerProfileResponse — /api/planner/profile. legs[i] is pts[i]→pts[i+1].
 type PlannerProfileResponse struct {
-	Source string              `json:"source"` // "SRTM (AWS Open Data)"
+	Source string              `json:"source"` // terrainSourceName, e.g. "SRTM (AWS Open Data)"
 	Legs   []PlannerProfileLeg `json:"legs"`
 	// Warnings, e.g. terrain missing for some tiles (legs there no_terrain).
 	Warnings []string `json:"warnings,omitempty"`

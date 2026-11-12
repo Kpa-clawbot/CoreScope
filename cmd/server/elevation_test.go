@@ -1,67 +1,20 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
-
-type fakeElevUpstream struct {
-	srv    *httptest.Server
-	calls  int32
-	status atomic.Int32
-	// short, when > 0, returns that many values instead of losSamples.
-	short atomic.Int32
-	nulls atomic.Bool
-	delay time.Duration
-
-	mu    sync.Mutex
-	query []url.Values
-}
-
-func newFakeElevUpstream(t *testing.T) *fakeElevUpstream {
-	f := &fakeElevUpstream{}
-	f.status.Store(200)
-	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&f.calls, 1)
-		f.mu.Lock()
-		f.query = append(f.query, r.URL.Query())
-		f.mu.Unlock()
-		if f.delay > 0 {
-			time.Sleep(f.delay)
-		}
-		if st := int(f.status.Load()); st != 200 {
-			w.WriteHeader(st)
-			w.Write([]byte(`{"error":true,"reason":"nope"}`))
-			return
-		}
-		n := losSamples
-		if s := int(f.short.Load()); s > 0 {
-			n = s
-		}
-		vals := make([]interface{}, n)
-		for i := range vals {
-			vals[i] = float64(i)
-			if f.nulls.Load() && i%10 == 0 {
-				vals[i] = nil
-			}
-		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"elevation": vals})
-	}))
-	t.Cleanup(f.srv.Close)
-	return f
-}
-
-func (f *fakeElevUpstream) count() int { return int(atomic.LoadInt32(&f.calls)) }
 
 type elevClock struct {
 	mu sync.Mutex
@@ -76,7 +29,7 @@ func (c *elevClock) add(d time.Duration) {
 }
 
 // elevNodes is the injected node list. Tests register the points they use
-// with register (or implicitly through getElev).
+// with register (or implicitly through elevTest.get).
 type elevNodes struct {
 	mu  sync.Mutex
 	svc *elevationService
@@ -101,81 +54,164 @@ func (n *elevNodes) register(pts ...elevPoint) {
 	n.svc.mu.Unlock()
 }
 
-var elevNodeLists sync.Map // *elevationService -> *elevNodes
-
-func nodesOf(svc *elevationService) *elevNodes {
-	v, _ := elevNodeLists.Load(svc)
-	return v.(*elevNodes)
+func (n *elevNodes) set(ns []nodeInfo) {
+	n.mu.Lock()
+	n.ns = ns
+	n.mu.Unlock()
 }
 
-// tleg registers both endpoints, then asks for the leg.
-func tleg(svc *elevationService, a, b elevPoint) ElevationLeg {
-	nodesOf(svc).register(a, b)
-	return svc.leg(a, b)
+// elevTest is route LOS over a test SRTM source (newSRTMTest): tiles are
+// preloaded with src.put, as a finished download leaves them, or served by
+// the test upstream h (nil: every tile 404s).
+type elevTest struct {
+	srv   *Server
+	svc   *elevationService
+	src   *srtmSource
+	up    *srtmUpstream
+	clk   *elevClock
+	nodes *elevNodes
 }
 
-func newElevTestServer(t *testing.T, f *fakeElevUpstream, query string) (*Server, *elevationService, *elevClock) {
-	svc := newElevationService(LOSConfig{Enabled: true, ElevationURL: f.srv.URL + query})
-	clk := &elevClock{t: time.Unix(1_700_000_000, 0)}
+func newElevTest(t testing.TB, h http.HandlerFunc) *elevTest {
+	t.Helper()
+	if h == nil {
+		h = srtmServe(nil)
+	}
+	src, up, clk := newSRTMTest(t, 0, h)
+	svc := newElevationService(src)
 	svc.now = clk.now
+	svc.wait = 10 * time.Second // downloads from the local upstream finish well within it
 	nl := &elevNodes{svc: svc}
 	svc.nodes = nl.get
-	elevNodeLists.Store(svc, nl)
-	t.Cleanup(func() { elevNodeLists.Delete(svc) })
-	return &Server{cfg: &Config{LOS: &LOSConfig{Enabled: true}}, elevation: svc}, svc, clk
+	srv := &Server{cfg: &Config{LOS: &LOSConfig{Enabled: true}}, elevation: svc}
+	return &elevTest{srv: srv, svc: svc, src: src, up: up, clk: clk, nodes: nl}
 }
 
-// getElev registers the request's points as known nodes, then calls the
-// handler.
-func getElev(srv *Server, pts string) (int, ElevationProfileResponse, string) {
-	if srv.elevation != nil {
-		if v, ok := elevNodeLists.Load(srv.elevation); ok {
-			parts := strings.Split(pts, ",")
-			var ps []elevPoint
-			for i := 0; i+1 < len(parts); i += 2 {
-				la, e1 := strconv.ParseFloat(parts[i], 64)
-				lo, e2 := strconv.ParseFloat(parts[i+1], 64)
-				if e1 == nil && e2 == nil {
-					ps = append(ps, elevPoint{la, lo})
-				}
-			}
-			v.(*elevNodes).register(ps...)
+const elevTestClient = "192.0.2.1:5000"
+
+func elevParsePts(pts string) []elevPoint {
+	parts := strings.Split(pts, ",")
+	var ps []elevPoint
+	for i := 0; i+1 < len(parts); i += 2 {
+		la, e1 := strconv.ParseFloat(parts[i], 64)
+		lo, e2 := strconv.ParseFloat(parts[i+1], 64)
+		if e1 == nil && e2 == nil {
+			ps = append(ps, elevPoint{la, lo})
 		}
 	}
-	return getElevRaw(srv, pts)
+	return ps
 }
 
-func getElevRaw(srv *Server, pts string) (int, ElevationProfileResponse, string) {
+// get registers the request's points as known nodes, then requests them.
+func (et *elevTest) get(pts string) *httptest.ResponseRecorder {
+	return et.getFrom(pts, elevTestClient, nil)
+}
+
+func (et *elevTest) getFrom(pts, remote string, hdr map[string]string) *httptest.ResponseRecorder {
+	et.nodes.register(elevParsePts(pts)...)
+	return et.raw(pts, remote, hdr)
+}
+
+// raw requests pts as they are, registering nothing.
+func (et *elevTest) raw(pts, remote string, hdr map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, "/api/elevation/profile?pts="+url.QueryEscape(pts), nil)
-	w := serveElev(srv, req)
-	var resp ElevationProfileResponse
-	if w.Code == 200 {
-		json.Unmarshal(w.Body.Bytes(), &resp)
+	req.RemoteAddr = remote
+	for k, v := range hdr {
+		req.Header.Set(k, v)
 	}
-	return w.Code, resp, w.Header().Get("Cache-Control")
-}
-
-func serveElev(srv *Server, req *http.Request) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
-	srv.handleElevationProfile(w, req)
+	et.srv.handleElevationProfile(w, req)
 	return w
 }
 
+// legs decodes a 200 body.
+func elevLegs(t testing.TB, w *httptest.ResponseRecorder) ElevationProfileResponse {
+	t.Helper()
+	if w.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	var resp ElevationProfileResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("body %q: %v", w.Body.String(), err)
+	}
+	return resp
+}
+
+func elevLegErrors(resp ElevationProfileResponse) []string {
+	out := make([]string, len(resp.Legs))
+	for i, l := range resp.Legs {
+		out[i] = l.Error
+		if (l.Error == "") != (len(l.ElevM) > 0) {
+			out[i] += "!elev_m"
+		}
+	}
+	return out
+}
+
+func withElevLimit(svc *elevationService, clk *elevClock, n int) {
+	svc.ipr = &wsLimiter{state: map[string]*wsIPState{}}
+	svc.rl = newRateLimiter(n, time.Minute)
+	svc.rl.now = clk.now
+}
+
+func elevBucketTokens(svc *elevationService, ip string) float64 {
+	svc.rl.mu.Lock()
+	defer svc.rl.mu.Unlock()
+	if b := svc.rl.buckets[ip]; b != nil {
+		return b.tokens
+	}
+	return svc.rl.burst
+}
+
+// elevFieldGrid is tile k with each sample set to f at its position, so
+// tiles built from one f agree on their shared edges, as real SRTM tiles do.
+func elevFieldGrid(k srtmKey, f func(lat, lon float64) float64) []int16 {
+	g := make([]int16, srtmSide*srtmSide)
+	for r := 0; r < srtmSide; r++ {
+		lat := float64(k.lat+1) - float64(r)/srtmCells
+		for c := 0; c < srtmSide; c++ {
+			g[r*srtmSide+c] = int16(math.Round(f(lat, float64(k.lon)+float64(c)/srtmCells)))
+		}
+	}
+	return g
+}
+
+func elevFlatGrid(v int16) []int16 {
+	g := make([]int16, srtmSide*srtmSide)
+	for i := range g {
+		g[i] = v
+	}
+	return g
+}
+
+// elevLinear is linear in lat and lon and whole at every 3-arc-second grid
+// point near 29-33 N, 99-95 W, so bilinear interpolation reproduces it
+// exactly there.
+func elevLinear(lat, lon float64) float64 { return 1200*(lat-29) + 1200*(lon+99) }
+
+// elevWavy is rough terrain: ridges every few km in both directions.
+func elevWavy(lat, lon float64) float64 {
+	return 600 + 250*math.Sin(lat*9) + 180*math.Cos(lon*7) + 40*math.Sin((lat+lon)*310)
+}
+
+// ─── Request handling ──────────────────────────────────────────────────────
+
 func TestElevationDisabled(t *testing.T) {
 	for _, srv := range []*Server{
-		{cfg: &Config{LOS: &LOSConfig{Enabled: false}}, elevation: newElevationService(LOSConfig{})},
+		{cfg: &Config{LOS: &LOSConfig{Enabled: false}}, elevation: newElevationService(nil)},
 		{cfg: &Config{LOS: &LOSConfig{Enabled: true}}},
 		{cfg: &Config{}},
 	} {
-		if code, _, _ := getElev(srv, "1,1,2,2"); code != 404 {
-			t.Fatalf("code=%d want 404", code)
+		w := httptest.NewRecorder()
+		srv.handleElevationProfile(w, httptest.NewRequest(http.MethodGet, "/api/elevation/profile?pts=1,1,2,2", nil))
+		if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "los disabled") {
+			t.Fatalf("code=%d body=%s want 404", w.Code, w.Body.String())
 		}
 	}
 }
 
 func TestElevationValidation(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, _, _ := newElevTestServer(t, f, "")
+	et := newElevTest(t, nil)
 	many := make([]string, 0)
 	for i := 0; i < (losMaxPoints+1)*2; i++ {
 		many = append(many, "1")
@@ -193,355 +229,488 @@ func TestElevationValidation(t *testing.T) {
 		"empty val": "1,,2,3",
 	}
 	for name, pts := range cases {
-		if code, _, _ := getElev(srv, pts); code != 400 {
-			t.Errorf("%s: code=%d want 400", name, code)
+		if w := et.get(pts); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: code=%d want 400", name, w.Code)
 		}
 	}
-	if f.count() != 0 {
-		t.Fatalf("validation failures reached upstream: %d", f.count())
+	if n := et.up.total(); n != 0 {
+		t.Fatalf("validation failures fetched %d tiles", n)
 	}
 }
 
-func TestElevationHappyPath(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, _, _ := newElevTestServer(t, f, "")
-	code, resp, cc := getElev(srv, "0,1,0,2,0,3")
-	if code != 200 {
-		t.Fatalf("code=%d", code)
+func TestElevationQueryBounds(t *testing.T) {
+	et := newElevTest(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/elevation/profile?pts=1,1,2,2&x="+strings.Repeat("a", 2100), nil)
+	w := httptest.NewRecorder()
+	et.srv.handleElevationProfile(w, req)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "pts too long") {
+		t.Fatalf("raw query: %d %s", w.Code, w.Body.String())
 	}
-	if cc != "public, max-age=86400" {
-		t.Fatalf("Cache-Control=%q", cc)
+	if _, msg := parseElevationPts(strings.Repeat("1,", 500) + "1"); !strings.Contains(msg, "2 to 16") {
+		t.Fatalf("comma count: %q", msg)
 	}
-	if resp.Samples != losSamples || len(resp.Legs) != 2 || resp.Source == "" {
-		t.Fatalf("bad response: %+v", resp)
+	// 16 points (31 commas) is the maximum and still parses.
+	if pts, msg := parseElevationPts(strings.TrimSuffix(strings.Repeat("1,1,", 16), ",")); msg != "" || len(pts) != 16 {
+		t.Fatalf("16 points: %d %q", len(pts), msg)
 	}
-	want := math.Round(haversineKm(0, 1, 0, 2)*1000) / 1000
-	for i, l := range resp.Legs {
-		if len(l.ElevM) != losSamples || l.Error != "" {
-			t.Fatalf("leg %d: %+v", i, l)
-		}
-		if l.DistanceKm != want {
-			t.Fatalf("leg %d distance=%v want %v", i, l.DistanceKm, want)
-		}
-	}
-	if f.count() != 2 {
-		t.Fatalf("calls=%d want 2", f.count())
+	if _, msg := parseElevationPts(strings.TrimSuffix(strings.Repeat("1,1,", 17), ",")); msg == "" {
+		t.Fatal("17 points accepted")
 	}
 }
 
-func TestElevationUpstreamQuery(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, _, _ := newElevTestServer(t, f, "?apikey=sekrit")
-	if code, _, _ := getElev(srv, "10,20,10.5,20.5"); code != 200 {
-		t.Fatalf("code=%d", code)
+// Review #2391 point 9: route LOS and the planner read the same tiles and
+// sample a leg the same way, so the same leg gets the same terrain, and so
+// the same verdict, in both views. Both requests go through their real
+// handlers over one shared source.
+func TestElevationMatchesPlannerProfile(t *testing.T) {
+	et := newElevTest(t, nil)
+	for _, k := range []srtmKey{{30, -98}, {30, -97}, {31, -98}, {31, -97}} {
+		et.src.put(k, elevFieldGrid(k, elevWavy))
 	}
-	q := f.query[0]
-	if q.Get("apikey") != "sekrit" {
-		t.Fatalf("apikey lost: %v", q)
-	}
-	lats, lons := strings.Split(q.Get("latitude"), ","), strings.Split(q.Get("longitude"), ",")
-	if len(lats) != losSamples || len(lons) != losSamples {
-		t.Fatalf("got %d lats, %d lons", len(lats), len(lons))
-	}
-	if lats[0] != "10.00000" || lons[losSamples-1] != "20.50000" {
-		t.Fatalf("endpoints: %s %s", lats[0], lons[losSamples-1])
-	}
-}
-
-func TestElevationGreatCircleSampling(t *testing.T) {
-	a, b := elevPoint{0, 0}, elevPoint{0, 90}
-	s := greatCircleSamples(a, b, losSamples)
-	if s[0] != a || s[losSamples-1] != b {
-		t.Fatalf("endpoints %v %v", s[0], s[losSamples-1])
-	}
-	// 100 samples have no exact midpoint; use 101 for t=0.5.
-	m := greatCircleSamples(a, b, 101)[50]
-	if math.Abs(m.lat) > 1e-9 || math.Abs(m.lon-45) > 1e-9 {
-		t.Fatalf("midpoint %v want (0,45)", m)
-	}
-	// Along a meridian-crossing great circle the path bows poleward.
-	mid := greatCircleSamples(elevPoint{60, -60}, elevPoint{60, 60}, 101)[50]
-	if mid.lat <= 60 {
-		t.Fatalf("expected great-circle arc above 60N, got %v", mid)
-	}
-	same := greatCircleSamples(a, a, 5)
-	for _, p := range same {
-		if p != a {
-			t.Fatalf("identical endpoints: %v", p)
-		}
-	}
-}
-
-func TestElevationCacheHit(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, _, _ := newElevTestServer(t, f, "")
-	_, r1, _ := getElev(srv, "1,1,1.2,1.2")
-	_, r2, _ := getElev(srv, "1,1,1.2,1.2")
-	if f.count() != 1 {
-		t.Fatalf("calls=%d want 1", f.count())
-	}
-	if fmt.Sprint(r1.Legs) != fmt.Sprint(r2.Legs) {
-		t.Fatal("cached response differs")
-	}
-}
-
-func TestElevationReversedLegFromCache(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, _ := newElevTestServer(t, f, "")
-	_, fwd, _ := getElev(srv, "1,1,1.2,1.2")
-	_, rev, _ := getElev(srv, "1.2,1.2,1,1")
-	if f.count() != 1 {
-		t.Fatalf("calls=%d want 1", f.count())
-	}
-	n := losSamples
-	for i := 0; i < n; i++ {
-		if fwd.Legs[0].ElevM[i] != rev.Legs[0].ElevM[n-1-i] {
-			t.Fatalf("not reversed at %d", i)
-		}
-	}
-	if fwd.Legs[0].ElevM[0] == fwd.Legs[0].ElevM[n-1] {
-		t.Fatal("test data should be asymmetric")
-	}
-	// Repeat in the original direction: cache must be unmodified.
-	_, fwd2, _ := getElev(srv, "1,1,1.2,1.2")
-	if fmt.Sprint(fwd.Legs) != fmt.Sprint(fwd2.Legs) {
-		t.Fatal("cached data was mutated")
-	}
-	for _, el := range svc.items {
-		for i, v := range el.Value.(*elevCacheEntry).elev {
-			if v != float64(i) {
-				t.Fatalf("cache entry mutated at %d", i)
-			}
-		}
-	}
-	// Mutating a returned slice must not touch the cache.
-	l := tleg(svc, elevPoint{1, 1}, elevPoint{1.2, 1.2})
-	l.ElevM[3] = -999
-	l2 := svc.leg(elevPoint{1, 1}, elevPoint{1.2, 1.2})
-	if l2.ElevM[3] == -999 {
-		t.Fatal("cache slice handed out")
-	}
-}
-
-func TestElevationTooLongNoCall(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, _, _ := newElevTestServer(t, f, "")
-	code, resp, _ := getElev(srv, "0,0,0,5,0,5.01")
-	if code != 200 {
-		t.Fatalf("code=%d", code)
-	}
-	if resp.Legs[0].Error != elevErrTooLong || len(resp.Legs[0].ElevM) != 0 || resp.Legs[0].DistanceKm < losMaxLegKm {
-		t.Fatalf("leg0: %+v", resp.Legs[0])
-	}
-	if resp.Legs[1].Error != "" {
-		t.Fatalf("leg1: %+v", resp.Legs[1])
-	}
-	if f.count() != 1 {
-		t.Fatalf("calls=%d want 1 (only the short leg)", f.count())
-	}
-}
-
-func TestElevationUpstream500CooldownAndRecovery(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, clk := newElevTestServer(t, f, "")
-	f.status.Store(500)
-	_, resp, _ := getElev(srv, "1,1,1.2,1.2")
-	if resp.Legs[0].Error != elevErrUpstream || len(resp.Legs[0].ElevM) != 0 {
-		t.Fatalf("leg: %+v", resp.Legs[0])
-	}
-	if svc.cacheLen() != 0 {
-		t.Fatal("failure was cached")
-	}
-	f.status.Store(200)
-	// Cooldown: no call, still an upstream error.
-	_, resp, _ = getElev(srv, "2,2,2.2,2.2")
-	if resp.Legs[0].Error != elevErrUpstream || f.count() != 1 {
-		t.Fatalf("cooldown not enforced: %+v calls=%d", resp.Legs[0], f.count())
-	}
-	clk.add(elevBackoff[0] + time.Second)
-	_, resp, _ = getElev(srv, "2,2,2.2,2.2")
-	if resp.Legs[0].Error != "" || f.count() != 2 {
-		t.Fatalf("after cooldown: %+v calls=%d", resp.Legs[0], f.count())
-	}
-}
-
-func TestElevationUpstream429OpensCooldown(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, _, _ := newElevTestServer(t, f, "")
-	f.status.Store(429)
-	getElev(srv, "1,1,1.2,1.2")
-	f.status.Store(200)
-	_, resp, _ := getElev(srv, "3,3,3.2,3.2")
-	if resp.Legs[0].Error != elevErrUpstream || f.count() != 1 {
-		t.Fatalf("429 did not open cooldown: %+v calls=%d", resp.Legs[0], f.count())
-	}
-}
-
-func TestElevationClientErrorStatusesOpenCooldown(t *testing.T) {
-	for _, st := range []int{400, 401, 403} {
-		f := newFakeElevUpstream(t)
-		srv, svc, _ := newElevTestServer(t, f, "")
-		f.status.Store(int32(st))
-		_, resp, _ := getElev(srv, "1,1,1.2,1.2")
-		if resp.Legs[0].Error != elevErrUpstream || svc.cacheLen() != 0 {
-			t.Fatalf("%d: %+v", st, resp.Legs[0])
-		}
-		f.status.Store(200)
-		_, resp, _ = getElev(srv, "1,1,1.3,1.3")
-		if resp.Legs[0].Error != elevErrUpstream || f.count() != 1 {
-			t.Fatalf("%d did not open cooldown: %+v calls=%d", st, resp.Legs[0], f.count())
-		}
-	}
-}
-
-func TestElevationLengthMismatchAndNulls(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, _ := newElevTestServer(t, f, "")
-	f.short.Store(50)
-	_, resp, _ := getElev(srv, "1,1,1.2,1.2")
-	if resp.Legs[0].Error != elevErrUpstream || svc.cacheLen() != 0 {
-		t.Fatalf("mismatch: %+v", resp.Legs[0])
-	}
-	f.short.Store(0)
-	f.nulls.Store(true)
-	_, resp, _ = getElev(srv, "1,1,1.2,1.2")
-	l := resp.Legs[0]
-	if l.Error != "" || len(l.ElevM) != losSamples {
-		t.Fatalf("nulls: %+v", l)
-	}
-	if l.ElevM[10] != 0 || l.ElevM[11] != 11 {
-		t.Fatalf("null should be 0: %v %v", l.ElevM[10], l.ElevM[11])
-	}
-}
-
-func TestElevationLRUEviction(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, _ := newElevTestServer(t, f, "")
-	svc.capacity = 2
-	getElev(srv, "1,1,1.1,1.1")
-	getElev(srv, "2,2,2.1,2.1")
-	getElev(srv, "1,1,1.1,1.1") // refresh leg 1
-	getElev(srv, "3,3,3.1,3.1") // evicts leg 2
-	if svc.cacheLen() != 2 {
-		t.Fatalf("size=%d want 2", svc.cacheLen())
-	}
-	before := f.count()
-	getElev(srv, "1,1,1.1,1.1")
-	if f.count() != before {
-		t.Fatal("recently used leg was evicted")
-	}
-	getElev(srv, "2,2,2.1,2.1")
-	if f.count() != before+1 {
-		t.Fatal("evicted leg should refetch")
-	}
-	if svc.cacheLen() != 2 {
-		t.Fatalf("size=%d want 2", svc.cacheLen())
-	}
-}
-
-func TestElevationConcurrentSingleflight(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	f.delay = 150 * time.Millisecond
-	srv, svc, _ := newElevTestServer(t, f, "")
-	nodesOf(svc).register(elevPoint{1, 1}, elevPoint{1.2, 1.2})
-	var wg sync.WaitGroup
-	for i := 0; i < 12; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			pts := "1,1,1.2,1.2"
-			if i%2 == 1 {
-				pts = "1.2,1.2,1,1"
-			}
-			if code, resp, _ := getElevRaw(srv, pts); code != 200 || resp.Legs[0].Error != "" {
-				t.Errorf("code=%d leg=%+v", code, resp.Legs[0])
-			}
-		}(i)
-	}
-	wg.Wait()
-	if f.count() != 1 {
-		t.Fatalf("calls=%d want 1", f.count())
-	}
-}
-
-func TestElevationConcurrencyBound(t *testing.T) {
-	var cur, max int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&cur, 1)
-		for {
-			m := atomic.LoadInt32(&max)
-			if n <= m || atomic.CompareAndSwapInt32(&max, m, n) {
-				break
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-		atomic.AddInt32(&cur, -1)
-		vals := make([]float64, losSamples)
-		json.NewEncoder(w).Encode(map[string]interface{}{"elevation": vals})
-	}))
-	defer srv.Close()
-	svc := newElevationService(LOSConfig{Enabled: true, ElevationURL: srv.URL})
-	s := &Server{cfg: &Config{LOS: &LOSConfig{Enabled: true}}, elevation: svc}
-	// 10 distinct legs in one request.
-	var p []string
+	// Points at 0.001° so the planner's quantisation keeps them as they are.
+	const pts = "30.2,-97.8,30.85,-97.15,31.3,-96.6"
+	cfg := &Config{LOS: &LOSConfig{Enabled: true}, Planner: &PlannerConfig{Enabled: true}}
+	et.srv.cfg = cfg
+	p := newPlannerService(*cfg.Planner, et.srv, et.src)
+	t.Cleanup(p.Close)
 	var ns []nodeInfo
-	for i := 0; i < 11; i++ {
-		p = append(p, fmt.Sprintf("%d,1", i))
-		ns = append(ns, nodeInfo{Lat: float64(i), Lon: 1, HasGPS: true})
+	for i, pt := range elevParsePts(pts) {
+		ns = append(ns, nodeInfo{PublicKey: fmt.Sprintf("ee%02d", i), Name: "N", Role: "repeater",
+			Lat: pt.lat, Lon: pt.lon, HasGPS: true, LastSeen: time.Now()})
 	}
-	svc.nodes = func() []nodeInfo { return ns }
-	// Adjacent degrees are ~111 km, within the leg limit.
-	if code, resp, _ := getElev(s, strings.Join(p, ",")); code != 200 || len(resp.Legs) != 10 {
-		t.Fatalf("code=%d legs=%d", code, len(resp.Legs))
+	p.data = &fakePlannerData{serverPlannerData: serverPlannerData{et.srv}, ns: ns}
+	p.fastWait = 10 * time.Second
+	et.srv.planner = p
+
+	los := elevLegs(t, et.get(pts))
+	req := httptest.NewRequest(http.MethodGet, "/api/planner/profile?pts="+pts, nil)
+	req.RemoteAddr = elevTestClient
+	pw := httptest.NewRecorder()
+	et.srv.handlePlannerProfile(pw, req)
+	if pw.Code != http.StatusOK {
+		t.Fatalf("planner: %d %s", pw.Code, pw.Body.String())
 	}
-	if max > elevMaxConcurrent || max < 2 {
-		t.Fatalf("max concurrent upstream calls=%d", max)
+	var plan PlannerProfileResponse
+	if err := json.Unmarshal(pw.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+
+	if los.Source != et.src.source || plan.Source != los.Source || los.Source != "SRTM (127.0.0.1)" {
+		t.Fatalf("sources: LOS %q, planner %q, source %q", los.Source, plan.Source, et.src.source)
+	}
+	if len(los.Legs) != 2 || len(plan.Legs) != 2 {
+		t.Fatalf("legs: LOS %d, planner %d", len(los.Legs), len(plan.Legs))
+	}
+	gp := elevParsePts(pts)
+	for i := range los.Legs {
+		l, pl := los.Legs[i], plan.Legs[i]
+		if l.Error != "" || pl.Error != "" {
+			t.Fatalf("leg %d errors: LOS %q, planner %q", i, l.Error, pl.Error)
+		}
+		a, b := geoPoint{gp[i].lat, gp[i].lon}, geoPoint{gp[i+1].lat, gp[i+1].lon}
+		if n := planProfileSamples(geoDistKm(a, b)); len(l.ElevM) != n {
+			t.Fatalf("leg %d: %d samples, want %d", i, len(l.ElevM), n)
+		}
+		if l.DistanceKm != pl.DistanceKm || !slices.Equal(l.ElevM, pl.ElevM) {
+			t.Fatalf("leg %d differs: LOS %v km, planner %v km, first elev %v vs %v",
+				i, l.DistanceKm, pl.DistanceKm, l.ElevM[:3], pl.ElevM[:3])
+		}
+		// Not flat: the comparison means something.
+		if slices.Min(l.ElevM) == slices.Max(l.ElevM) {
+			t.Fatalf("leg %d is flat", i)
+		}
+	}
+	if n := et.up.total(); n != 0 {
+		t.Fatalf("resident tiles fetched again: %d", n)
 	}
 }
+
+// Only the tiles a leg's samples fall in are loaded, not its bounding box.
+func TestElevationLoadsOnlyLegTiles(t *testing.T) {
+	a, b := geoPoint{30.5, -97.5}, geoPoint{32.5, -95.5}
+	if d := geoDistKm(a, b); d > losMaxLegKm {
+		t.Fatalf("test leg is %.0f km", d)
+	}
+	want := legTiles(a, b)
+	box, _ := srtmSpanOf(geoBBox{S: a.Lat, W: a.Lon, N: b.Lat, E: b.Lon})
+	if len(want) >= box.count() {
+		t.Fatalf("the leg's samples touch %d tiles, its box %d: the test needs fewer", len(want), box.count())
+	}
+	for _, p := range legSamplePoints(a, b) {
+		if !slices.Contains(want, srtmKeyOf(p.lat, p.lon)) {
+			t.Fatalf("sample (%v, %v) is in no listed tile", p.lat, p.lon)
+		}
+	}
+	tile := srtmConstTile(t, 250, srtmRawBytes, gzip.BestSpeed)
+	tiles := map[string][]byte{}
+	for i := 0; i < box.count(); i++ {
+		tiles[srtmPath(box.key(i))] = tile
+	}
+	et := newElevTest(t, srtmServe(tiles))
+	resp := elevLegs(t, et.get("30.5,-97.5,32.5,-95.5"))
+	l := resp.Legs[0]
+	if l.Error != "" || len(l.ElevM) != planProfileSamples(geoDistKm(a, b)) || slices.Min(l.ElevM) != 250 || slices.Max(l.ElevM) != 250 {
+		t.Fatalf("leg %+v", l.Error)
+	}
+	for i := 0; i < box.count(); i++ {
+		k := box.key(i)
+		wantHits := 0
+		if slices.Contains(want, k) {
+			wantHits = 1
+		}
+		if got := et.up.hitsFor(srtmPath(k)); got != wantHits {
+			t.Errorf("tile %s fetched %d times, want %d", k.name(), got, wantHits)
+		}
+	}
+}
+
+// Points on degree lines (a tile corner, a parallel, a meridian) read the
+// tile north or east of the line, which shares its edge with the other
+// side, and agree with the planner's rectangular view.
+func TestElevationDegreeLinePoints(t *testing.T) {
+	et := newElevTest(t, nil)
+	var keys []srtmKey
+	for lat := 29; lat <= 31; lat++ {
+		for lon := -98; lon <= -96; lon++ {
+			k := srtmKey{lat, lon}
+			keys = append(keys, k)
+			et.src.put(k, elevFieldGrid(k, elevLinear))
+		}
+	}
+	// Along the -97 meridian, to the 31,-97 corner, then along the 31st
+	// parallel (the great circle bulges north of it).
+	const pts = "30.2,-97,30.8,-97,31,-97,31,-96.5,31,-96"
+	gp := elevParsePts(pts)
+	if !slices.Contains(legTiles(geoPoint{31, -97}, geoPoint{31, -96.5}), srtmKey{31, -97}) {
+		t.Fatal("the corner point does not load the tile north-east of it")
+	}
+	resp := elevLegs(t, et.get(pts))
+	var geo []geoPoint
+	for _, p := range gp {
+		geo = append(geo, geoPoint{p.lat, p.lon})
+	}
+	tmpl := make([]PlannerProfileLeg, len(geo)-1)
+	for i := range tmpl {
+		tmpl[i].DistanceKm = losRound(geoDistKm(geo[i], geo[i+1]), 1000)
+	}
+	v := srtmMustView(t, et.src, plannerProfileView(geoBBox{S: 30.2, W: -97, N: 31, E: -96}, plannerProfilePad(defaultPlannerMaxLegKm)))
+	plan, err := planProfileLegs(t.Context(), v, geo, tmpl, func(float64) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, l := range resp.Legs {
+		if l.Error != "" {
+			t.Fatalf("leg %d: %q", i, l.Error)
+		}
+		samples := legSamplePoints(geo[i], geo[i+1])
+		for j, e := range l.ElevM {
+			if want := elevLinear(samples[j].lat, samples[j].lon); math.Abs(e-want) > 0.05+1e-6 {
+				t.Fatalf("leg %d sample %d at (%v, %v): %v, want %v", i, j, samples[j].lat, samples[j].lon, e, want)
+			}
+		}
+		if !slices.Equal(l.ElevM, plan.Legs[i].ElevM) {
+			t.Fatalf("leg %d differs from the planner view", i)
+		}
+	}
+	if n := et.up.total(); n != 0 {
+		t.Fatalf("fetched %d tiles", n)
+	}
+}
+
+// Tiles that are not resident: the request waits, then answers 202 while
+// the download goes on; polls are free and start nothing; once the tile is
+// in, the same URL answers 200.
+func TestElevationLoadingThenReady(t *testing.T) {
+	gate := newSRTMGate()
+	slow, ready := srtmKey{40, 10}, srtmKey{40, 11}
+	tile := srtmConstTile(t, 300, srtmRawBytes, gzip.BestSpeed)
+	serve := srtmServe(map[string][]byte{srtmPath(slow): tile})
+	et := newElevTest(t, func(w http.ResponseWriter, r *http.Request) {
+		if gate.wait(r) {
+			serve(w, r)
+		}
+	})
+	t.Cleanup(gate.open)
+	et.svc.wait = 20 * time.Millisecond
+	withElevLimit(et.svc, et.clk, 10)
+	et.src.put(ready, elevFlatGrid(50))
+	const ip = "192.0.2.30"
+	const pts = "40.5,10.5,40.5,11.5"
+
+	check202 := func(w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusAccepted || w.Header().Get("Retry-After") != "2" || w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("code=%d Retry-After=%q Cache-Control=%q body=%s", w.Code, w.Header().Get("Retry-After"),
+				w.Header().Get("Cache-Control"), w.Body.String())
+		}
+		var st PlannerJobStatus
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil ||
+			st != (PlannerJobStatus{State: "loading_terrain", Progress: 0.5, RetryAfterS: 2}) {
+			t.Fatalf("status %s (%v)", w.Body.String(), err)
+		}
+	}
+	check202(et.getFrom(pts, ip+":5000", nil))
+	if got := elevBucketTokens(et.svc, ip); got != 9 {
+		t.Fatalf("tokens=%v want 9 (one download started)", got)
+	}
+	srtmEventually(t, "the download to start", func() bool { return et.up.hitsFor(srtmPath(slow)) == 1 })
+	// A poll while it downloads costs nothing and starts nothing.
+	check202(et.raw(pts, ip+":5000", nil))
+	if got := elevBucketTokens(et.svc, ip); got != 9 || et.up.total() != 1 {
+		t.Fatalf("poll: tokens=%v, fetches=%d", got, et.up.total())
+	}
+
+	gate.open()
+	srtmEventually(t, "the tile to load", func() bool { return et.src.Resident(srtmBox(slow)) })
+	w := et.raw(pts, ip+":5000", nil)
+	resp := elevLegs(t, w)
+	l := resp.Legs[0]
+	if l.Error != "" || l.ElevM[0] != 300 || l.ElevM[len(l.ElevM)-1] != 50 || w.Header().Get("Cache-Control") != elevCacheControl {
+		t.Fatalf("after load: %q, ends %v..%v, Cache-Control %q", l.Error, l.ElevM[0], l.ElevM[len(l.ElevM)-1],
+			w.Header().Get("Cache-Control"))
+	}
+	if got := elevBucketTokens(et.svc, ip); got != 9 || et.up.total() != 1 {
+		t.Fatalf("after load: tokens=%v, fetches=%d", got, et.up.total())
+	}
+}
+
+func TestElevationMissingTileIsNoTerrain(t *testing.T) {
+	et := newElevTest(t, nil) // every download 404s: no such tile
+	et.src.put(srtmKey{40, 10}, elevFlatGrid(70))
+	const pts = "40.2,10.2,40.8,10.8,41.2,10.5"
+	for round := 0; round < 2; round++ {
+		w := et.get(pts)
+		resp := elevLegs(t, w)
+		if got := elevLegErrors(resp); !slices.Equal(got, []string{"", elevErrNoTerrain}) {
+			t.Fatalf("round %d: errors %q", round, got)
+		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Fatalf("round %d: Cache-Control %q", round, cc)
+		}
+	}
+	// Known missing after the first: not asked again.
+	if n := et.up.hitsFor(srtmPath(srtmKey{41, 10})); n != 1 || et.up.total() != 1 {
+		t.Fatalf("missing tile fetched %d times (total %d)", n, et.up.total())
+	}
+}
+
+// A request loads at most losMaxTiles distinct tiles. A leg whose new tiles
+// would go past the cap is too_many_tiles and loads nothing; a later leg
+// over tiles already in the request still fits.
+func TestElevationTooManyTiles(t *testing.T) {
+	et := newElevTest(t, nil)
+	// About 280 km legs east along 30.5° N, then back west over the fifth.
+	lons := []float64{-100, -97.1, -94.2, -91.3, -88.4, -85.5, -82.6, -85.5, -88.4}
+	var parts []string
+	var geo []geoPoint
+	for _, lon := range lons {
+		parts = append(parts, fmt.Sprintf("30.5,%g", lon))
+		geo = append(geo, geoPoint{30.5, lon})
+	}
+	pts := strings.Join(parts, ",")
+	seen := map[srtmKey]bool{}
+	var cum []int
+	for i := 0; i+1 < len(geo); i++ {
+		if d := geoDistKm(geo[i], geo[i+1]); d > losMaxLegKm {
+			t.Fatalf("leg %d is %.0f km", i, d)
+		}
+		for _, k := range legTiles(geo[i], geo[i+1]) {
+			seen[k] = true
+		}
+		cum = append(cum, len(seen))
+	}
+	if cum[4] > losMaxTiles || cum[5] <= losMaxTiles {
+		t.Fatalf("cumulative tiles %v: the test needs the 6th leg to cross the cap", cum)
+	}
+	// Preload what the request may load, so nothing is downloaded.
+	et.nodes.register(elevParsePts(pts)...)
+	_, keys := et.svc.plan(elevParsePts(pts))
+	if len(keys) != cum[4] {
+		t.Fatalf("request tiles %d, want %d", len(keys), cum[4])
+	}
+	flat := elevFlatGrid(10)
+	for _, k := range keys {
+		et.src.put(k, flat)
+	}
+	w := et.raw(pts, elevTestClient, nil)
+	resp := elevLegs(t, w)
+	tm := elevErrTooManyTiles
+	if got, want := elevLegErrors(resp), []string{"", "", "", "", "", tm, tm, ""}; !slices.Equal(got, want) {
+		t.Fatalf("errors %q, want %q", got, want)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" || et.up.total() != 0 {
+		t.Fatalf("Cache-Control %q, fetches %d", cc, et.up.total())
+	}
+}
+
+// Terrain that cannot load makes its legs "upstream" (retryable); the
+// other legs are still answered.
+func TestElevationTerrainUnavailable(t *testing.T) {
+	near, far := srtmKey{40, 10}, srtmKey{40, 11}
+	const pts = "40.2,10.2,40.8,10.8,40.5,11.5"
+	tile := srtmConstTile(t, 300, srtmRawBytes, gzip.BestSpeed)
+
+	// Downloads paused (cooldown): nothing is fetched or charged.
+	et := newElevTest(t, srtmServe(map[string][]byte{srtmPath(far): tile}))
+	withElevLimit(et.svc, et.clk, 10)
+	et.src.put(near, elevFlatGrid(70))
+	et.src.mu.Lock()
+	et.src.coolTo = et.clk.now().Add(time.Minute)
+	et.src.mu.Unlock()
+	w := et.getFrom(pts, "192.0.2.40:5000", nil)
+	resp := elevLegs(t, w)
+	if got := elevLegErrors(resp); !slices.Equal(got, []string{"", elevErrUpstream}) || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("cooldown: errors %q, Cache-Control %q", got, w.Header().Get("Cache-Control"))
+	}
+	if et.up.total() != 0 || elevBucketTokens(et.svc, "192.0.2.40") != 10 {
+		t.Fatalf("cooldown: fetches %d, tokens %v", et.up.total(), elevBucketTokens(et.svc, "192.0.2.40"))
+	}
+
+	// Download budget used up.
+	et.clk.add(time.Minute)
+	et.src.mu.Lock()
+	for i := 0; i < srtmPerMinute; i++ {
+		et.src.budget.starts = append(et.src.budget.starts, et.clk.now())
+	}
+	et.src.mu.Unlock()
+	if got := elevLegErrors(elevLegs(t, et.raw(pts, elevTestClient, nil))); !slices.Equal(got, []string{"", elevErrUpstream}) {
+		t.Fatalf("budget: errors %q", got)
+	}
+
+	// The tile server failing opens a cooldown.
+	et2 := newElevTest(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) })
+	if got := elevLegErrors(elevLegs(t, et2.get("40.5,11.2,40.5,11.8"))); !slices.Equal(got, []string{elevErrUpstream}) {
+		t.Fatalf("502: errors %q", got)
+	}
+	if !et2.src.cooling() {
+		t.Fatal("a failed download did not pause downloads")
+	}
+}
+
+// ─── Per-client limit ──────────────────────────────────────────────────────
+
+// A request is charged one token per tile download it starts, all or
+// nothing; resident tiles cost nothing, so such a request is never limited.
+func TestElevationChargedPerDownload(t *testing.T) {
+	tile := srtmConstTile(t, 120, srtmRawBytes, gzip.BestSpeed)
+	tiles := map[string][]byte{}
+	for lon := 10; lon <= 18; lon++ {
+		tiles[srtmPath(srtmKey{40, lon})] = tile
+	}
+	et := newElevTest(t, srtmServe(tiles))
+	withElevLimit(et.svc, et.clk, 4)
+	const a, b = "192.0.2.20", "192.0.2.21"
+	ok := func(pts, ip string) {
+		t.Helper()
+		if w := et.getFrom(pts, ip+":5000", nil); w.Code != http.StatusOK {
+			t.Fatalf("%s from %s: %d %s", pts, ip, w.Code, w.Body.String())
+		}
+	}
+	tokens := func(ip string, want float64) {
+		t.Helper()
+		if got := elevBucketTokens(et.svc, ip); math.Abs(got-want) > 1e-6 {
+			t.Fatalf("%s tokens=%v want %v", ip, got, want)
+		}
+	}
+
+	ok("40.5,10.5,40.5,11.5", a) // 2 downloads
+	tokens(a, 2)
+	ok("40.5,10.5,40.5,11.5", a) // resident: free
+	tokens(a, 2)
+
+	// 3 downloads, 2 tokens: refused, nothing taken, nothing fetched.
+	const three = "40.5,11.5,40.5,12.5,40.5,13.5,40.5,14.5"
+	before := et.up.total()
+	w := et.getFrom(three, a+":5000", nil)
+	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "rate limited") {
+		t.Fatalf("code=%d body=%s want 429", w.Code, w.Body.String())
+	}
+	if ra, _ := strconv.Atoi(w.Header().Get("Retry-After")); ra < 1 || ra > 60 {
+		t.Fatalf("Retry-After=%q", w.Header().Get("Retry-After"))
+	}
+	tokens(a, 2)
+	if et.up.total() != before {
+		t.Fatal("a refused request fetched tiles")
+	}
+
+	ok(three, b) // another client has its own bucket
+	tokens(b, 1)
+	ok("40.5,14.5,40.5,16.5", a) // 2 downloads: a is out of tokens
+	tokens(a, 0)
+	ok(three, a) // resident now: never limited
+	tokens(a, 0)
+	const more = "40.5,16.5,40.5,18.5" // 2 downloads
+	if w := et.getFrom(more, a+":5000", nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("out of tokens: %d", w.Code)
+	}
+	et.clk.add(31 * time.Second) // 4 a minute: 2.07 tokens back
+	ok(more, a)
+	tokens(a, 31.0/60*4-2)
+}
+
+func TestElevationRateLimitIndistinctClientsShareBucket(t *testing.T) {
+	tile := srtmConstTile(t, 120, srtmRawBytes, gzip.BestSpeed)
+	tiles := map[string][]byte{}
+	for lon := 20; lon <= 22; lon++ {
+		tiles[srtmPath(srtmKey{40, lon})] = tile
+	}
+	et := newElevTest(t, srtmServe(tiles))
+	withElevLimit(et.svc, et.clk, 2)
+	// Loopback peer, no trusted proxy: X-Forwarded-For is not believed.
+	for i, xff := range []string{"198.51.100.1", "198.51.100.2"} {
+		pts := fmt.Sprintf("40.2,%d.2,40.8,%d.8", 20+i, 20+i)
+		if w := et.getFrom(pts, "127.0.0.1:1", map[string]string{"X-Forwarded-For": xff}); w.Code != http.StatusOK {
+			t.Fatalf("request %d: %d", i, w.Code)
+		}
+	}
+	if w := et.getFrom("40.2,22.2,40.8,22.8", "127.0.0.1:1", map[string]string{"X-Forwarded-For": "198.51.100.3"}); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("shared bucket not enforced: %d", w.Code)
+	}
+}
+
+// ─── Known-node rule ───────────────────────────────────────────────────────
 
 func TestElevationUnknownPoint(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, clk := newElevTestServer(t, f, "")
-	nl := nodesOf(svc)
-	nl.mu.Lock()
-	nl.ns = []nodeInfo{
+	et := newElevTest(t, nil)
+	et.src.put(srtmKey{1, 1}, elevFlatGrid(5))
+	et.nodes.set([]nodeInfo{
 		{Lat: 1, Lon: 1, HasGPS: true},
 		{Lat: 1.2, Lon: 1.2, HasGPS: true},
 		{Lat: 0, Lon: 0, HasGPS: true},      // null island: excluded
 		{Lat: 0.5, Lon: 0.5, HasGPS: false}, // no GPS: excluded
+	})
+	leg := func(pts string) ElevationLeg {
+		t.Helper()
+		return elevLegs(t, et.raw(pts, elevTestClient, nil)).Legs[0]
 	}
-	nl.mu.Unlock()
 	for name, pts := range map[string]string{
 		"unknown":     "1.5,1.5,1,1",
 		"unknown b":   "1,1,1.5,1.5",
 		"null island": "0,0,1,1",
 		"no gps":      "0.5,0.5,1,1",
 	} {
-		_, resp, _ := getElevRaw(srv, pts)
-		if resp.Legs[0].Error != elevErrUnknownPoint || len(resp.Legs[0].ElevM) != 0 {
-			t.Errorf("%s: %+v", name, resp.Legs[0])
+		if l := leg(pts); l.Error != elevErrUnknownPoint || len(l.ElevM) != 0 {
+			t.Errorf("%s: %+v", name, l)
 		}
 	}
-	if f.count() != 0 {
-		t.Fatalf("unknown points reached upstream: %d", f.count())
+	if n := et.up.total(); n != 0 {
+		t.Fatalf("unknown points fetched %d tiles", n)
 	}
-	if _, resp, _ := getElevRaw(srv, "1,1,1.2,1.2"); resp.Legs[0].Error != "" {
-		t.Fatalf("known pair: %+v", resp.Legs[0])
+	if l := leg("1,1,1.2,1.2"); l.Error != "" {
+		t.Fatalf("known pair: %+v", l)
 	}
 	// too_long wins over unknown_point.
-	if _, resp, _ := getElevRaw(srv, "10,10,10,20"); resp.Legs[0].Error != elevErrTooLong {
-		t.Fatalf("order: %+v", resp.Legs[0])
+	if l := leg("10,10,10,20"); l.Error != elevErrTooLong {
+		t.Fatalf("order: %+v", l)
 	}
 	// The set is rebuilt only after 60 s.
-	nl.mu.Lock()
-	nl.ns = append(nl.ns, nodeInfo{Lat: 1.4, Lon: 1.4, HasGPS: true})
-	nl.mu.Unlock()
-	if _, resp, _ := getElevRaw(srv, "1,1,1.4,1.4"); resp.Legs[0].Error != elevErrUnknownPoint {
-		t.Fatalf("set refreshed early: %+v", resp.Legs[0])
+	et.nodes.set(append(et.nodes.get(), nodeInfo{Lat: 1.4, Lon: 1.4, HasGPS: true}))
+	if l := leg("1,1,1.4,1.4"); l.Error != elevErrUnknownPoint {
+		t.Fatalf("set refreshed early: %+v", l)
 	}
-	clk.add(elevNodeSetTTL + time.Second)
-	if _, resp, _ := getElevRaw(srv, "1,1,1.4,1.4"); resp.Legs[0].Error != "" {
-		t.Fatalf("set not refreshed after TTL: %+v", resp.Legs[0])
+	et.clk.add(elevNodeSetTTL + time.Second)
+	if l := leg("1,1,1.4,1.4"); l.Error != "" {
+		t.Fatalf("set not refreshed after TTL: %+v", l)
 	}
 }
 
@@ -549,28 +718,26 @@ func TestElevationUnknownPoint(t *testing.T) {
 // outside the geo_filter) is no valid endpoint, and a rule change applies to
 // the next request, not after elevNodeSetTTL.
 func TestElevationHiddenNodesAreUnknown(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, _ := newElevTestServer(t, f, "")
+	et := newElevTest(t, nil)
+	et.src.put(srtmKey{1, 1}, elevFlatGrid(5))
+	srv, svc := et.srv, et.svc
 	srv.cfg.SetNodeBlacklist([]string{"bad1"})
 	srv.cfg.SetHiddenNamePrefixes([]string{"zz-"})
 	inside := &GeoFilterConfig{Polygon: [][2]float64{{0.5, 0.5}, {0.5, 1.35}, {1.35, 1.35}, {1.35, 0.5}}}
 	srv.setGeoFilter(inside)
 	svc.visibility = srv
-	nl := nodesOf(svc)
-	nl.mu.Lock()
-	nl.ns = []nodeInfo{
+	et.nodes.set([]nodeInfo{
 		{PublicKey: "ok1", Name: "A", Lat: 1, Lon: 1, HasGPS: true},
 		{PublicKey: "ok2", Name: "B", Lat: 1.2, Lon: 1.2, HasGPS: true},
 		{PublicKey: "BAD1", Name: "C", Lat: 1.1, Lon: 1.1, HasGPS: true},
 		{PublicKey: "hid1", Name: "zz-x", Lat: 1.3, Lon: 1.3, HasGPS: true},
 		{PublicKey: "far1", Name: "D", Lat: 1.4, Lon: 1.4, HasGPS: true},
-	}
-	nl.mu.Unlock()
+	})
 	leg := func(pts string) ElevationLeg {
 		t.Helper()
-		code, resp, _ := getElevRaw(srv, pts)
-		if code != http.StatusOK || len(resp.Legs) != 1 {
-			t.Fatalf("%s: %d %+v", pts, code, resp)
+		resp := elevLegs(t, et.raw(pts, elevTestClient, nil))
+		if len(resp.Legs) != 1 {
+			t.Fatalf("%s: %+v", pts, resp)
 		}
 		return resp.Legs[0]
 	}
@@ -584,15 +751,12 @@ func TestElevationHiddenNodesAreUnknown(t *testing.T) {
 			t.Errorf("%s: %+v", name, l)
 		}
 	}
-	if f.count() != 0 {
-		t.Fatalf("hidden endpoints reached upstream: %d", f.count())
-	}
 	if l := leg("1,1,1.2,1.2"); l.Error != "" {
 		t.Fatalf("visible pair: %+v", l)
 	}
 
-	// Each rule change applies at once (the clock never moves), and a cached
-	// profile is not served for an endpoint that is now hidden.
+	// Each rule change applies at once (the clock never moves), and terrain
+	// is not served for an endpoint that is now hidden.
 	steps := []struct {
 		name   string
 		change func()
@@ -614,406 +778,42 @@ func TestElevationHiddenNodesAreUnknown(t *testing.T) {
 			t.Fatalf("after %s: %s → %+v, want error %q", st.name, st.pts, l, st.want)
 		}
 	}
-	if f.count() != 2 {
-		t.Fatalf("upstream calls=%d want 2 (1,1→1.2,1.2 once, 1,1→1.4,1.4 once)", f.count())
+	if n := et.up.total(); n != 0 {
+		t.Fatalf("fetched %d tiles", n)
 	}
 }
 
 func TestElevationUnknownPointFailClosed(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, _ := newElevTestServer(t, f, "")
-	svc.nodes = nil
-	_, resp, _ := getElevRaw(srv, "1,1,1.2,1.2")
-	if resp.Legs[0].Error != elevErrUnknownPoint {
-		t.Fatalf("nil nodes: %+v", resp.Legs[0])
+	et := newElevTest(t, nil)
+	et.svc.nodes = nil
+	if l := elevLegs(t, et.raw("1,1,1.2,1.2", elevTestClient, nil)).Legs[0]; l.Error != elevErrUnknownPoint {
+		t.Fatalf("nil nodes: %+v", l)
 	}
-	svc.nodes = func() []nodeInfo { return nil }
-	_, resp, _ = getElevRaw(srv, "1,1,1.2,1.2")
-	if resp.Legs[0].Error != elevErrUnknownPoint || f.count() != 0 {
-		t.Fatalf("empty nodes: %+v calls=%d", resp.Legs[0], f.count())
-	}
-}
-
-func TestElevationQuantisedSampling(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, _ := newElevTestServer(t, f, "")
-	nodesOf(svc).register(elevPoint{1, 1}, elevPoint{1.2, 1.2})
-	// Two spellings of the same 5-decimal endpoints.
-	getElevRaw(srv, "1.0000004,1,1.2,1.2")
-	getElevRaw(srv, "1,1,1.2,1.2000003")
-	if f.count() != 1 {
-		t.Fatalf("calls=%d want 1", f.count())
-	}
-	if q := f.query[0]; strings.Split(q.Get("latitude"), ",")[0] != "1.00000" {
-		t.Fatalf("not sampled from the quantised endpoint: %v", q.Get("latitude")[:20])
-	}
-}
-
-func TestElevationBudgetsExhaustIndependently(t *testing.T) {
-	big := 1000000
-	cases := []struct {
-		name  string
-		set   func(*elevationService)
-		reset time.Duration // advance that must reopen the budget
-		short time.Duration // advance that must NOT reopen it
-	}{
-		{"minute", func(s *elevationService) { s.minute.limit = 2; s.hour.limit, s.day.limit = big, big }, time.Minute + time.Second, 0},
-		{"hour", func(s *elevationService) { s.hour.limit = 2; s.minute.limit, s.day.limit = big, big }, time.Hour + time.Second, time.Minute + time.Second},
-		{"day", func(s *elevationService) { s.day.limit = 2; s.minute.limit, s.hour.limit = big, big }, 24*time.Hour + time.Second, time.Hour + time.Second},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			f := newFakeElevUpstream(t)
-			_, svc, clk := newElevTestServer(t, f, "")
-			c.set(svc)
-			leg := func(i int) ElevationLeg {
-				return tleg(svc, elevPoint{float64(i) + 0.5, 1}, elevPoint{float64(i) + 0.6, 1.1})
-			}
-			for i := 0; i < 2; i++ {
-				if l := leg(i); l.Error != "" {
-					t.Fatalf("call %d: %+v", i, l)
-				}
-			}
-			if l := leg(2); l.Error != elevErrUpstream || f.count() != 2 {
-				t.Fatalf("budget not enforced: %+v calls=%d", l, f.count())
-			}
-			// Cached legs are still served over budget.
-			if l := leg(0); l.Error != "" {
-				t.Fatalf("cached leg over budget: %+v", l)
-			}
-			if c.short > 0 {
-				clk.add(c.short)
-				if l := leg(2); l.Error != elevErrUpstream {
-					t.Fatalf("reopened too early: %+v", l)
-				}
-				clk.add(c.reset - c.short)
-			} else {
-				clk.add(c.reset)
-			}
-			if l := leg(2); l.Error != "" {
-				t.Fatalf("not reopened after window: %+v", l)
-			}
-		})
-	}
-}
-
-func TestElevationSemaphoreTimeoutDoesNotSpendBudget(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	_, svc, _ := newElevTestServer(t, f, "")
-	svc.timeout = 50 * time.Millisecond
-	for i := 0; i < elevMaxConcurrent; i++ {
-		svc.sem <- struct{}{}
-	}
-	l := tleg(svc, elevPoint{1, 1}, elevPoint{1.2, 1.2})
-	if l.Error != elevErrUpstream || f.count() != 0 {
-		t.Fatalf("leg=%+v calls=%d", l, f.count())
-	}
-	svc.mu.Lock()
-	spent := svc.minute.n + svc.hour.n + svc.day.n
-	cool := svc.coolTo
-	svc.mu.Unlock()
-	if spent != 0 || !cool.IsZero() {
-		t.Fatalf("budget spent=%d cooldown=%v on a semaphore timeout", spent, cool)
-	}
-}
-
-func TestElevationBackoffLadderAndReset(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	_, svc, clk := newElevTestServer(t, f, "")
-	f.status.Store(503)
-	n := 0
-	try := func() ElevationLeg {
-		n++
-		return tleg(svc, elevPoint{1, 1}, elevPoint{1.2, 1.2})
-	}
-	for step, d := range elevBackoff {
-		before := f.count()
-		if l := try(); l.Error != elevErrUpstream || f.count() != before+1 {
-			t.Fatalf("step %d: call not made (%+v)", step, l)
-		}
-		clk.add(d - time.Second)
-		if try(); f.count() != before+1 {
-			t.Fatalf("step %d: call made before %s elapsed", step, d)
-		}
-		clk.add(2 * time.Second)
-	}
-	// The ladder tops out at one hour.
-	if try(); f.count() != len(elevBackoff)+1 {
-		t.Fatalf("expected a call after the last step, calls=%d", f.count())
-	}
-	clk.add(time.Hour - time.Second)
-	before := f.count()
-	if try(); f.count() != before {
-		t.Fatal("capped cooldown shorter than 1h")
-	}
-	clk.add(2 * time.Second)
-	// A 200 resets the ladder.
-	f.status.Store(200)
-	if l := try(); l.Error != "" {
-		t.Fatalf("success expected: %+v", l)
-	}
-	f.status.Store(500)
-	tleg(svc, elevPoint{2, 2}, elevPoint{2.2, 2.2}) // fails: first rung again
-	before = f.count()
-	clk.add(61 * time.Second)
-	tleg(svc, elevPoint{2, 2}, elevPoint{2.2, 2.2})
-	if f.count() != before+1 {
-		t.Fatalf("ladder not reset by 200: calls=%d want %d", f.count(), before+1)
-	}
-}
-
-func TestElevationTransportErrorOpensCooldown(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	_, svc, _ := newElevTestServer(t, f, "")
-	f.srv.Close()
-	if l := tleg(svc, elevPoint{1, 1}, elevPoint{1.2, 1.2}); l.Error != elevErrUpstream {
-		t.Fatalf("%+v", l)
-	}
-	svc.mu.Lock()
-	cool := svc.coolTo
-	svc.mu.Unlock()
-	if cool.IsZero() {
-		t.Fatal("transport error did not open a cooldown")
-	}
-}
-
-func getElevFrom(srv *Server, pts, remote string, hdr map[string]string) *httptest.ResponseRecorder {
-	if v, ok := elevNodeLists.Load(srv.elevation); ok {
-		parts := strings.Split(pts, ",")
-		var ps []elevPoint
-		for i := 0; i+1 < len(parts); i += 2 {
-			la, _ := strconv.ParseFloat(parts[i], 64)
-			lo, _ := strconv.ParseFloat(parts[i+1], 64)
-			ps = append(ps, elevPoint{la, lo})
-		}
-		v.(*elevNodes).register(ps...)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/api/elevation/profile?pts="+url.QueryEscape(pts), nil)
-	req.RemoteAddr = remote
-	for k, v := range hdr {
-		req.Header.Set(k, v)
-	}
-	return serveElev(srv, req)
-}
-
-func withElevLimit(svc *elevationService, clk *elevClock, n int) {
-	svc.ipr = &wsLimiter{state: map[string]*wsIPState{}}
-	svc.rl = newRateLimiter(n, time.Minute)
-	svc.rl.now = clk.now
-}
-
-func TestElevationPerIPRateLimit(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, clk := newElevTestServer(t, f, "")
-	withElevLimit(svc, clk, 2)
-	ip := "192.0.2.10:5000"
-	for i := 0; i < 2; i++ {
-		w := getElevFrom(srv, fmt.Sprintf("%d,1,%d.1,1.1", i+1, i+1), ip, nil)
-		if w.Code != 200 {
-			t.Fatalf("request %d: %d", i, w.Code)
-		}
-	}
-	w := getElevFrom(srv, "7,1,7.1,1.1", ip, nil)
-	if w.Code != 429 {
-		t.Fatalf("code=%d want 429", w.Code)
-	}
-	if ra, _ := strconv.Atoi(w.Header().Get("Retry-After")); ra < 1 || ra > 30 {
-		t.Fatalf("Retry-After=%q", w.Header().Get("Retry-After"))
-	}
-	if !strings.Contains(w.Body.String(), "rate limited") {
-		t.Fatalf("body=%s", w.Body.String())
-	}
-	before := f.count()
-	// A fully cached request is never limited, and takes no token.
-	for i := 0; i < 5; i++ {
-		if w := getElevFrom(srv, "1,1,1.1,1.1", ip, nil); w.Code != 200 {
-			t.Fatalf("cached request limited: %d", w.Code)
-		}
-	}
-	if f.count() != before {
-		t.Fatal("cached request reached upstream")
-	}
-	// Another client has its own bucket.
-	if w := getElevFrom(srv, "7,1,7.1,1.1", "192.0.2.11:5000", nil); w.Code != 200 {
-		t.Fatalf("other client: %d", w.Code)
-	}
-	// Tokens refill.
-	clk.add(31 * time.Second)
-	if w := getElevFrom(srv, "8,1,8.1,1.1", ip, nil); w.Code != 200 {
-		t.Fatalf("after refill: %d", w.Code)
-	}
-}
-
-func TestElevationRateLimitIndistinctClientsShareBucket(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, clk := newElevTestServer(t, f, "")
-	withElevLimit(svc, clk, 2)
-	// Loopback peer, no trusted proxy: X-Forwarded-For is not believed.
-	for i, xff := range []string{"198.51.100.1", "198.51.100.2"} {
-		if w := getElevFrom(srv, fmt.Sprintf("%d,1,%d.1,1.1", i+1, i+1), "127.0.0.1:1", map[string]string{"X-Forwarded-For": xff}); w.Code != 200 {
-			t.Fatalf("request %d: %d", i, w.Code)
-		}
-	}
-	if w := getElevFrom(srv, "7,1,7.1,1.1", "127.0.0.1:1", map[string]string{"X-Forwarded-For": "198.51.100.3"}); w.Code != 429 {
-		t.Fatalf("shared bucket not enforced: %d", w.Code)
-	}
-}
-
-func TestElevationQueryBounds(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, _, _ := newElevTestServer(t, f, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/elevation/profile?pts=1,1,2,2&x="+strings.Repeat("a", 2100), nil)
-	w := serveElev(srv, req)
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "pts too long") {
-		t.Fatalf("raw query: %d %s", w.Code, w.Body.String())
-	}
-	if _, msg := parseElevationPts(strings.Repeat("1,", 500) + "1"); !strings.Contains(msg, "2 to 16") {
-		t.Fatalf("comma count: %q", msg)
-	}
-	// 16 points (31 commas) is the maximum and still parses.
-	if pts, msg := parseElevationPts(strings.TrimSuffix(strings.Repeat("1,1,", 16), ",")); msg != "" || len(pts) != 16 {
-		t.Fatalf("16 points: %d %q", len(pts), msg)
-	}
-	if _, msg := parseElevationPts(strings.TrimSuffix(strings.Repeat("1,1,", 17), ",")); msg == "" {
-		t.Fatal("17 points accepted")
+	et.svc.nodes = func() []nodeInfo { return nil }
+	if l := elevLegs(t, et.raw("1,1,1.2,1.2", elevTestClient, nil)).Legs[0]; l.Error != elevErrUnknownPoint || et.up.total() != 0 {
+		t.Fatalf("empty nodes: %+v fetches=%d", l, et.up.total())
 	}
 }
 
 func TestElevationCacheControl(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, _, clk := newElevTestServer(t, f, "")
-	_ = clk
-	if code, _, cc := getElev(srv, "1,1,1.2,1.2"); code != 200 || cc != "public, max-age=86400" {
-		t.Fatalf("clean: %d %q", code, cc)
-	}
-	// too_long only: still cacheable.
-	if code, resp, cc := getElev(srv, "0,1,0,5"); code != 200 || resp.Legs[0].Error != elevErrTooLong || cc != "public, max-age=86400" {
-		t.Fatalf("too_long: %d %q %+v", code, cc, resp.Legs)
-	}
-	// unknown_point: not cacheable.
-	if _, resp, cc := getElevRaw(srv, "60,60,60.1,60.1"); resp.Legs[0].Error != elevErrUnknownPoint || cc != "no-store" {
-		t.Fatalf("unknown: %q %+v", cc, resp.Legs)
-	}
-	// upstream error mixed with a good leg: not cacheable.
-	f.status.Store(500)
-	if _, resp, cc := getElev(srv, "1,1,1.2,1.2,2,2"); resp.Legs[1].Error != elevErrUpstream || cc != "no-store" {
-		t.Fatalf("upstream: %q %+v", cc, resp.Legs)
-	}
-}
-
-func TestElevationRedirectNotFollowed(t *testing.T) {
-	var hits int32
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-	}))
-	defer target.Close()
-	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL, http.StatusFound)
-	}))
-	defer redir.Close()
-	svc := newElevationService(LOSConfig{Enabled: true, ElevationURL: redir.URL})
-	svc.nodes = func() []nodeInfo {
-		return []nodeInfo{{Lat: 1, Lon: 1, HasGPS: true}, {Lat: 1.2, Lon: 1.2, HasGPS: true}}
-	}
-	if l := svc.leg(elevPoint{1, 1}, elevPoint{1.2, 1.2}); l.Error != elevErrUpstream {
-		t.Fatalf("%+v", l)
-	}
-	if atomic.LoadInt32(&hits) != 0 {
-		t.Fatal("redirect was followed")
-	}
-}
-
-func TestElevationUserAgent(t *testing.T) {
-	old := Version
-	defer func() { Version = old }()
-	for _, v := range []string{"v9.9.9", ""} {
-		Version = v
-		var ua atomic.Value
-		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ua.Store(r.Header.Get("User-Agent"))
-			vals := make([]float64, losSamples)
-			json.NewEncoder(w).Encode(map[string]interface{}{"elevation": vals})
-		}))
-		svc := newElevationService(LOSConfig{Enabled: true, ElevationURL: up.URL})
-		svc.nodes = func() []nodeInfo {
-			return []nodeInfo{{Lat: 1, Lon: 1, HasGPS: true}, {Lat: 1.2, Lon: 1.2, HasGPS: true}}
+	et := newElevTest(t, nil)
+	et.src.put(srtmKey{1, 1}, elevFlatGrid(5))
+	cc := func(pts string, register bool, want string, wantErrs ...string) {
+		t.Helper()
+		var w *httptest.ResponseRecorder
+		if register {
+			w = et.get(pts)
+		} else {
+			w = et.raw(pts, elevTestClient, nil)
 		}
-		svc.leg(elevPoint{1, 1}, elevPoint{1.2, 1.2})
-		up.Close()
-		want := "CoreScope"
-		if v != "" {
-			want += "/" + v
-		}
-		if got, _ := ua.Load().(string); got != want {
-			t.Fatalf("User-Agent=%q want %q", got, want)
+		if got := elevLegErrors(elevLegs(t, w)); !slices.Equal(got, wantErrs) || w.Header().Get("Cache-Control") != want {
+			t.Fatalf("%s: errors %q, Cache-Control %q; want %q, %q", pts, got, w.Header().Get("Cache-Control"), wantErrs, want)
 		}
 	}
-}
-
-func elevBucketTokens(svc *elevationService, ip string) float64 {
-	svc.rl.mu.Lock()
-	defer svc.rl.mu.Unlock()
-	return svc.rl.buckets[ip].tokens
-}
-
-func TestElevationBudgetChargedPerUncachedLeg(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, clk := newElevTestServer(t, f, "")
-	withElevLimit(svc, clk, 10)
-	ip := "192.0.2.20"
-	remote := ip + ":5000"
-	// 4 points = 3 distinct uncached legs.
-	if w := getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3", remote, nil); w.Code != 200 {
-		t.Fatalf("code=%d", w.Code)
-	}
-	if got := elevBucketTokens(svc, ip); got != 7 {
-		t.Fatalf("tokens=%v want 7 (3 legs charged)", got)
-	}
-	// Same route again: all cached, free. Extend by one leg: 1 charged.
-	getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3", remote, nil)
-	if got := elevBucketTokens(svc, ip); got != 7 {
-		t.Fatalf("cached legs charged: tokens=%v", got)
-	}
-	if w := getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3,1.4,1.4", remote, nil); w.Code != 200 {
-		t.Fatalf("code=%d", w.Code)
-	}
-	if got := elevBucketTokens(svc, ip); got != 6 {
-		t.Fatalf("tokens=%v want 6", got)
-	}
-	// Duplicate legs in one request (A-B-A-B) are one leg, one token.
-	if w := getElevFrom(srv, "5,1,5.1,1.1,5,1,5.1,1.1", remote, nil); w.Code != 200 {
-		t.Fatalf("code=%d", w.Code)
-	}
-	if got := elevBucketTokens(svc, ip); got != 5 {
-		t.Fatalf("duplicate legs: tokens=%v want 5", got)
-	}
-}
-
-func TestElevationBudgetAllOrNothing(t *testing.T) {
-	f := newFakeElevUpstream(t)
-	srv, svc, clk := newElevTestServer(t, f, "")
-	withElevLimit(svc, clk, 3)
-	ip := "192.0.2.21"
-	remote := ip + ":5000"
-	before := f.count()
-	// 4 uncached legs, 3 tokens: refused, nothing taken, nothing fetched.
-	w := getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3,1.4,1.4", remote, nil)
-	if w.Code != 429 {
-		t.Fatalf("code=%d want 429", w.Code)
-	}
-	if ra, _ := strconv.Atoi(w.Header().Get("Retry-After")); ra < 1 {
-		t.Fatalf("Retry-After=%q", w.Header().Get("Retry-After"))
-	}
-	if f.count() != before {
-		t.Fatal("refused request reached upstream")
-	}
-	if got := elevBucketTokens(svc, ip); got != 3 {
-		t.Fatalf("refused request consumed tokens: %v", got)
-	}
-	// A 3-leg request still fits.
-	if w := getElevFrom(srv, "1,1,1.1,1.1,1.2,1.2,1.3,1.3", remote, nil); w.Code != 200 {
-		t.Fatalf("code=%d", w.Code)
-	}
+	cc("1,1,1.2,1.2", true, elevCacheControl, "")
+	cc("1,1,1.2,1.2,1,5", true, elevCacheControl, "", elevErrTooLong) // too_long only: still cacheable
+	cc("60,60,60.1,60.1", false, "no-store", elevErrUnknownPoint)
+	cc("1,1,1.2,1.2,1.5,2.5", true, "no-store", "", elevErrNoTerrain) // N01E002 404s
 }
 
 func TestRateLimiterTakeN(t *testing.T) {
@@ -1026,5 +826,34 @@ func TestRateLimiterTakeN(t *testing.T) {
 	}
 	if ok, _ := l.takeN("k", 2); !ok {
 		t.Fatal("refusal took tokens")
+	}
+}
+
+// BenchmarkElevationServeResident: a full request (16 points, 15 legs of
+// about 190 km, so 600 samples a leg) whose tiles are all resident: tile
+// planning, sampling and encoding, no download.
+func BenchmarkElevationServeResident(b *testing.B) {
+	et := newElevTest(b, nil)
+	flat := elevFlatGrid(100)
+	for lat := 30; lat <= 31; lat++ {
+		for lon := -98; lon <= -96; lon++ {
+			et.src.put(srtmKey{lat, lon}, flat)
+		}
+	}
+	var parts []string
+	for i := 0; i < losMaxPoints; i++ {
+		lat := 30.1 + 1.7*float64(i%2)
+		parts = append(parts, fmt.Sprintf("%.3f,%.3f", lat, -97.9+0.18*float64(i)))
+	}
+	pts := strings.Join(parts, ",")
+	et.nodes.register(elevParsePts(pts)...)
+	if resp := elevLegs(b, et.raw(pts, elevTestClient, nil)); !slices.Equal(elevLegErrors(resp), make([]string, losMaxPoints-1)) {
+		b.Fatalf("benchmark route: %q", elevLegErrors(resp))
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if w := et.raw(pts, elevTestClient, nil); w.Code != http.StatusOK {
+			b.Fatal(w.Code)
+		}
 	}
 }

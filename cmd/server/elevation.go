@@ -1,57 +1,58 @@
 package main
 
 // GET /api/elevation/profile — terrain elevation along consecutive legs of a
-// route, for the map's line-of-sight view (los_config.go).
+// route, for the map's line-of-sight view (los_config.go). The terrain is
+// the planner's: the same SRTM source (terrain_config.go) and the same
+// sampling (sampleLegProfile), so a leg gets the same verdict in both views.
 //
-// CONTRACT (frozen; public/route-los.js depends on it):
+// CONTRACT (public/route-los.js depends on it):
 //
 //	GET /api/elevation/profile?pts=lat1,lon1,lat2,lon2[,lat3,lon3...]
 //
 //	pts      flat comma list of 2..losMaxPoints points (even count of
 //	         numbers), lat in [-90,90], lon in [-180,180].
 //	200      ElevationProfileResponse; legs[i] is pts[i] → pts[i+1].
+//	202      PlannerJobStatus{"loading_terrain", progress, retry_after_s}
+//	         + Retry-After, no-store: some of the request's tiles are still
+//	         downloading after losTileWait. The downloads carry on; the
+//	         client re-polls the same URL.
 //	400      writeError: bad/missing pts, odd count, out of range, too many,
 //	         query over 2048 bytes.
 //	404      writeError "los disabled" when los.enabled is false.
-//	429      writeError "rate limited" + Retry-After (seconds): this client
-//	         needs upstream fetches and used up its per-IP tokens. Fully
-//	         cached requests are never limited.
+//	429      writeError "rate limited" + Retry-After (seconds): the request
+//	         would start more tile downloads than this client has tokens
+//	         left. A request that starts none is never limited.
 //
 // Points rule: every point must be the position of a known node (GPS set,
-// not 0,0) that /api/nodes shows (node_visibility.go), matched at 5 decimals. This bounds the cache key space to real
-// node pairs so the endpoint cannot be used to drain the elevation quota.
+// not 0,0) that /api/nodes shows (node_visibility.go), matched at 5
+// decimals. This bounds the tiles a client can make the server download to
+// those under real node pairs.
 //
 // Per-leg failures never fail the request: the leg carries an error code
-// and no elev_m. Codes: "too_long" (leg > losMaxLegKm), "unknown_point"
-// (an endpoint is not a known node), "upstream" (elevation service failed,
-// cooling down, or over budget). Cache-Control is public, max-age=86400
-// unless a leg has an error other than too_long, then no-store.
+// and no elev_m. Codes, checked in this order: "too_long" (leg >
+// losMaxLegKm), "unknown_point" (an endpoint is not a known node),
+// "too_many_tiles" (the leg's tiles would take the request past
+// losMaxTiles), "upstream" (a tile could not be loaded: downloads paused,
+// over budget or failed), "no_terrain" (a sample lies in a tile without
+// data). Cache-Control is public, max-age=86400 when every leg is OK or
+// too_long, else no-store.
 
 import (
-	"container/list"
-	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"log"
+	"maps"
 	"math"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/singleflight"
 )
 
 // ElevationProfileResponse is the /api/elevation/profile body.
 type ElevationProfileResponse struct {
-	// Samples per leg, both endpoints included (losSamples).
-	Samples int `json:"samples"`
-	// Source is the elevation host, for attribution (e.g.
-	// "api.open-meteo.com").
+	// Source attributes the terrain: "SRTM (AWS Open Data)" for the default
+	// tiles, else "SRTM (<tile host>)" (terrainSourceName). The planner
+	// reports the same string.
 	Source string         `json:"source"`
 	Legs   []ElevationLeg `json:"legs"`
 }
@@ -60,42 +61,31 @@ type ElevationProfileResponse struct {
 type ElevationLeg struct {
 	// Great-circle (haversine, R=6371 km) length of the leg.
 	DistanceKm float64 `json:"distance_km"`
-	// ElevM holds Samples terrain heights in metres, from the leg's first
-	// point to its second, at evenly spaced great-circle fractions
-	// t = i/(Samples-1). Omitted when Error is set.
+	// ElevM holds terrain heights in metres (0.1 m steps), from the leg's
+	// first point to its second, at evenly spaced great-circle fractions
+	// t = i/(len-1). The count grows with the leg: planProfileSamples, about
+	// one sample per 90 m, 64 to 600. Omitted when Error is set.
 	ElevM []float64 `json:"elev_m,omitempty"`
-	// Error codes: "too_long" (leg > losMaxLegKm), "unknown_point" (an
-	// endpoint is not a known node), "upstream" (elevation service failed or
-	// rate-limited).
+	// Error codes: see the file comment.
 	Error string `json:"error,omitempty"`
 }
 
-// Leg error codes.
+// Leg error codes. The ones the planner profile shares mean the same there.
 const (
-	elevErrTooLong  = "too_long"
-	elevErrUpstream = "upstream"
-	// elevErrUnknownPoint: a leg endpoint is not the position of a known node.
+	elevErrTooLong      = plannerErrTooLong
 	elevErrUnknownPoint = "unknown_point"
+	elevErrTooManyTiles = plannerErrTooManyTiles
+	elevErrUpstream     = "upstream"
+	elevErrNoTerrain    = plannerErrNoTerrain
 )
 
 const (
-	elevCacheCapacity    = 4096
-	elevMaxConcurrent    = 4
-	elevUpstreamTimeout  = 10 * time.Second
-	elevMaxBodyBytes     = 256 << 10
-	elevErrBodyDrain     = 4096
 	elevEarthRadiusKm    = 6371.0
 	elevSamePointRadians = 1e-9
 	elevMaxRawQuery      = 2048
 	elevNodeSetTTL       = 60 * time.Second
-	// elevIPTokens is the per-client budget in legs per minute; it must cover
-	// one full route (losMaxPoints-1 = 15 legs).
-	elevIPTokens = 30
+	elevCacheControl     = "public, max-age=86400"
 )
-
-// elevBackoff is the cooldown after the 1st, 2nd, 3rd... consecutive upstream
-// failure; the last step repeats.
-var elevBackoff = []time.Duration{60 * time.Second, 5 * time.Minute, 30 * time.Minute, time.Hour}
 
 func (s *Server) handleElevationProfile(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.LOS.enabled() || s.elevation == nil {
@@ -111,40 +101,73 @@ func (s *Server) handleElevationProfile(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	e := s.elevation
-	plans := make([]elevPlan, len(pts)-1)
-	// The client is charged one token per distinct uncached leg (a leg and
-	// its reverse share a key), all or nothing, so a route cannot spend the
-	// upstream budget at one token per request.
-	uncached := map[string]struct{}{}
-	for i := range plans {
-		plans[i] = e.plan(pts[i], pts[i+1])
-		if plans[i].res.Error == "" && !e.cached(plans[i].key) {
-			uncached[plans[i].key] = struct{}{}
+	s.elevation.serve(w, r, pts)
+}
+
+// serve answers a validated request. It waits up to e.wait for the tiles it
+// needs, then answers 200, or 202 while some are still downloading. The
+// client is charged one token per download the request starts, all or
+// nothing, before any starts; resident tiles, tiles already downloading
+// (another request's, or the planner's) and polls cost nothing.
+func (e *elevationService) serve(w http.ResponseWriter, r *http.Request, pts []elevPoint) {
+	legs, keys := e.plan(pts)
+	ts := e.src.tiles(keys)
+	failed := map[srtmKey]bool{}
+	switch {
+	case len(ts.need) == 0:
+	case ts.cooling:
+		// Downloads are paused: the legs on these tiles are upstream, the
+		// rest are answered.
+		for _, k := range ts.need {
+			failed[k] = true
+		}
+	default:
+		if ts.starts > 0 && !e.allowN(w, r, ts.starts) {
+			return
+		}
+		got, bad := e.src.await(r.Context(), ts.need, e.wait)
+		maps.Copy(ts.grids, got)
+		maps.Copy(failed, bad)
+		if len(ts.grids)+len(failed) < len(keys) {
+			writePlannerStatus(w, PlannerJobStatus{
+				State:       plannerStateNames[plannerStateTerrain],
+				Progress:    math.Round(float64(len(ts.grids))/float64(len(keys))*100) / 100,
+				RetryAfterS: losPollAfterS,
+			})
+			return
 		}
 	}
-	if len(uncached) > 0 && !e.allowN(w, r, len(uncached)) {
-		return
-	}
-	legs := make([]ElevationLeg, len(plans))
-	var wg sync.WaitGroup
-	for i := range plans {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			legs[i] = e.run(plans[i])
-		}(i)
-	}
-	wg.Wait()
-	cc := "public, max-age=86400"
-	for _, l := range legs {
-		if l.Error != "" && l.Error != elevErrTooLong {
+	view := srtmTileView(ts.grids)
+	out := ElevationProfileResponse{Source: e.src.source, Legs: make([]ElevationLeg, len(legs))}
+	cc := elevCacheControl
+	for i, l := range legs {
+		out.Legs[i] = l.res
+		res := &out.Legs[i]
+		if res.Error == "" {
+			if anyTileIn(l.tiles, failed) {
+				res.Error = elevErrUpstream
+			} else if elev, ok := sampleLegProfile(view, l.a, l.b); ok {
+				res.ElevM = elev
+			} else {
+				res.Error = elevErrNoTerrain
+			}
+		}
+		if res.Error != "" && res.Error != elevErrTooLong {
 			cc = "no-store"
-			break
 		}
 	}
 	w.Header().Set("Cache-Control", cc)
-	writeJSON(w, ElevationProfileResponse{Samples: losSamples, Source: e.source, Legs: legs})
+	writeJSON(w, out)
+}
+
+// anyTileIn reports whether any of keys is in set.
+func anyTileIn(keys []srtmKey, set map[srtmKey]bool) bool {
+	for _, k := range keys {
+		if set[k] {
+			return true
+		}
+	}
+	return false
 }
 
 type elevPoint struct{ lat, lon float64 }
@@ -215,29 +238,20 @@ func greatCircleSamples(a, b elevPoint, n int) []elevPoint {
 	return out
 }
 
-// elevHTTPDoer is the slice of *http.Client the service needs (test seam).
-type elevHTTPDoer interface {
-	Do(*http.Request) (*http.Response, error)
-}
-
-type elevCacheEntry struct {
-	key  string
-	elev []float64 // canonical direction; never handed out
-}
-
-// elevWindow is a fixed-window counter.
-type elevWindow struct {
-	every time.Duration
-	limit int
-	at    time.Time
-	n     int
-}
-
-// roll starts a new window when the current one has expired.
-func (w *elevWindow) roll(now time.Time) {
-	if w.at.IsZero() || now.Sub(w.at) >= w.every {
-		w.at, w.n = now, 0
+// legTiles lists, first seen first, the tiles sampleLegProfile reads for
+// leg a→b: the one each of legSamplePoints falls in, as srtmTileView looks
+// it up (srtmKeyOf). Only these load, not the leg's bounding box: a 300 km
+// diagonal's box holds dozens of tiles, its samples about 10.
+func legTiles(a, b geoPoint) []srtmKey {
+	var out []srtmKey
+	seen := map[srtmKey]bool{}
+	for _, p := range legSamplePoints(a, b) {
+		if k := srtmKeyOf(p.lat, p.lon); !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
 	}
+	return out
 }
 
 // elevVisibility is the node-hiding rule /api/nodes applies; *Server
@@ -249,106 +263,50 @@ type elevVisibility interface {
 	visibleNodeInfo() func(n *nodeInfo) bool
 }
 
-// elevationService fetches and caches leg profiles. The cache is in-memory
-// only (the server never writes the DB).
+// elevationService serves route LOS profiles from the shared terrain source.
+// It keeps no terrain of its own: tiles live in the source's cache, in
+// memory only (the server never writes the DB).
 type elevationService struct {
-	baseURL   string
-	source    string
-	userAgent string
-	client    elevHTTPDoer
-	now       func() time.Time
-	// capacity is the max number of cached legs.
-	capacity int
-	// timeout bounds one upstream fetch, semaphore wait included.
-	timeout time.Duration
+	src *srtmSource
+	now func() time.Time
+	// wait is the longest a request waits for its tiles before 202.
+	wait time.Duration
 	// nodes lists the known nodes; only their positions are valid leg
 	// endpoints. Nil means none (every leg is unknown_point).
 	nodes func() []nodeInfo
 	// visibility narrows nodes to those /api/nodes shows
 	// (node_visibility.go). Nil (unit tests) hides nothing.
 	visibility elevVisibility
-	// clientLimiter (ipr/rl) is the per-client limit in legs, charged one
-	// token per distinct uncached leg; nil ipr or rl disables it.
+	// clientLimiter (ipr/rl) is the per-client limit in tile downloads,
+	// charged one token per download a request starts; nil ipr or rl
+	// disables it.
 	clientLimiter
-
-	sf  singleflight.Group
-	sem chan struct{}
 
 	refreshMu sync.Mutex // serialises node-set rebuilds
 
 	mu         sync.Mutex
-	ll         *list.List
-	items      map[string]*list.Element
 	nodeSet    map[string]struct{}
 	nodeSetAt  time.Time
-	nodeSetGen string    // visibility generation nodeSet was built under
-	fails      int       // consecutive upstream failures
-	coolTo     time.Time // upstream calls blocked until then
-	minute     elevWindow
-	hour       elevWindow
-	day        elevWindow
+	nodeSetGen string // visibility generation nodeSet was built under
 }
 
-// newElevationService builds the service from the resolved config.
-func newElevationService(cfg LOSConfig) *elevationService {
-	src := ""
-	if u, err := url.Parse(cfg.ElevationURL); err == nil {
-		src = u.Host
-	}
-	ua := "CoreScope"
-	if Version != "" {
-		ua += "/" + Version
-	}
-	perMin, perHour, perDay := cfg.LegsPerMinute, cfg.LegsPerHour, cfg.LegsPerDay
-	if perMin <= 0 {
-		perMin = defaultLOSLegsPerMinute
-	}
-	if perHour <= 0 {
-		perHour = defaultLOSLegsPerHour
-	}
-	if perDay <= 0 {
-		perDay = defaultLOSLegsPerDay
+// newElevationService builds the service over src, the SRTM source it
+// shares with the planner (newTerrainServices); nil builds a private default
+// one sized for route LOS (tests).
+func newElevationService(src *srtmSource) *elevationService {
+	if src == nil {
+		src = newSRTMSource(TerrainConfig{}, losMaxTiles)
 	}
 	return &elevationService{
-		baseURL:   cfg.ElevationURL,
-		source:    src,
-		userAgent: ua,
-		client: &http.Client{
-			Timeout: elevUpstreamTimeout,
-			// An elevation host has no business redirecting us elsewhere.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-		now:      time.Now,
-		capacity: elevCacheCapacity,
-		timeout:  elevUpstreamTimeout,
-		sem:      make(chan struct{}, elevMaxConcurrent),
-		ll:       list.New(),
-		items:    make(map[string]*list.Element),
-		minute:   elevWindow{every: time.Minute, limit: perMin},
-		hour:     elevWindow{every: time.Hour, limit: perHour},
-		day:      elevWindow{every: 24 * time.Hour, limit: perDay},
+		src:  src,
+		now:  time.Now,
+		wait: losTileWait,
 
-		clientLimiter: clientLimiter{tag: "los", what: "elevation"},
+		clientLimiter: clientLimiter{tag: "los", what: "terrain tile"},
 	}
 }
 
 func elevKey(p elevPoint) string { return fmt.Sprintf("%.5f,%.5f", p.lat, p.lon) }
-
-// parseElevKey is the inverse of elevKey.
-func parseElevKey(k string) elevPoint {
-	la, lo, _ := strings.Cut(k, ",")
-	lat, _ := strconv.ParseFloat(la, 64)
-	lon, _ := strconv.ParseFloat(lo, 64)
-	return elevPoint{lat, lon}
-}
-
-func reversedCopy(in []float64) []float64 {
-	out := make([]float64, len(in))
-	for i, v := range in {
-		out[len(in)-1-i] = v
-	}
-	return out
-}
 
 // known reports whether key is the position of a known node that /api/nodes
 // shows. The set is rebuilt outside e.mu every elevNodeSetTTL, and at once
@@ -418,248 +376,53 @@ func (e *elevationService) buildNodeSet() map[string]struct{} {
 	return set
 }
 
-// elevPlan is a leg after the checks that need no upstream: res carries the
-// distance and, when the leg is already decided, its error.
-type elevPlan struct {
-	res      ElevationLeg
-	key      string
-	a, b     elevPoint // canonical order, quantised to the key's 5 decimals
-	reversed bool
+// elevLeg is one requested leg after the checks that need no terrain.
+type elevLeg struct {
+	res   ElevationLeg // the distance, and the error once decided
+	a, b  geoPoint
+	tiles []srtmKey // legTiles; nil once res.Error is set
 }
 
-// plan runs the cheap checks, in order: too_long, unknown_point.
-func (e *elevationService) plan(a, b elevPoint) elevPlan {
-	p := elevPlan{res: ElevationLeg{DistanceKm: math.Round(legKm(a, b)*1000) / 1000}}
-	if p.res.DistanceKm > losMaxLegKm {
-		p.res.Error = elevErrTooLong
-		return p
-	}
-	ka, kb := elevKey(a), elevKey(b)
-	if !e.known(ka) || !e.known(kb) {
-		p.res.Error = elevErrUnknownPoint
-		return p
-	}
-	if kb < ka {
-		ka, kb = kb, ka
-		p.reversed = true
-	}
-	p.key = ka + "|" + kb
-	// Sample from the quantised endpoints so the cached profile does not
-	// depend on which spelling of the coordinates asked first.
-	p.a, p.b = parseElevKey(ka), parseElevKey(kb)
-	return p
-}
-
-// leg builds one ElevationLeg; failures are reported on the leg.
-func (e *elevationService) leg(a, b elevPoint) ElevationLeg { return e.run(e.plan(a, b)) }
-
-// run serves a planned leg from the cache or one shared upstream fetch.
-func (e *elevationService) run(p elevPlan) ElevationLeg {
-	res := p.res
-	if res.Error != "" {
-		return res
-	}
-	elev, ok := e.cacheGet(p.key)
-	if !ok {
-		v, err, _ := e.sf.Do(p.key, func() (interface{}, error) {
-			if cached, ok := e.cacheGet(p.key); ok {
-				return cached, nil
+// plan runs the checks that need no terrain, in order: too_long,
+// unknown_point, too_many_tiles. It returns the legs and the request's
+// distinct tiles, first seen first. A leg whose new tiles would take the
+// request past losMaxTiles is too_many_tiles and adds none; a later leg may
+// still fit.
+func (e *elevationService) plan(pts []elevPoint) ([]elevLeg, []srtmKey) {
+	legs := make([]elevLeg, len(pts)-1)
+	seen := map[srtmKey]bool{}
+	var keys []srtmKey
+	for i := range legs {
+		l := &legs[i]
+		pa, pb := pts[i], pts[i+1]
+		l.a, l.b = geoPoint{pa.lat, pa.lon}, geoPoint{pb.lat, pb.lon}
+		l.res.DistanceKm = losRound(legKm(pa, pb), 1000)
+		if l.res.DistanceKm > losMaxLegKm {
+			l.res.Error = elevErrTooLong
+			continue
+		}
+		if !e.known(elevKey(pa)) || !e.known(elevKey(pb)) {
+			l.res.Error = elevErrUnknownPoint
+			continue
+		}
+		tiles := legTiles(l.a, l.b)
+		fresh := 0
+		for _, k := range tiles {
+			if !seen[k] {
+				fresh++
 			}
-			got, err := e.fetch(p.a, p.b)
-			if err != nil {
-				return nil, err
+		}
+		if len(keys)+fresh > losMaxTiles {
+			l.res.Error = elevErrTooManyTiles
+			continue
+		}
+		for _, k := range tiles {
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
 			}
-			e.cachePut(p.key, got)
-			return got, nil
-		})
-		if err != nil {
-			res.Error = elevErrUpstream
-			return res
 		}
-		elev = v.([]float64)
+		l.tiles = tiles
 	}
-	// elev may be shared with other callers or the cache: always copy.
-	if p.reversed {
-		res.ElevM = reversedCopy(elev)
-	} else {
-		res.ElevM = append([]float64(nil), elev...)
-	}
-	return res
-}
-
-// cached reports whether key is cached, without touching LRU order.
-func (e *elevationService) cached(key string) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	_, ok := e.items[key]
-	return ok
-}
-
-// cacheGet returns a private copy of the cached canonical profile.
-func (e *elevationService) cacheGet(key string) ([]float64, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	el, ok := e.items[key]
-	if !ok {
-		return nil, false
-	}
-	e.ll.MoveToFront(el)
-	return append([]float64(nil), el.Value.(*elevCacheEntry).elev...), true
-}
-
-func (e *elevationService) cachePut(key string, elev []float64) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	stored := append([]float64(nil), elev...)
-	if el, ok := e.items[key]; ok {
-		el.Value.(*elevCacheEntry).elev = stored
-		e.ll.MoveToFront(el)
-		return
-	}
-	e.items[key] = e.ll.PushFront(&elevCacheEntry{key: key, elev: stored})
-	for e.capacity > 0 && e.ll.Len() > e.capacity {
-		last := e.ll.Back()
-		e.ll.Remove(last)
-		delete(e.items, last.Value.(*elevCacheEntry).key)
-	}
-}
-
-func (e *elevationService) cacheLen() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.ll.Len()
-}
-
-var errElevUpstream = errors.New("elevation upstream unavailable")
-
-// admit applies the cooldown and the minute/hour/day budgets. A call is
-// counted against all three only when every one allows it.
-func (e *elevationService) admit() bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	now := e.now()
-	if now.Before(e.coolTo) {
-		return false
-	}
-	ws := [...]*elevWindow{&e.minute, &e.hour, &e.day}
-	for _, w := range ws {
-		w.roll(now)
-		if w.n >= w.limit {
-			return false
-		}
-	}
-	for _, w := range ws {
-		w.n++
-	}
-	return true
-}
-
-// openCooldown records an upstream failure and blocks calls for the next
-// step of the back-off ladder. Failures that land while a cooldown is already
-// running (calls admitted just before it opened) do not escalate it.
-func (e *elevationService) openCooldown() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	now := e.now()
-	if now.Before(e.coolTo) {
-		return
-	}
-	step := e.fails
-	if step >= len(elevBackoff) {
-		step = len(elevBackoff) - 1
-	}
-	e.fails++
-	e.coolTo = now.Add(elevBackoff[step])
-}
-
-func (e *elevationService) resetFailures() {
-	e.mu.Lock()
-	e.fails = 0
-	e.mu.Unlock()
-}
-
-type elevUpstreamBody struct {
-	Elevation []*float64 `json:"elevation"`
-}
-
-// fetch samples the leg a→b and queries the upstream once.
-func (e *elevationService) fetch(a, b elevPoint) ([]float64, error) {
-	// Detached from any request context: a shared singleflight call must not
-	// fail because one client went away.
-	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
-	defer cancel()
-	select {
-	case e.sem <- struct{}{}:
-		defer func() { <-e.sem }()
-	case <-ctx.Done():
-		return nil, errElevUpstream
-	}
-	// Budget is spent only once a slot is held, so a wait that times out
-	// costs nothing.
-	if !e.admit() {
-		return nil, errElevUpstream
-	}
-
-	samples := greatCircleSamples(a, b, losSamples)
-	lats := make([]string, len(samples))
-	lons := make([]string, len(samples))
-	for i, p := range samples {
-		lats[i] = strconv.FormatFloat(p.lat, 'f', 5, 64)
-		lons[i] = strconv.FormatFloat(p.lon, 'f', 5, 64)
-	}
-	u, err := url.Parse(e.baseURL)
-	if err != nil {
-		return nil, errElevUpstream
-	}
-	q := u.Query()
-	q.Set("latitude", strings.Join(lats, ","))
-	q.Set("longitude", strings.Join(lons, ","))
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, errElevUpstream
-	}
-	req.Header.Set("User-Agent", e.userAgent)
-	resp, err := e.client.Do(req)
-	if err != nil {
-		// Unwrap: url.Error text embeds the URL, which may carry an apikey.
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			err = ue.Err
-		}
-		log.Printf("[los] elevation request failed: %v", err)
-		e.openCooldown()
-		return nil, errElevUpstream
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, io.LimitReader(resp.Body, elevErrBodyDrain))
-		switch {
-		case resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode >= 500,
-			resp.StatusCode == http.StatusBadRequest, resp.StatusCode == http.StatusUnauthorized,
-			resp.StatusCode == http.StatusForbidden:
-			e.openCooldown()
-			log.Printf("[los] elevation upstream status %d; backing off", resp.StatusCode)
-		default:
-			log.Printf("[los] elevation upstream status %d", resp.StatusCode)
-		}
-		return nil, errElevUpstream
-	}
-	e.resetFailures()
-	var body elevUpstreamBody
-	if err := json.NewDecoder(io.LimitReader(resp.Body, elevMaxBodyBytes)).Decode(&body); err != nil {
-		return nil, errElevUpstream
-	}
-	if len(body.Elevation) != losSamples {
-		log.Printf("[los] elevation upstream returned %d values, want %d", len(body.Elevation), losSamples)
-		return nil, errElevUpstream
-	}
-	out := make([]float64, losSamples)
-	for i, v := range body.Elevation {
-		if v != nil && !math.IsNaN(*v) && !math.IsInf(*v, 0) {
-			out[i] = *v
-		}
-	}
-	return out, nil
+	return legs, keys
 }
