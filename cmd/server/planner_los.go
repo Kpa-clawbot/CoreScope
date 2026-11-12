@@ -121,7 +121,8 @@ func planProfileSamples(distKm float64) int {
 }
 
 // sampleTerrainProfile returns n elevations from a to b along the great
-// circle (t = i/(n-1)); ok=false if any sample is outside the view.
+// circle (t = i/(n-1)); ok=false if any sample has no terrain (outside the
+// view, or on a tile without data).
 func sampleTerrainProfile(v terrainView, a, b geoPoint, n int) ([]float64, bool) {
 	if v == nil || n < 2 {
 		return nil, false

@@ -1513,7 +1513,7 @@ These rules apply to all three planner endpoints: this one, [`/api/planner/relay
 - **Opt-in.** Only available when `planner.enabled` is `true`. Otherwise the endpoints return `404`, and `/api/config/client` omits the `planner` block.
 - **Quantised input.** Points are rounded to 0.001°, antenna heights to 1 m, and `range` must be one of a fixed set. Coverage boxes are snapped outward to a 0.05° grid. Requests that round to the same values share one cache entry and one job.
 - **Unknown or repeated parameters.** A parameter the endpoint does not take, a repeated parameter, or a query longer than 512 bytes returns `400`.
-- **Terrain.** SRTM 1° tiles from AWS Open Data (`skadi` layout), downsampled to 3 arc-seconds (about 90 m) and held in server memory only. Nothing is written to disk or the database. Tiles are fetched on demand, at most `planner.tileCacheTiles` are kept in memory (but never fewer than one full view, 12 tiles at the default sizes), and downloads are budgeted at 20 per minute and 200 per hour. A tile that is missing upstream (ocean or no data) reads as 0 m.
+- **Terrain.** SRTM 1° tiles from AWS Open Data (`skadi` layout), downsampled to 3 arc-seconds (about 90 m) and held in server memory only. Nothing is written to disk or the database. Tiles are fetched on demand, at most `planner.tileCacheTiles` are kept in memory (but never fewer than one full view, 12 tiles at the default sizes), and downloads are budgeted at 20 per minute and 200 per hour. A tile that is missing upstream (open sea or no data), unusable or all void has no terrain: relay and area searches skip every site and link that touches it, a profile leg across it is `no_terrain`, and a relay `direct` link across it carries `error: "no_terrain"` with no verdict.
 - **Size limits.** Three `config.json` keys set how large a request may be. A value of 0 or a missing key means the default. A value outside the valid range falls back to the default and logs a warning at startup.
 
   | Key | Default | Valid | Limits |
@@ -1701,10 +1701,11 @@ Abbreviated: the `elev_m` arrays in `direct`, `leg_a` and `leg_b` are truncated 
 |-------|-------------|
 | `distance_km` | Great-circle distance of the link |
 | `clearance_pct` | 100 × the worst first-Fresnel clearance along the path. Negative means terrain crosses the line |
-| `verdict` | `clear` (100% or more), `clear60` (60% or more), `marginal` (0% or more) or `blocked` (below 0%) |
+| `verdict` | `clear` (100% or more), `clear60` (60% or more), `marginal` (0% or more) or `blocked` (below 0%). Empty when `error` is set |
 | `worst_km` | Distance along the link to the point with the worst clearance |
 | `obstruction_m` | Height of the highest terrain point above the line of sight, metres. Negative means it clears the line |
-| `elev_m` | Terrain profile, decimated to at most 200 samples. Present on `direct` and on the option legs |
+| `elev_m` | Terrain profile, decimated to at most 200 samples. Present on `direct` and on the option legs, absent when `error` is set |
+| `error` | Present only when the link could not be measured: `no_terrain` (part of it has no terrain data). `verdict` is then empty, `clearance_pct`, `worst_km` and `obstruction_m` are 0, and `warnings` says so. Only `direct` can carry it: an option whose leg would is not offered |
 
 ### Error codes
 

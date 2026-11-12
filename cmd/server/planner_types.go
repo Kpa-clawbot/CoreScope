@@ -113,7 +113,7 @@ type PlannerJobStatus struct {
 type PlannerProfileResponse struct {
 	Source string              `json:"source"` // "SRTM (AWS Open Data)"
 	Legs   []PlannerProfileLeg `json:"legs"`
-	// Warnings, e.g. terrain missing for some tiles (read as sea level).
+	// Warnings, e.g. terrain missing for some tiles (legs there no_terrain).
 	Warnings []string `json:"warnings,omitempty"`
 }
 
@@ -131,6 +131,8 @@ type PlannerProfileLeg struct {
 // first-Fresnel clearance (negative = terrain crosses the line). Verdict is
 // one of clear | clear60 | marginal | blocked (public/los.js VERDICTS).
 // ElevM (optional) is the terrain profile decimated to ≤ 200 samples.
+// Error no_terrain: the link was not measured (a sample has no terrain);
+// Verdict is then empty, the numbers 0 and ElevM absent.
 type PlannerLink struct {
 	DistanceKm   float64   `json:"distance_km"`
 	ClearancePct float64   `json:"clearance_pct"`
@@ -138,6 +140,7 @@ type PlannerLink struct {
 	WorstKm      float64   `json:"worst_km"`
 	ObstructionM float64   `json:"obstruction_m"`
 	ElevM        []float64 `json:"elev_m,omitempty"`
+	Error        string    `json:"error,omitempty"`
 }
 
 // PlannerRelayResponse — /api/planner/relay.

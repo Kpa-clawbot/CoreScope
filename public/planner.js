@@ -288,10 +288,16 @@
 
   function verdicts() { return (window.MeshLOS && window.MeshLOS.VERDICTS) || {}; }
 
-  function errorReason(code) { return LEG_ERRORS[code] || LEG_ERRORS.request; }
+  // The VERDICTS entry for name, or null: '' and prototype keys are not verdicts.
+  function verdictOf(name) {
+    var all = verdicts();
+    return typeof name === 'string' && hasOwn(all, name) ? all[name] : null;
+  }
+
+  function errorReason(code) { return hasOwn(LEG_ERRORS, code) ? LEG_ERRORS[code] : LEG_ERRORS.request; }
 
   function verdictSummary(an) {
-    var v = verdicts()[an.verdict];
+    var v = verdictOf(an.verdict);
     if (!v) return 'No verdict';
     if (an.verdict === 'blocked' && an.obstructionM > 0) {
       return v.label + ': terrain ' + Math.max(1, Math.round(an.obstructionM)) + ' m above the line of sight';
@@ -306,14 +312,17 @@
   function chipFor(an) {
     if (!an) return { tone: 'muted', text: 'Checking…', title: 'Checking terrain', loading: true };
     if (an.error) return { tone: 'muted', text: 'n/a', title: errorReason(an.error), loading: false };
-    var v = verdicts()[an.verdict];
+    var v = verdictOf(an.verdict);
     if (!v) return { tone: 'muted', text: 'n/a', title: 'No verdict', loading: false };
     return { tone: v.tone, text: v.label, title: verdictSummary(an), loading: false };
   }
 
-  // A server Link as the subset of an analysis that chipFor/verdictSummary read.
+  // A server Link as the subset of an analysis that chipFor/verdictSummary
+  // read. A link the server could not measure (error, e.g. no_terrain) has
+  // no verdict: it comes back as an error result.
   function linkAnalysis(link) {
     if (!link || typeof link !== 'object') return { error: 'request' };
+    if (link.error) return { error: String(link.error), distanceKm: Number(link.distance_km) };
     var c = Number(link.clearance_pct);
     return {
       verdict: String(link.verdict || ''),
@@ -601,22 +610,30 @@
       '</button></li>';
   }
 
+  // A direct link the server could not measure (an error such as no_terrain,
+  // or no verdict) gets a muted "Not measured" chip and no clearance, verdict
+  // or profile: unknown terrain is never judged.
   function directHtml(d, nameA, nameB) {
-    var an = linkAnalysis(d), chip = chipFor(an);
-    var note = an.verdict === 'clear' || an.verdict === 'clear60'
-      ? 'A and B should reach each other directly; a relay adds margin.'
-      : an.verdict === 'marginal'
-        ? 'The direct link is marginal; a relay can make it dependable.'
-        : 'Terrain blocks the direct link, so a relay is needed.';
+    var an = linkAnalysis(d);
+    var measured = !an.error && !!verdictOf(an.verdict);
+    var why = an.error === 'no_terrain' ? 'No terrain data along the direct link' : 'The direct link could not be measured';
+    var chip = measured ? chipFor(an) : { tone: 'muted', text: 'Not measured', title: why, loading: false };
+    var note = !measured
+      ? why + (an.error === 'no_terrain' ? ', so it can\'t be judged.' : '.') + ' The relay options below are still measured.'
+      : an.verdict === 'clear' || an.verdict === 'clear60'
+        ? 'A and B should reach each other directly; a relay adds margin.'
+        : an.verdict === 'marginal'
+          ? 'The direct link is marginal; a relay can make it dependable.'
+          : 'Terrain blocks the direct link, so a relay is needed.';
     var obst = an.verdict === 'blocked' && an.obstructionM > 0
       ? ' Terrain rises ' + Math.max(1, Math.round(an.obstructionM)) + ' m above the line ' + fmtKm(an.worstKm) + ' from ' + nameA + '.'
       : '';
     return '<section class="mc-pl-card mc-pl-direct" aria-labelledby="mc-pl-direct-h">' +
       '<div class="mc-pl-card-head"><h3 id="mc-pl-direct-h">Direct link</h3>' + chipSpan(chip, 'Direct link') + '</div>' +
-      '<p class="mc-pl-sub">' + esc(nameA) + ' → ' + esc(nameB) + ' · ' + esc(fmtKm(d && d.distance_km)) + ' · ' +
-        esc(clearanceMeta(d && d.clearance_pct)) + '</p>' +
+      '<p class="mc-pl-sub">' + esc(nameA) + ' → ' + esc(nameB) + ' · ' + esc(fmtKm(d && d.distance_km)) +
+        (measured ? ' · ' + esc(clearanceMeta(d.clearance_pct)) : '') + '</p>' +
       '<p class="mc-pl-note">' + esc(note + obst) + '</p>' +
-      (d && finiteArray(d.elev_m) ? '<button type="button" class="mc-pl-btn mc-pl-btn-small" data-direct-profile="1" aria-haspopup="dialog">View profile</button>' : '') +
+      (measured && finiteArray(d.elev_m) ? '<button type="button" class="mc-pl-btn mc-pl-btn-small" data-direct-profile="1" aria-haspopup="dialog">View profile</button>' : '') +
       '</section>';
   }
 
@@ -651,7 +668,7 @@
     }
     var pill;
     if (an) {
-      var v = verdicts()[an.verdict] || { label: an.verdict, detail: '', tone: 'muted' };
+      var v = verdictOf(an.verdict) || { label: an.verdict, detail: '', tone: 'muted' };
       pill = '<span class="mc-los-pill mc-los-tone-' + v.tone + '" title="' + esc(v.detail) + '">' + esc(v.label) + '</span>';
     } else {
       pill = '<span class="mc-los-pill mc-los-tone-muted' + (leg.error ? '' : ' mc-los-loading') + '">' + (leg.error ? 'n/a' : 'Checking…') + '</span>';
@@ -2107,7 +2124,7 @@
     el.innerHTML = html + warningsHtml(res.warnings);
   }
 
-  // Server notes (e.g. a missing terrain tile read as sea level): visible, not alarming.
+  // Server notes (e.g. a missing terrain tile, whose sites and links were skipped): visible, not alarming.
   function warningsHtml(list) {
     if (!list || !list.length) return '';
     return '<ul class="mc-pl-warnings">' + list.map(function (w) {

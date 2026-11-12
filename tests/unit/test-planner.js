@@ -130,10 +130,46 @@ async function main() {
     assert(I.chipFor(I.linkAnalysis({ verdict: 'blocked', clearance_pct: -999 })).title.indexOf('-999') < 0 && I.chipFor(I.linkAnalysis({ verdict: 'blocked', clearance_pct: -999 })).title.indexOf('999') < 0, 'chip title has no sentinel');
     const prof = I.profileSectionHtml({ a: { name: 'A' }, b: { name: 'B' }, error: 'no_terrain', distanceKm: 3 }, 0);
     assert(prof.includes('No terrain data for this leg'), 'no_terrain leg wording');
-    const w = I.warningsHtml(['terrain missing for 1 of 4 tiles (read as sea level)', '<b>x</b>']);
+    const w = I.warningsHtml(['terrain missing for 1 of 4 tiles (open sea or unavailable)', '<b>x</b>']);
     assert(w.includes('mc-pl-warnings') && w.includes('terrain missing for 1 of 4 tiles') && w.includes('&lt;b&gt;'), 'relay warnings render, escaped');
     assert(I.warningsHtml([]) === '' && I.warningsHtml(undefined) === '', 'no warnings → nothing');
     assert(/el\.innerHTML = html \+ warningsHtml\(res\.warnings\)/.test(PLANNER_SRC), 'relay panel renders warnings');
+  }
+
+  console.log('\n=== direct link without terrain ===');
+  {
+    // The server could not measure it: error, no verdict, zero numbers, no profile.
+    const nt = { distance_km: 12.727, clearance_pct: 0, verdict: '', worst_km: 0, obstruction_m: 0, error: 'no_terrain' };
+    const an = I.linkAnalysis(nt);
+    assert(an.error === 'no_terrain' && !an.verdict, 'linkAnalysis keeps the link error');
+    const chip = I.chipFor(an);
+    assert(chip.tone === 'muted' && !chip.loading, 'unmeasured link → muted chip (the map draws the direct leg in this tone)');
+    const dh = I.directHtml(nt, 'Point A', 'Point B');
+    assert(/mc-los-tone-muted[^>]*>.*Not measured<\/span>/.test(dh), 'direct card: muted "Not measured" chip');
+    assert(dh.includes('No terrain data along the direct link, so it can&#39;t be judged. The relay options below are still measured.'), 'direct card: says why it is not judged');
+    assert(/Point A → Point B · 12\.7 km<\/p>/.test(dh), 'direct card: distance, no clearance figure');
+    assert(!/blocks|F1 clearance|Blocked|0%/.test(dh), 'direct card: no verdict or clearance from unknown terrain');
+    assert(!dh.includes('View profile'), 'direct card: no profile button');
+    assert(!I.directHtml(Object.assign({}, nt, { elev_m: [1, 2, 3] }), 'A', 'B').includes('View profile'), 'no profile button even with a stray elev_m');
+    const other = I.directHtml({ distance_km: 3, clearance_pct: 0, verdict: '', error: 'whatever' }, 'A', 'B');
+    assert(other.includes('Not measured') && other.includes('could not be measured') && !/blocks/.test(other), 'unknown link error: not measured, no verdict');
+    const empty = I.directHtml({ distance_km: 3, clearance_pct: 0, verdict: '' }, 'A', 'B');
+    assert(empty.includes('Not measured') && !/blocks/.test(empty), 'empty verdict: not measured, no verdict');
+    // Empty or odd verdicts never throw and never borrow a prototype key.
+    let threw = false;
+    try {
+      ['', 'constructor', '__proto__', 'toString'].forEach(v => {
+        const c = I.chipFor(I.linkAnalysis({ verdict: v }));
+        if (c.tone !== 'muted' || c.text !== 'n/a') throw new Error(v + ' → ' + JSON.stringify(c));
+      });
+      I.chipFor(I.linkAnalysis({}));
+      I.chipFor(I.linkAnalysis(null));
+      I.chipFor({ error: 'constructor' });
+    } catch (e) { threw = e; }
+    assert(!threw, 'linkAnalysis/chipFor: empty or prototype-named verdicts → muted n/a, no throw' + (threw ? ' (' + threw.message + ')' : ''));
+    assert(/failed/.test(I.chipFor({ error: 'constructor' }).title), 'prototype-named error code → generic reason');
+    const measured = I.directHtml({ distance_km: 41.3, clearance_pct: -45, verdict: 'blocked', obstruction_m: 30, worst_km: 9, elev_m: [1, 2, 3] }, 'A', 'B');
+    assert(measured.includes('Terrain blocks the direct link') && measured.includes('View profile') && !measured.includes('Not measured'), 'a measured direct link is unchanged');
   }
 
   console.log('\n=== parsePts / serializePts ===');
@@ -441,6 +477,7 @@ async function main() {
       endRow: I.endRowHtml('a', { lat: 37.1, lon: -122.1, node: nodeB }, true),
       optionRow: I.optionRowHtml(opt, 'existing', 0, true),
       direct: I.directHtml(link, EVIL_A, EVIL_B),
+      directNoTerrain: I.directHtml({ distance_km: 4.2, clearance_pct: 0, verdict: '', error: 'no_terrain' }, EVIL_A, EVIL_B),
       tooltip: I.nodeTooltipHtml(nodeB),
       profile: I.profileSectionHtml(profLeg, 0),
       profileLoading: I.profileSectionHtml({ a: leg.a, b: leg.b, an: null, distanceKm: 2.7 }, 1),

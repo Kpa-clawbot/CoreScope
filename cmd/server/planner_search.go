@@ -53,6 +53,10 @@ const (
 	relayMinLegKm    = 0.1 // a relay this close to A or B is the endpoint itself
 	relayGridEnd     = 0.1 // progress when the open grid is sampled
 
+	// relayWarnDirectNoTerrain: a sample of the direct path has no terrain,
+	// so Direct is not measured (Error no_terrain).
+	relayWarnDirectNoTerrain = "Direct link crosses missing terrain: not measured"
+
 	// planGridMaxSide caps grid rows/cols. A 250 km coverage area (the
 	// largest maxAreaKm) at 1 km fits, and so does a 200 km relay leg's
 	// corridor (the largest maxLegKm: 320 km at 500 m is 641 cells, a little
@@ -71,6 +75,9 @@ const (
 // Baseline is "predicted") → baseline graph and stats → candidate sites
 // (1 km grid local maxima, plateaus thinned to one per 3 km, with ≥ 1
 // solid link) → greedy picks → response.
+// Terrain without data (ElevationAt ok=false) is skipped, never read as 0 m:
+// no candidate stands on it and no predicted edge or candidate link crosses
+// it. An observed edge is radio evidence and stays, its clearance unknown (0).
 // A cancelled ctx returns ctx.Err() within one ctx-check interval; invalid
 // inputs return an error before any work.
 func runCoveragePlan(ctx context.Context, v terrainView, in planInputs, progress func(frac float64)) (PlannerPlanResponse, error) {
@@ -307,7 +314,7 @@ func (s *coverageSearch) baselineEdges() error {
 		}
 		isObserved[a*n+b] = true
 		d := geoDistKm(s.pts[a], s.pts[b])
-		pct := 0.0 // terrain unknown (profile leaves the view)
+		pct := 0.0 // terrain unknown: a sample has no terrain
 		if c, ok := s.ev.clearance(s.pts[a], s.pts[b], d, he, he, math.Inf(-1)); ok {
 			pct = planPct(c)
 		}
@@ -775,6 +782,11 @@ func (s *coverageSearch) siteOut(step int, pk planPick) (PlannerSite, error) {
 // are 500 m grid local maxima (3×3), the 400 highest evaluated, and none
 // within 1 km of a better one. Options with a negative bottleneck are listed
 // only when no option in either list reaches 0.
+//
+// Terrain without data is skipped, never read as 0 m: no relay stands on it
+// and no option has a leg across it. A direct path across it is not
+// measured (Error no_terrain, no verdict or profile) and gets
+// relayWarnDirectNoTerrain.
 func runRelaySearch(ctx context.Context, v terrainView, nodes []plannerNode, p PlannerRelayParams, progress func(frac float64)) (PlannerRelayResponse, error) {
 	if err := checkRelayParams(v, p); err != nil {
 		return PlannerRelayResponse{}, err
@@ -860,7 +872,7 @@ func runRelaySearch(ctx context.Context, v terrainView, nodes []plannerNode, p P
 			if done += 2; done%64 == 0 {
 				progress(relayGridEnd + (1-relayGridEnd)*float64(done)/float64(total))
 			}
-			if okA && okB { // a leg leaving the view says nothing
+			if okA && okB { // a leg over missing terrain says nothing
 				c.pct = math.Min(planPct(ca), planPct(cb))
 				kept = append(kept, c)
 			}
@@ -891,6 +903,9 @@ func runRelaySearch(ctx context.Context, v terrainView, nodes []plannerNode, p P
 		Open:     relayOptions(v, nodes, open, a, b, lp, p, "open", p.RelayAntennaM),
 		Params:   p,
 		Warnings: []string{},
+	}
+	if resp.Direct.Error != "" {
+		resp.Warnings = append(resp.Warnings, relayWarnDirectNoTerrain)
 	}
 	best := math.Inf(-1)
 	for _, list := range [][]PlannerRelayOption{resp.Existing, resp.Open} {
@@ -974,27 +989,39 @@ func relayUsable(list []relayCand) []relayCand {
 	return slices.DeleteFunc(list, func(c relayCand) bool { return c.pct < 0 })
 }
 
-// relayLink is a reported leg: the shared LOS summary with its profile.
+// relayLink is a reported leg: the shared LOS summary with its profile. A
+// leg with a sample that has no terrain is not measured: Error no_terrain,
+// no verdict and no profile, never a verdict read from 0 m.
 func relayLink(v terrainView, a, b geoPoint, d float64, lp losParams, ha, hb float64) PlannerLink {
 	lp.AntennaAM, lp.AntennaBM = ha, hb
-	elev, _ := sampleTerrainProfile(v, a, b, planProfileSamples(d))
+	elev, ok := sampleTerrainProfile(v, a, b, planProfileSamples(d))
+	if !ok {
+		return PlannerLink{DistanceKm: losRound(math.Max(d, 0), 1000), Error: plannerErrNoTerrain}
+	}
 	return linkFromProfile(elev, d, lp, true)
 }
 
 func relayOptions(v terrainView, nodes []plannerNode, list []relayCand, a, b geoPoint, lp losParams,
 	p PlannerRelayParams, kind string, hR float64) []PlannerRelayOption {
-	out := make([]PlannerRelayOption, len(list))
-	for i, c := range list {
+	out := make([]PlannerRelayOption, 0, len(list))
+	for _, c := range list {
+		legA := relayLink(v, a, c.pt, c.dA, lp, p.AntennaAM, hR)
+		legB := relayLink(v, c.pt, b, c.dB, lp, hR, p.AntennaBM)
+		if legA.Error != "" || legB.Error != "" {
+			// The search measured both legs, so only an interior sample an
+			// ulp across the edge of a tile without data gets here (planArc
+			// vs greatCircleSamples). An unmeasured leg is never offered.
+			continue
+		}
 		o := PlannerRelayOption{
 			Kind: kind, Lat: c.pt.Lat, Lon: c.pt.Lon, ElevM: losRound(c.elev, 10), AntennaM: hR,
-			LegA: relayLink(v, a, c.pt, c.dA, lp, p.AntennaAM, hR),
-			LegB: relayLink(v, c.pt, b, c.dB, lp, hR, p.AntennaBM),
+			LegA: legA, LegB: legB,
 		}
 		o.BottleneckPct = math.Min(o.LegA.ClearancePct, o.LegB.ClearancePct)
 		if c.node >= 0 {
 			o.PubKey, o.Name = nodes[c.node].PubKey, nodes[c.node].Name
 		}
-		out[i] = o
+		out = append(out, o)
 	}
 	// The legs are recomputed from the same samples, so this is a no-op
 	// unless rounding disagrees; it keeps the list ordered as reported.
@@ -1038,8 +1065,9 @@ func newPlanLinkEval(ctx context.Context, v terrainView, freqMHz, kFactor float6
 // geoDistKm(a, b). Interior samples are visited coarse-to-fine (stride 16,
 // then the midpoints between) so an obstruction is usually met early, and
 // the walk stops at the first sample below floor: ok=false. floor = −Inf
-// evaluates every sample. ok=false also means the profile left the view
-// (analyzeLOS would reject it) or ctx was cancelled (e.err is then set).
+// evaluates every sample. ok=false also means a sample has no terrain
+// (outside the view, or a tile without data: never read as 0 m) or ctx was
+// cancelled (e.err is then set).
 func (e *planLinkEval) clearance(a, b geoPoint, distKm, ha, hb, floor float64) (float64, bool) {
 	if e.err != nil {
 		return 0, false

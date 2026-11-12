@@ -140,8 +140,8 @@ func (f *fakeTerrain) set(fn func(f *fakeTerrain)) { f.mu.Lock(); fn(f); f.mu.Un
 func (f *fakeTerrain) viewCount() int              { f.mu.Lock(); defer f.mu.Unlock(); return f.views }
 func (f *fakeTerrain) lastBBox() geoBBox           { f.mu.Lock(); defer f.mu.Unlock(); return f.lastView }
 
-// fakeTerrainView is terrain over bb; tiles in missing read 0 m and are
-// reported through terrainCoverage, like srtmView's.
+// fakeTerrainView is terrain over bb; tiles in missing have no elevation
+// and are reported through terrainCoverage, like srtmView's.
 type fakeTerrainView struct {
 	bb      geoBBox
 	missing map[[2]int]bool
@@ -153,11 +153,8 @@ func (v fakeTerrainView) inside(lat, lon float64) bool {
 }
 
 func (v fakeTerrainView) ElevationAt(lat, lon float64) (float64, bool) {
-	if !v.inside(lat, lon) {
-		return 0, false
-	}
 	if v.MissingAt(lat, lon) {
-		return 0, true
+		return 0, false
 	}
 	return 100 + 3*lat, true
 }
@@ -1638,7 +1635,7 @@ func TestPlannerAPIMissingTerrainWarnings(t *testing.T) {
 	h.p.fastWait = plannerFastWait
 	ip := "198.51.100.114"
 	warning := func(view geoBBox) string {
-		return fmt.Sprintf("Terrain missing for 1 of %d tiles (read as sea level): results there are unreliable",
+		return fmt.Sprintf("Terrain missing for 1 of %d tiles (open sea or unavailable): sites and links there were skipped",
 			len(fakeTiles(view)))
 	}
 	setMissing := func(tiles ...[2]int) {

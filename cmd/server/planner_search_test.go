@@ -877,6 +877,251 @@ func TestRelaySearchLongestLegFitsGrid(t *testing.T) {
 	}
 }
 
+// ─── Missing terrain ───────────────────────────────────────────────────────
+
+// ptNE is the SRTM tile north-east of the test origin (x ≥ 0, y ≥ 0).
+var ptNE = srtmKey{int(ptLat0), int(ptLon0)}
+
+// ptSRTMView renders t onto the four real SRTM tiles that meet at the test
+// origin (36–38 N, 101–99 W), so the search reads terrain through srtmView.
+func ptSRTMView(t terrainView) *srtmView {
+	sp := srtmSpan{lat0: int(ptLat0) - 1, lon0: int(ptLon0) - 1, nLat: 2, nLon: 2}
+	v := &srtmView{span: sp, grids: make([][]int16, sp.count())}
+	for i := range v.grids {
+		k := sp.key(i)
+		g := make([]int16, srtmSide*srtmSide)
+		for r := 0; r < srtmSide; r++ {
+			lat := float64(k.lat+1) - float64(r)/srtmCells
+			for c := 0; c < srtmSide; c++ {
+				e, _ := t.ElevationAt(lat, float64(k.lon)+float64(c)/srtmCells)
+				g[r*srtmSide+c] = int16(math.Round(e))
+			}
+		}
+		v.grids[i] = g
+	}
+	return v
+}
+
+// ptWithout is v with tile k gone, as a 404 leaves it (grids are shared).
+func ptWithout(v *srtmView, k srtmKey) *srtmView {
+	out := &srtmView{span: v.span, grids: slices.Clone(v.grids)}
+	for i := range out.grids {
+		if v.span.key(i) == k {
+			out.grids[i] = nil
+		}
+	}
+	return out
+}
+
+// ptTouchesMissing reports whether a sample of the a→b profile (the points
+// sampleTerrainProfile reads) has no terrain in v.
+func ptTouchesMissing(v terrainCoverage, a, b geoPoint) bool {
+	n := planProfileSamples(geoDistKm(a, b))
+	for _, p := range greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, n) {
+		if v.MissingAt(p.lat, p.lon) {
+			return true
+		}
+	}
+	return false
+}
+
+// A tile without data (404: open sea, or unavailable) is skipped, never read
+// as 0 m: no relay stands on it, no reported leg crosses it, and a direct
+// link across it is not measured: error no_terrain, no verdict.
+func TestRelaySearchSkipsMissingTerrain(t *testing.T) {
+	// Flat 0 m with two 300 m hills, one each side of the origin. A (north-
+	// west) to B (south-east) crosses the north-east tile.
+	full := ptSRTMView(&ptBumps{bumps: []ptBump{
+		{x: -1, y: -1, h: 300, sx: 0.6, sy: 0.6},
+		{x: 2.5, y: 2.5, h: 300, sx: 0.6, sy: 0.6},
+	}})
+	nodes := []plannerNode{ptNode("kept", -1, -1), ptNode("lost", 2.5, 2.5)}
+	a, b := ptGeo(-3, 6), ptGeo(6, -3)
+	p := PlannerRelayParams{
+		A: geoPointJSON{a.Lat, a.Lon}, B: geoPointJSON{b.Lat, b.Lon},
+		AntennaAM: 2, AntennaBM: 2, RelayAntennaM: 10, ExistingAntennaM: 20, RangeKm: 15,
+		FrequencyMHz: 869.525, KFactor: 4.0 / 3.0,
+	}
+	run := func(v terrainView) PlannerRelayResponse {
+		t.Helper()
+		resp, err := runRelaySearch(context.Background(), v, nodes, p, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	isLost := func(o PlannerRelayOption) bool { return o.Name == "lost" }
+
+	directJSON := func(l PlannerLink) string {
+		t.Helper()
+		b, err := json.Marshal(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+
+	// Control: with every tile present the north-east hill is offered and
+	// the direct link is measured.
+	resp := run(full)
+	if !slices.ContainsFunc(resp.Existing, isLost) || len(resp.Direct.ElevM) == 0 || resp.Direct.Verdict == "" ||
+		resp.Direct.Error != "" || strings.Contains(directJSON(resp.Direct), `"error"`) ||
+		slices.Contains(resp.Warnings, relayWarnDirectNoTerrain) {
+		t.Fatalf("full terrain: existing %+v direct %+v warnings %q", resp.Existing, resp.Direct, resp.Warnings)
+	}
+
+	v := ptWithout(full, ptNE)
+	if !ptTouchesMissing(v, a, b) || !v.MissingAt(ptGeo(2.5, 2.5).Lat, ptGeo(2.5, 2.5).Lon) {
+		t.Fatal("test geometry: the direct path and the lost hill should be in the missing tile")
+	}
+	resp = run(v)
+	d := resp.Direct
+	if d.Error != plannerErrNoTerrain || d.Verdict != "" || d.ElevM != nil || d.ClearancePct != 0 || d.WorstKm != 0 ||
+		d.ObstructionM != 0 || d.DistanceKm != losRound(geoDistKm(a, b), 1000) {
+		t.Errorf("direct %+v, want it unmeasured (error no_terrain, no verdict, no profile)", d)
+	}
+	if got := directJSON(d); !strings.Contains(got, `"error":"no_terrain"`) || !strings.Contains(got, `"verdict":""`) ||
+		strings.Contains(got, "elev_m") {
+		t.Errorf("direct JSON %s", got)
+	}
+	if !slices.Contains(resp.Warnings, relayWarnDirectNoTerrain) {
+		t.Errorf("warnings %q lack %q", resp.Warnings, relayWarnDirectNoTerrain)
+	}
+	if len(resp.Existing) != 1 || resp.Existing[0].Name != "kept" {
+		t.Errorf("existing %+v, want only the hill with terrain", resp.Existing)
+	}
+	if len(resp.Open) == 0 || geoDistKm(geoPoint{resp.Open[0].Lat, resp.Open[0].Lon}, ptGeo(-1, -1)) > 1 {
+		t.Fatalf("open %+v, want the south-west hilltop first", resp.Open)
+	}
+	for _, list := range [][]PlannerRelayOption{resp.Existing, resp.Open} {
+		for _, o := range list {
+			r := geoPoint{o.Lat, o.Lon}
+			if v.MissingAt(r.Lat, r.Lon) {
+				t.Errorf("%s option %q at %+v stands on missing terrain", o.Kind, o.Name, r)
+			}
+			if ptTouchesMissing(v, a, r) || ptTouchesMissing(v, r, b) || len(o.LegA.ElevM) == 0 || len(o.LegB.ElevM) == 0 {
+				t.Errorf("%s option %q at %+v has a leg over missing terrain", o.Kind, o.Name, r)
+			}
+		}
+	}
+
+	// An endpoint on missing terrain: nothing can be measured, nothing offered.
+	p.B = geoPointJSON{ptGeo(4, 4).Lat, ptGeo(4, 4).Lon}
+	resp = run(v)
+	if len(resp.Existing)+len(resp.Open) != 0 || resp.Direct.Error != plannerErrNoTerrain || resp.Direct.Verdict != "" ||
+		!slices.Contains(resp.Warnings, relayWarnDirectNoTerrain) {
+		t.Errorf("B on missing terrain: existing %d open %d direct %+v warnings %q",
+			len(resp.Existing), len(resp.Open), resp.Direct, resp.Warnings)
+	}
+}
+
+// The coverage plan skips missing terrain the same way: no candidate site on
+// it, no candidate link, site link or predicted edge across it. An observed
+// edge is radio evidence, so it stays in the backbone, with its clearance
+// unknown (0).
+func TestCoveragePlanSkipsMissingTerrain(t *testing.T) {
+	// ptTwoClusterCase with its summit 3 km south, out of the north-east
+	// tile, where e2 stands.
+	full := ptSRTMView(&ptBumps{base: 100, bumps: []ptBump{
+		{x: -4, h: 400, sx: 0.8, sy: 1e6},
+		{x: 4, h: 400, sx: 0.8, sy: 1e6},
+		{x: 0, y: -3, h: 700, sx: 1.2, sy: 1.2},
+	}})
+	nodes := []plannerNode{
+		ptNode("w1", -16, -3), ptNode("w2", -15, 3), ptNode("w3", -19, -0.5),
+		ptNode("e1", 16, -3), ptNode("e2", 15, 3), ptNode("e3", 19, -1),
+	}
+	const e1, e2 = 3, 4
+	p := ptParams()
+	p.RangeKm = 40
+	in := planInputs{
+		Area: ptArea(-22, -8, 22, 8), Nodes: nodes, Params: p,
+		Observed: []plannerEdge{{A: e1, B: e2, Class: "observed"}},
+	}
+	pt := func(i int) geoPoint { return geoPoint{nodes[i].Lat, nodes[i].Lon} }
+	candidates := func(v terrainView) []planCand {
+		t.Helper()
+		s := newCoverageSearch(context.Background(), v, in, func(float64) {})
+		if err := s.baselineEdges(); err != nil {
+			t.Fatal(err)
+		}
+		s.baselineGraph()
+		if _, err := s.findCandidates(); err != nil {
+			t.Fatal(err)
+		}
+		return s.cands
+	}
+	inNE := func(c planCand) bool { return srtmKeyOf(c.pt.Lat, c.pt.Lon) == ptNE }
+	predictedTouching := func(holed terrainCoverage, resp PlannerPlanResponse) (n int) {
+		for _, e := range resp.Edges {
+			if e.Class != "observed" && ptTouchesMissing(holed, pt(e.A), pt(e.B)) {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Control: with every tile present the north-east has candidates and
+	// e2 has predicted links.
+	v := ptWithout(full, ptNE)
+	if !slices.ContainsFunc(candidates(full), inNE) {
+		t.Fatal("full terrain: no candidate in the north-east tile")
+	}
+	if n := predictedTouching(v, ptPlan(t, full, in)); n == 0 {
+		t.Fatal("full terrain: no predicted edge through the north-east tile")
+	}
+
+	if !v.MissingAt(nodes[e2].Lat, nodes[e2].Lon) {
+		t.Fatal("test geometry: e2 should stand in the missing tile")
+	}
+	cands := candidates(v)
+	if len(cands) == 0 {
+		t.Fatal("no candidates at all")
+	}
+	for _, c := range cands {
+		if v.MissingAt(c.pt.Lat, c.pt.Lon) {
+			t.Errorf("candidate %+v stands on missing terrain", c.pt)
+		}
+		for _, l := range c.links {
+			if ptTouchesMissing(v, c.pt, pt(l.peer)) {
+				t.Errorf("candidate %+v links %s across missing terrain", c.pt, nodes[l.peer].Name)
+			}
+		}
+	}
+
+	resp := ptPlan(t, v, in)
+	if len(resp.Sites) == 0 || resp.Sites[0].Reason != "joins" {
+		t.Fatalf("sites %+v, want the summit to join the clusters", resp.Sites)
+	}
+	for _, s := range resp.Sites {
+		sp := geoPoint{s.Lat, s.Lon}
+		if v.MissingAt(s.Lat, s.Lon) {
+			t.Errorf("site %d at %+v stands on missing terrain", s.Step, sp)
+		}
+		for _, l := range s.Links {
+			var q geoPoint
+			if l.Node >= 0 {
+				q = pt(l.Node)
+			} else {
+				q = geoPoint{resp.Sites[l.PeerStep-1].Lat, resp.Sites[l.PeerStep-1].Lon}
+			}
+			if ptTouchesMissing(v, sp, q) {
+				t.Errorf("site %d link %+v crosses missing terrain", s.Step, l)
+			}
+		}
+	}
+	if n := predictedTouching(v, resp); n != 0 {
+		t.Errorf("%d predicted edges cross missing terrain", n)
+	}
+	i := slices.IndexFunc(resp.Edges, func(e PlannerEdgeOut) bool { return e.Class == "observed" })
+	if i < 0 || resp.Edges[i].A != e1 || resp.Edges[i].B != e2 || resp.Edges[i].ClearancePct != 0 {
+		t.Errorf("edges %+v, want the observed e1–e2 kept with unknown (0) clearance", resp.Edges)
+	}
+	if resp.Nodes[e2].Component != resp.Nodes[e1].Component {
+		t.Errorf("observed e1–e2 no longer joins them: components %d, %d", resp.Nodes[e1].Component, resp.Nodes[e2].Component)
+	}
+}
+
 // ─── Benchmarks (AGENTS.md rule 0) ─────────────────────────────────────────
 
 // ptGridTerrain is SRTM-like: int16 metres every 3 arc-seconds (1200 per
@@ -1002,7 +1247,7 @@ func ptBenchPlanInputs() planInputs {
 	}}
 }
 
-// ptBenchFlat: the same grid, all 0 m (sea, or a missing tile). Every cell
+// ptBenchFlat: the same grid, all 0 m (the sea in a coastal tile). Every cell
 // of a plateau is a local maximum, so this is the candidate-count worst case.
 func ptBenchFlat() *ptGridTerrain {
 	t := ptBenchTerrain()

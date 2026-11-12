@@ -442,15 +442,14 @@ func plannerProfileView(legs geoBBox, padDeg float64) geoBBox {
 }
 
 // planProfileLegs samples every leg without an error; legs is the request's
-// pre-checked template and is not modified. When the view has tiles without
-// data, a leg with any sample in one is no_terrain (its 0 m would read as a
-// valley) and the response carries the terrain warning.
+// pre-checked template and is not modified. A leg with any sample on a tile
+// without data is no_terrain (terrain has no elevation there, never a 0 m
+// valley), and the response carries the terrain warning.
 func planProfileLegs(ctx context.Context, v terrainView, pts []geoPoint, legs []PlannerProfileLeg,
 	progress func(float64)) (PlannerProfileResponse, error) {
 	out := PlannerProfileResponse{Source: plannerSourceName, Legs: slices.Clone(legs)}
-	tc, warning := plannerTerrainGaps(v)
-	if warning != "" {
-		out.Warnings = []string{warning}
+	if w := plannerTerrainWarning(v); w != "" {
+		out.Warnings = []string{w}
 	}
 	for i := range out.Legs {
 		if err := ctx.Err(); err != nil {
@@ -458,9 +457,7 @@ func planProfileLegs(ctx context.Context, v terrainView, pts []geoPoint, legs []
 		}
 		if leg := &out.Legs[i]; leg.Error == "" {
 			n := planProfileSamples(geoDistKm(pts[i], pts[i+1]))
-			if tc != nil && plannerLegMissing(tc, pts[i], pts[i+1], n) {
-				leg.Error = plannerErrNoTerrain
-			} else if elev, ok := sampleTerrainProfile(v, pts[i], pts[i+1], n); ok {
+			if elev, ok := sampleTerrainProfile(v, pts[i], pts[i+1], n); ok {
 				for j := range elev {
 					elev[j] = losRound(elev[j], 10)
 				}
@@ -474,31 +471,19 @@ func planProfileLegs(ctx context.Context, v terrainView, pts []geoPoint, legs []
 	return out, nil
 }
 
-// plannerTerrainGaps returns v's coverage report and the warning to show
-// when some of its tiles have no data; both are zero when it has none or
-// cannot tell.
-func plannerTerrainGaps(v terrainView) (terrainCoverage, string) {
+// plannerTerrainWarning is the warning to show when some of v's tiles have
+// no data, which every endpoint skips; "" when it has none or cannot tell.
+func plannerTerrainWarning(v terrainView) string {
 	tc, ok := v.(terrainCoverage)
 	if !ok {
-		return nil, ""
+		return ""
 	}
 	missing, total := tc.MissingTiles()
 	if missing == 0 {
-		return nil, ""
+		return ""
 	}
-	return tc, fmt.Sprintf("Terrain missing for %d of %d tiles (read as sea level): results there are unreliable",
+	return fmt.Sprintf("Terrain missing for %d of %d tiles (open sea or unavailable): sites and links there were skipped",
 		missing, total)
-}
-
-// plannerLegMissing reports whether any of the leg's n samples (the points
-// sampleTerrainProfile reads) has no data.
-func plannerLegMissing(tc terrainCoverage, a, b geoPoint, n int) bool {
-	for _, pt := range greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, n) {
-		if tc.MissingAt(pt.lat, pt.lon) {
-			return true
-		}
-	}
-	return false
 }
 
 // ─── /api/planner/relay ─────────────────────────────────────────────────────
@@ -586,7 +571,7 @@ func (p *plannerService) handleRelay(w http.ResponseWriter, r *http.Request) {
 			}
 			res.Existing = plannerNonNil(res.Existing)
 			res.Open = plannerNonNil(res.Open)
-			if _, w := plannerTerrainGaps(v); w != "" {
+			if w := plannerTerrainWarning(v); w != "" {
 				res.Warnings = append(res.Warnings, w)
 			}
 			res.Warnings = plannerNonNil(res.Warnings)
@@ -721,7 +706,7 @@ func (p *plannerService) handleCoverage(w http.ResponseWriter, r *http.Request) 
 			res.Nodes = plannerNonNil(res.Nodes)
 			res.Edges = plannerNonNil(res.Edges)
 			res.Sites = plannerNonNil(res.Sites)
-			if _, w := plannerTerrainGaps(v); w != "" {
+			if w := plannerTerrainWarning(v); w != "" {
 				res.Warnings = append(res.Warnings, w)
 			}
 			res.Warnings = plannerNonNil(res.Warnings)

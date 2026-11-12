@@ -263,6 +263,14 @@ func srtmWantElev(t *testing.T, v terrainView, lat, lon, want float64) {
 	}
 }
 
+// srtmWantNoElev: (lat, lon) has no terrain, so callers skip it.
+func srtmWantNoElev(t *testing.T, v terrainView, lat, lon float64) {
+	t.Helper()
+	if got, ok := v.ElevationAt(lat, lon); ok {
+		t.Fatalf("ElevationAt(%v, %v) = %v, ok=true; want no elevation", lat, lon, got)
+	}
+}
+
 type srtmLogBuf struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -641,7 +649,7 @@ func TestSRTMDecompressionBomb(t *testing.T) {
 	}
 }
 
-// An unusable body is about that one tile: it reads as missing (0 m) for
+// An unusable body is about that one tile: it has no elevation for
 // srtmBadTTL, is never cached as data, and does not pause other downloads.
 func TestSRTMBadBodiesReadAsMissing(t *testing.T) {
 	valid := srtmConstTile(t, 0, srtmRawBytes, gzip.BestSpeed)
@@ -701,6 +709,7 @@ func TestSRTMBadBodiesReadAsMissing(t *testing.T) {
 			if missing != 1 || !v.(terrainCoverage).MissingAt(30.5, -97.5) {
 				t.Fatalf("bad tile not reported missing (%d)", missing)
 			}
+			srtmWantNoElev(t, v, 30.5, -97.5)
 			if srtmCacheLen(s) != 0 || srtmNegLen(s) != 1 {
 				t.Fatal("a bad tile was cached as data, or not set aside")
 			}
@@ -774,8 +783,8 @@ func TestSRTMNegativeCache(t *testing.T) {
 	})
 	bb := geoBBox{S: 30.5, W: -97.5, N: 31.5, E: -97.5}
 	v := srtmMustView(t, s, bb)
-	srtmWantElev(t, v, 30.5, -97.5, 0)
-	srtmWantElev(t, v, 31.5, -97.5, 0)
+	srtmWantNoElev(t, v, 30.5, -97.5)
+	srtmWantNoElev(t, v, 31.5, -97.5)
 	if !s.Resident(bb) {
 		t.Fatal("404/403 tiles not resident")
 	}
@@ -1160,13 +1169,18 @@ func TestSRTMViewMissingTiles(t *testing.T) {
 		if got := tc.MissingAt(c.lat, c.lon); got != c.want {
 			t.Errorf("MissingAt(%v, %v) = %v, want %v", c.lat, c.lon, got, c.want)
 		}
+		// No data is no elevation: never 0 m, which would read as sea level.
+		if e, ok := v.ElevationAt(c.lat, c.lon); ok == c.want {
+			t.Errorf("ElevationAt(%v, %v) = %v, ok=%v; want ok=%v", c.lat, c.lon, e, ok, !c.want)
+		}
 	}
 	srtmWantElev(t, v, 30.5, -97.5, 250)
-	srtmWantElev(t, v, 31.5, -97.5, 0)
+	srtmWantElev(t, v, 30.999, -97.5, 250)
+	srtmWantNoElev(t, v, 31.5, -97.5)
 }
 
-// A tile with no valid sample would read as 0 m everywhere: it is reported
-// missing, and not held as 2.9 MB of zeros.
+// A tile with no valid sample would decode to 0 m everywhere: it is reported
+// missing, has no elevation, and is not held as 2.9 MB of zeros.
 func TestSRTMAllVoidTileIsMissing(t *testing.T) {
 	k := srtmKey{30, -98}
 	s, u, clk := newSRTMTest(t, 0, srtmServe(map[string][]byte{
@@ -1176,7 +1190,7 @@ func TestSRTMAllVoidTileIsMissing(t *testing.T) {
 	if m, _ := v.(terrainCoverage).MissingTiles(); m != 1 || srtmCacheLen(s) != 0 || srtmNegLen(s) != 1 {
 		t.Fatalf("all-void tile: missing=%d cached=%d negative=%d", m, srtmCacheLen(s), srtmNegLen(s))
 	}
-	srtmWantElev(t, v, 30.5, -97.5, 0)
+	srtmWantNoElev(t, v, 30.5, -97.5)
 	clk.add(srtmNegTTL - time.Second)
 	srtmMustView(t, s, srtmBox(k))
 	if n := u.total(); n != 1 {

@@ -5,7 +5,8 @@ package main
 // CONTRACT (planner_search.go / planner_api.go depend on it; keep signatures):
 //   - Tiles: <TileURL>/<N30>/<N30W098>.hgt.gz, gzipped raw big-endian int16,
 //     3601×3601, row 0 = north edge, 1 arc-second. Downsampled in memory to
-//     3 arc-seconds (1201×1201). Missing (404/ocean) tiles read as 0 m.
+//     3 arc-seconds (1201×1201). Missing (404/ocean) tiles have no elevation:
+//     never 0 m, which would read as sea level.
 //   - terrainView is immutable and safe for concurrent use without locks.
 //
 // Safety model (this runs inside a public web server; nothing touches disk):
@@ -23,8 +24,8 @@ package main
 //     whose body is unusable (corrupt, oversized, truncated, wrong length,
 //     unexpected status; srtmBadTTL, and no cooldown: one bad tile must not
 //     stop the others) and a tile that is all void are negative-cached and
-//     read as 0 m. Views report them through terrainCoverage, so callers can
-//     say where the terrain is missing.
+//     have no elevation, so callers skip what touches them. Views count them
+//     through terrainCoverage, so callers can warn that terrain is missing.
 
 import (
 	"compress/gzip"
@@ -49,7 +50,9 @@ import (
 // terrainView answers elevation queries over the tiles it was built for.
 type terrainView interface {
 	// ElevationAt returns bilinear-interpolated metres above sea level.
-	// ok=false only when (lat, lon) is outside the view's tiles.
+	// ok=false when (lat, lon) has no terrain: it is outside the view's
+	// tiles or in a tile without data (terrainCoverage). Callers skip such
+	// a point, and anything that samples it; they never read it as 0 m.
 	ElevationAt(lat, lon float64) (float64, bool)
 }
 
@@ -67,13 +70,13 @@ type terrainSource interface {
 }
 
 // terrainCoverage is implemented by views that know which of their tiles
-// have no data: known missing, unusable, or all void, and so read as 0 m.
-// Optional; callers type-assert.
+// have no data: known missing, unusable, or all void, and so without
+// elevation. Optional; callers type-assert.
 type terrainCoverage interface {
 	// MissingTiles counts the view's tiles without data, of total.
 	MissingTiles() (missing, total int)
 	// MissingAt reports whether (lat, lon) has no data: it lies in such a
-	// tile, or outside the view.
+	// tile, or outside the view. Exactly where ElevationAt says ok=false.
 	MissingAt(lat, lon float64) bool
 }
 
@@ -224,7 +227,7 @@ func srtmBilinear(g []int16, row, col int, fy, fx float64) float64 {
 // cache eviction never invalidates a view.
 type srtmView struct {
 	span  srtmSpan
-	grids [][]int16 // span.key(i) order; nil = tile without data (0 m)
+	grids [][]int16 // span.key(i) order; nil = tile without data (no elevation)
 }
 
 // tile is the grid holding (lat, lon) (nil: no data) and its key;
@@ -270,7 +273,7 @@ func (v *srtmView) ElevationAt(lat, lon float64) (float64, bool) {
 	tj := min(int(math.Floor(lon))-sp.lon0, sp.nLon-1)
 	g := v.grids[ti*sp.nLon+tj]
 	if g == nil {
-		return 0, true
+		return 0, false
 	}
 	row, col, fy, fx := srtmPixel(lat, lon, srtmKey{sp.lat0 + ti, sp.lon0 + tj})
 	return srtmBilinear(g, row, col, fy, fx), true
@@ -565,7 +568,7 @@ func (s *srtmSource) put(k srtmKey, grid []int16) {
 	}
 }
 
-// putMissing remembers for ttl a tile that reads as 0 m. When the negative
+// putMissing remembers for ttl a tile without data. When the negative
 // cache is full it drops expired entries, then the one closest to expiry.
 func (s *srtmSource) putMissing(k srtmKey, ttl time.Duration) {
 	s.mu.Lock()
@@ -621,11 +624,11 @@ func (s *srtmSource) fetchAndStore(k srtmKey) ([]int16, error) {
 	return grid, nil
 }
 
-// missing negative-caches k for ttl, so it reads as 0 m and views report it
-// missing, and logs why.
+// missing negative-caches k for ttl, so views report it missing and give no
+// elevation there, and logs why.
 func (s *srtmSource) missing(k srtmKey, ttl time.Duration, why string) ([]int16, error) {
 	s.putMissing(k, ttl)
-	log.Printf("[planner] terrain tile %s: %s; reading it as 0 m for %s", k.name(), why, ttl)
+	log.Printf("[planner] terrain tile %s: %s; no terrain there for %s", k.name(), why, ttl)
 	return nil, nil
 }
 
