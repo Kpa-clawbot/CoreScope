@@ -1112,8 +1112,11 @@ type ClientConfigResponse struct {
 	// Present (true) only when clientRxCoverage.requireLinkedCompanion is set
 	// and user management is on: CoreDrive RX then holds its queue until
 	// its companion is linked.
-	ClientRxRequireLinkedCompanion bool             `json:"clientRxRequireLinkedCompanion,omitempty"`
-	PathTrust                      *PathTrustConfig `json:"pathTrust,omitempty"`
+	ClientRxRequireLinkedCompanion bool `json:"clientRxRequireLinkedCompanion,omitempty"`
+	// Present only when clientRxCoverage is on and clientRxCoverage.appUrl
+	// is a valid https URL: the coverage page shows it as a QR code.
+	ClientRxAppURL string           `json:"clientRxAppUrl,omitempty"`
+	PathTrust      *PathTrustConfig `json:"pathTrust,omitempty"`
 	// Present only when user management is on, so the payload is unchanged
 	// for every instance that leaves it off.
 	UserManagement *ClientUserManagement `json:"userManagement,omitempty"`

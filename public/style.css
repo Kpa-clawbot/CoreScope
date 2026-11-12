@@ -1396,7 +1396,7 @@ img.brand-logo {
  * corrupted overflow under last-writer-wins races. */
 body.scroll-locked { overflow: hidden; }
 .slide-over-backdrop {
-  position: fixed; inset: 0; z-index: 1000;
+  position: fixed; inset: 0; z-index: var(--z-modal-backdrop);
   background: rgba(0, 0, 0, 0.5);
   cursor: pointer;
 }
@@ -1404,7 +1404,7 @@ body.scroll-locked { overflow: hidden; }
 .slide-over-panel {
   position: fixed; top: 0; right: 0; bottom: 0;
   width: min(480px, 90vw);
-  z-index: 1001;
+  z-index: var(--z-modal);
   background: var(--detail-bg, var(--card-bg, #1f2937));
   color: var(--text, inherit);
   border-left: 1px solid var(--border);
@@ -2068,6 +2068,14 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .node-detail { padding: 4px 0; }
 .node-detail-name { font-size: 20px; font-weight: 700; margin: 12px 0 4px; }
 .node-detail-role { margin-bottom: 12px; }
+.node-quick-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.node-quick-actions .btn-primary {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; padding: 4px 10px; text-decoration: none;
+}
+@media (pointer: coarse) {
+  .node-quick-actions .btn-primary { min-height: 44px; min-width: 44px; }
+}
 .node-detail-section {
   background: var(--card-bg); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px; margin-bottom: 8px;
@@ -2487,18 +2495,30 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 
   /* #1224 Channels mobile UX: compact header, dominant channel name,
      icon-only row actions, smaller empty state. */
+  /* No max-height here: on touch devices the region pills (44px) and
+     + Add (48px) touch-target minimums can't fit a 56px cap, and the
+     wrapped rows overflowed onto the channel list. Instead: title + Add
+     on row 1, region pills on a full-width, sideways-scrolling row 2. */
   .ch-sidebar-header {
     padding: 6px 10px; gap: 6px;
-    max-height: 56px;
+    flex-wrap: wrap;
   }
-  .ch-sidebar-title { font-size: 14px; }
+  .ch-sidebar-title { font-size: 14px; flex: 1 1 auto; order: 1; }
   .ch-sidebar-title .ch-icon { font-size: 16px; }
-  .ch-add-channel-btn { padding: 4px 8px; font-size: 12px; }
+  .ch-add-channel-btn { padding: 4px 8px; font-size: 12px; flex: 0 0 auto; order: 2; }
   .ch-analytics-link { padding: 3px 7px; font-size: 13px; }
   /* Region filter shows just its compact pills/dropdown trigger in the header. */
-  .ch-header-region .region-filter-bar { padding: 0; gap: 4px; }
-  .ch-header-region .region-pill { padding: 2px 6px; font-size: 11px; }
-  .ch-header-region .region-dropdown-trigger { padding: 3px 6px; font-size: 11px; }
+  .ch-header-region {
+    order: 3; flex: 1 0 100%; min-width: 0;
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .ch-header-region::-webkit-scrollbar { display: none; }
+  /* Dropdown mode (>4 regions): the menu is position:absolute below its
+     trigger, so the row must not clip it. A single trigger never needs
+     to scroll sideways anyway. */
+  .ch-header-region:has(.region-dropdown-wrap) { overflow: visible; }
+  .ch-header-region:empty { display: none; }
+  .ch-header-region .region-filter-bar { padding: 0; gap: 4px; flex-wrap: nowrap; }
 
   /* Keep legacy channel rows compact without reducing the shared hit area.
      The mobile chat-app renderer uses rows without inline action icons. */
@@ -4304,10 +4324,13 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
 .observers-page .page-header h2 { font-size: var(--fs-lg); margin: 0 var(--space-sm) 0 0; }
 .observers-page .page-header .obs-refresh-spacer { margin-left: auto; }
 
+/* Empty datasets leave canvases at their native size without Chart.js. */
+.observer-detail-page .obs-charts canvas { max-width: 100%; }
+
 /* Observer-detail header: the Compare-with picker + Compare button
  * should sit together visually. Reuses the same .btn-secondary. */
 .observer-detail-page .compare-with-group {
-  display: inline-flex; align-items: stretch; gap: 0;
+  display: inline-flex; align-items: stretch; gap: 0; max-width: 100%;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface-1); overflow: hidden;
 }
@@ -4315,7 +4338,7 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
   border: none; background: transparent; color: var(--text);
   font-size: var(--fs-sm); padding: 6px 10px;
   border-right: 1px solid var(--border);
-  min-height: 0;
+  min-height: 0; min-width: 0;
 }
 .observer-detail-page .compare-with-group select.time-range-select:focus { outline: none; }
 .observer-detail-page .compare-with-group button[data-action="compare-with-go"] {

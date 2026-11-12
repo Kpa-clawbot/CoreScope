@@ -99,6 +99,7 @@ node tests/unit/test-issue-1456-score-labels.js
 node tests/unit/test-issue-1461-mobile-page-actions.js
 node tests/unit/test-issue-1470-card-bg-contrast.js
 node tests/unit/test-issue-1470-node-tile-helper.js
+node tests/unit/test-tile-resolver.js
 node tests/unit/test-issue-1473-prefix-generator.js
 node tests/unit/test-issue-1473-reserved-prefixes.js
 node tests/unit/test-issue-1485-live-anim-z.js
@@ -185,6 +186,7 @@ node tests/unit/test-node-reach-coverage.js
 node tests/unit/test-nodes-export-wiring.js
 node tests/unit/test-nav-drawer-version-footer.js
 node tests/unit/test-nodes-export.js
+node tests/unit/test-node-quick-actions.js
 node tests/unit/test-notifications-ui.js
 node tests/unit/test-observer-iata-1188.js
 node tests/unit/test-observer-menu-interactions.js
@@ -219,6 +221,7 @@ node tests/unit/test-rx-coverage-mine.js
 node tests/unit/test-rx-coverage-escape.js
 node tests/unit/test-rx-coverage-noise.js
 node tests/unit/test-rx-coverage-viewport.js
+node tests/unit/test-rx-coverage-app-qr.js
 node tests/unit/test-scope-audit-styles-linked.js
 node tests/unit/test-settings-sync.js
 node tests/unit/test-slideover-1056-rowsel-strict.js

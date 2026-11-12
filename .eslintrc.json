@@ -274,6 +274,7 @@
     "renderVersionCard": "readonly",
     "renderSkewBadge": "readonly",
     "renderSkewSparkline": "readonly",
+    "renderTimestampHtml": "readonly",
     "require": "readonly",
     "routeHopFromInferred": "readonly",
     "routeLayer": "readonly",

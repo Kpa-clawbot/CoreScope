@@ -43,3 +43,11 @@
 .rxb-head .rxb-sort { cursor:pointer; user-select:none; }
 .rxb-head .rxb-sort:hover { color:var(--link, #0969da); }
 .rxb-head .rxb-sort:focus-visible { outline:2px solid var(--link, #0969da); outline-offset:1px; }
+
+/* CoreDrive RX app link on #/rx-coverage (clientRxCoverage.appUrl). The QR
+   keeps the vendor's dark-on-white modules in both themes so it scans. */
+.rx-app { display:flex; align-items:center; gap:12px; margin:8px 0; padding:8px 10px; background:var(--card-bg); border:1px solid var(--border); border-radius:6px; font-size:13px; color:var(--text); }
+.rx-app-qr { flex:0 0 auto; line-height:0; }
+.rx-app-qr svg { width:96px; height:96px; display:block; border-radius:4px; }
+.rx-app-text { min-width:0; }
+.rx-app-url { overflow-wrap:anywhere; }

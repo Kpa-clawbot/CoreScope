@@ -196,14 +196,11 @@
             <div class="analytics-chart-desc">Nodes this device has exchanged messages with</div>
             <div class="analytics-table-scroll"><table class="analytics-peer-table">
               <thead><tr><th scope="col">Peer</th><th scope="col">Messages</th><th scope="col">Last Contact</th></tr></thead>
-              <tbody>${data.peerInteractions.map(p => {
-                const contact = formatTimestampWithTooltip(p.lastContact);
-                return `<tr>
+              <tbody>${data.peerInteractions.map(p => `<tr>
                 <td><a href="#/nodes/${encodeURIComponent(p.peer_key)}" style="color:var(--link-color)">${escapeHtml(p.peer_name)}</a></td>
                 <td>${p.messageCount}</td>
-                <td><span class="timestamp-text" title="${escapeHtml(contact.tooltip)}">${escapeHtml(contact.text)}</span></td>
-              </tr>`;
-              }).join('')}</tbody>
+                <td>${renderTimestampHtml(p.lastContact)}</td>
+              </tr>`).join('')}</tbody>
             </table></div>
           </div>` : ''}
         </div>
