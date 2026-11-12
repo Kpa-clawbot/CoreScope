@@ -192,7 +192,15 @@
       mobileGroup(data.mobileReceptions, pubkey);
   }
 
-  window.NodeAnalyticsHeardBy = { html: heardByHtml, stripPct, changeCell, dotClass };
+  // Signal Grade comes from the direct observers' medians; without one the
+  // server's "D" means no evidence, not a bad signal. color null = grade colour.
+  function gradeView(data) {
+    const has = (data.heardBy || []).some(r => r.medianSnr != null);
+    if (!has) return { text: 'n/a', color: 'var(--text-muted)' };
+    return { text: data.computedStats.signalGrade, color: null };
+  }
+
+  window.NodeAnalyticsHeardBy = { html: heardByHtml, stripPct, changeCell, dotClass, gradeView };
 
   async function loadAnalytics(container, pubkey, days) {
     const gen = viewGeneration();
@@ -217,6 +225,7 @@
 
     const n = data.node;
     const s = data.computedStats;
+    const grade = gradeView(data);
     const nodeName = escapeHtml(n.name || n.public_key.slice(0, 12));
 
     container.innerHTML = `
@@ -243,7 +252,7 @@
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Signal Grade</div>
-            <div class="analytics-stat-value" style="color:${GRADE_COLORS[s.signalGrade]||'var(--text)'}">${s.signalGrade}</div>
+            <div class="analytics-stat-value" style="color:${grade.color || GRADE_COLORS[grade.text] || 'var(--text)'}">${grade.text}</div>
             <div class="analytics-stat-desc">From the median SNR of each observer that heard this node directly; each observer counts once</div>
           </div>
           <div class="analytics-stat-card">

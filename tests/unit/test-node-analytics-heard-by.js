@@ -106,6 +106,17 @@ t('mobile receptions: no distance without a node position, no group without the 
   assert.ok(!HB.html({ heardBy: [row(1, 4)] }, { pubkey: PK }).includes('Mobile receptions'));
 });
 
+t('gradeView: no direct evidence shows n/a in a neutral colour, not a red D', () => {
+  const none = HB.gradeView({ heardBy: [], computedStats: { signalGrade: 'D' } });
+  assert.strictEqual(none.text, 'n/a');
+  assert.strictEqual(none.color, 'var(--text-muted)');
+  const noSnr = HB.gradeView({ heardBy: [row(1, null)], computedStats: { signalGrade: 'D' } });
+  assert.strictEqual(noSnr.text, 'n/a');
+  const real = HB.gradeView({ heardBy: [row(1, -12)], computedStats: { signalGrade: 'D' } });
+  assert.strictEqual(real.text, 'D');
+  assert.strictEqual(real.color, null);
+});
+
 t('no hex colours in the card', () => {
   const html = HB.html(Object.assign({ mobileReceptions: { receptions: 1, receivers: 1, medianSnr: 1, maxDistanceKm: 1 } }, twelve), { pubkey: PK });
   assert.ok(!/#[0-9a-f]{3,6}\b/i.test(html.replace(/href="#\/[^"]*"/g, '')));
