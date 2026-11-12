@@ -409,3 +409,18 @@ func TestDirectHeardNode_ZeroHopNonAdvertLeavesDecodedCacheCold(t *testing.T) {
 		t.Fatalf("decoded JSON was parsed for a zero-hop non-advert")
 	}
 }
+
+// TestDirectHeardNode_RetiredPrefixCreditsNobody: a hop whose prefix a
+// retired repeater (moved to inactive_nodes, still able to relay) shares is
+// no proof the one active candidate transmitted, as in uniqueHopPrefix.
+func TestDirectHeardNode_RetiredPrefixCreditsNobody(t *testing.T) {
+	pm := buildPrefixMap(directHeardNodes)
+	pm.retired = map[string]struct{}{"bb11": {}}
+	tx := dhTx(RouteFlood, PayloadTXT_MSG, "")
+	if got := directHeardNode(tx, &StoreObs{ObserverID: "obs1", PathJSON: `["66","BB11"]`}, pm); got != "" {
+		t.Fatalf("directHeardNode = %q, want \"\" for a hop shared with a retired node", got)
+	}
+	if got := directHeardNode(tx, &StoreObs{ObserverID: "obs1", PathJSON: `["66","BB1122"]`}, pm); got != dhUnique {
+		t.Fatalf("directHeardNode = %q, want %q: the 3-byte hop is not retired", got, dhUnique)
+	}
+}

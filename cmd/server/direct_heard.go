@@ -20,8 +20,9 @@
 // Direct routes with a path never attribute: a forwarder calls
 // removeSelfFromPath (Mesh.cpp:89,103) before retransmitting, so the path
 // left behind is the remaining route. A hop prefix of 2 bytes or more that
-// matches more than one node also attributes to nobody: under-attribute
-// rather than credit the wrong node, as resolvePathForObsColdLoad does.
+// matches more than one node, or that a retired repeater shares, also
+// attributes to nobody: under-attribute rather than credit the wrong node,
+// as resolvePathForObsColdLoad and uniqueHopPrefix do.
 package main
 
 import (
@@ -122,6 +123,11 @@ func directHeardNode(tx *StoreTx, obs *StoreObs, pm *prefixMap) string {
 		return key
 	}
 	if pm == nil {
+		return ""
+	}
+	// A retired repeater (moved to inactive_nodes) may still relay on this
+	// prefix, so the one active candidate is not proven (uniqueHopPrefix).
+	if _, shared := pm.retired[key]; shared {
 		return ""
 	}
 	// key is already lower case: look it up directly instead of through
