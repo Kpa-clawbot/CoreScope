@@ -11,7 +11,6 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
-const { execFileSync } = require('child_process');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
 let passed = 0, failed = 0;
@@ -99,13 +98,9 @@ console.log('\n=== no new hardcoded colours ===');
 {
   // Hex colours that are NOT a var(--x, #fallback) fallback.
   const bare = s => (s.replace(/var\(--[a-z0-9-]+, *#[0-9a-fA-F]{3,6}\)/gi, '').match(/#[0-9a-fA-F]{3,6}/g) || []).length;
-  let before = null;
-  try {
-    before = bare(execFileSync('git', ['show', 'HEAD:public/route-view.css'], { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
-  } catch (e) { /* no git history available */ }
+  const BASELINE_BARE_HEX = 8; // bare hex colours in master's route-view.css before this feature
   const after = bare(css);
-  if (before == null) before = 8;
-  assert(after <= before, 'bare hex colours in route-view.css did not increase (' + before + ' -> ' + after + ')');
+  assert(after <= BASELINE_BARE_HEX, 'bare hex colours in route-view.css did not increase (' + BASELINE_BARE_HEX + ' -> ' + after + ')');
 }
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
