@@ -12,7 +12,9 @@ package main
 //   - terrainView is immutable and safe for concurrent use without locks.
 //   - The planner loads a rectangle of tiles (View); route LOS loads only the
 //     tiles its legs' samples fall in (tiles + await, read through an
-//     srtmTileView). Both share the cache, the downloads and the budget.
+//     srtmTileView). Both share the cache, the downloads and the budget, and
+//     both charge their client for the downloads they start (Starts, tiles)
+//     before starting any.
 //
 // Safety model (this runs inside a public web server; nothing touches disk):
 //   - Tile names and URLs are built only from clamped integer indices.
@@ -71,6 +73,11 @@ type terrainSource interface {
 	Resident(bb geoBBox) bool
 	// TileCount is the number of 1° tiles covering bb.
 	TileCount(bb geoBBox) int
+	// Starts is how many downloads View(bb) would start now: tiles neither
+	// loaded, known missing nor already downloading, as many as the download
+	// budget admits (none while downloads are paused). 0 for a box View
+	// refuses.
+	Starts(bb geoBBox) int
 }
 
 // terrainCoverage is implemented by views that know which of their tiles
@@ -328,18 +335,27 @@ func (b *srtmBudget) take(now time.Time) bool {
 		drop++
 	}
 	b.starts = b.starts[:copy(b.starts, b.starts[drop:])]
-	if len(b.starts) >= srtmPerHour {
-		return false
-	}
-	inMinute := 0
-	for i := len(b.starts) - 1; i >= 0 && now.Sub(b.starts[i]) < time.Minute; i-- {
-		inMinute++
-	}
-	if inMinute >= srtmPerMinute {
+	if b.room(now) == 0 {
 		return false
 	}
 	b.starts = append(b.starts, now)
 	return true
+}
+
+// room is how many starts take would accept at now, recording none.
+func (b *srtmBudget) room(now time.Time) int {
+	inHour, inMinute := 0, 0
+	for i := len(b.starts) - 1; i >= 0; i-- {
+		d := now.Sub(b.starts[i])
+		if d >= time.Hour {
+			break // oldest first: the rest are older still
+		}
+		inHour++
+		if d < time.Minute {
+			inMinute++
+		}
+	}
+	return max(0, min(srtmPerHour-inHour, srtmPerMinute-inMinute))
 }
 
 // srtmSource is the production terrainSource: an LRU of downsampled tiles in
@@ -492,32 +508,76 @@ func (s *srtmSource) View(ctx context.Context, bb geoBBox) (terrainView, error) 
 	return v, nil
 }
 
+// Starts mirrors tiles for View's rectangle, without touching LRU order.
+func (s *srtmSource) Starts(bb geoBBox) int {
+	sp, ok := srtmSpanOf(bb)
+	if !ok || sp.count() > s.maxTiles {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	n := 0
+	for i := 0; i < sp.count(); i++ {
+		k := sp.key(i)
+		if _, ok := s.lookupLocked(k, now, false); ok {
+			continue
+		}
+		if _, running := s.loading[k]; !running {
+			n++
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	return min(n, s.roomLocked(now))
+}
+
+// roomLocked is how many downloads admit would accept now: none while they
+// are paused. Caller holds s.mu.
+func (s *srtmSource) roomLocked(now time.Time) int {
+	if now.Before(s.coolTo) {
+		return 0
+	}
+	return s.budget.room(now)
+}
+
 // srtmTileSet is a set of tiles as tiles found them.
 type srtmTileSet struct {
 	grids   map[srtmKey][]int16 // resident: the grid, or nil for a tile without data
-	need    []srtmKey           // neither cached nor known missing, in keys order
+	need    []srtmKey           // to load: already downloading, or a download the budget admits; keys order
 	starts  int                 // of need, those no load is running for: the downloads loading need would start
-	cooling bool                // downloads are paused, so need cannot load now
+	refused []srtmKey           // not downloading, and over what the budget admits now (all of them while downloads are paused)
 }
 
 // tiles looks keys up in one pass, marking the cached ones used. It starts
-// nothing, so the caller can charge for starts before calling await.
+// nothing, so the caller can charge for starts before calling await, and
+// it counts as starts only the downloads the budget would admit now: the
+// rest are refused, so no caller is charged for a download that would fail
+// at once. Tiles already downloading cost no start.
 func (s *srtmSource) tiles(keys []srtmKey) srtmTileSet {
 	ts := srtmTileSet{grids: make(map[srtmKey][]int16, len(keys))}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
+	room := -1 // looked up at the first tile that needs a download
 	for _, k := range keys {
 		if g, ok := s.lookupLocked(k, now, true); ok {
 			ts.grids[k] = g
 			continue
 		}
-		ts.need = append(ts.need, k)
 		if _, running := s.loading[k]; !running {
+			if room < 0 {
+				room = s.roomLocked(now)
+			}
+			if ts.starts == room {
+				ts.refused = append(ts.refused, k)
+				continue
+			}
 			ts.starts++
 		}
+		ts.need = append(ts.need, k)
 	}
-	ts.cooling = now.Before(s.coolTo)
 	return ts
 }
 

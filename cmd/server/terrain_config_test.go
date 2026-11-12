@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTerrainConfigResolve(t *testing.T) {
@@ -146,8 +149,13 @@ func TestTerrainServicesShareOneSource(t *testing.T) {
 	if e.src.source != "SRTM (dem.example.org)" || p.source != e.src.source {
 		t.Fatalf("attribution: LOS %q, planner %q", e.src.source, p.source)
 	}
-	if e.nodes == nil || e.visibility == nil || e.ipr == nil || e.rl == nil || e.rl.burst != losClientTilesPerMin {
+	if e.nodes == nil || e.visibility == nil || e.downloads == nil || e.downloads.ipr == nil {
 		t.Fatalf("LOS service not wired: %+v", e)
+	}
+	// One download budget per client across both features, sized for one
+	// full view of the shared source.
+	if p.downloads != e.downloads || e.downloads.rl.burst != float64(e.src.maxTiles) {
+		t.Fatalf("download budgets: LOS %p, planner %p, burst %v", e.downloads, p.downloads, e.downloads.rl.burst)
 	}
 
 	// A larger planner raises the shared cap and cache floor.
@@ -246,6 +254,7 @@ func TestTerrainConfigLog(t *testing.T) {
 	for _, want := range []string{
 		"terrain.tileCacheTiles must be within 4-200; using the default",
 		"[terrain] SRTM tiles from https://tiles.example.com for route LOS and the planner: up to 16 tiles per view, cache 24 tiles (up to 69 MB, 2.9 MB a tile)",
+		"[terrain] tile downloads: 20/min and 200/hour for everyone; per client, 16 at once, then 10/min, at most 40/hour",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q:\n%s", want, out)
@@ -264,6 +273,102 @@ func TestTerrainConfigLog(t *testing.T) {
 	logTerrainConfig(nil, &LOSConfig{Enabled: true}, nil)
 	if out := buf.String(); !strings.Contains(out, "for route LOS: up to 16 tiles per view") {
 		t.Fatalf("los-only log %q", out)
+	}
+}
+
+// Security review (#2391): the per-client budget is one full view of the
+// shared source, so any single request can load at once, refills at half the
+// global rate, and is capped per hour well below the global hourly budget.
+func TestTerrainClientBudget(t *testing.T) {
+	terrainQuietLog(t)
+	for _, los := range []*LOSConfig{nil, {Enabled: true}} {
+		for _, sz := range plannerTestSizes {
+			planner := &PlannerConfig{Enabled: true, MaxAreaKm: sz.area, NodeMarginKm: sz.margin, MaxLegKm: sz.leg}
+			view := planner.tileLimits().max()
+			if los.enabled() {
+				view = max(view, losMaxTiles)
+			}
+			burst, hourly := terrainClientBudget(terrainViewTiles(los, planner))
+			if burst != view || hourly != max(terrainClientHourFloor, 2*view) {
+				t.Fatalf("los %v, %+v: burst %d, hourly %d; largest view %d", los.enabled(), sz, burst, hourly, view)
+			}
+			// A token bucket lets a client take its cap and one refill in any
+			// hour: that still leaves most of the global hour to others.
+			if 2*hourly >= srtmPerHour {
+				t.Fatalf("%+v: a client may take %d of the %d downloads an hour", sz, 2*hourly, srtmPerHour)
+			}
+			cfg := &Config{LOS: los, Planner: planner}
+			e, p := newTerrainServices(cfg, &Server{cfg: cfg})
+			t.Cleanup(p.Close)
+			rl := p.downloads.rl
+			if (e != nil && e.downloads != p.downloads) || rl.burst != float64(view) || rl.capBurst != float64(hourly) ||
+				math.Abs(rl.rate*60-terrainClientTilesPerMin) > 1e-9 || math.Abs(rl.capRate*3600-float64(hourly)) > 1e-9 {
+				t.Fatalf("los %v, %+v: limiter %+v", los.enabled(), sz, rl)
+			}
+			if ok, _ := p.downloads.rl.takeN("198.51.100.1", view); !ok {
+				t.Fatalf("%+v: the largest view does not fit a fresh client's budget", sz)
+			}
+		}
+	}
+}
+
+// Security review (#2391): route LOS and the planner draw on one budget per
+// client, so using both buys no more downloads, and the hourly cap holds
+// while the per-minute bucket refills.
+func TestTerrainClientHourlyCapAcrossFeatures(t *testing.T) {
+	terrainQuietLog(t)
+	tb := newTerrainBoth(t, srtmServe(nil)) // every tile 404s: cheap, one request each
+	_, hourly := terrainClientBudget(losMaxTiles)
+	if hourly != 40 || tb.p.downloads.rl.burst != losMaxTiles {
+		t.Fatalf("budget: hourly %d, burst %v", hourly, tb.p.downloads.rl.burst)
+	}
+	// route is one leg per tile along latitude lat+0.5: n+1 tiles.
+	route := func(lat, n int) string {
+		parts := make([]string, n+1)
+		for i := range parts {
+			parts[i] = fmt.Sprintf("%d.5,%d.5", lat, i)
+		}
+		return strings.Join(parts, ",")
+	}
+	// area is a 2×2-tile planner profile view at lat, lat+1 × 5, 6.
+	area := func(lat int) string { return fmt.Sprintf("%d.8,5.8,%d.2,6.2", lat, lat+1) }
+	tb.known(area(50), area(52), area(54), area(56))
+	const ip, other = "198.51.100.160", "198.51.100.161"
+	los := func(pts, from string, want int) {
+		t.Helper()
+		if w := tb.getFrom(pts, from+":5000", nil); w.Code != want {
+			t.Fatalf("route LOS %s: %d, want %d: %s", pts, w.Code, want, w.Body.String())
+		}
+	}
+	minute := func() { // refills 10 per-minute tokens, 0.67 hourly ones
+		tb.clk.add(time.Minute)
+		tb.p.downloads.rl.takeN(ip, 0)
+	}
+
+	los(route(40, 15), ip, http.StatusOK) // 16: the burst
+	for i, lat := range []int{50, 52} {
+		minute()
+		tb.profileDone(t, area(lat), ip)       // 4
+		los(route(45+i, 5), ip, http.StatusOK) // 6
+	}
+	minute()
+	tb.profileDone(t, area(54), ip) // 4: 40 in all, the hourly cap
+	if got := tb.up.total(); got != hourly {
+		t.Fatalf("%d downloads, want %d", got, hourly)
+	}
+	// The minute bucket has room for 6 more; the hourly cap has 2.
+	if got := tb.tokens(ip); got < 6 {
+		t.Fatalf("per-minute tokens %v: the test needs room in them", got)
+	}
+	los(route(47, 5), ip, http.StatusTooManyRequests)
+	minute()
+	if w := tb.profile(area(56), ip); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("planner past the hourly cap: %d %s", w.Code, w.Body.String())
+	}
+	// Downloads are capped per client, not for everyone.
+	los(route(47, 5), other, http.StatusOK)
+	if got := tb.up.total(); got != hourly+6 {
+		t.Fatalf("%d downloads, want %d", got, hourly+6)
 	}
 }
 

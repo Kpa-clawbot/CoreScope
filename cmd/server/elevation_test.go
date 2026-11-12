@@ -148,19 +148,24 @@ func elevLegErrors(resp ElevationProfileResponse) []string {
 	return out
 }
 
+// withElevLimit gives the service a download limit of n tiles a minute.
 func withElevLimit(svc *elevationService, clk *elevClock, n int) {
-	svc.ipr = &wsLimiter{state: map[string]*wsIPState{}}
-	svc.rl = newRateLimiter(n, time.Minute)
-	svc.rl.now = clk.now
+	svc.downloads = &clientLimiter{ipr: &wsLimiter{state: map[string]*wsIPState{}}, rl: newRateLimiter(n, time.Minute)}
+	svc.downloads.rl.now = clk.now
 }
 
 func elevBucketTokens(svc *elevationService, ip string) float64 {
-	svc.rl.mu.Lock()
-	defer svc.rl.mu.Unlock()
-	if b := svc.rl.buckets[ip]; b != nil {
+	return rlTokens(svc.downloads.rl, ip)
+}
+
+// rlTokens is key's tokens in l (its burst when it has no bucket yet).
+func rlTokens(l *rateLimiter, key string) float64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b := l.buckets[key]; b != nil {
 		return b.tokens
 	}
-	return svc.rl.burst
+	return l.burst
 }
 
 // elevFieldGrid is tile k with each sample set to f at its position, so
@@ -640,6 +645,75 @@ func TestElevationChargedPerDownload(t *testing.T) {
 	et.clk.add(31 * time.Second) // 4 a minute: 2.07 tokens back
 	ok(more, a)
 	tokens(a, 31.0/60*4-2)
+}
+
+// Code review #1 (#2391): a request whose tiles the download budget only
+// partly admits answered 202 while the admitted one loaded, and every poll
+// counted the refused tile as a new start and charged for it again, until
+// the client got 429 on a poll. The budget is now peeked first: a tile it
+// has no room for is upstream and costs nothing, so polls stay free.
+func TestElevationPollAfterRefusedIsFree(t *testing.T) {
+	gate := newSRTMGate()
+	slow, refused := srtmKey{40, 10}, srtmKey{40, 11}
+	tile := srtmConstTile(t, 300, srtmRawBytes, gzip.BestSpeed)
+	serve := srtmServe(map[string][]byte{srtmPath(slow): tile, srtmPath(refused): tile})
+	et := newElevTest(t, func(w http.ResponseWriter, r *http.Request) {
+		if gate.wait(r) {
+			serve(w, r)
+		}
+	})
+	t.Cleanup(gate.open)
+	et.svc.wait = 20 * time.Millisecond
+	withElevLimit(et.svc, et.clk, 10)
+	// The download budget has room for one more start this minute.
+	et.src.mu.Lock()
+	for i := 0; i < srtmPerMinute-1; i++ {
+		et.src.budget.starts = append(et.src.budget.starts, et.clk.now())
+	}
+	et.src.mu.Unlock()
+	const ip = "192.0.2.31"
+	// One leg in each tile, and one across both.
+	const pts = "40.2,10.2,40.8,10.8,40.2,11.2,40.8,11.8"
+
+	w := et.getFrom(pts, ip+":5000", nil)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("first request: %d %s", w.Code, w.Body.String())
+	}
+	if got := elevBucketTokens(et.svc, ip); got != 9 {
+		t.Fatalf("tokens=%v want 9 (one download admitted, one refused)", got)
+	}
+	srtmEventually(t, "the admitted download", func() bool { return et.up.hitsFor(srtmPath(slow)) == 1 })
+	// Spend the rest: a poll that charged anything would now be limited.
+	if ok, _ := et.svc.downloads.rl.takeN(ip, 9); !ok {
+		t.Fatal("could not drain the bucket")
+	}
+	for i := 0; i < 5; i++ {
+		if w := et.raw(pts, ip+":5000", nil); w.Code != http.StatusAccepted {
+			t.Fatalf("poll %d: %d %s", i, w.Code, w.Body.String())
+		}
+	}
+	if got := elevBucketTokens(et.svc, ip); got != 0 {
+		t.Fatalf("polls took tokens: %v left", got)
+	}
+	gate.open()
+	srtmEventually(t, "the tile to load", func() bool { return et.src.Resident(srtmBox(slow)) })
+	w = et.raw(pts, ip+":5000", nil)
+	if got := elevLegErrors(elevLegs(t, w)); !slices.Equal(got, []string{"", elevErrUpstream, elevErrUpstream}) {
+		t.Fatalf("after load: errors %q", got)
+	}
+	if w.Header().Get("Cache-Control") != "no-store" || et.up.hitsFor(srtmPath(refused)) != 0 || elevBucketTokens(et.svc, ip) != 0 {
+		t.Fatalf("Cache-Control %q, refused tile fetched %d times, tokens %v", w.Header().Get("Cache-Control"),
+			et.up.hitsFor(srtmPath(refused)), elevBucketTokens(et.svc, ip))
+	}
+	// Once the budget has room again the refused tile downloads, charged
+	// once: the bucket refilled to 10, less 1.
+	et.clk.add(time.Minute)
+	if got := elevLegErrors(elevLegs(t, et.raw(pts, ip+":5000", nil))); !slices.Equal(got, []string{"", "", ""}) {
+		t.Fatalf("budget back: errors %q", got)
+	}
+	if got := elevBucketTokens(et.svc, ip); got != 9 || et.up.hitsFor(srtmPath(refused)) != 1 {
+		t.Fatalf("budget back: tokens %v, refused tile fetched %d times", got, et.up.hitsFor(srtmPath(refused)))
+	}
 }
 
 func TestElevationRateLimitIndistinctClientsShareBucket(t *testing.T) {

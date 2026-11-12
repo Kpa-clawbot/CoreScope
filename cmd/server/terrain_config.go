@@ -29,7 +29,38 @@ const (
 	defaultTerrainTileCache = 24
 	// terrainDefaultSource attributes the default tiles in responses.
 	terrainDefaultSource = "SRTM (AWS Open Data)"
+
+	// terrainClientTilesPerMin refills a client's tile download budget
+	// (terrainClientBudget), half the global srtmPerMinute: one client
+	// cannot hold the shared budget on its own.
+	terrainClientTilesPerMin = 10
+	// terrainClientHourFloor is the least a client may download in an hour.
+	terrainClientHourFloor = 40
 )
+
+// terrainClientBudget is one client's tile download budget, shared by route
+// LOS and the planner, for a source whose largest view is viewTiles
+// (terrainViewTiles): burst tokens, so any single request can load in one
+// go, refilled at terrainClientTilesPerMin, under an hourly cap of hourly
+// tokens refilled at hourly an hour. hourly stays below the global
+// srtmPerHour at every size the planner allows (40 tiles: 80 of 200).
+func terrainClientBudget(viewTiles int) (burst, hourly int) {
+	return viewTiles, max(terrainClientHourFloor, 2*viewTiles)
+}
+
+// newTerrainClientLimiter builds the per-client terrain download limiter
+// route LOS and the planner share (newTerrainServices): one token per tile
+// download a request or job starts, keyed like every other per-client limit
+// (clientKey).
+func newTerrainClientLimiter(trustedProxies []string, viewTiles int) *clientLimiter {
+	burst, hourly := terrainClientBudget(viewTiles)
+	return &clientLimiter{
+		ipr: &wsLimiter{state: map[string]*wsIPState{},
+			trustedProxies: parseCIDRList(trustedProxies, "webSocket.trustedProxies")},
+		rl:  newCappedRateLimiter(burst, terrainClientTilesPerMin, time.Minute, hourly, time.Hour),
+		tag: "terrain", what: "terrain download",
+	}
+}
 
 // resolved applies defaults; invalid values fall back with a warning.
 func (c *TerrainConfig) resolved() (TerrainConfig, []string) {
@@ -121,6 +152,10 @@ func logTerrainConfig(c *TerrainConfig, los *LOSConfig, planner *PlannerConfig) 
 	log.Printf("[terrain] SRTM tiles from %s for %s: up to %d tiles per view, cache %d tiles (up to %.0f MB, %.1f MB a tile)",
 		terrainTileHost(r.TileURL), terrainUsers(los, planner), views, cache,
 		float64(cache)*srtmTileBytes/1e6, float64(srtmTileBytes)/1e6)
+	burst, hourly := terrainClientBudget(views)
+	log.Printf("[terrain] tile downloads: %d/min and %d/hour for everyone; per client, %d at once, "+
+		"then %d/min, at most %d/hour",
+		srtmPerMinute, srtmPerHour, burst, terrainClientTilesPerMin, hourly)
 }
 
 // terrainTileHost is the tile URL reduced to scheme and host for logs: a
@@ -142,7 +177,11 @@ func newTerrainServices(cfg *Config, s *Server) (*elevationService, *plannerServ
 	}
 	logTerrainConfig(cfg.Terrain, cfg.LOS, cfg.Planner)
 	tc, _ := cfg.Terrain.resolved()
-	src := newSRTMSource(tc, terrainViewTiles(cfg.LOS, cfg.Planner))
+	views := terrainViewTiles(cfg.LOS, cfg.Planner)
+	src := newSRTMSource(tc, views)
+	// One budget per client across both features: a client cannot get twice
+	// the downloads by using both.
+	downloads := newTerrainClientLimiter(cfg.WSTrustedProxies(), views)
 
 	var elev *elevationService
 	if cfg.LOS.enabled() {
@@ -150,15 +189,14 @@ func newTerrainServices(cfg *Config, s *Server) (*elevationService, *plannerServ
 		elev = newElevationService(src)
 		elev.nodes = serverPlannerData{s}.nodes
 		elev.visibility = s
-		elev.ipr = &wsLimiter{state: map[string]*wsIPState{},
-			trustedProxies: parseCIDRList(cfg.WSTrustedProxies(), "webSocket.trustedProxies")}
-		elev.rl = newRateLimiter(losClientTilesPerMin, time.Minute)
+		elev.downloads = downloads
 	}
 	var planner *plannerService
 	if cfg.Planner.enabled() {
 		logPlannerConfig(cfg.Planner)
 		pc, _ := cfg.Planner.resolved()
 		planner = newPlannerService(pc, s, src)
+		planner.downloads = downloads
 	}
 	return elev, planner
 }

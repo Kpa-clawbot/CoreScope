@@ -20,8 +20,8 @@ import (
 	"time"
 )
 
-// clientLimiter charges one token per call to the caller's bucket. A nil ipr
-// or rl disables the limit (tests).
+// clientLimiter charges tokens to the caller's bucket. A nil limiter, ipr or
+// rl disables the limit (tests).
 type clientLimiter struct {
 	ipr  *wsLimiter
 	rl   *rateLimiter
@@ -61,13 +61,24 @@ func (c *clientLimiter) take(r *http.Request) (bool, time.Duration) {
 }
 
 // takeN consumes n tokens from r's bucket, all or nothing; on refusal it
-// reports how long until n are available and takes none.
+// reports how long until n are available and takes none. n < 1 always
+// succeeds, and leaves no bucket behind.
 func (c *clientLimiter) takeN(r *http.Request, n int) (bool, time.Duration) {
-	if c.ipr == nil || c.rl == nil {
+	if c.off() || n < 1 {
 		return true, 0
 	}
 	return c.rl.takeN(c.clientKey(r), n)
 }
+
+// refundN gives back n tokens takeN just took from r's bucket.
+func (c *clientLimiter) refundN(r *http.Request, n int) {
+	if c.off() || n < 1 {
+		return
+	}
+	c.rl.refundN(c.clientKey(r), n)
+}
+
+func (c *clientLimiter) off() bool { return c == nil || c.ipr == nil || c.rl == nil }
 
 // allow is take that answers 429 "rate limited" + Retry-After itself.
 func (c *clientLimiter) allow(w http.ResponseWriter, r *http.Request) bool {

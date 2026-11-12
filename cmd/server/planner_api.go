@@ -9,10 +9,12 @@ package main
 // only ever sees quantised values. Work runs as background jobs, one per
 // key: a request waits at most plannerFastWait for its job and otherwise gets
 // 202 + PlannerJobStatus to re-poll. Starting a job costs the client a per-IP
-// token and the server a global one; cache hits and polls of a live job are
-// free. Compute is kept away from the live app by slot semaphores (coverage
-// 1, relay + profile 2), caps on live and queued jobs, per-stage timeouts, and
-// cancellation of any job nobody has polled for plannerAbandonAfter.
+// token, plus one token per tile download its terrain view would start from
+// the terrain budget it shares with route LOS, and the server a global
+// token; cache hits and polls of a live job are free. Compute is kept away
+// from the live app by slot semaphores (coverage 1, relay + profile 2), caps
+// on live and queued jobs, per-stage timeouts, and cancellation of any job
+// nobody has polled for plannerAbandonAfter.
 //
 // Invariants:
 //   - At most one live job per key. A successful job caches its result before
@@ -215,9 +217,12 @@ type plannerService struct {
 	now      func() time.Time
 
 	// limit charges the client for each job it starts; global caps new jobs
-	// for everyone.
-	limit  clientLimiter
-	global *rateLimiter
+	// for everyone. downloads charges the client per tile download a job's
+	// view starts: the budget route LOS shares (newTerrainServices), else
+	// this planner's own.
+	limit     clientLimiter
+	downloads *clientLimiter
+	global    *rateLimiter
 
 	// Timings (fields so tests can shorten them).
 	fastWait, terrainTimeout, computeTimeout time.Duration
@@ -283,6 +288,7 @@ func newPlannerService(cfg PlannerConfig, s *Server, terrain *srtmSource) *plann
 			rl:  newRateLimiter(plannerIPJobsPerMin, time.Minute),
 			tag: "planner", what: "planner",
 		},
+		downloads:      newTerrainClientLimiter(trusted, terrain.maxTiles),
 		global:         newRateLimiter(plannerGlobalJobsPerMin, time.Minute),
 		fastWait:       plannerFastWait,
 		terrainTimeout: plannerTerrainTimeout,
@@ -1243,8 +1249,9 @@ func (p *plannerService) serve(w http.ResponseWriter, r *http.Request, spec plan
 
 // attach returns the live job for spec.key, or the result that landed since
 // the caller's cache miss, or starts a job. Starting one checks capacity
-// first (free), then charges the client, then the global budget: a client
-// over its own limit never spends everyone else's.
+// first (free), then charges the client a job and the downloads its view
+// would start (p.src.Starts, all or nothing), then the global budget: a
+// client over its own limit never spends everyone else's.
 func (p *plannerService) attach(r *http.Request, spec plannerJobSpec, heavy bool, now time.Time) (*plannerJob, []byte, *plannerReject) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1271,8 +1278,14 @@ func (p *plannerService) attach(r *http.Request, spec plannerJobSpec, heavy bool
 	if ok, wait := p.limit.take(r); !ok {
 		return nil, nil, &plannerReject{http.StatusTooManyRequests, "rate limited", retryAfterSecs(wait)}
 	}
+	starts := p.src.Starts(spec.view)
+	if ok, wait := p.downloads.takeN(r, starts); !ok {
+		p.refundClient(client)
+		return nil, nil, &plannerReject{http.StatusTooManyRequests, "rate limited", retryAfterSecs(wait)}
+	}
 	if ok, wait := p.global.take("all"); !ok {
 		p.refundClient(client)
+		p.downloads.refundN(r, starts)
 		return nil, nil, &plannerReject{http.StatusServiceUnavailable, "planner busy", retryAfterSecs(wait)}
 	}
 	ctx, cancel := context.WithCancelCause(p.ctx)

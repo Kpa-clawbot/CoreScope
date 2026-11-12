@@ -44,6 +44,7 @@ type fakeTerrain struct {
 	gates    map[geoBBox]chan struct{} // per view: blocks, and is not resident, until released
 	missing  map[[2]int]bool           // 1° tiles (south-west corner) without data
 	tiles    func(geoBBox) int         // nil: real 1° tile count
+	starts   func(geoBBox) int         // nil: no view downloads anything
 	views    int
 	lastView geoBBox
 }
@@ -132,6 +133,19 @@ func (f *fakeTerrain) TileCount(bb geoBBox) int {
 		return f.tiles(bb)
 	}
 	return len(fakeTiles(bb))
+}
+
+// Starts is f.starts(bb), or 0: the fake does not track which tiles are
+// downloading, so the tests that charge downloads use a real srtmSource
+// (planner_tiles_test.go).
+func (f *fakeTerrain) Starts(bb geoBBox) int {
+	f.mu.Lock()
+	fn := f.starts
+	f.mu.Unlock()
+	if fn == nil {
+		return 0
+	}
+	return fn(bb)
 }
 
 func (f *fakeTerrain) set(fn func(f *fakeTerrain)) { f.mu.Lock(); fn(f); f.mu.Unlock() }
@@ -363,6 +377,7 @@ func newPlannerHarnessWith(t *testing.T, pc PlannerConfig) *plannerHarness {
 	p.relay = h.stubs.relay
 	p.now = h.clk.now
 	p.limit.rl.now = h.clk.now
+	p.downloads.rl.now = h.clk.now
 	p.global.now = h.clk.now
 	p.fastWait = 0
 	p.watchEvery = 2 * time.Millisecond

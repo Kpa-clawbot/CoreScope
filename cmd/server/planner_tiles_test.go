@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // plannerTestDest is the point km from a on the initial bearing (degrees
@@ -363,4 +366,162 @@ func TestSRTMSourceMaxTiles(t *testing.T) {
 	if n := u.total(); n != 0 {
 		t.Fatalf("refused view made %d requests", n)
 	}
+}
+
+// terrainBoth is route LOS and the planner over one test source and one
+// per-client download budget, wired as newTerrainServices wires them, on the
+// source's clock.
+type terrainBoth struct {
+	*elevTest
+	p    *plannerService
+	data *fakePlannerData
+}
+
+func newTerrainBoth(t *testing.T, h http.HandlerFunc) *terrainBoth {
+	t.Helper()
+	et := newElevTest(t, h)
+	cfg := &Config{LOS: &LOSConfig{Enabled: true}, Planner: &PlannerConfig{Enabled: true}}
+	et.srv.cfg = cfg
+	p := newPlannerService(*cfg.Planner, et.srv, et.src)
+	t.Cleanup(p.Close)
+	data := &fakePlannerData{serverPlannerData: serverPlannerData{et.srv}}
+	p.data = data
+	p.now = et.clk.now
+	p.limit.rl.now = et.clk.now
+	p.global.now = et.clk.now
+	et.svc.downloads = newTerrainClientLimiter(nil, terrainViewTiles(cfg.LOS, cfg.Planner))
+	et.svc.downloads.rl.now = et.clk.now
+	p.downloads = et.svc.downloads
+	et.srv.planner = p
+	return &terrainBoth{elevTest: et, p: p, data: data}
+}
+
+// known makes the points of each pts list repeaters the planner knows. Call
+// it before the first planner request: the planner rebuilds its node set
+// only every plannerKnownTTL.
+func (tb *terrainBoth) known(ptsLists ...string) {
+	var ns []nodeInfo
+	for _, pts := range ptsLists {
+		for _, pt := range elevParsePts(pts) {
+			ns = append(ns, nodeInfo{PublicKey: fmt.Sprintf("kn%04d", len(ns)), Name: "N", Role: "repeater",
+				Lat: pt.Lat, Lon: pt.Lon, HasGPS: true, LastSeen: tb.clk.now()})
+		}
+	}
+	tb.data.setNodes(append(tb.data.nodes(), ns...))
+}
+
+// profile asks the planner for a profile of pts from ip, once.
+func (tb *terrainBoth) profile(pts, ip string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/planner/profile?pts="+url.QueryEscape(pts), nil)
+	req.RemoteAddr = ip + ":5000"
+	w := httptest.NewRecorder()
+	tb.srv.handlePlannerProfile(w, req)
+	return w
+}
+
+// profileDone polls the planner profile until it answers 200.
+func (tb *terrainBoth) profileDone(t *testing.T, pts, ip string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		w := tb.profile(pts, ip)
+		if w.Code == http.StatusOK {
+			return
+		}
+		if w.Code != http.StatusAccepted || time.Now().After(deadline) {
+			t.Fatalf("planner %s from %s: %d %s", pts, ip, w.Code, w.Body.String())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func (tb *terrainBoth) tokens(ip string) float64 { return rlTokens(tb.p.downloads.rl, ip) }
+
+// Security review (#2391): a planner job cost one token however many tiles
+// its view downloaded. It now also takes one token per download its view
+// starts, from the budget route LOS charges, all or nothing; tiles already
+// in memory or already downloading cost nothing.
+func TestPlannerChargesTileDownloads(t *testing.T) {
+	gate := newSRTMGate()
+	tb := newTerrainBoth(t, func(w http.ResponseWriter, r *http.Request) {
+		if gate.wait(r) {
+			http.NotFound(w, r)
+		}
+	})
+	t.Cleanup(gate.open)
+	const (
+		cold    = "30.8,-97.2,31.2,-96.8"     // N30-N31 × W098-W097: 4 tiles
+		overlap = "30.85,-97.15,31.15,-96.85" // the same 4 tiles, another key
+		here    = "40.3,10.3,40.6,10.6"       // N40E010 only
+		refused = "50.8,5.8,51.2,6.2"         // N50-N51 × E005-E006: 4 tiles
+		busy    = "52.8,5.8,53.2,6.2"         // N52-N53 × E005-E006: 4 tiles
+	)
+	tb.known(cold, overlap, here, refused, busy)
+	tb.src.put(srtmKey{31, -97}, elevFlatGrid(80))
+	tb.src.put(srtmKey{40, 10}, elevFlatGrid(80))
+	const ip = "198.51.100.150"
+	burst := tb.p.downloads.rl.burst
+
+	// 3 of the 4 tiles are not here: 3 tokens, and one job token.
+	if w := tb.profile(cold, ip); w.Code != http.StatusAccepted {
+		t.Fatalf("cold view: %d %s", w.Code, w.Body.String())
+	}
+	if got := tb.tokens(ip); got != burst-3 {
+		t.Fatalf("cold view: %v download tokens left, want %v", got, burst-3)
+	}
+	srtmEventually(t, "the 3 downloads to start", func() bool {
+		tb.src.mu.Lock()
+		defer tb.src.mu.Unlock()
+		return len(tb.src.loading) == 3
+	})
+	jobs := rlTokens(tb.p.limit.rl, ip)
+
+	// Polling the job, a view over the same tiles while they download, and a
+	// view in memory cost no download token.
+	if w := tb.profile(cold, ip); w.Code != http.StatusAccepted {
+		t.Fatalf("poll: %d", w.Code)
+	}
+	if w := tb.profile(overlap, ip); w.Code != http.StatusAccepted {
+		t.Fatalf("overlapping view: %d %s", w.Code, w.Body.String())
+	}
+	tb.p.fastWait = 10 * time.Second
+	if w := tb.profile(here, ip); w.Code != http.StatusOK {
+		t.Fatalf("resident view: %d %s", w.Code, w.Body.String())
+	}
+	if got := tb.tokens(ip); got != burst-3 || rlTokens(tb.p.limit.rl, ip) != jobs-2 {
+		t.Fatalf("free requests: %v download tokens, %v job tokens (want %v, %v)", got, rlTokens(tb.p.limit.rl, ip), burst-3, jobs-2)
+	}
+
+	// Too few download tokens: 429, the job token back, nothing started.
+	tb.p.downloads.rl.takeN(ip, int(burst)-3-2) // 2 left, the view needs 4
+	jobs = rlTokens(tb.p.limit.rl, ip)
+	w := tb.profile(refused, ip)
+	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "rate limited") || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("over the download budget: %d %s", w.Code, w.Body.String())
+	}
+	if rlTokens(tb.p.limit.rl, ip) != jobs || tb.tokens(ip) != 2 || tb.p.src.Starts(plannerProfileView(geoBBox{S: 50.8, W: 5.8, N: 51.2, E: 6.2},
+		plannerProfilePad(defaultPlannerMaxLegKm))) != 4 {
+		t.Fatalf("refused job: %v job tokens (want %v), %v download tokens", rlTokens(tb.p.limit.rl, ip), jobs, tb.tokens(ip))
+	}
+
+	// The global job budget refusing gives both tokens back.
+	tb.clk.add(time.Minute) // 2 + 10 download tokens
+	tb.p.global = newRateLimiter(1, time.Hour)
+	tb.p.global.now = tb.clk.now
+	tb.p.global.take("all")
+	if w := tb.profile(busy, ip); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("global budget out: %d %s", w.Code, w.Body.String())
+	}
+	if ok, _ := tb.p.downloads.rl.takeN(ip, 12); !ok || rlTokens(tb.p.limit.rl, ip) != plannerIPJobsPerMin {
+		t.Fatalf("not refunded: %v download tokens, %v job tokens", tb.tokens(ip), rlTokens(tb.p.limit.rl, ip))
+	}
+	if tb.liveJobs() != 2 {
+		t.Fatalf("%d live jobs, want the 2 loading ones", tb.liveJobs())
+	}
+}
+
+func (tb *terrainBoth) liveJobs() int {
+	tb.p.mu.Lock()
+	defer tb.p.mu.Unlock()
+	return len(tb.p.jobs)
 }

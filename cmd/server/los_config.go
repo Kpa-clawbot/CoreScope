@@ -37,10 +37,6 @@ const (
 	losTileWait = 1500 * time.Millisecond
 	// losPollAfterS is the 202's retry_after_s.
 	losPollAfterS = 2
-	// losClientTilesPerMin is the per-client limit in tile downloads per
-	// minute: a request is charged one token per download it starts. It
-	// covers one full request (losMaxTiles).
-	losClientTilesPerMin = 20
 )
 
 // LOSConfig is the "los" block in config.json. Terrain tiles come from the
@@ -123,6 +119,6 @@ func logLOSConfig(c *LOSConfig) {
 	for _, w := range warns {
 		log.Printf("[los] %s", w)
 	}
-	log.Printf("[los] enabled (%.3f MHz, antenna=%.1f m, k=%.3f, up to %d terrain tiles a request, %d tile downloads/min per client)",
-		r.FrequencyMHz, r.AntennaHeightM, r.KFactor, losMaxTiles, losClientTilesPerMin)
+	log.Printf("[los] enabled (%.3f MHz, antenna=%.1f m, k=%.3f, up to %d terrain tiles a request)",
+		r.FrequencyMHz, r.AntennaHeightM, r.KFactor, losMaxTiles)
 }

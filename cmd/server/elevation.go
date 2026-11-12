@@ -21,7 +21,9 @@ package main
 //	404      writeError "los disabled" when los.enabled is false.
 //	429      writeError "rate limited" + Retry-After (seconds): the request
 //	         would start more tile downloads than this client has tokens
-//	         left. A request that starts none is never limited.
+//	         left in the terrain budget it shares with the planner
+//	         (newTerrainClientLimiter). A request that starts none is never
+//	         limited.
 //
 // Points rule: every point must be the position of a known node (GPS set,
 // not 0,0) that /api/nodes shows (node_visibility.go), matched at 5
@@ -106,21 +108,18 @@ func (s *Server) handleElevationProfile(w http.ResponseWriter, r *http.Request) 
 // needs, then answers 200, or 202 while some are still downloading. The
 // client is charged one token per download the request starts, all or
 // nothing, before any starts; resident tiles, tiles already downloading
-// (another request's, or the planner's) and polls cost nothing.
+// (another request's, or the planner's) and tiles the download budget has no
+// room for cost nothing, so a poll that only waits is free. The legs on
+// refused tiles answer upstream; the rest are answered.
 func (e *elevationService) serve(w http.ResponseWriter, r *http.Request, pts []geoPoint) {
 	legs, keys := e.plan(pts)
 	ts := e.src.tiles(keys)
-	failed := map[srtmKey]bool{}
-	switch {
-	case len(ts.need) == 0:
-	case ts.cooling:
-		// Downloads are paused: the legs on these tiles are upstream, the
-		// rest are answered.
-		for _, k := range ts.need {
-			failed[k] = true
-		}
-	default:
-		if ts.starts > 0 && !e.allowN(w, r, ts.starts) {
+	failed := make(map[srtmKey]bool, len(ts.refused))
+	for _, k := range ts.refused {
+		failed[k] = true
+	}
+	if len(ts.need) > 0 {
+		if !e.downloads.allowN(w, r, ts.starts) {
 			return
 		}
 		got, bad := e.src.await(r.Context(), ts.need, e.wait)
@@ -240,10 +239,10 @@ type elevationService struct {
 	// visibility narrows nodes to those /api/nodes shows
 	// (node_visibility.go). Nil (unit tests) hides nothing.
 	visibility elevVisibility
-	// clientLimiter (ipr/rl) is the per-client limit in tile downloads,
-	// charged one token per download a request starts; nil ipr or rl
-	// disables it.
-	clientLimiter
+	// downloads is the per-client terrain download budget, shared with the
+	// planner (newTerrainClientLimiter): one token per download a request
+	// starts. Nil disables it.
+	downloads *clientLimiter
 
 	refreshMu sync.Mutex // serialises node-set rebuilds
 
@@ -264,8 +263,6 @@ func newElevationService(src *srtmSource) *elevationService {
 		src:  src,
 		now:  time.Now,
 		wait: losTileWait,
-
-		clientLimiter: clientLimiter{tag: "los", what: "terrain tile"},
 	}
 }
 

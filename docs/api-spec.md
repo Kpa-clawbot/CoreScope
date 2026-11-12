@@ -1502,11 +1502,13 @@ A value of 0 or a missing key means the default; an invalid value falls back to 
 
 Tiles are 1 arc-second SRTM, downsampled to 3 arc-seconds (about 90 m) and held in server memory only. Nothing is written to disk or the database. Downloads are shared by both features: at most 2 at a time, 20 per minute and 200 per hour. After a `429`, `5xx` or transport error from the tile server, every download pauses for 60 s, then 5 min, 30 min and 1 h for each further consecutive failure; a successful download resets this. A tile the server does not have (`404`, `403`), or one whose body is unusable or all void, has no terrain for a while instead.
 
+Each client IP also has one download budget for both features, so using both buys no more downloads. A route line-of-sight request, or a new planner job, takes one token for each tile download it starts, all or nothing, before any starts. Tiles already in memory or already downloading (for any client, or for either feature) cost nothing, and neither do downloads the server-wide limits above would refuse. The budget holds the largest single load of an enabled feature (16 tiles for route line of sight, 12 to 40 for the planner depending on its size limits), so any one request fits it, and refills at 10 tokens a minute. A second bucket caps it at 40 tokens an hour, or twice the largest load when that is more, refilled at the same number an hour. The startup log prints the numbers in effect.
+
 ### Caching & limits
 
 - Terrain comes from SRTM 1° tiles held in server memory (see [Terrain tiles](#terrain-tiles)). Only the tiles the legs' samples fall in are loaded, not each leg's bounding box. A request loads at most 16 distinct tiles.
 - `Cache-Control: public, max-age=86400` when every leg is OK or `too_long`; otherwise `no-store`.
-- Per client IP, a request takes one of 20 tokens per minute for each tile download it starts, all or nothing, before any starts. A request that would start more downloads than its tokens allow answers `429` with `Retry-After` and starts none. Tiles already in memory or already downloading (for any client, or for the planner) cost nothing, so a poll after `202`, or a request whose tiles are all in memory, is never limited.
+- Per client IP, a request takes one token from the client's [download budget](#terrain-tiles), shared with the planner, for each tile download it starts, all or nothing, before any starts. A request that would start more downloads than its tokens allow answers `429` with `Retry-After` and starts none. Tiles already in memory or already downloading (for any client, or for the planner) cost nothing. So do tiles the server-wide download limits have no room for: they are not downloaded, and their legs answer `upstream`. A request whose tiles are all in memory is never limited, and a poll after `202` costs nothing unless the server-wide limits have since made room for a tile they refused.
 - The request query may not exceed 2048 bytes.
 - Data: SRTM terrain only; trees and buildings are not modelled.
 
@@ -1524,7 +1526,7 @@ Returned when `los.enabled` is not `true` in `config.json`.
 
 ### Response `429`
 
-Returned when the request would start more tile downloads than the client's per-IP tokens allow. The `Retry-After` header gives whole seconds to wait.
+Returned when the request would start more tile downloads than the client's [download budget](#terrain-tiles) allows. The budget is shared with the planner. The `Retry-After` header gives whole seconds to wait.
 
 ```json
 { "error": "rate limited" }
@@ -1565,7 +1567,7 @@ The planner runs each request as a background job, one per cache key. A request 
 | `202`  | `{"state":"computing","progress":0.42,"retry_after_s":1}` | Job still running. The `Retry-After` header carries the same wait. Re-poll the same URL after `retry_after_s` seconds. |
 | `400`  | `{"error":"..."}` | Bad input. See the endpoint's error codes. |
 | `404`  | `{"error":"planner disabled"}` | `planner.enabled` is not `true`. |
-| `429`  | `{"error":"rate limited"}` | Per-IP limit of 6 new jobs per minute. The `Retry-After` header gives whole seconds to wait. Cache hits and polls of a live job are never limited. |
+| `429`  | `{"error":"rate limited"}` | Per-IP limit of 6 new jobs per minute. A new job also takes one token from the client's [download budget](#terrain-tiles), shared with route line of sight, for each tile download its terrain view starts, all or nothing; tiles in memory or already downloading cost nothing. The `Retry-After` header gives whole seconds to wait. Cache hits and polls of a live job are never limited. |
 | `503`  | `{"error":"planner busy"}` | Too many jobs are live or queued (`planner busy`). The server is shutting down (`planner unavailable`). The terrain fetch for this key failed and is cooling down (`terrain busy`). The `Retry-After` header gives whole seconds to wait. |
 
 `state` is one of `queued`, `loading_terrain` or `computing`. `progress` runs from `0` to `1`. A job that no client has polled for 15 s is cancelled.

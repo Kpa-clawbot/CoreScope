@@ -989,6 +989,66 @@ func TestSRTMBudget(t *testing.T) {
 	}
 }
 
+// room peeks at what take would admit; tiles and Starts count only the
+// downloads it admits (code review #1, #2391), the first ones first.
+func TestSRTMBudgetRoomAndStarts(t *testing.T) {
+	s, u, clk := newSRTMTest(t, 0, srtmServe(nil))
+	var b srtmBudget
+	now := clk.now()
+	if r := b.room(now); r != srtmPerMinute {
+		t.Fatalf("empty budget: room %d", r)
+	}
+	for i := 0; i < 5; i++ {
+		b.take(now)
+	}
+	if r := b.room(now); r != srtmPerMinute-5 || len(b.starts) != 5 {
+		t.Fatalf("after 5: room %d, %d starts (room must not record)", r, len(b.starts))
+	}
+	for i := 0; i < srtmPerHour-6; i++ { // spread over the hour: only the hour binds
+		b.starts = append(b.starts, now.Add(time.Duration(i)*time.Second-time.Hour+time.Minute))
+	}
+	slices.SortFunc(b.starts, func(x, y time.Time) int { return x.Compare(y) })
+	if r := b.room(now); r != 1 {
+		t.Fatalf("one start left in the hour: room %d", r)
+	}
+	if !b.take(now) || b.take(now) || b.room(now) != 0 {
+		t.Fatal("take disagrees with room")
+	}
+
+	box := geoBBox{S: 40.5, W: 10.5, N: 41.5, E: 11.5} // 4 tiles
+	keys := []srtmKey{{40, 10}, {40, 11}, {41, 10}, {41, 11}}
+	s.put(keys[3], elevFlatGrid(1))
+	if n := s.Starts(box); n != 3 {
+		t.Fatalf("Starts = %d, want the 3 tiles not in memory", n)
+	}
+	s.mu.Lock()
+	for i := 0; i < srtmPerMinute-2; i++ {
+		s.budget.starts = append(s.budget.starts, clk.now())
+	}
+	s.mu.Unlock()
+	if n := s.Starts(box); n != 2 {
+		t.Fatalf("Starts = %d with room for 2", n)
+	}
+	ts := s.tiles(keys)
+	if ts.starts != 2 || !slices.Equal(ts.need, keys[:2]) || !slices.Equal(ts.refused, keys[2:3]) {
+		t.Fatalf("tiles: starts %d, need %v, refused %v", ts.starts, ts.need, ts.refused)
+	}
+	s.mu.Lock()
+	s.coolTo = clk.now().Add(time.Minute)
+	s.mu.Unlock()
+	if n := s.Starts(box); n != 0 {
+		t.Fatalf("Starts = %d while downloads are paused", n)
+	}
+	for _, bad := range []geoBBox{{S: 40.5, W: 10.5, N: 41.5, E: 30.5}, {S: math.NaN()}} {
+		if n := s.Starts(bad); n != 0 {
+			t.Fatalf("Starts(%+v) = %d for a box View refuses", bad, n)
+		}
+	}
+	if u.total() != 0 {
+		t.Fatalf("peeking downloaded %d tiles", u.total())
+	}
+}
+
 // ─── Concurrency ───────────────────────────────────────────────────────────
 
 func TestSRTMSingleflight(t *testing.T) {
@@ -1434,8 +1494,8 @@ func TestSRTMTilesAndAwait(t *testing.T) {
 
 	keys := []srtmKey{gated, gone, here}
 	ts := s.tiles(keys)
-	if len(ts.grids) != 1 || ts.grids[here] == nil || !slices.Equal(ts.need, []srtmKey{gated, gone}) || ts.starts != 2 || ts.cooling {
-		t.Fatalf("first look: %d resident, need %v, starts %d, cooling %v", len(ts.grids), ts.need, ts.starts, ts.cooling)
+	if len(ts.grids) != 1 || ts.grids[here] == nil || !slices.Equal(ts.need, []srtmKey{gated, gone}) || ts.starts != 2 || len(ts.refused) != 0 {
+		t.Fatalf("first look: %d resident, need %v, starts %d, refused %v", len(ts.grids), ts.need, ts.starts, ts.refused)
 	}
 	got, failed := s.await(context.Background(), ts.need, 200*time.Millisecond)
 	if g, ok := got[gone]; !ok || g != nil || len(failed) != 0 {
@@ -1472,12 +1532,15 @@ func TestSRTMTilesAndAwait(t *testing.T) {
 	if _, failed := s.await(context.Background(), []srtmKey{broken}, 10*time.Second); !failed[broken] {
 		t.Fatalf("503 tile not failed: %v", failed)
 	}
-	if ts = s.tiles([]srtmKey{broken, srtmKey{41, 10}}); !ts.cooling || ts.starts != 2 {
-		t.Fatalf("after a 503: cooling %v, starts %d", ts.cooling, ts.starts)
+	// Paused: nothing would start, so every download is refused and none is
+	// counted, or charged.
+	paused := []srtmKey{broken, {41, 10}}
+	if ts = s.tiles(paused); len(ts.need) != 0 || ts.starts != 0 || !slices.Equal(ts.refused, paused) {
+		t.Fatalf("after a 503: need %v, starts %d, refused %v", ts.need, ts.starts, ts.refused)
 	}
 	clk.add(srtmBackoff[0])
-	if ts = s.tiles([]srtmKey{broken}); ts.cooling {
-		t.Fatal("cooldown did not lapse")
+	if ts = s.tiles(paused); ts.starts != 2 || len(ts.refused) != 0 {
+		t.Fatalf("cooldown did not lapse: starts %d, refused %v", ts.starts, ts.refused)
 	}
 }
 

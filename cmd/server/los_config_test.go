@@ -63,7 +63,7 @@ func TestLOSConfigLog(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"los.frequencyMhz must be within 100-6000; using the default",
-		"[los] enabled (910.525 MHz, antenna=5.0 m, k=1.333, up to 16 terrain tiles a request, 20 tile downloads/min per client)",
+		"[los] enabled (910.525 MHz, antenna=5.0 m, k=1.333, up to 16 terrain tiles a request)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q:\n%s", want, out)
