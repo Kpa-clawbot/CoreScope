@@ -5414,10 +5414,20 @@ func (s *PacketStore) evictStaleInternal() int {
 	for _, tx := range evicting {
 		evictedTxSet[tx] = true
 	}
-	// Preserve arrays borrowed by unlocked analytics readers. The new arrays
-	// clear retired pointers; old snapshots are released when readers finish.
-	s.distHops = slices.DeleteFunc(slices.Clone(s.distHops), func(r distHopRecord) bool { return evictedTxSet[r.tx] })
-	s.distPaths = slices.DeleteFunc(slices.Clone(s.distPaths), func(r distPathRecord) bool { return evictedTxSet[r.tx] })
+	// Only copy arrays with evicted records. Preserve arrays borrowed by
+	// unlocked readers; deleting from the copied suffix clears retired pointers.
+	isEvictedHop := func(r distHopRecord) bool { return evictedTxSet[r.tx] }
+	if first := slices.IndexFunc(s.distHops, isEvictedHop); first >= 0 {
+		hops := slices.Clone(s.distHops)
+		filtered := slices.DeleteFunc(hops[first:], isEvictedHop)
+		s.distHops = hops[:first+len(filtered)]
+	}
+	isEvictedPath := func(r distPathRecord) bool { return evictedTxSet[r.tx] }
+	if first := slices.IndexFunc(s.distPaths, isEvictedPath); first >= 0 {
+		paths := slices.Clone(s.distPaths)
+		filtered := slices.DeleteFunc(paths[first:], isEvictedPath)
+		s.distPaths = paths[:first+len(filtered)]
+	}
 
 	// Trim packets slice
 	n := copy(s.packets, s.packets[cutoffIdx:])
