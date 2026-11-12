@@ -357,6 +357,31 @@
     return attempt();
   }
 
+  // fetchRequest, then re-request the legs the server refused with
+  // too_many_tiles (its per-request tile cap; tiles already resident cost
+  // nothing, so a request of just those legs fits). Resolves to a result per
+  // leg of req. Each round holds strictly fewer legs than the one before, so
+  // it ends: a request whose every leg was refused (a lone leg too big on its
+  // own) is not retried, and neither is one the route no longer shows.
+  function fetchWithRetry(req, maxPts) {
+    var gen = S.gen;
+    return fetchRequest(req).then(function (results) {
+      var retry = [];
+      req.legs.forEach(function (leg, i) {
+        if (results[i] && results[i].error === 'too_many_tiles') retry.push(leg);
+      });
+      if (!retry.length || retry.length >= req.legs.length || !stillWanted(req, gen)) return results;
+      var byKey = {};
+      return Promise.all(runsToRequests(retry, maxPts).map(function (sub) {
+        return fetchWithRetry(sub, maxPts).then(function (rs) {
+          sub.legs.forEach(function (leg, j) { byKey[leg.key] = rs[j]; });
+        });
+      })).then(function () {
+        return req.legs.map(function (leg, i) { return byKey[leg.key] || results[i]; });
+      });
+    });
+  }
+
   // Start one fetch per run of legs not cached or already in flight.
   function fetchMissing(legs) {
     var seen = {}, need = [];
@@ -367,7 +392,7 @@
     });
     var maxPts = Number(cfg() && cfg().maxPoints) || DEFAULT_MAX_POINTS;
     runsToRequests(need, maxPts).forEach(function (req) {
-      var all = fetchRequest(req);
+      var all = fetchWithRetry(req, maxPts);
       req.legs.forEach(function (leg, i) {
         var one = all.then(function (results) {
           var res = results[i] || { error: 'upstream' };

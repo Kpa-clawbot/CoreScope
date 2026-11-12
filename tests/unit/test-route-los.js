@@ -692,6 +692,63 @@ async function main() {
     assert(!t.I.cache.has(t.I.cacheKey(A, B)) && t.I.cache.has(t.I.cacheKey(C, D)), 'the dropped poll caches nothing');
   }
 
+  console.log('\n=== update(): legs past the per-request tile cap ===');
+  const F = { name: 'Far Repeater', lat: 37.70, lon: -122.40, resolved: true };
+  const seq6 = [A, B, C, D, E, F];
+  const mkFetch = (answer, gate) => {
+    const calls = [];
+    const f = url => {
+      calls.push(url);
+      const n = ptsOf(url).length - 1;
+      const kinds = answer(calls.length, n);
+      const legs = kinds.map(k => k === 'cap' ? { distance_km: 280, error: 'too_many_tiles' } : { distance_km: 2.7, elev_m: flat(20) });
+      const resp = { ok: true, status: 200, json: () => Promise.resolve({ source: 'SRTM', legs }) };
+      return gate ? gate.then(() => resp) : Promise.resolve(resp);
+    };
+    f.calls = calls;
+    return f;
+  };
+  {
+    // answer(call, nLegs) → array of 'ok' | 'cap' per leg; the request may hold (be held) by gate.
+    const capAfter3 = (call, n) => Array.from({ length: n }, (_, i) => (call === 1 && i >= 3 ? 'cap' : 'ok'));
+
+    // First response: legs 1-3 OK, 4-5 over the cap → one more request with only those legs.
+    const f = mkFetch(capAfter3);
+    const t = load({ fetch: f });
+    const sb = makeSidebar(seq6);
+    t.R.update({ map: makeMap(), sidebar: sb, seq: seq6 });
+    await flush(40);
+    assert(f.calls.length === 2, 'a second request goes out for the refused legs (got ' + f.calls.length + ')');
+    const second = ptsOf(f.calls[1]);
+    assert(second.length === 3 && second[0][0] === String(D.lat) && second[2][0] === String(F.lat),
+      'the second request holds only legs 4-5 (points D, E, F)');
+    assert(t.I.cache.has(t.I.cacheKey(D, E)) && t.I.cache.has(t.I.cacheKey(E, F)), 'legs 4-5 end up cached with data');
+    const chips = rowsOf(sb).slice(1).map(r => chipOf(r).textContent);
+    assert(chips.length === 5 && chips.every(x => x === 'LOS clear'), 'every chip reads a result, none "LOS n/a" (' + chips.join('|') + ')');
+  }
+  {
+    // Teardown while the first response is outstanding: no follow-up request.
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const f = mkFetch((call, n) => Array.from({ length: n }, (_, i) => (i >= 3 ? 'cap' : 'ok')), gate);
+    const t = load({ fetch: f });
+    t.R.update({ map: makeMap(), sidebar: makeSidebar([A, B, C, D, E, F]), seq: [A, B, C, D, E, F] });
+    await flush();
+    t.R.clear();
+    release();
+    await flush(40);
+    assert(f.calls.length === 1, 'clear() before the response: no retry (got ' + f.calls.length + ' requests)');
+  }
+  {
+    // The server refuses a lone leg every time: no loop.
+    const f = mkFetch((call, n) => Array.from({ length: n }, (_, i) => (call > 1 || i >= 1 ? 'cap' : 'ok')));
+    const t = load({ fetch: f });
+    t.R.update({ map: makeMap(), sidebar: makeSidebar([A, B, C]), seq: [A, B, C] });
+    await flush(40);
+    assert(f.calls.length === 2, 'a leg refused on its own is asked for once more, not forever (got ' + f.calls.length + ')');
+    assert(!t.I.cache.has(t.I.cacheKey(B, C)), 'the refused leg is not cached');
+  }
+
   console.log('\n=== panel footer ===');
   {
     assert(I.footText('SRTM (AWS Open Data)') === 'Elevation: SRTM (AWS Open Data) · terrain only, trees and buildings are not modelled',
