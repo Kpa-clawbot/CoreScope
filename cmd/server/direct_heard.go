@@ -107,8 +107,12 @@ func directHeardNode(tx *StoreTx, obs *StoreObs, pm *prefixMap) string {
 	}
 	hop := lastPathHop(obs.PathJSON)
 	adv := ""
-	if hop == "" && !tx.signatureFailed() {
-		adv = advertOriginPubkey(tx)
+	if hop == "" {
+		// advertOriginPubkey checks the type first, so signatureFailed (which
+		// may parse DecodedJSON) only runs for ADVERTs.
+		if pk := advertOriginPubkey(tx); pk != "" && !tx.signatureFailed() {
+			adv = pk
+		}
 	}
 	key, src, ok := packetpath.HeardKey(*tx.RouteType, byte(*tx.PayloadType), hop, adv)
 	if !ok {

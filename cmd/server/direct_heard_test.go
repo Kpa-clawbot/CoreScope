@@ -393,3 +393,19 @@ func BenchmarkBuildDirectHeardIndex_MixedHops(b *testing.B) {
 		buildDirectHeardIndex(packets, pm)
 	}
 }
+
+// TestDirectHeardNode_ZeroHopNonAdvertLeavesDecodedCacheCold pins that the
+// signature check runs for ADVERTs only: the compute pass walks every
+// observation, and a zero-hop message must not parse and cache its decoded
+// JSON (signatureFailed parses when the text holds a \u escape).
+func TestDirectHeardNode_ZeroHopNonAdvertLeavesDecodedCacheCold(t *testing.T) {
+	pm := buildPrefixMap(directHeardNodes)
+	tx := dhTx(RouteFlood, PayloadTXT_MSG, `{"type":"TXT_MSG","text":"caf\u00e9"}`)
+	obs := &StoreObs{ObserverID: "obs1", PathJSON: `[]`}
+	if got := directHeardNode(tx, obs, pm); got != "" {
+		t.Fatalf("directHeardNode = %q, want \"\"", got)
+	}
+	if tx.parsedDecoded != nil {
+		t.Fatalf("decoded JSON was parsed for a zero-hop non-advert")
+	}
+}
