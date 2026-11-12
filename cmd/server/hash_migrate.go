@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sync/atomic"
 	"time"
 )
 
@@ -10,6 +11,24 @@ import (
 // both the DB and the in-memory byHash index.  The migration is idempotent:
 // once all hashes match the current formula it completes instantly.
 func migrateContentHashesAsync(store *PacketStore, batchSize int, yieldDuration time.Duration) {
+	// Eviction compacts the slice, and background loads may prepend packets.
+	// Keep one boundary pointer, not a snapshot that pins all data.
+	store.mu.RLock()
+	total := len(store.packets)
+	evicted := atomic.LoadInt64(&store.evicted)
+	var last *StoreTx
+	if total > 0 {
+		last = store.packets[total-1]
+	}
+	store.mu.RUnlock()
+	// Caller holds store.mu. Appends leave the original range intact; merges
+	// before its end move the boundary and invalidate offset-based traversal.
+	sameRange := func() bool {
+		return len(store.packets) >= total && atomic.LoadInt64(&store.evicted) == evicted &&
+			(total == 0 || store.packets[total-1] == last)
+	}
+	inputChanged := false
+
 	// #1856: every DB failure below continues to the next batch, so the loop
 	// always reaches the deferred completion. Setting the flag unconditionally
 	// therefore reported success after migrating nothing, which is exactly what
@@ -28,21 +47,17 @@ func migrateContentHashesAsync(store *PacketStore, batchSize int, yieldDuration 
 				"and the migration belongs in the ingestor (#1856).", failedBatches)
 			return
 		}
+		store.mu.RLock()
+		defer store.mu.RUnlock()
+		if inputChanged || !sameRange() {
+			log.Printf("[hash-migrate] INCOMPLETE: packet set changed during migration")
+			return
+		}
 		store.hashMigrationComplete.Store(true)
 	}()
 
-	// Snapshot the packet slice length under lock (packets only grow).
-	store.mu.RLock()
-	total := len(store.packets)
-	store.mu.RUnlock()
-
 	migrated := 0
 	for offset := 0; offset < total; offset += batchSize {
-		end := offset + batchSize
-		if end > total {
-			end = total
-		}
-
 		// Collect stale hashes in this batch under RLock.
 		type hashUpdate struct {
 			tx      *StoreTx
@@ -51,17 +66,27 @@ func migrateContentHashesAsync(store *PacketStore, batchSize int, yieldDuration 
 		}
 		var updates []hashUpdate
 
-		store.mu.RLock()
-		for _, tx := range store.packets[offset:end] {
-			if tx.RawHex == "" {
-				continue
+		func() {
+			store.mu.RLock()
+			defer store.mu.RUnlock()
+			if !sameRange() {
+				inputChanged = true
+				return
 			}
-			newHash := ComputeContentHash(tx.RawHex)
-			if newHash != tx.Hash {
-				updates = append(updates, hashUpdate{tx: tx, oldHash: tx.Hash, newHash: newHash})
+			end := min(offset+batchSize, min(total, len(store.packets)))
+			for _, tx := range store.packets[offset:end] {
+				if tx.RawHex == "" {
+					continue
+				}
+				newHash := ComputeContentHash(tx.RawHex)
+				if newHash != tx.Hash {
+					updates = append(updates, hashUpdate{tx: tx, oldHash: tx.Hash, newHash: newHash})
+				}
 			}
+		}()
+		if inputChanged {
+			return
 		}
-		store.mu.RUnlock()
 
 		if len(updates) == 0 {
 			continue
@@ -104,27 +129,33 @@ func migrateContentHashesAsync(store *PacketStore, batchSize int, yieldDuration 
 		}
 
 		// Update in-memory index under write lock.
-		store.mu.Lock()
-		for _, u := range updates {
-			delete(store.byHash, u.oldHash)
-			if u.newHash == "" {
-				// Merged duplicate — remove from packets slice and indexes.
-				delete(store.byTxID, u.tx.ID)
-				// Move observations to survivor if present.
-				if surv := store.byHash[ComputeContentHash(u.tx.RawHex)]; surv != nil {
-					for _, obs := range u.tx.Observations {
-						surv.Observations = append(surv.Observations, obs)
-						surv.ObservationCount++
-					}
+		func() {
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			for _, u := range updates {
+				// SQL can wait while eviction removes or replaces this object.
+				if store.byTxID[u.tx.ID] != u.tx {
+					inputChanged = true
+					continue
 				}
-			} else {
-				u.tx.Hash = u.newHash
-				store.byHash[u.newHash] = u.tx
+				delete(store.byHash, u.oldHash)
+				if u.newHash == "" {
+					// Merged duplicate — remove from packets slice and indexes.
+					delete(store.byTxID, u.tx.ID)
+					// Move observations to survivor if present.
+					if surv := store.byHash[ComputeContentHash(u.tx.RawHex)]; surv != nil {
+						for _, obs := range u.tx.Observations {
+							surv.Observations = append(surv.Observations, obs)
+							surv.ObservationCount++
+						}
+					}
+				} else {
+					u.tx.Hash = u.newHash
+					store.byHash[u.newHash] = u.tx
+				}
+				migrated++
 			}
-		}
-		store.mu.Unlock()
-
-		migrated += len(updates)
+		}()
 
 		// Yield to let HTTP handlers run.
 		time.Sleep(yieldDuration)
