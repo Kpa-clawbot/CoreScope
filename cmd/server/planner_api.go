@@ -69,13 +69,11 @@ const (
 	plannerMaxAntennaM    = 100.0
 	plannerDefaultSites   = 3
 
-	plannerProfilePadDeg    = 0.01 // covers the great-circle bulge of a 100 km leg
-	plannerProfileMaxTiles  = 6
-	plannerRelayMaxTiles    = 6
-	plannerCoverageMaxTiles = 9
-	plannerRelayPadFrac     = 0.3 // relay corridor: A,B ± max(0.3·D, 2 km)
-	plannerRelayPadMinKm    = 2.0
-	plannerAreaNodeKm       = 10.0 // coverage needs a repeater/room within bbox + this
+	plannerProfilePadDeg = 0.01 // covers the great-circle bulge of a 100 km leg
+	plannerRelayPadFrac  = 0.3  // relay corridor: A,B ± max(0.3·D, 2 km)
+	plannerRelayPadMinKm = 2.0
+	plannerMinLegTiles   = 6    // profile/relay tile caps never go below this
+	plannerAreaNodeKm    = 10.0 // coverage needs a repeater/room within bbox + this
 	// plannerObservedMinScore is the Score×Confidence an observed neighbor
 	// edge needs to count as a backbone link (same floor as the neighbor
 	// graph view's default minScore).
@@ -113,11 +111,15 @@ const (
 )
 
 // 400 codes the UI matches on (leg errors use the first three too).
+// area_too_large: a coverage box side is over the size limit.
+// too_many_tiles: the request's terrain view spans more 1° tiles than its
+// endpoint's cap (plannerTileLimits).
 const (
 	plannerErrTooLong      = "too_long"
 	plannerErrOutOfArea    = "out_of_area"
 	plannerErrNoTerrain    = "no_terrain"
 	plannerErrAreaTooLarge = "area_too_large"
+	plannerErrTooManyTiles = "too_many_tiles"
 	plannerErrNoNodes      = "no_nodes_in_area"
 )
 
@@ -217,6 +219,7 @@ type plannerService struct {
 	cfg     PlannerConfig // resolved
 	freqMHz float64       // radio defaults from the los block, like the LOS tool
 	kFactor float64
+	tiles   plannerTileLimits
 
 	src      terrainSource
 	data     plannerData
@@ -275,6 +278,7 @@ func newPlannerService(cfg PlannerConfig, s *Server) *plannerService {
 		cfg:      rc,
 		freqMHz:  radio.FrequencyMHz,
 		kFactor:  radio.KFactor,
+		tiles:    plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm),
 		src:      newSRTMSource(rc),
 		data:     serverPlannerData{s},
 		coverage: runCoveragePlan,
@@ -406,10 +410,9 @@ func (p *plannerService) handleProfile(w http.ResponseWriter, r *http.Request) {
 		writePlannerResult(w, body)
 		return
 	}
-	bb = geoBBox{S: bb.S - plannerProfilePadDeg, W: bb.W - plannerProfilePadDeg,
-		N: bb.N + plannerProfilePadDeg, E: bb.E + plannerProfilePadDeg}
-	if p.src.TileCount(bb) > plannerProfileMaxTiles {
-		plannerBadRequest(w, plannerErrAreaTooLarge)
+	bb = plannerProfileView(bb, plannerProfilePadDeg)
+	if p.src.TileCount(bb) > p.tiles.Profile {
+		plannerBadRequest(w, plannerErrTooManyTiles)
 		return
 	}
 	p.serve(w, r, plannerJobSpec{
@@ -420,6 +423,13 @@ func (p *plannerService) handleProfile(w http.ResponseWriter, r *http.Request) {
 			return planProfileLegs(ctx, v, pts, legs, progress)
 		},
 	})
+}
+
+// plannerProfileView is the terrain a profile over legs (the bbox of its
+// valid legs' endpoints) reads: grown by padDeg on every side for the
+// great-circle bulge.
+func plannerProfileView(legs geoBBox, padDeg float64) geoBBox {
+	return geoBBox{S: legs.S - padDeg, W: legs.W - padDeg, N: legs.N + padDeg, E: legs.E + padDeg}
 }
 
 // planProfileLegs samples every leg without an error; legs is the request's
@@ -529,13 +539,9 @@ func (p *plannerService) handleRelay(w http.ResponseWriter, r *http.Request) {
 		plannerBadRequest(w, plannerErrOutOfArea)
 		return
 	}
-	pad := plannerRelayPadFrac * d
-	if pad < plannerRelayPadMinKm {
-		pad = plannerRelayPadMinKm
-	}
-	view := plannerExpandBBox(plannerBBoxAdd(geoBBox{S: a.Lat, W: a.Lon, N: a.Lat, E: a.Lon}, b), pad)
-	if p.src.TileCount(view) > plannerRelayMaxTiles {
-		plannerBadRequest(w, plannerErrAreaTooLarge)
+	view := plannerRelayView(a, b)
+	if p.src.TileCount(view) > p.tiles.Relay {
+		plannerBadRequest(w, plannerErrTooManyTiles)
 		return
 	}
 	params := PlannerRelayParams{
@@ -578,6 +584,18 @@ func (p *plannerService) handleRelay(w http.ResponseWriter, r *http.Request) {
 			return res, nil
 		},
 	})
+}
+
+// plannerRelayPad is the corridor margin around a leg of dKm.
+func plannerRelayPad(dKm float64) float64 {
+	return math.Max(plannerRelayPadFrac*dKm, plannerRelayPadMinKm)
+}
+
+// plannerRelayView is the terrain a relay search for a→b reads: the
+// endpoints' bbox grown by plannerRelayPad on every side.
+func plannerRelayView(a, b geoPoint) geoBBox {
+	ends := plannerBBoxAdd(geoBBox{S: a.Lat, W: a.Lon, N: a.Lat, E: a.Lon}, b)
+	return plannerExpandBBox(ends, plannerRelayPad(geoDistKm(a, b)))
 }
 
 // ─── /api/planner/coverage ──────────────────────────────────────────────────
@@ -642,8 +660,8 @@ func (p *plannerService) handleCoverage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	view := plannerExpandBBox(area, plannerNodeMarginKm)
-	if p.src.TileCount(view) > plannerCoverageMaxTiles {
-		plannerBadRequest(w, plannerErrAreaTooLarge)
+	if p.src.TileCount(view) > p.tiles.Coverage {
+		plannerBadRequest(w, plannerErrTooManyTiles)
 		return
 	}
 	params := PlannerPlanParams{
@@ -911,6 +929,68 @@ func plannerNonNil[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+// ─── Terrain tile caps ──────────────────────────────────────────────────────
+
+// plannerTileLimits is the most 1° terrain tiles one request's view may span,
+// per endpoint. Each is the worst case of the largest request the size
+// limits accept anywhere in the SRTM latitude band, so such a request is
+// never refused for its tiles. A view over its cap (a profile chain of many
+// long legs, a leg beyond the band) is too_many_tiles.
+type plannerTileLimits struct{ Profile, Relay, Coverage int }
+
+// max is the most tiles one view may need: what the terrain source accepts
+// in one View.
+func (l plannerTileLimits) max() int { return max(l.Profile, l.Relay, l.Coverage) }
+
+// plannerTileCaps derives the caps from the size limits.
+//
+//   - Coverage: the parser checks the snapped box, so its sides are at most
+//     maxAreaKm (the width at the box's middle latitude) and its edges within
+//     the band; the view adds nodeMarginKm on every side. Every point of the
+//     view lies within the band's edge plus the margin (plus one grid cell,
+//     to spare), and its extent is at most maxAreaKm + 2·nodeMarginKm.
+//   - Relay: A and B are at most maxLegKm apart and the corridor adds
+//     plannerRelayPad of that on every side, so its extent is at most
+//     maxLegKm + 2·plannerRelayPad(maxLegKm), with A and B in the band.
+//   - Profile: one leg's view (its pad is far below the relay corridor's)
+//     fits the relay's; longer chains may not.
+//
+// Profile and relay never go below plannerMinLegTiles.
+func plannerTileCaps(maxAreaKm, nodeMarginKm, maxLegKm float64) plannerTileLimits {
+	band := math.Max(plannerCoverageMaxLat, -plannerCoverageMinLat)
+	cov := plannerWorstCaseTiles(maxAreaKm+2*nodeMarginKm,
+		band+nodeMarginKm/plannerKmPerDeg+1.0/plannerGridPerDeg)
+	pad := plannerRelayPad(maxLegKm)
+	leg := max(plannerWorstCaseTiles(maxLegKm+2*pad, band+pad/plannerKmPerDeg), plannerMinLegTiles)
+	return plannerTileLimits{Profile: leg, Relay: leg, Coverage: cov}
+}
+
+// plannerWorstCaseTiles is the most 1° SRTM tiles a view can span when it
+// extends at most sideKm north-south and east-west and no point of it lies
+// beyond maxAbsLat. A span of x degrees touches at most ceil(x)+1 tiles,
+// when it starts just short of a degree line; the 1e-9° keeps a span that
+// rounding nudged past a whole number from being counted one short.
+func plannerWorstCaseTiles(sideKm, maxAbsLat float64) int {
+	lat := math.Ceil(sideKm/plannerKmPerDeg+1e-9) + 1
+	lon := math.Ceil(plannerLonSpanDeg(sideKm, maxAbsLat)+1e-9) + 1
+	return int(math.Min(lat, 180) * math.Min(lon, 360))
+}
+
+// plannerLonSpanDeg bounds the degrees of longitude km can span at
+// |lat| ≤ maxAbsLat: the longitude between two points on that parallel km
+// apart (haversine). It is at least km/(plannerKmPerDeg·cos maxAbsLat), the
+// linear conversion plannerExpandBBox and the width check use, and it grows
+// at least that fast, so it also covers a leg's endpoints (no further apart
+// in longitude than two points on the parallel) plus linear padding.
+func plannerLonSpanDeg(km, maxAbsLat float64) float64 {
+	c := math.Cos(math.Min(math.Abs(maxAbsLat), 90) * math.Pi / 180)
+	q := math.Sin(km/(2*losEarthKm)) / c
+	if !(q < 1) {
+		return 360
+	}
+	return 2 * math.Asin(q) * 180 / math.Pi
 }
 
 // ─── Known positions ────────────────────────────────────────────────────────
@@ -1387,7 +1467,7 @@ func (p *plannerService) failure(err error) *plannerReject {
 	case errors.Is(err, errTerrainUnavailable):
 		return &plannerReject{unavailable, "terrain unavailable", failedS}
 	case errors.Is(err, errTerrainTooManyTiles):
-		return &plannerReject{code: http.StatusBadRequest, msg: plannerErrAreaTooLarge}
+		return &plannerReject{code: http.StatusBadRequest, msg: plannerErrTooManyTiles}
 	case errors.Is(err, context.DeadlineExceeded):
 		return &plannerReject{unavailable, "planner timed out", failedS}
 	}

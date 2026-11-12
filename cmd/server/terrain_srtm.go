@@ -98,7 +98,6 @@ const (
 	srtmCells       = srtmSide - 1                  // 1200 grid intervals per degree
 	srtmVoid        = -32768                        // SRTM no-data value
 
-	srtmMaxTiles      = 9
 	srtmMaxGzipBytes  = 24 << 20 // real tiles reach ~17 MB (Sierra, Alps); raw is 25.9 MB
 	srtmFetchTimeout  = 30 * time.Second
 	srtmDialTimeout   = 5 * time.Second
@@ -316,6 +315,7 @@ type srtmSource struct {
 	client    elevHTTPDoer
 	now       func() time.Time
 	capacity  int           // max cached tiles
+	maxTiles  int           // max tiles in one view: the largest planner tile cap
 	sem       chan struct{} // fetch slots; srtmFetchSlots outside tests
 
 	sf singleflight.Group // one fetch per tile name
@@ -349,6 +349,7 @@ func newSRTMSource(cfg PlannerConfig) *srtmSource {
 		client:    newSRTMHTTPClient(),
 		now:       time.Now,
 		capacity:  capacity,
+		maxTiles:  plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm).max(),
 		sem:       srtmFetchSlots,
 		ll:        list.New(),
 		items:     make(map[srtmKey]*list.Element),
@@ -397,7 +398,7 @@ func (s *srtmSource) TileCount(bb geoBBox) int {
 // It does not touch LRU order.
 func (s *srtmSource) Resident(bb geoBBox) bool {
 	sp, ok := srtmSpanOf(bb)
-	if !ok || sp.count() > srtmMaxTiles {
+	if !ok || sp.count() > s.maxTiles {
 		return false
 	}
 	s.mu.Lock()
@@ -416,7 +417,7 @@ func (s *srtmSource) View(ctx context.Context, bb geoBBox) (terrainView, error) 
 	if !ok {
 		return nil, errTerrainUnavailable
 	}
-	if sp.count() > srtmMaxTiles {
+	if sp.count() > s.maxTiles {
 		return nil, errTerrainTooManyTiles
 	}
 	v := &srtmView{span: sp, grids: make([][]int16, sp.count())}

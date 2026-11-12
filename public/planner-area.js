@@ -171,7 +171,10 @@
 
   function errorText(err) {
     var st = err && err.status, msg = (err && (err.code || err.message)) || '';
-    if (st === 400 && /no_nodes_in_area/.test(msg + ' ' + (err.message || ''))) return 'No known repeaters in this area';
+    var codes = msg + ' ' + (err && err.message || '');
+    if (st === 400 && /no_nodes_in_area/.test(codes)) return 'No known repeaters in this area';
+    if (st === 400 && /area_too_large/.test(codes)) return 'Area is too large. Draw a smaller area.';
+    if (st === 400 && /too_many_tiles/.test(codes)) return 'This area needs more terrain tiles than the server allows. Draw a smaller area.';
     if (st === 429 || st === 503) {
       var s = Math.ceil(Number(err.retryAfter) || 10);
       return 'Busy, try again in ' + s + ' s';

@@ -361,13 +361,13 @@ func TestSRTMTileCount(t *testing.T) {
 		if got := s.TileCount(c.bb); got != c.want {
 			t.Errorf("%s: TileCount = %d, want %d", c.name, got, c.want)
 		}
-		if c.want != 0 && c.want <= srtmMaxTiles {
+		if c.want != 0 && c.want <= s.maxTiles {
 			continue
 		}
 		// Boxes View refuses: never a request, never resident.
 		v, err := s.View(context.Background(), c.bb)
 		want := errTerrainUnavailable
-		if c.want > srtmMaxTiles {
+		if c.want > s.maxTiles {
 			want = errTerrainTooManyTiles
 		}
 		if !errors.Is(err, want) || v != nil {
@@ -377,12 +377,12 @@ func TestSRTMTileCount(t *testing.T) {
 			t.Errorf("%s: Resident = true for a box View refuses", c.name)
 		}
 	}
-	tooMany := geoBBox{29.5, -99.5, 31.5, -96.5} // 3×4
-	if got := s.TileCount(tooMany); got != 12 {
-		t.Fatalf("TileCount = %d, want 12", got)
+	tooMany := geoBBox{29.5, -99.5, 32.5, -96.5} // 4×4
+	if got := s.TileCount(tooMany); got != 16 || got <= s.maxTiles {
+		t.Fatalf("TileCount = %d, want 16 (over the cap of %d)", got, s.maxTiles)
 	}
 	if _, err := s.View(context.Background(), tooMany); !errors.Is(err, errTerrainTooManyTiles) {
-		t.Fatalf("View(12 tiles) err = %v, want errTerrainTooManyTiles", err)
+		t.Fatalf("View(16 tiles) err = %v, want errTerrainTooManyTiles", err)
 	}
 	if n := u.total(); n != 0 {
 		t.Fatalf("refused boxes made %d requests", n)
@@ -1328,7 +1328,7 @@ func FuzzSRTMPixel(f *testing.F) {
 			t.Fatalf("srtmSpanOf ok=%v for finite=%v", ok, finite)
 		}
 		if ok {
-			if sp.count() < 1 || sp.count() > srtmMaxTiles || sp.lat0 < -90 || sp.lat0+sp.nLat > 90 || sp.lon0 < -180 || sp.lon0+sp.nLon > 180 {
+			if sp.count() < 1 || sp.count() > 9 || sp.lat0 < -90 || sp.lat0+sp.nLat > 90 || sp.lon0 < -180 || sp.lon0+sp.nLon > 180 {
 				t.Fatalf("srtmSpanOf around (%v, %v) = %+v", lat, lon, sp)
 			}
 			views = append(views, viewOf(sp))

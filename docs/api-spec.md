@@ -1562,7 +1562,7 @@ Whole-request `400` messages:
 | `pts required` | `pts` is missing |
 | `pts must hold 2 to 16 lat,lon points` | Odd number of values, fewer than 2 points or more than 16 |
 | `pts contains an invalid or out-of-range number` | A value is not a number, or lat or lon is out of range |
-| `area_too_large` | The chain needs more terrain tiles than the server will load for one request |
+| `too_many_tiles` | The chain needs more 1° terrain tiles than the server loads for one request. Any single leg up to the maximum length within latitudes -56 to 60 fits. Long multi-leg chains may not |
 
 Per-leg `error` codes (the request still returns `200`):
 
@@ -1707,7 +1707,7 @@ Abbreviated: the `elev_m` arrays in `direct`, `leg_a` and `leg_b` are truncated 
 | `range must be one of 10,15,20,30,40,50,60` | Range not in the allowed set |
 | `too_long` | A to B is longer than 100 km |
 | `out_of_area` | A or B is not within 50 km of a known node |
-| `area_too_large` | The corridor around A and B needs more terrain tiles than the server will load for one request |
+| `too_many_tiles` | The corridor around A and B needs more 1° terrain tiles than the server loads for one request. Any leg up to the maximum length with both ends within latitudes -56 to 60 fits |
 
 ### Response `400`
 
@@ -1864,7 +1864,8 @@ The area must hold at least one repeater or room within 10 km of the box. Nodes 
 | `bbox must be s,w,n,e in degrees` | Wrong number of values, not a number, or out of range |
 | `bbox needs south below north and west below east (no antimeridian crossing)` | Degenerate or reversed box |
 | `bbox must lie within latitudes -56 to 60 (terrain coverage)` | Outside SRTM coverage |
-| `area_too_large` | The snapped box is over 100 km on a side, or it needs more terrain tiles than the server will load for one request |
+| `area_too_large` | The snapped box is over 100 km on a side |
+| `too_many_tiles` | The box plus the 30 km node margin needs more 1° terrain tiles than the server loads for one request. Never returned for a box the size check accepts; kept as a safeguard |
 | `no_nodes_in_area` | No repeater or room within 10 km of the box |
 | `sites must be an integer 1-10` | `sites` not an integer in range |
 | `range must be one of 10,15,20,30,40,50,60` | `range` not in the allowed set |

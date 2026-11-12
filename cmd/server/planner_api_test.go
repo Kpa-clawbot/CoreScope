@@ -502,7 +502,7 @@ func TestPlannerAPIValidation(t *testing.T) {
 		{name: "one point", path: "/api/planner/profile?pts=30.1,-97.1", want: "2 to 16"},
 		{name: "odd count", path: "/api/planner/profile?pts=30.1,-97.1,30.2", want: "2 to 16"},
 		{name: "17 points", path: "/api/planner/profile?pts=" + seventeen, want: "2 to 16"},
-		{name: "profile tiles", path: plannerProfPath, want: plannerErrAreaTooLarge, setup: manyTiles(7)},
+		{name: "profile tiles", path: plannerProfPath, want: plannerErrTooManyTiles, setup: manyTiles(13)},
 
 		// relay
 		{name: "a missing", path: "/api/planner/relay?b=30.2,-97.0", want: "a required"},
@@ -520,7 +520,7 @@ func TestPlannerAPIValidation(t *testing.T) {
 		{name: "relay too long", path: "/api/planner/relay?a=30.1,-97.1&b=31.5,-97.1", want: plannerErrTooLong},
 		{name: "relay out of area", path: "/api/planner/relay?a=30.1,-97.1&b=30.9,-97.0", want: plannerErrOutOfArea},
 		{name: "relay near hidden only", path: "/api/planner/relay?a=40.0,-80.05&b=40.05,-80.0", want: plannerErrOutOfArea},
-		{name: "relay tiles", path: plannerRelayPath, want: plannerErrAreaTooLarge, setup: manyTiles(7)},
+		{name: "relay tiles", path: plannerRelayPath, want: plannerErrTooManyTiles, setup: manyTiles(13)},
 
 		// coverage
 		{name: "bbox missing", path: "/api/planner/coverage?sites=2", want: "bbox required"},
@@ -551,7 +551,7 @@ func TestPlannerAPIValidation(t *testing.T) {
 		{name: "only hidden nodes", path: "/api/planner/coverage?bbox=39.9,-80.1,40.1,-79.9", want: plannerErrNoNodes},
 		{name: "only blacklisted node", path: "/api/planner/coverage?bbox=40.9,-81.1,41.1,-80.9", want: plannerErrNoNodes},
 		{name: "only companions", path: "/api/planner/coverage?bbox=31.4,-97.2,31.6,-97.0", want: plannerErrNoNodes},
-		{name: "coverage tiles", path: plannerCovPath, want: plannerErrAreaTooLarge, setup: manyTiles(10)},
+		{name: "coverage tiles", path: plannerCovPath, want: plannerErrTooManyTiles, setup: manyTiles(13)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -575,7 +575,7 @@ func TestPlannerAPIValidation(t *testing.T) {
 	for _, tc := range []struct {
 		path string
 		max  int
-	}{{plannerProfPath, plannerProfileMaxTiles}, {plannerRelayPath, plannerRelayMaxTiles}, {plannerCovPath, plannerCoverageMaxTiles}} {
+	}{{plannerProfPath, 12}, {plannerRelayPath, 12}, {plannerCovPath, 12}} {
 		h := newPlannerHarness(t)
 		h.src.set(func(f *fakeTerrain) { f.tiles = func(geoBBox) int { return tc.max } })
 		if w := h.get(tc.path, "198.51.100.1"); w.Code != http.StatusAccepted && w.Code != http.StatusOK {

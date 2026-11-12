@@ -1,0 +1,291 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+// plannerTestDest is the point km from a on the initial bearing (degrees
+// clockwise from north), on haversineKm's sphere.
+func plannerTestDest(a geoPoint, bearingDeg, km float64) geoPoint {
+	const rad = math.Pi / 180
+	d := km / losEarthKm
+	p1, l1, th := a.Lat*rad, a.Lon*rad, bearingDeg*rad
+	p2 := math.Asin(math.Sin(p1)*math.Cos(d) + math.Cos(p1)*math.Sin(d)*math.Cos(th))
+	l2 := l1 + math.Atan2(math.Sin(th)*math.Sin(d)*math.Cos(p1), math.Cos(d)-math.Sin(p1)*math.Sin(p2))
+	return geoPoint{p2 / rad, l2 / rad}
+}
+
+// plannerTestTiles is the real source's tile count.
+func plannerTestTiles(bb geoBBox) int {
+	sp, ok := srtmSpanOf(bb)
+	if !ok {
+		return 0
+	}
+	return sp.count()
+}
+
+func TestPlannerWorstCaseTiles(t *testing.T) {
+	cases := []struct {
+		name           string
+		sideKm, maxLat float64
+		want           int
+	}{
+		// 50 km is 0.45° of latitude and, at the equator, of longitude.
+		{"small at the equator", 50, 0, 2 * 2},
+		// At 60° a degree of longitude is half as long: 0.9° → still 2.
+		{"small at 60", 50, 60, 2 * 2},
+		// 160 km: 1.44° of latitude (3 tiles), 2.9° of longitude at 60.3° (4).
+		{"default view at the band edge", 160, 60.3, 3 * 4},
+		// 160 km at 30°: 1.66° of longitude → 3 tiles.
+		{"default view at 30", 160, 30, 3 * 3},
+	}
+	for _, c := range cases {
+		if got := plannerWorstCaseTiles(c.sideKm, c.maxLat); got != c.want {
+			t.Errorf("%s: plannerWorstCaseTiles(%v, %v) = %d, want %d", c.name, c.sideKm, c.maxLat, got, c.want)
+		}
+	}
+	// Longitude never shrinks with latitude, and a span never needs fewer
+	// tiles than a smaller one.
+	for lat := 0.0; lat <= 85; lat += 5 {
+		if a, b := plannerWorstCaseTiles(160, lat), plannerWorstCaseTiles(160, lat+5); a > b {
+			t.Errorf("tiles at %v° (%d) > at %v° (%d)", lat, a, lat+5, b)
+		}
+	}
+	if got := plannerWorstCaseTiles(100, 89.99); got < 180 {
+		t.Errorf("near the pole: %d tiles, want the whole circle of longitude counted", got)
+	}
+}
+
+func TestPlannerTileCapsDefaults(t *testing.T) {
+	got := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm)
+	// 100 km box + 30 km margin = 160 km; 100 km leg + 2×30 km pad = 160 km:
+	// 3 × 4 tiles at the north edge of the SRTM band.
+	if want := (plannerTileLimits{Profile: 12, Relay: 12, Coverage: 12}); got != want {
+		t.Fatalf("caps %+v, want %+v", got, want)
+	}
+	if got.max() != 12 {
+		t.Fatalf("max %d", got.max())
+	}
+	// Short legs keep the old floor of 6.
+	if c := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, 10); c.Relay != 6 || c.Profile != 6 {
+		t.Fatalf("10 km legs: %+v, want relay/profile 6", c)
+	}
+	if s := newSRTMSource(PlannerConfig{}); s.maxTiles != got.max() {
+		t.Fatalf("source accepts %d tiles per view, want %d", s.maxTiles, got.max())
+	}
+	p := newPlannerService(PlannerConfig{Enabled: true}, nil)
+	t.Cleanup(p.Close)
+	if p.tiles != got {
+		t.Fatalf("service caps %+v, want %+v", p.tiles, got)
+	}
+}
+
+// Review #2391 point 1: an 89 × 84 km box at 51° N needs 3 × 4 = 12 tiles
+// once the 30 km node margin is added, and was refused at a cap of 9.
+func TestPlannerCoverageReviewBoxAccepted(t *testing.T) {
+	const bbox = "50.2,3.4,51.0,4.6"
+	g, msg := plannerParseGridBox(bbox)
+	if msg != "" {
+		t.Fatalf("parse: %s", msg)
+	}
+	view := plannerExpandBBox(g.bbox(), plannerNodeMarginKm)
+	caps := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm)
+	src := newSRTMSource(PlannerConfig{})
+	if n := src.TileCount(view); n != 12 || n > caps.Coverage || n > src.maxTiles {
+		t.Fatalf("view %+v: %d tiles, coverage cap %d, source cap %d", view, n, caps.Coverage, src.maxTiles)
+	}
+
+	h := newPlannerHarness(t)
+	h.data.setNodes(append(plannerTestNodes(), nodeInfo{PublicKey: "be01", Name: "Brussels", Role: "repeater",
+		Lat: 50.6, Lon: 4.0, HasGPS: true, LastSeen: plannerTestStart}))
+	w := h.get("/api/planner/coverage?bbox="+bbox, "198.51.100.200")
+	if w.Code != http.StatusAccepted && w.Code != http.StatusOK {
+		t.Fatalf("review box: %d %s", w.Code, w.Body.String())
+	}
+	plannerWaitFor(t, "the job's terrain request", func() bool { return h.src.viewCount() == 1 })
+	if v := h.src.lastBBox(); v != view {
+		t.Fatalf("job view %+v, want %+v", v, view)
+	}
+}
+
+// plannerTestCoverageBoxes calls fn with every coverage box at the size
+// limit that plannerParseGridBox accepts: each south edge on the 0.05° grid
+// within the band, each height, the widest box the width check allows at
+// that height, and every 0.05° west-edge alignment within a degree. A box
+// smaller than these at the same corner is inside one of them, so these are
+// the worst case for the tile count.
+func plannerTestCoverageBoxes(t *testing.T, fn func(area geoBBox)) {
+	t.Helper()
+	parse := func(s, w, n, e int) bool {
+		raw := fmt.Sprintf("%g,%g,%g,%g", float64(s)/plannerGridPerDeg, float64(w)/plannerGridPerDeg,
+			float64(n)/plannerGridPerDeg, float64(e)/plannerGridPerDeg)
+		g, msg := plannerParseGridBox(raw)
+		if msg == "" && g != (plannerGridBox{s, w, n, e}) {
+			t.Fatalf("%s snapped to %+v", raw, g)
+		}
+		return msg == ""
+	}
+	sMin := int(plannerCoverageMinLat * plannerGridPerDeg)
+	nMax := int(plannerCoverageMaxLat * plannerGridPerDeg)
+	maxArea := plannerMaxAreaKm
+	hMax := int(maxArea / plannerKmPerDeg * plannerGridPerDeg)
+	boxes := 0
+	for s := sMin; s < nMax; s++ {
+		for h := 1; h <= hMax && s+h <= nMax; h++ {
+			n := s + h
+			mid := (float64(s) + float64(n)) / 2 / plannerGridPerDeg
+			w0 := 20 // 1° E: any meridian will do, only the alignment matters
+			wd := int(maxArea/(plannerKmPerDeg*math.Cos(mid*math.Pi/180))*plannerGridPerDeg) + 1
+			for wd > 0 && !parse(s, w0, n, w0+wd) {
+				wd--
+			}
+			if wd == 0 || parse(s, w0, n, w0+wd+1) {
+				t.Fatalf("no widest box at s=%d h=%d (width %d)", s, h, wd)
+			}
+			for off := 0; off < plannerGridPerDeg; off++ {
+				if !parse(s, w0+off, n, w0+off+wd) {
+					t.Fatalf("box s=%d h=%d w=%d at offset %d refused", s, h, wd, off)
+				}
+				fn(plannerGridBox{s, w0 + off, n, w0 + off + wd}.bbox())
+				boxes++
+			}
+		}
+	}
+	if boxes == 0 {
+		t.Fatal("no boxes")
+	}
+}
+
+// Every coverage box the parser accepts fits the coverage cap, and the cap
+// is reached: it is the worst case, not a guess.
+func TestPlannerCoverageTileCapHoldsEverywhere(t *testing.T) {
+	caps := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm)
+	worst := 0
+	plannerTestCoverageBoxes(t, func(area geoBBox) {
+		n := plannerTestTiles(plannerExpandBBox(area, plannerNodeMarginKm))
+		if n > caps.Coverage {
+			t.Fatalf("box %+v: view needs %d tiles, cap %d", area, n, caps.Coverage)
+		}
+		worst = max(worst, n)
+	})
+	if worst != caps.Coverage {
+		t.Fatalf("largest view needs %d tiles, cap %d: the cap is not the worst case", worst, caps.Coverage)
+	}
+}
+
+// Every relay corridor and single profile leg of at most the maximum length,
+// with both ends in the band, fits its cap.
+func TestPlannerRelayProfileTileCapsHoldEverywhere(t *testing.T) {
+	caps := plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm)
+	legs := 0
+	for lat := plannerCoverageMinLat; lat <= plannerCoverageMaxLat; lat += 0.25 {
+		for off := 0.0; off < 1; off += 0.05 {
+			a := geoPoint{lat, 20 + off}
+			for bearing := 0.0; bearing < 360; bearing += 15 {
+				for _, km := range []float64{plannerMaxLegKm, plannerMaxLegKm / 2} {
+					b := plannerTestDest(a, bearing, km)
+					qa, ok1 := plannerLatLon(fmt.Sprint(a.Lat), fmt.Sprint(a.Lon))
+					qb, ok2 := plannerLatLon(fmt.Sprint(b.Lat), fmt.Sprint(b.Lon))
+					if !ok1 || !ok2 || qb.Lat < plannerCoverageMinLat || qb.Lat > plannerCoverageMaxLat {
+						continue
+					}
+					if d := geoDistKm(qa, qb); d > plannerMaxLegKm {
+						// Rounding to 0.001° lengthened it: the handler says too_long.
+						continue
+					}
+					legs++
+					if n := plannerTestTiles(plannerRelayView(qa, qb)); n > caps.Relay {
+						t.Fatalf("relay %+v → %+v: %d tiles, cap %d", qa, qb, n, caps.Relay)
+					}
+					pv := plannerProfileView(plannerBBoxAdd(geoBBox{qa.Lat, qa.Lon, qa.Lat, qa.Lon}, qb), plannerProfilePadDeg)
+					if n := plannerTestTiles(pv); n > caps.Profile {
+						t.Fatalf("profile %+v → %+v: %d tiles, cap %d", qa, qb, n, caps.Profile)
+					}
+				}
+			}
+		}
+	}
+	if legs < 100000 {
+		t.Fatalf("only %d legs checked", legs)
+	}
+}
+
+// A view over its endpoint's cap is too_many_tiles, not area_too_large, and
+// refused before any job or token; area_too_large stays for a box side over
+// the size limit.
+func TestPlannerTooManyTiles(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		set        func(l *plannerTileLimits, n int)
+	}{
+		{"profile", plannerProfPath, func(l *plannerTileLimits, n int) { l.Profile = n }},
+		{"relay", plannerRelayPath, func(l *plannerTileLimits, n int) { l.Relay = n }},
+		{"coverage", plannerCovPath, func(l *plannerTileLimits, n int) { l.Coverage = n }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPlannerHarness(t)
+			// The test views are 2×2 tiles (29-30 N × 98-97 W) or smaller.
+			need := 0
+			h.src.set(func(f *fakeTerrain) {
+				f.tiles = func(bb geoBBox) int { need = len(fakeTiles(bb)); return need }
+			})
+			tc.set(&h.p.tiles, 0)
+			w := h.get(tc.path, "198.51.100.201")
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), plannerErrTooManyTiles) ||
+				strings.Contains(w.Body.String(), plannerErrAreaTooLarge) {
+				t.Fatalf("over the cap: %d %s", w.Code, w.Body.String())
+			}
+			if h.liveJobs() != 0 || h.tokens("198.51.100.201") != plannerIPJobsPerMin {
+				t.Fatal("a refused request started a job or took a token")
+			}
+			// At exactly the cap it runs.
+			tc.set(&h.p.tiles, need)
+			if w := h.get(tc.path, "198.51.100.201"); w.Code != http.StatusAccepted && w.Code != http.StatusOK {
+				t.Fatalf("at the cap (%d): %d %s", need, w.Code, w.Body.String())
+			}
+		})
+	}
+
+	// A terrain source that refuses the view fails the job the same way.
+	h := newPlannerHarness(t)
+	h.p.fastWait = plannerFastWait
+	h.src.set(func(f *fakeTerrain) { f.err = errTerrainTooManyTiles })
+	w := h.get(plannerCovPath, "198.51.100.202")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), plannerErrTooManyTiles) {
+		t.Fatalf("source refusal: %d %s", w.Code, w.Body.String())
+	}
+	if got := plannerOutcome(fmt.Errorf("wrapped: %w", errTerrainTooManyTiles)); got != "too_many_tiles" {
+		t.Fatalf("outcome %q", got)
+	}
+
+	// The size limit keeps its own code.
+	h = newPlannerHarness(t)
+	w = h.get("/api/planner/coverage?bbox=30.0,-97.2,31.0,-96.85", "198.51.100.203")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), plannerErrAreaTooLarge) {
+		t.Fatalf("oversized box: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The source enforces its own per-view cap: one tile more is refused
+// without a request, and is never resident.
+func TestSRTMSourceMaxTiles(t *testing.T) {
+	s, u, _ := newSRTMTest(t, 0, srtmServe(nil))
+	strip := func(n int) geoBBox { return geoBBox{S: 30.2, W: -99.5, N: 30.8, E: -100 + float64(n)} }
+	if got := s.TileCount(strip(s.maxTiles + 1)); got != s.maxTiles+1 {
+		t.Fatalf("strip of %d: %d tiles", s.maxTiles+1, got)
+	}
+	if _, err := s.View(context.Background(), strip(s.maxTiles+1)); err != errTerrainTooManyTiles {
+		t.Fatalf("View over the cap: %v", err)
+	}
+	if s.Resident(strip(s.maxTiles + 1)) {
+		t.Fatal("a view over the cap is resident")
+	}
+	if n := u.total(); n != 0 {
+		t.Fatalf("refused view made %d requests", n)
+	}
+}

@@ -345,6 +345,7 @@ async function main() {
     assert(/need 2 points/.test(I2.jobErrorText(e)), 'jobErrorText shows a 400 message');
     assert(/Try again in 30 s/.test(I2.jobErrorText({ status: 429, retryAfter: 30 })), 'jobErrorText: 429 says when to retry');
     assert(/connection/.test(I2.jobErrorText({ status: 0 })), 'jobErrorText: network failure');
+    assert(/more terrain tiles/.test(I2.jobErrorText({ status: 400, message: 'too_many_tiles' })), 'jobErrorText: too_many_tiles has its own message');
   }
   {
     const f = makeFetch([res(404, undefined)]);

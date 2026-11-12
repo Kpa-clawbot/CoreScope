@@ -160,6 +160,8 @@ test('summaryRows: four rows, stale only when > 0', () => {
 
 test('errorText: plain-language messages', () => {
   assert.strictEqual(I.errorText({ status: 400, message: 'no_nodes_in_area' }), 'No known repeaters in this area');
+  assert.strictEqual(I.errorText({ status: 400, message: 'area_too_large' }), 'Area is too large. Draw a smaller area.');
+  assert.strictEqual(I.errorText({ status: 400, message: 'too_many_tiles' }), 'This area needs more terrain tiles than the server allows. Draw a smaller area.');
   assert.strictEqual(I.errorText({ status: 429, retryAfter: 12 }), 'Busy, try again in 12 s');
   assert.strictEqual(I.errorText({ status: 503 }), 'Busy, try again in 10 s');
 });

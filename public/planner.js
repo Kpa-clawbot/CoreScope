@@ -480,6 +480,7 @@
   function jobErrorText(err) {
     var s = err ? Number(err.status) : 0;
     var wait = err && err.retryAfter > 0 ? ' Try again in ' + err.retryAfter + ' s.' : ' Try again in a moment.';
+    if (s === 400 && err.message === 'too_many_tiles') return 'These points span more terrain tiles than the server allows. Use points closer together.';
     if (s === 400) return 'The planner can’t use this request' + (err.message && !/^HTTP /.test(err.message) ? ': ' + err.message : '.');
     if (s === 404) return 'The planner isn’t available on this server right now.';
     if (s === 429) return 'Too many planner requests from this connection.' + wait;
