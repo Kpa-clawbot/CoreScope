@@ -59,6 +59,23 @@ func (c *PlannerConfig) resolved() (PlannerConfig, []string) {
 	return out, warns
 }
 
+// tileLimits is the per-endpoint terrain tile caps for c's size limits.
+func (c PlannerConfig) tileLimits() plannerTileLimits {
+	return plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm)
+}
+
+// tileCache is the terrain cache size in tiles: TileCacheTiles (0 = the
+// default), raised to one full view when it is smaller. A smaller cache
+// would evict a view's own tiles while loading it, so the next job on the
+// same area downloads them again.
+func (c PlannerConfig) tileCache() int {
+	n := c.TileCacheTiles
+	if n <= 0 {
+		n = defaultPlannerTileCache
+	}
+	return max(n, c.tileLimits().max())
+}
+
 func plannerRangeAllowed(km float64) bool {
 	for _, r := range plannerRangesKm {
 		if r == km {
@@ -99,8 +116,13 @@ func logPlannerConfig(c *PlannerConfig) {
 	for _, w := range warns {
 		log.Printf("[planner] %s", w)
 	}
+	cache := r.tileCache()
+	if cache > r.TileCacheTiles {
+		log.Printf("[planner] tileCacheTiles=%d is below one full view; keeping %d tiles resident",
+			r.TileCacheTiles, cache)
+	}
 	log.Printf("[planner] enabled (tiles=%s, cache=%d tiles, range=%.0f km, new=%.0f m, existing=%.0f m)",
-		plannerTileHost(r.TileURL), r.TileCacheTiles, r.DefaultRangeKm, r.NewAntennaM, r.ExistingAntennaM)
+		plannerTileHost(r.TileURL), cache, r.DefaultRangeKm, r.NewAntennaM, r.ExistingAntennaM)
 }
 
 // plannerTileHost is the tile URL reduced to scheme and host for logs: a

@@ -36,7 +36,8 @@ type PlannerConfig struct {
 	// TileURL is the base of an SRTM "skadi" tile tree:
 	// <TileURL>/N30/N30W098.hgt.gz. Default AWS Open Data elevation-tiles-prod.
 	TileURL string `json:"tileUrl"`
-	// TileCacheTiles caps resident downsampled tiles (~2.9 MB each).
+	// TileCacheTiles caps resident downsampled tiles (~2.9 MB each). The
+	// effective cache never goes below one full view (tileCache).
 	TileCacheTiles   int     `json:"tileCacheTiles"`
 	DefaultRangeKm   float64 `json:"defaultRangeKm"`
 	NewAntennaM      float64 `json:"newAntennaM"`

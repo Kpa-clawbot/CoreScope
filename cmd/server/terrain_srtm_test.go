@@ -1080,6 +1080,9 @@ func TestSRTMLRUEviction(t *testing.T) {
 		tiles[srtmPath(key(i))] = srtmConstTile(t, int16(1000+i), srtmRawBytes, gzip.BestSpeed)
 	}
 	s, u, _ := newSRTMTest(t, 4, srtmServe(tiles))
+	// LRU mechanics at a small size, below the one-view floor newSRTMSource
+	// applies to a configured cache (TestPlannerTileCacheHoldsOneView).
+	s.capacity = 4
 	views := make([]terrainView, 7)
 	for i := 0; i < 4; i++ {
 		views[i] = srtmMustView(t, s, srtmBox(key(i)))

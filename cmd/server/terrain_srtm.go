@@ -314,7 +314,7 @@ type srtmSource struct {
 	userAgent string
 	client    elevHTTPDoer
 	now       func() time.Time
-	capacity  int           // max cached tiles
+	capacity  int           // max cached tiles; never below maxTiles
 	maxTiles  int           // max tiles in one view: the largest planner tile cap
 	sem       chan struct{} // fetch slots; srtmFetchSlots outside tests
 
@@ -335,10 +335,6 @@ func newSRTMSource(cfg PlannerConfig) *srtmSource {
 	if base == "" {
 		base = defaultPlannerTileURL
 	}
-	capacity := cfg.TileCacheTiles
-	if capacity <= 0 {
-		capacity = defaultPlannerTileCache
-	}
 	ua := "CoreScope"
 	if Version != "" {
 		ua += "/" + Version
@@ -348,8 +344,8 @@ func newSRTMSource(cfg PlannerConfig) *srtmSource {
 		userAgent: ua,
 		client:    newSRTMHTTPClient(),
 		now:       time.Now,
-		capacity:  capacity,
-		maxTiles:  plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm).max(),
+		capacity:  cfg.tileCache(),
+		maxTiles:  cfg.tileLimits().max(),
 		sem:       srtmFetchSlots,
 		ll:        list.New(),
 		items:     make(map[srtmKey]*list.Element),

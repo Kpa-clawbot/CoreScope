@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"strings"
@@ -287,5 +290,74 @@ func TestSRTMSourceMaxTiles(t *testing.T) {
 	}
 	if n := u.total(); n != 0 {
 		t.Fatalf("refused view made %d requests", n)
+	}
+}
+
+// Review #2391: a terrain cache smaller than one view evicted the view's
+// own tiles while it loaded, so the next job on the same area downloaded
+// them again. The configured size is still validated as 4-200, but the
+// cache in use never holds fewer tiles than one full view.
+func TestPlannerTileCacheHoldsOneView(t *testing.T) {
+	view := PlannerConfig{}.tileLimits().max()
+	if view <= 4 {
+		t.Fatalf("one view is %d tiles: the test needs it above the configurable minimum", view)
+	}
+	for _, tc := range []struct{ configured, want int }{
+		{0, defaultPlannerTileCache}, {4, view}, {view - 1, view}, {view, view},
+		{defaultPlannerTileCache, defaultPlannerTileCache}, {200, 200},
+	} {
+		c := PlannerConfig{TileCacheTiles: tc.configured}
+		if got := c.tileCache(); got != tc.want {
+			t.Errorf("tileCacheTiles=%d: cache %d, want %d", tc.configured, got, tc.want)
+		}
+		if got := newSRTMSource(c).capacity; got != tc.want {
+			t.Errorf("tileCacheTiles=%d: source capacity %d, want %d", tc.configured, got, tc.want)
+		}
+	}
+	for _, n := range []int{3, 201} {
+		if r, warns := (&PlannerConfig{TileCacheTiles: n}).resolved(); r.TileCacheTiles != defaultPlannerTileCache || len(warns) != 1 {
+			t.Errorf("tileCacheTiles=%d: resolved %d, warnings %q", n, r.TileCacheTiles, warns)
+		}
+	}
+	if r, warns := (&PlannerConfig{TileCacheTiles: 4}).resolved(); r.TileCacheTiles != 4 || len(warns) != 0 {
+		t.Errorf("tileCacheTiles=4: resolved %d, warnings %q", r.TileCacheTiles, warns)
+	}
+
+	// The raise is logged at startup, once; a large enough cache is not.
+	var buf bytes.Buffer
+	prev, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev); log.SetFlags(flags) })
+	logPlannerConfig(&PlannerConfig{Enabled: true, TileCacheTiles: 4})
+	raised := fmt.Sprintf("tileCacheTiles=4 is below one full view; keeping %d tiles resident", view)
+	if out := buf.String(); strings.Count(out, raised) != 1 || !strings.Contains(out, fmt.Sprintf("cache=%d tiles", view)) {
+		t.Fatalf("log %q", out)
+	}
+	buf.Reset()
+	logPlannerConfig(&PlannerConfig{Enabled: true})
+	if out := buf.String(); strings.Contains(out, "below one full view") {
+		t.Fatalf("log %q", out)
+	}
+
+	// End to end: with tileCacheTiles 4, a 3×4-tile view stays resident
+	// after it loads, and loading it again downloads nothing.
+	box := geoBBox{S: 49.5, W: 2.5, N: 51.5, E: 5.5}
+	sp, _ := srtmSpanOf(box)
+	if sp.count() != 12 || sp.count() > view {
+		t.Fatalf("test box spans %d tiles, one view %d", sp.count(), view)
+	}
+	tile := srtmConstTile(t, 100, srtmRawBytes, gzip.BestSpeed)
+	tiles := map[string][]byte{}
+	for i := 0; i < sp.count(); i++ {
+		tiles[srtmPath(sp.key(i))] = tile
+	}
+	s, u, _ := newSRTMTest(t, 4, srtmServe(tiles))
+	srtmMustView(t, s, box)
+	if !s.Resident(box) || srtmCacheLen(s) != sp.count() {
+		t.Fatalf("after one view: resident %v, %d tiles cached", s.Resident(box), srtmCacheLen(s))
+	}
+	srtmMustView(t, s, box)
+	if n := u.total(); n != sp.count() {
+		t.Fatalf("two views of %d tiles made %d requests", sp.count(), n)
 	}
 }

@@ -278,7 +278,7 @@ func newPlannerService(cfg PlannerConfig, s *Server) *plannerService {
 		cfg:      rc,
 		freqMHz:  radio.FrequencyMHz,
 		kFactor:  radio.KFactor,
-		tiles:    plannerTileCaps(plannerMaxAreaKm, plannerNodeMarginKm, plannerMaxLegKm),
+		tiles:    rc.tileLimits(),
 		src:      newSRTMSource(rc),
 		data:     serverPlannerData{s},
 		coverage: runCoveragePlan,
