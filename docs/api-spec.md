@@ -776,6 +776,22 @@ Per-node analytics over a time range.
 }
 ```
 
+When `clientRxCoverage` is enabled the response also carries
+`mobileReceptions` (absent otherwise, and when there are none):
+
+```jsonc
+"mobileReceptions": {
+  "receptions":    number,        // mobile client receptions since timeRange.from
+  "receivers":     number,        // distinct receiving clients
+  "medianSnr":     number | null,
+  "maxDistanceKm": number | null  // null when the node has no position
+}
+```
+
+A reception counts when its heard key is this node's full key, its 8-byte
+discover prefix, or a 2- or 3-byte prefix that no other known node and no
+retired repeater shares. These receptions do not enter `computedStats`.
+
 `hopDistribution`, `peerInteractions` and `computedStats.relayPct` are
 deprecated: the analytics page will stop showing them.
 

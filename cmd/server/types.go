@@ -623,6 +623,8 @@ type NodeAnalyticsResponse struct {
 	UptimeHeatmap       []HeatmapCell           `json:"uptimeHeatmap"`
 	ComputedStats       ComputedNodeStats       `json:"computedStats"`
 	ClockSkew           *NodeClockSkew          `json:"clockSkew,omitempty"`
+	// MobileReceptions is set only when clientRxCoverage is enabled.
+	MobileReceptions *MobileReceptionsSummary `json:"mobileReceptions,omitempty"`
 }
 
 // NodeHopPacket is one flood packet this node forwarded, with the hop count
