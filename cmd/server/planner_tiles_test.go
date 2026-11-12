@@ -13,7 +13,7 @@ import (
 // clockwise from north), on haversineKm's sphere.
 func plannerTestDest(a geoPoint, bearingDeg, km float64) geoPoint {
 	const rad = math.Pi / 180
-	d := km / losEarthKm
+	d := km / earthRadiusKm
 	p1, l1, th := a.Lat*rad, a.Lon*rad, bearingDeg*rad
 	p2 := math.Asin(math.Sin(p1)*math.Cos(d) + math.Cos(p1)*math.Sin(d)*math.Cos(th))
 	l2 := l1 + math.Atan2(math.Sin(th)*math.Sin(d)*math.Cos(p1), math.Cos(d)-math.Sin(p1)*math.Sin(p2))
@@ -111,8 +111,8 @@ func TestPlannerTileCapsFromConfig(t *testing.T) {
 	p := newPlannerService(cfg, nil, nil)
 	t.Cleanup(p.Close)
 	src := p.src.(*srtmSource)
-	if p.tiles != want || src.maxTiles != 28 || src.capacity != 28 {
-		t.Fatalf("service caps %+v, source max %d, cache %d", p.tiles, src.maxTiles, src.capacity)
+	if p.tiles != want || src.maxTiles != 28 || src.cache.maxItems != 28 {
+		t.Fatalf("service caps %+v, source max %d, cache %d", p.tiles, src.maxTiles, src.cache.maxItems)
 	}
 	if n := terrainViewTiles(nil, &cfg); n != 28 {
 		t.Fatalf("shared source view cap %d, want 28", n)
@@ -280,8 +280,8 @@ func TestPlannerProfilePadCoversBulge(t *testing.T) {
 				a := geoPoint{lat, 20.5}
 				b := plannerTestDest(a, bearing, sz.leg)
 				view := plannerProfileView(plannerBBoxAdd(geoBBox{a.Lat, a.Lon, a.Lat, a.Lon}, b), pad)
-				for _, pt := range greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, planProfileSamples(sz.leg)) {
-					if !plannerBBoxContains(view, pt.lat, pt.lon) {
+				for _, pt := range greatCircleSamples(a, b, planProfileSamples(sz.leg)) {
+					if !plannerBBoxContains(view, pt.Lat, pt.Lon) {
 						t.Fatalf("leg %v km from %+v on %v°: sample %+v outside %+v", sz.leg, a, bearing, pt, view)
 					}
 				}

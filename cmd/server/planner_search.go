@@ -32,8 +32,6 @@ type planInputs struct {
 }
 
 const (
-	planSearchSource = "SRTM (AWS Open Data)"
-
 	planGridKm        = 1.0  // coverage candidate grid spacing
 	planPeakRadius    = 2    // candidate = local maximum over a 5×5 window
 	planSiteSpacingKm = 2.0  // candidates keep this far from active nodes and chosen sites
@@ -619,7 +617,6 @@ func (s *coverageSearch) response() (PlannerPlanResponse, error) {
 	resp := PlannerPlanResponse{
 		Area:       geoBBoxJSON{S: in.Area.S, W: in.Area.W, N: in.Area.N, E: in.Area.E},
 		Params:     s.p,
-		Source:     planSearchSource,
 		Baseline:   s.summary(s.s0),
 		Final:      s.summary(s.cur),
 		Nodes:      make([]PlannerNodeOut, len(in.Nodes)),
@@ -897,7 +894,6 @@ func runRelaySearch(ctx context.Context, v terrainView, nodes []plannerNode, p P
 
 	lp := losParams{FreqMHz: p.FrequencyMHz, KFactor: p.KFactor}
 	resp := PlannerRelayResponse{
-		Source:   planSearchSource,
 		Direct:   relayLink(v, a, b, D, lp, p.AntennaAM, p.AntennaBM),
 		Existing: relayOptions(v, nodes, existing, a, b, lp, p, "existing", p.ExistingAntennaM),
 		Open:     relayOptions(v, nodes, open, a, b, lp, p, "open", p.RelayAntennaM),
@@ -1056,7 +1052,7 @@ func newPlanLinkEval(ctx context.Context, v terrainView, freqMHz, kFactor float6
 	if k == 0 {
 		k = 4.0 / 3.0
 	}
-	return &planLinkEval{ctx: ctx, v: v, freq: freqMHz, bulgeDen: 2 * k * losEarthKm}
+	return &planLinkEval{ctx: ctx, v: v, freq: freqMHz, bulgeDen: 2 * k * earthRadiusKm}
 }
 
 // clearance returns the worst first-Fresnel clearance of a→b with antennas
@@ -1134,8 +1130,8 @@ type planArc struct {
 func newPlanArc(a, b geoPoint, distKm float64) planArc {
 	p1, l1 := a.Lat*math.Pi/180, a.Lon*math.Pi/180
 	p2, l2 := b.Lat*math.Pi/180, b.Lon*math.Pi/180
-	d := distKm / elevEarthRadiusKm
-	if d < elevSamePointRadians {
+	d := distKm / earthRadiusKm
+	if d < geoSamePointRadians {
 		return planArc{a: a, same: true}
 	}
 	return planArc{
@@ -1166,7 +1162,7 @@ type planNear struct{ latLim, lonLim float64 }
 
 func newPlanNear(km, maxAbsLat float64) planNear {
 	const slack = 1 + 1e-9
-	r := km / losEarthKm // radians; haversineKm uses the same radius
+	r := km / earthRadiusKm // radians; haversineKm uses the same radius
 	p := planNear{latLim: r * 180 / math.Pi * slack, lonLim: 360}
 	if c := math.Cos(maxAbsLat * math.Pi / 180); c > 0 {
 		if q := math.Sin(r/2) / c; q < 1 {

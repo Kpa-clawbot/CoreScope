@@ -315,7 +315,7 @@ func TestNodeVisibilityAgreesAcrossSurfaces(t *testing.T) {
 	svc.visibility = srv
 	var elevKeys []string
 	for _, n := range visFixtureNodes {
-		if visNodeHasFix(n) && svc.known(elevKey(elevPoint{n.lat, n.lon})) {
+		if visNodeHasFix(n) && svc.known(elevKey(geoPoint{n.lat, n.lon})) {
 			elevKeys = append(elevKeys, n.pubkey)
 		}
 	}

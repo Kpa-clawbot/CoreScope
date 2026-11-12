@@ -206,7 +206,7 @@ func srtmServe(tiles map[string][]byte) http.HandlerFunc {
 func srtmCacheLen(s *srtmSource) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.ll.Len()
+	return s.cache.Len()
 }
 
 func srtmNegLen(s *srtmSource) int {
@@ -1096,7 +1096,7 @@ func TestSRTMLRUEviction(t *testing.T) {
 	s, u, _ := newSRTMTest(t, 4, srtmServe(tiles))
 	// LRU mechanics at a small size, below the one-view floor newSRTMSource
 	// applies to a configured cache (TestPlannerTileCacheHoldsOneView).
-	s.capacity = 4
+	s.cache = newLRU[srtmKey, []int16](4, 0, nil)
 	views := make([]terrainView, 7)
 	for i := 0; i < 4; i++ {
 		views[i] = srtmMustView(t, s, srtmBox(key(i)))
@@ -1281,8 +1281,8 @@ func TestSRTMClientConfig(t *testing.T) {
 	if c.CheckRedirect == nil || c.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
 		t.Error("redirects are followed")
 	}
-	if s := newSRTMSource(TerrainConfig{}, srtmTestViewTiles); s.sem != srtmFetchSlots || cap(s.sem) != 2 || s.capacity != defaultTerrainTileCache {
-		t.Errorf("source: %d slots (shared %v), %d tiles", cap(s.sem), s.sem == srtmFetchSlots, s.capacity)
+	if s := newSRTMSource(TerrainConfig{}, srtmTestViewTiles); s.sem != srtmFetchSlots || cap(s.sem) != 2 || s.cache.maxItems != defaultTerrainTileCache {
+		t.Errorf("source: %d slots (shared %v), %d tiles", cap(s.sem), s.sem == srtmFetchSlots, s.cache.maxItems)
 	}
 }
 

@@ -34,7 +34,6 @@ package main
 
 import (
 	"compress/gzip"
-	"container/list"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -343,11 +342,6 @@ func (b *srtmBudget) take(now time.Time) bool {
 	return true
 }
 
-type srtmEntry struct {
-	key  srtmKey
-	grid []int16
-}
-
 // srtmSource is the production terrainSource: an LRU of downsampled tiles in
 // memory, filled from the tile server on demand.
 type srtmSource struct {
@@ -356,19 +350,17 @@ type srtmSource struct {
 	userAgent string
 	client    srtmHTTPDoer
 	now       func() time.Time
-	capacity  int           // max cached tiles; never below maxTiles
 	maxTiles  int           // max tiles in one load (terrainViewTiles)
 	sem       chan struct{} // fetch slots; srtmFetchSlots outside tests
 
 	sf singleflight.Group // one fetch per tile name
 
 	mu      sync.Mutex
-	ll      *list.List // *srtmEntry, most recently used first
-	items   map[srtmKey]*list.Element
-	neg     map[srtmKey]time.Time // known-missing tile → expiry
-	loading map[srtmKey]struct{}  // tiles whose load is running (loadChan)
-	fails   int                   // consecutive upstream failures
-	coolTo  time.Time             // no downloads before then
+	cache   *lru[srtmKey, []int16] // decoded tiles; its cap is never below maxTiles
+	neg     map[srtmKey]time.Time  // known-missing tile → expiry
+	loading map[srtmKey]struct{}   // tiles whose load is running (loadChan)
+	fails   int                    // consecutive upstream failures
+	coolTo  time.Time              // no downloads before then
 	budget  srtmBudget
 }
 
@@ -390,11 +382,9 @@ func newSRTMSource(cfg TerrainConfig, viewTiles int) *srtmSource {
 		userAgent: ua,
 		client:    newSRTMHTTPClient(),
 		now:       time.Now,
-		capacity:  cfg.cacheTiles(viewTiles),
 		maxTiles:  viewTiles,
 		sem:       srtmFetchSlots,
-		ll:        list.New(),
-		items:     make(map[srtmKey]*list.Element),
+		cache:     newLRU[srtmKey, []int16](cfg.cacheTiles(viewTiles), 0, nil),
 		neg:       make(map[srtmKey]time.Time),
 		loading:   make(map[srtmKey]struct{}),
 	}
@@ -591,11 +581,15 @@ func (s *srtmSource) loadChan(k srtmKey) <-chan singleflight.Result {
 // lookupLocked finds k in the cache (grid) or the negative cache (nil grid).
 // touch marks a cached tile most recently used. Caller holds s.mu.
 func (s *srtmSource) lookupLocked(k srtmKey, now time.Time, touch bool) ([]int16, bool) {
-	if el, ok := s.items[k]; ok {
-		if touch {
-			s.ll.MoveToFront(el)
-		}
-		return el.Value.(*srtmEntry).grid, true
+	var g []int16
+	var ok bool
+	if touch {
+		g, ok = s.cache.Get(k)
+	} else {
+		g, ok = s.cache.Peek(k)
+	}
+	if ok {
+		return g, true
 	}
 	if exp, ok := s.neg[k]; ok {
 		if now.Before(exp) {
@@ -682,17 +676,7 @@ func (s *srtmSource) put(k srtmKey, grid []int16) {
 	defer s.mu.Unlock()
 	s.fails = 0
 	delete(s.neg, k)
-	if el, ok := s.items[k]; ok {
-		el.Value.(*srtmEntry).grid = grid
-		s.ll.MoveToFront(el)
-		return
-	}
-	s.items[k] = s.ll.PushFront(&srtmEntry{key: k, grid: grid})
-	for s.ll.Len() > max(s.capacity, 1) {
-		last := s.ll.Back()
-		s.ll.Remove(last)
-		delete(s.items, last.Value.(*srtmEntry).key)
-	}
+	s.cache.Put(k, grid)
 }
 
 // putMissing remembers for ttl a tile without data. When the negative

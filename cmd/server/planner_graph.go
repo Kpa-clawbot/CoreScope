@@ -37,7 +37,7 @@ type plannerNodeFilter struct {
 }
 
 // plannerKmPerDeg is one degree of latitude on haversineKm's sphere.
-const plannerKmPerDeg = 6371.0 * math.Pi / 180
+const plannerKmPerDeg = earthRadiusKm * math.Pi / 180
 
 // selectPlannerNodes picks repeaters/rooms with GPS (not 0,0) that f.Visible
 // keeps, inside area expanded by marginKm, capped at

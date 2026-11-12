@@ -80,11 +80,9 @@ const (
 )
 
 const (
-	elevEarthRadiusKm    = 6371.0
-	elevSamePointRadians = 1e-9
-	elevMaxRawQuery      = 2048
-	elevNodeSetTTL       = 60 * time.Second
-	elevCacheControl     = "public, max-age=86400"
+	elevMaxRawQuery  = 2048
+	elevNodeSetTTL   = 60 * time.Second
+	elevCacheControl = "public, max-age=86400"
 )
 
 func (s *Server) handleElevationProfile(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +107,7 @@ func (s *Server) handleElevationProfile(w http.ResponseWriter, r *http.Request) 
 // client is charged one token per download the request starts, all or
 // nothing, before any starts; resident tiles, tiles already downloading
 // (another request's, or the planner's) and polls cost nothing.
-func (e *elevationService) serve(w http.ResponseWriter, r *http.Request, pts []elevPoint) {
+func (e *elevationService) serve(w http.ResponseWriter, r *http.Request, pts []geoPoint) {
 	legs, keys := e.plan(pts)
 	ts := e.src.tiles(keys)
 	failed := map[srtmKey]bool{}
@@ -170,11 +168,9 @@ func anyTileIn(keys []srtmKey, set map[srtmKey]bool) bool {
 	return false
 }
 
-type elevPoint struct{ lat, lon float64 }
-
 // parseElevationPts validates the flat "lat,lon,lat,lon..." list. The second
 // return value is a 400 message, empty when valid.
-func parseElevationPts(raw string) ([]elevPoint, string) {
+func parseElevationPts(raw string) ([]geoPoint, string) {
 	if raw == "" {
 		return nil, "pts required"
 	}
@@ -190,7 +186,7 @@ func parseElevationPts(raw string) ([]elevPoint, string) {
 	if n < 2 || n > losMaxPoints {
 		return nil, tooMany
 	}
-	pts := make([]elevPoint, n)
+	pts := make([]geoPoint, n)
 	for i := 0; i < n; i++ {
 		lat, err1 := strconv.ParseFloat(strings.TrimSpace(parts[2*i]), 64)
 		lon, err2 := strconv.ParseFloat(strings.TrimSpace(parts[2*i+1]), 64)
@@ -200,42 +196,9 @@ func parseElevationPts(raw string) ([]elevPoint, string) {
 		if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
 			return nil, "pts out of range"
 		}
-		pts[i] = elevPoint{lat, lon}
+		pts[i] = geoPoint{lat, lon}
 	}
 	return pts, ""
-}
-
-func legKm(a, b elevPoint) float64 { return haversineKm(a.lat, a.lon, b.lat, b.lon) }
-
-// greatCircleSamples returns n points from a to b (inclusive) along the great
-// circle, using the spherical intermediate-point formula.
-func greatCircleSamples(a, b elevPoint, n int) []elevPoint {
-	out := make([]elevPoint, n)
-	p1, l1 := a.lat*math.Pi/180, a.lon*math.Pi/180
-	p2, l2 := b.lat*math.Pi/180, b.lon*math.Pi/180
-	d := legKm(a, b) / elevEarthRadiusKm
-	if d < elevSamePointRadians {
-		for i := range out {
-			out[i] = a
-		}
-		return out
-	}
-	sd := math.Sin(d)
-	for i := range out {
-		f := float64(i) / float64(n-1)
-		A := math.Sin((1-f)*d) / sd
-		B := math.Sin(f*d) / sd
-		x := A*math.Cos(p1)*math.Cos(l1) + B*math.Cos(p2)*math.Cos(l2)
-		y := A*math.Cos(p1)*math.Sin(l1) + B*math.Cos(p2)*math.Sin(l2)
-		z := A*math.Sin(p1) + B*math.Sin(p2)
-		out[i] = elevPoint{
-			lat: math.Atan2(z, math.Hypot(x, y)) * 180 / math.Pi,
-			lon: math.Atan2(y, x) * 180 / math.Pi,
-		}
-	}
-	// Endpoints are exact, not trig round-trips.
-	out[0], out[n-1] = a, b
-	return out
 }
 
 // legTiles lists, first seen first, the tiles sampleLegProfile reads for
@@ -246,7 +209,7 @@ func legTiles(a, b geoPoint) []srtmKey {
 	var out []srtmKey
 	seen := map[srtmKey]bool{}
 	for _, p := range legSamplePoints(a, b) {
-		if k := srtmKeyOf(p.lat, p.lon); !seen[k] {
+		if k := srtmKeyOf(p.Lat, p.Lon); !seen[k] {
 			seen[k] = true
 			out = append(out, k)
 		}
@@ -306,7 +269,7 @@ func newElevationService(src *srtmSource) *elevationService {
 	}
 }
 
-func elevKey(p elevPoint) string { return fmt.Sprintf("%.5f,%.5f", p.lat, p.lon) }
+func elevKey(p geoPoint) string { return fmt.Sprintf("%.5f,%.5f", p.Lat, p.Lon) }
 
 // known reports whether key is the position of a known node that /api/nodes
 // shows. The set is rebuilt outside e.mu every elevNodeSetTTL, and at once
@@ -371,7 +334,7 @@ func (e *elevationService) buildNodeSet() map[string]struct{} {
 		if visible != nil && !visible(n) {
 			continue
 		}
-		set[elevKey(elevPoint{n.Lat, n.Lon})] = struct{}{}
+		set[elevKey(geoPoint{n.Lat, n.Lon})] = struct{}{}
 	}
 	return set
 }
@@ -388,20 +351,19 @@ type elevLeg struct {
 // distinct tiles, first seen first. A leg whose new tiles would take the
 // request past losMaxTiles is too_many_tiles and adds none; a later leg may
 // still fit.
-func (e *elevationService) plan(pts []elevPoint) ([]elevLeg, []srtmKey) {
+func (e *elevationService) plan(pts []geoPoint) ([]elevLeg, []srtmKey) {
 	legs := make([]elevLeg, len(pts)-1)
 	seen := map[srtmKey]bool{}
 	var keys []srtmKey
 	for i := range legs {
 		l := &legs[i]
-		pa, pb := pts[i], pts[i+1]
-		l.a, l.b = geoPoint{pa.lat, pa.lon}, geoPoint{pb.lat, pb.lon}
-		l.res.DistanceKm = losRound(legKm(pa, pb), 1000)
+		l.a, l.b = pts[i], pts[i+1]
+		l.res.DistanceKm = losRound(geoDistKm(l.a, l.b), 1000)
 		if l.res.DistanceKm > losMaxLegKm {
 			l.res.Error = elevErrTooLong
 			continue
 		}
-		if !e.known(elevKey(pa)) || !e.known(elevKey(pb)) {
+		if !e.known(elevKey(l.a)) || !e.known(elevKey(l.b)) {
 			l.res.Error = elevErrUnknownPoint
 			continue
 		}

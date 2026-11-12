@@ -219,14 +219,30 @@ func TestPlannerLOSTerrainProfile(t *testing.T) {
 }
 
 func TestPlannerLOSGeoHelpers(t *testing.T) {
-	m := geoIntermediate(geoPoint{0, 0}, geoPoint{0, 90}, 0.5)
-	if math.Abs(m.Lat) > 1e-9 || math.Abs(m.Lon-45) > 1e-9 {
-		t.Errorf("midpoint %+v", m)
+	near := func(p, q geoPoint) bool { return math.Abs(p.Lat-q.Lat) <= 1e-9 && math.Abs(p.Lon-q.Lon) <= 1e-9 }
+	// Along the equator, evenly spaced in t.
+	for i, p := range greatCircleSamples(geoPoint{0, 0}, geoPoint{0, 90}, 5) {
+		if want := (geoPoint{0, 22.5 * float64(i)}); !near(p, want) {
+			t.Errorf("equator sample %d %+v, want %+v", i, p, want)
+		}
 	}
-	if got := geoIntermediate(geoPoint{3, 4}, geoPoint{3, 4}, 0.5); got != (geoPoint{3, 4}) {
-		t.Errorf("same point %+v", got)
+	// Between two points on the 45th parallel the great circle bulges
+	// poleward: its midpoint is at atan(√2), not 45.
+	mid := greatCircleSamples(geoPoint{45, 0}, geoPoint{45, 90}, 3)[1]
+	if want := (geoPoint{math.Atan(math.Sqrt2) * 180 / math.Pi, 45}); !near(mid, want) {
+		t.Errorf("midpoint %+v, want %+v", mid, want)
 	}
-	if d := geoDistKm(geoPoint{0, 0}, geoPoint{0, 90}); math.Abs(d-losEarthKm*math.Pi/2) > 1e-6 {
+	// The ends are the inputs exactly, not trig round-trips.
+	a, b := geoPoint{37.123456789, -122.987654321}, geoPoint{36.5, -121.25}
+	if pts := greatCircleSamples(a, b, 64); len(pts) != 64 || pts[0] != a || pts[63] != b {
+		t.Errorf("ends %+v %+v of %d", pts[0], pts[len(pts)-1], len(pts))
+	}
+	for _, p := range greatCircleSamples(geoPoint{3, 4}, geoPoint{3, 4}, 3) {
+		if p != (geoPoint{3, 4}) {
+			t.Errorf("same point %+v", p)
+		}
+	}
+	if d := geoDistKm(geoPoint{0, 0}, geoPoint{0, 90}); math.Abs(d-earthRadiusKm*math.Pi/2) > 1e-6 {
 		t.Errorf("dist %v", d)
 	}
 }

@@ -7,7 +7,8 @@ package main
 
 import "math"
 
-const losEarthKm = 6371.0
+// geoSamePointRadians: a leg shorter than this is one point to the samplers.
+const geoSamePointRadians = 1e-9
 
 // losParams: antenna heights are metres above ground at each end.
 // KFactor 0 means the default 4/3; negative is invalid.
@@ -80,7 +81,7 @@ func analyzeLOS(elevM []float64, distKm float64, p losParams) (losResult, bool) 
 	last := float64(n - 1)
 	terrain := func(i int) float64 {
 		d := float64(i) / last * D
-		return elevM[i] + d*(D-d)/(2*k*losEarthKm)*1000
+		return elevM[i] + d*(D-d)/(2*k*earthRadiusKm)*1000
 	}
 	yA, yB := terrain(0)+aA, terrain(n-1)+aB
 	res := losResult{DistanceKm: D, Clearance: math.Inf(1), WorstIdx: -1, ObstructionM: math.Inf(-1)}
@@ -127,18 +128,18 @@ func sampleTerrainProfile(v terrainView, a, b geoPoint, n int) ([]float64, bool)
 	if n < 2 {
 		return nil, false
 	}
-	return sampleTerrainAt(v, greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, n))
+	return sampleTerrainAt(v, greatCircleSamples(a, b, n))
 }
 
 // sampleTerrainAt returns the elevation at each point; ok=false if any has
 // no terrain.
-func sampleTerrainAt(v terrainView, pts []elevPoint) ([]float64, bool) {
+func sampleTerrainAt(v terrainView, pts []geoPoint) ([]float64, bool) {
 	if v == nil {
 		return nil, false
 	}
 	out := make([]float64, len(pts))
 	for i, p := range pts {
-		e, ok := v.ElevationAt(p.lat, p.lon)
+		e, ok := v.ElevationAt(p.Lat, p.Lon)
 		if !ok {
 			return nil, false
 		}
@@ -149,8 +150,8 @@ func sampleTerrainAt(v terrainView, pts []elevPoint) ([]float64, bool) {
 
 // legSamplePoints is where a profile reads the terrain of leg a→b:
 // planProfileSamples(km) points along the great circle, both ends included.
-func legSamplePoints(a, b geoPoint) []elevPoint {
-	return greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, planProfileSamples(geoDistKm(a, b)))
+func legSamplePoints(a, b geoPoint) []geoPoint {
+	return greatCircleSamples(a, b, planProfileSamples(geoDistKm(a, b)))
 }
 
 // sampleLegProfile is leg a→b's terrain as both profile endpoints serve it
@@ -171,21 +172,37 @@ func sampleLegProfile(v terrainView, a, b geoPoint) ([]float64, bool) {
 
 func geoDistKm(a, b geoPoint) float64 { return haversineKm(a.Lat, a.Lon, b.Lat, b.Lon) }
 
-// geoIntermediate is the spherical intermediate point at fraction t of the
-// great circle a→b (same formula as MeshLOS.intermediatePoint).
-func geoIntermediate(a, b geoPoint, t float64) geoPoint {
-	rad := math.Pi / 180
-	p1, l1, p2, l2 := a.Lat*rad, a.Lon*rad, b.Lat*rad, b.Lon*rad
-	h := math.Pow(math.Sin((p2-p1)/2), 2) + math.Cos(p1)*math.Cos(p2)*math.Pow(math.Sin((l2-l1)/2), 2)
-	d := 2 * math.Asin(math.Min(1, math.Sqrt(h)))
-	if d < 1e-12 {
-		return a
+// greatCircleSamples returns n points from a to b (inclusive) along the great
+// circle, at fractions t = i/(n-1), using the spherical intermediate-point
+// formula. It is the one sampler of point slices; planArc is its one-point
+// form for the search's hot loop.
+func greatCircleSamples(a, b geoPoint, n int) []geoPoint {
+	out := make([]geoPoint, n)
+	p1, l1 := a.Lat*math.Pi/180, a.Lon*math.Pi/180
+	p2, l2 := b.Lat*math.Pi/180, b.Lon*math.Pi/180
+	d := geoDistKm(a, b) / earthRadiusKm
+	if d < geoSamePointRadians {
+		for i := range out {
+			out[i] = a
+		}
+		return out
 	}
-	A, B := math.Sin((1-t)*d)/math.Sin(d), math.Sin(t*d)/math.Sin(d)
-	x := A*math.Cos(p1)*math.Cos(l1) + B*math.Cos(p2)*math.Cos(l2)
-	y := A*math.Cos(p1)*math.Sin(l1) + B*math.Cos(p2)*math.Sin(l2)
-	z := A*math.Sin(p1) + B*math.Sin(p2)
-	return geoPoint{Lat: math.Atan2(z, math.Hypot(x, y)) / rad, Lon: math.Atan2(y, x) / rad}
+	sd := math.Sin(d)
+	for i := range out {
+		f := float64(i) / float64(n-1)
+		A := math.Sin((1-f)*d) / sd
+		B := math.Sin(f*d) / sd
+		x := A*math.Cos(p1)*math.Cos(l1) + B*math.Cos(p2)*math.Cos(l2)
+		y := A*math.Cos(p1)*math.Sin(l1) + B*math.Cos(p2)*math.Sin(l2)
+		z := A*math.Sin(p1) + B*math.Sin(p2)
+		out[i] = geoPoint{
+			Lat: math.Atan2(z, math.Hypot(x, y)) * 180 / math.Pi,
+			Lon: math.Atan2(y, x) * 180 / math.Pi,
+		}
+	}
+	// Endpoints are exact, not trig round-trips.
+	out[0], out[n-1] = a, b
+	return out
 }
 
 func losRound(x float64, scale float64) float64 { return math.Round(x*scale) / scale }

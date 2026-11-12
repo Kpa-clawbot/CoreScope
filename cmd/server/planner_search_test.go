@@ -586,6 +586,32 @@ func TestPlannerSearchLinkEvalMatchesAnalyzeLOS(t *testing.T) {
 
 func ptTwoClusterView() terrainView { v, _ := ptTwoClusterCase(); return v }
 
+// planArc is greatCircleSamples one point at a time: planLinkEval must read
+// the terrain at the points the profile endpoints read.
+func TestPlannerSearchArcMatchesGreatCircleSamples(t *testing.T) {
+	legs := [][2]geoPoint{
+		{{30.2, -97.8}, {30.85, -97.15}},
+		{{45.1, -120.7}, {44.8, -120.2}},
+		{{-33.9, 151.2}, {-34.4, 150.6}},
+		{{45, 0}, {45, 90}},           // long: 600 samples, bulging poleward
+		{{10, 179.3}, {10.4, -179.6}}, // across the antimeridian
+		{{3, 4}, {3, 4}},              // one point
+	}
+	for _, l := range legs {
+		a, b := l[0], l[1]
+		d := geoDistKm(a, b)
+		n := planProfileSamples(d)
+		want := greatCircleSamples(a, b, n)
+		arc := newPlanArc(a, b, d)
+		for _, i := range []int{1, n / 4, n / 2, 3 * n / 4, n - 2} {
+			lat, lon := arc.at(float64(i) / float64(n-1))
+			if math.Abs(lat-want[i].Lat) > 1e-9 || math.Abs(lon-want[i].Lon) > 1e-9 {
+				t.Errorf("%v→%v sample %d/%d: planArc (%v, %v), greatCircleSamples %+v", a, b, i, n, lat, lon, want[i])
+			}
+		}
+	}
+}
+
 // planNear must never reject a pair within range.
 func TestPlannerSearchNearIsConservative(t *testing.T) {
 	rng := rand.New(rand.NewPCG(3, 4))
@@ -766,7 +792,7 @@ func TestRelaySearchRidgeAndHill(t *testing.T) {
 	if len(resp.Warnings) != 0 {
 		t.Errorf("warnings %q", resp.Warnings)
 	}
-	if resp.Source != planSearchSource || resp.Params != p {
+	if resp.Source != "" || resp.Params != p { // the API layer names the source
 		t.Errorf("source %q params %+v", resp.Source, resp.Params)
 	}
 
@@ -917,8 +943,8 @@ func ptWithout(v *srtmView, k srtmKey) *srtmView {
 // sampleTerrainProfile reads) has no terrain in v.
 func ptTouchesMissing(v terrainCoverage, a, b geoPoint) bool {
 	n := planProfileSamples(geoDistKm(a, b))
-	for _, p := range greatCircleSamples(elevPoint{a.Lat, a.Lon}, elevPoint{b.Lat, b.Lon}, n) {
-		if v.MissingAt(p.lat, p.lon) {
+	for _, p := range greatCircleSamples(a, b, n) {
+		if v.MissingAt(p.Lat, p.Lon) {
 			return true
 		}
 	}

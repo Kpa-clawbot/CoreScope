@@ -34,7 +34,6 @@ package main
 //     a response, a geo check or a cache key.
 
 import (
-	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -973,7 +972,7 @@ func plannerWorstCaseTiles(sideKm, maxAbsLat float64) int {
 // in longitude than two points on the parallel) plus linear padding.
 func plannerLonSpanDeg(km, maxAbsLat float64) float64 {
 	c := math.Cos(math.Min(math.Abs(maxAbsLat), 90) * math.Pi / 180)
-	q := math.Sin(km/(2*losEarthKm)) / c
+	q := math.Sin(km/(2*earthRadiusKm)) / c
 	if !(q < 1) {
 		return 360
 	}
@@ -1515,70 +1514,51 @@ func writePlannerStatus(w http.ResponseWriter, st PlannerJobStatus) {
 // put, so get hands out the stored slice.
 type plannerLRU struct {
 	mu       sync.Mutex
-	maxItems int
-	maxBytes int
 	ttl      time.Duration
-	size     int
-	ll       *list.List // *plannerLRUEntry, most recently used first
-	items    map[string]*list.Element
+	maxEntry int // bytes; put skips a bigger entry
+	cache    *lru[string, plannerLRUEntry]
 }
 
 type plannerLRUEntry struct {
-	key  string
 	body []byte
 	exp  time.Time
 }
 
 func newPlannerLRU(maxItems, maxBytes int, ttl time.Duration) *plannerLRU {
-	return &plannerLRU{maxItems: maxItems, maxBytes: maxBytes, ttl: ttl,
-		ll: list.New(), items: map[string]*list.Element{}}
+	return &plannerLRU{ttl: ttl, maxEntry: maxBytes / 4,
+		cache: newLRU(maxItems, maxBytes, plannerEntrySize)}
 }
 
-func plannerEntrySize(key string, body []byte) int { return len(key) + len(body) }
+func plannerEntrySize(key string, e plannerLRUEntry) int { return len(key) + len(e.body) }
 
 func (c *plannerLRU) get(key string, now time.Time) ([]byte, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	el, ok := c.items[key]
+	e, ok := c.cache.Get(key)
 	if !ok {
 		return nil, false
 	}
-	e := el.Value.(*plannerLRUEntry)
 	if !now.Before(e.exp) {
-		c.removeLocked(el)
+		c.cache.Remove(key)
 		return nil, false
 	}
-	c.ll.MoveToFront(el)
 	return e.body, true
 }
 
 // put stores body; one entry over a quarter of the byte budget is not
 // cached, so it cannot flush everything else.
 func (c *plannerLRU) put(key string, body []byte, now time.Time) {
-	sz := plannerEntrySize(key, body)
-	if sz > c.maxBytes/4 {
+	e := plannerLRUEntry{body: body, exp: now.Add(c.ttl)}
+	if plannerEntrySize(key, e) > c.maxEntry {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if el, ok := c.items[key]; ok {
-		c.removeLocked(el)
-	}
-	c.items[key] = c.ll.PushFront(&plannerLRUEntry{key: key, body: body, exp: now.Add(c.ttl)})
-	c.size += sz
-	for c.ll.Len() > c.maxItems || c.size > c.maxBytes {
-		c.removeLocked(c.ll.Back())
-	}
-}
-
-func (c *plannerLRU) removeLocked(el *list.Element) {
-	e := c.ll.Remove(el).(*plannerLRUEntry)
-	delete(c.items, e.key)
-	c.size -= plannerEntrySize(e.key, e.body)
+	c.cache.Put(key, e)
 }
 
 func (c *plannerLRU) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.ll.Len()
+	return c.cache.Len()
 }

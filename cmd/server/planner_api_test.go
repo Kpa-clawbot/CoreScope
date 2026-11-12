@@ -1323,16 +1323,16 @@ func TestPlannerAPIResultCacheBounds(t *testing.T) {
 		c.put(strconv.Itoa(i), body(240), now) // 241 bytes each
 	}
 	c.put("4", body(240), now)
-	if _, ok := c.get("0", now); ok || c.len() != 4 || c.size > 1000 {
-		t.Fatalf("byte cap: len=%d size=%d", c.len(), c.size)
+	if _, ok := c.get("0", now); ok || c.len() != 4 || c.cache.size > 1000 {
+		t.Fatalf("byte cap: len=%d size=%d", c.len(), c.cache.size)
 	}
 	c.put("big", body(300), now) // over a quarter of the budget
 	if _, ok := c.get("big", now); ok {
 		t.Fatal("oversized entry cached")
 	}
 	c.put("1", body(10), now) // replacing an entry adjusts the size
-	if c.size != 241*3+11 {
-		t.Fatalf("size=%d", c.size)
+	if c.cache.size != 241*3+11 {
+		t.Fatalf("size=%d", c.cache.size)
 	}
 }
 

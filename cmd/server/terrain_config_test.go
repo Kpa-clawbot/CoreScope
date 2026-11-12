@@ -140,8 +140,8 @@ func TestTerrainServicesShareOneSource(t *testing.T) {
 	if ps, ok := p.src.(*srtmSource); !ok || ps != e.src {
 		t.Fatalf("planner source %p, LOS source %p: not shared", p.src, e.src)
 	}
-	if e.src.maxTiles != losMaxTiles || e.src.capacity != losMaxTiles || e.src.baseURL != tc.TileURL {
-		t.Fatalf("shared source: max %d, cache %d, base %s", e.src.maxTiles, e.src.capacity, e.src.baseURL)
+	if e.src.maxTiles != losMaxTiles || e.src.cache.maxItems != losMaxTiles || e.src.baseURL != tc.TileURL {
+		t.Fatalf("shared source: max %d, cache %d, base %s", e.src.maxTiles, e.src.cache.maxItems, e.src.baseURL)
 	}
 	if e.src.source != "SRTM (dem.example.org)" || p.source != e.src.source {
 		t.Fatalf("attribution: LOS %q, planner %q", e.src.source, p.source)
@@ -153,8 +153,8 @@ func TestTerrainServicesShareOneSource(t *testing.T) {
 	// A larger planner raises the shared cap and cache floor.
 	big := &PlannerConfig{Enabled: true, MaxAreaKm: 200, NodeMarginKm: 50, MaxLegKm: 150}
 	e, p = newSrv(&Config{LOS: &LOSConfig{Enabled: true}, Planner: big})
-	if e.src != p.src.(*srtmSource) || e.src.maxTiles != 28 || e.src.capacity != 28 {
-		t.Fatalf("big planner: max %d, cache %d", e.src.maxTiles, e.src.capacity)
+	if e.src != p.src.(*srtmSource) || e.src.maxTiles != 28 || e.src.cache.maxItems != 28 {
+		t.Fatalf("big planner: max %d, cache %d", e.src.maxTiles, e.src.cache.maxItems)
 	}
 	if e.src.source != terrainDefaultSource {
 		t.Fatalf("default attribution %q", e.src.source)
@@ -190,7 +190,7 @@ func TestTerrainCacheHoldsOneView(t *testing.T) {
 		if got := c.cacheTiles(view); got != tc.want {
 			t.Errorf("tileCacheTiles=%d: cache %d, want %d", tc.configured, got, tc.want)
 		}
-		if got := newSRTMSource(c, view).capacity; got != tc.want {
+		if got := newSRTMSource(c, view).cache.maxItems; got != tc.want {
 			t.Errorf("tileCacheTiles=%d: source capacity %d, want %d", tc.configured, got, tc.want)
 		}
 	}

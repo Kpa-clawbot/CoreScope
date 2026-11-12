@@ -43,10 +43,10 @@ func (n *elevNodes) get() []nodeInfo {
 }
 
 // register adds nodes at the points and forces a node-set rebuild.
-func (n *elevNodes) register(pts ...elevPoint) {
+func (n *elevNodes) register(pts ...geoPoint) {
 	n.mu.Lock()
 	for _, p := range pts {
-		n.ns = append(n.ns, nodeInfo{Lat: p.lat, Lon: p.lon, HasGPS: true})
+		n.ns = append(n.ns, nodeInfo{Lat: p.Lat, Lon: p.Lon, HasGPS: true})
 	}
 	n.mu.Unlock()
 	n.svc.mu.Lock()
@@ -89,14 +89,14 @@ func newElevTest(t testing.TB, h http.HandlerFunc) *elevTest {
 
 const elevTestClient = "192.0.2.1:5000"
 
-func elevParsePts(pts string) []elevPoint {
+func elevParsePts(pts string) []geoPoint {
 	parts := strings.Split(pts, ",")
-	var ps []elevPoint
+	var ps []geoPoint
 	for i := 0; i+1 < len(parts); i += 2 {
 		la, e1 := strconv.ParseFloat(parts[i], 64)
 		lo, e2 := strconv.ParseFloat(parts[i+1], 64)
 		if e1 == nil && e2 == nil {
-			ps = append(ps, elevPoint{la, lo})
+			ps = append(ps, geoPoint{la, lo})
 		}
 	}
 	return ps
@@ -276,7 +276,7 @@ func TestElevationMatchesPlannerProfile(t *testing.T) {
 	var ns []nodeInfo
 	for i, pt := range elevParsePts(pts) {
 		ns = append(ns, nodeInfo{PublicKey: fmt.Sprintf("ee%02d", i), Name: "N", Role: "repeater",
-			Lat: pt.lat, Lon: pt.lon, HasGPS: true, LastSeen: time.Now()})
+			Lat: pt.Lat, Lon: pt.Lon, HasGPS: true, LastSeen: time.Now()})
 	}
 	p.data = &fakePlannerData{serverPlannerData: serverPlannerData{et.srv}, ns: ns}
 	p.fastWait = 10 * time.Second
@@ -307,7 +307,7 @@ func TestElevationMatchesPlannerProfile(t *testing.T) {
 		if l.Error != "" || pl.Error != "" {
 			t.Fatalf("leg %d errors: LOS %q, planner %q", i, l.Error, pl.Error)
 		}
-		a, b := geoPoint{gp[i].lat, gp[i].lon}, geoPoint{gp[i+1].lat, gp[i+1].lon}
+		a, b := gp[i], gp[i+1]
 		if n := planProfileSamples(geoDistKm(a, b)); len(l.ElevM) != n {
 			t.Fatalf("leg %d: %d samples, want %d", i, len(l.ElevM), n)
 		}
@@ -337,8 +337,8 @@ func TestElevationLoadsOnlyLegTiles(t *testing.T) {
 		t.Fatalf("the leg's samples touch %d tiles, its box %d: the test needs fewer", len(want), box.count())
 	}
 	for _, p := range legSamplePoints(a, b) {
-		if !slices.Contains(want, srtmKeyOf(p.lat, p.lon)) {
-			t.Fatalf("sample (%v, %v) is in no listed tile", p.lat, p.lon)
+		if !slices.Contains(want, srtmKeyOf(p.Lat, p.Lon)) {
+			t.Fatalf("sample (%v, %v) is in no listed tile", p.Lat, p.Lon)
 		}
 	}
 	tile := srtmConstTile(t, 250, srtmRawBytes, gzip.BestSpeed)
@@ -369,26 +369,20 @@ func TestElevationLoadsOnlyLegTiles(t *testing.T) {
 // side, and agree with the planner's rectangular view.
 func TestElevationDegreeLinePoints(t *testing.T) {
 	et := newElevTest(t, nil)
-	var keys []srtmKey
 	for lat := 29; lat <= 31; lat++ {
 		for lon := -98; lon <= -96; lon++ {
 			k := srtmKey{lat, lon}
-			keys = append(keys, k)
 			et.src.put(k, elevFieldGrid(k, elevLinear))
 		}
 	}
 	// Along the -97 meridian, to the 31,-97 corner, then along the 31st
 	// parallel (the great circle bulges north of it).
 	const pts = "30.2,-97,30.8,-97,31,-97,31,-96.5,31,-96"
-	gp := elevParsePts(pts)
+	geo := elevParsePts(pts)
 	if !slices.Contains(legTiles(geoPoint{31, -97}, geoPoint{31, -96.5}), srtmKey{31, -97}) {
 		t.Fatal("the corner point does not load the tile north-east of it")
 	}
 	resp := elevLegs(t, et.get(pts))
-	var geo []geoPoint
-	for _, p := range gp {
-		geo = append(geo, geoPoint{p.lat, p.lon})
-	}
 	tmpl := make([]PlannerProfileLeg, len(geo)-1)
 	for i := range tmpl {
 		tmpl[i].DistanceKm = losRound(geoDistKm(geo[i], geo[i+1]), 1000)
@@ -404,8 +398,8 @@ func TestElevationDegreeLinePoints(t *testing.T) {
 		}
 		samples := legSamplePoints(geo[i], geo[i+1])
 		for j, e := range l.ElevM {
-			if want := elevLinear(samples[j].lat, samples[j].lon); math.Abs(e-want) > 0.05+1e-6 {
-				t.Fatalf("leg %d sample %d at (%v, %v): %v, want %v", i, j, samples[j].lat, samples[j].lon, e, want)
+			if want := elevLinear(samples[j].Lat, samples[j].Lon); math.Abs(e-want) > 0.05+1e-6 {
+				t.Fatalf("leg %d sample %d at (%v, %v): %v, want %v", i, j, samples[j].Lat, samples[j].Lon, e, want)
 			}
 		}
 		if !slices.Equal(l.ElevM, plan.Legs[i].ElevM) {
