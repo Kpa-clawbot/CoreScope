@@ -156,8 +156,24 @@ func (l *wsLimiter) clientIP(r *http.Request) (ip net.IP, distinct bool) {
 // the address that connected, so the rightmost untrusted entry cannot be
 // forged. An unparseable entry ends the walk at the peer, since it cannot be
 // attributed to any proxy. distinct has the same meaning as for clientIP.
+//
+// The result is key-ready: an IPv6 address is masked to its /64, because a
+// single subscriber is routinely delegated a whole /64 and keying on the full
+// address would hand it 2^64 buckets. IPv4 is unchanged.
 func (l *wsLimiter) clientIPRightmost(r *http.Request) (ip net.IP, distinct bool) {
-	return l.resolveClientIP(r, true)
+	ip, distinct = l.resolveClientIP(r, true)
+	return maskIPv6To64(ip), distinct
+}
+
+var ipv6Mask64 = net.CIDRMask(64, 128)
+
+// maskIPv6To64 truncates a native IPv6 address to its /64 network. IPv4 and
+// IPv4-mapped addresses (To4 != nil) are returned as they are.
+func maskIPv6To64(ip net.IP) net.IP {
+	if ip == nil || ip.To4() != nil {
+		return ip
+	}
+	return ip.Mask(ipv6Mask64)
 }
 
 func (l *wsLimiter) resolveClientIP(r *http.Request, rightmost bool) (ip net.IP, distinct bool) {
@@ -191,24 +207,45 @@ func (l *wsLimiter) resolveClientIP(r *http.Request, rightmost bool) (ip net.IP,
 	return peer, true
 }
 
+// parseXFFHop parses one X-Forwarded-For entry. Some proxies write "ip:port"
+// or "[v6]:port", and a bare IPv6 may be wrapped in brackets; all of those are
+// accepted. Returns nil when the entry is not an address.
+func parseXFFHop(raw string) net.IP {
+	e := strings.TrimSpace(raw)
+	if ip := net.ParseIP(e); ip != nil {
+		return ip
+	}
+	if host, _, err := net.SplitHostPort(e); err == nil {
+		e = host
+	}
+	if len(e) > 2 && e[0] == '[' && e[len(e)-1] == ']' {
+		e = e[1 : len(e)-1]
+	}
+	return net.ParseIP(e)
+}
+
 // rightmostUntrusted returns the last X-Forwarded-For entry (across all
-// header lines) that is not a trusted proxy, or nil when every entry is
-// trusted, the header is empty, or an entry is unparseable.
+// header lines) that is not a trusted proxy. When every entry is trusted it
+// returns the leftmost one (nginx real_ip_recursive), so clients inside a
+// trusted range are still told apart. It returns nil when the header is
+// empty or an entry reached by the walk is unparseable.
 func rightmostUntrusted(values []string, trusted []*net.IPNet) net.IP {
 	if len(values) == 0 {
 		return nil
 	}
 	hops := strings.Split(strings.Join(values, ","), ",")
+	var leftmost net.IP
 	for i := len(hops) - 1; i >= 0; i-- {
-		ip := net.ParseIP(strings.TrimSpace(hops[i]))
+		ip := parseXFFHop(hops[i])
 		if ip == nil {
 			return nil
 		}
 		if !ipInAny(ip, trusted) {
 			return ip
 		}
+		leftmost = ip
 	}
-	return nil
+	return leftmost
 }
 
 // allow decides whether an upgrade may proceed. On rejection it returns the

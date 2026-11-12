@@ -617,6 +617,8 @@ type WebSocketConfig struct {
 	// /api/elevation/profile and /api/planner/* limits take the rightmost
 	// entry that is not a trusted proxy, so behind a CDN list the CDN's
 	// ranges here too, or every client looks like the CDN.
+	// A listed proxy MUST append to X-Forwarded-For (nginx $proxy_add_x_forwarded_for);
+	// behind a CDN, anyone sending from inside its ranges can choose the hop used.
 	// Never list an address you do not control; anyone reaching the server
 	// from a trusted address can name any client IP they like.
 	TrustedProxies []string `json:"trustedProxies,omitempty"`

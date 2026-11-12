@@ -419,11 +419,25 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
 ```
 
 The `Upgrade` and `Connection` headers are required for WebSocket support.
+
+The `X-Forwarded-For` line matters for the per-client limits on
+`/api/elevation/profile` and `/api/planner/*`. Without it stock nginx passes
+the visitor's own header through untouched, and the entry CoreScope trusts is
+chosen by the visitor. `$proxy_add_x_forwarded_for` appends the real peer
+address.
+
+A proxy listed in `webSocket.trustedProxies` MUST append to `X-Forwarded-For`
+(never replace it with a client-supplied value). If you list a CDN's ranges,
+anyone who can send requests from inside those ranges (for example CDN
+workers) can choose the hop CoreScope uses. Traefik appends to
+`X-Forwarded-For` by default for trusted entrypoints; check yours.
 
 ### Option 2: Built-in Caddy (auto-TLS)
 
@@ -446,7 +460,10 @@ The container includes Caddy for automatic Let's Encrypt certificates:
      ghcr.io/kpa-clawbot/corescope:latest
    ```
 
-Caddy handles certificate issuance and renewal automatically.
+Caddy handles certificate issuance and renewal automatically. `reverse_proxy`
+appends the connecting address to `X-Forwarded-For` by default, so no extra
+header configuration is needed; list the Caddy address in
+`webSocket.trustedProxies`.
 
 ---
 

@@ -47,7 +47,7 @@
     "upgradesPerMinPerIP": 30,
     "_comment_upgradesPerMinPerIP": "#1794 - handshakes per minute from one client address. On by default. Safe under CGNAT: a real client upgrades a handful of times per minute even while reconnecting, so 30 leaves ordinary traffic alone while flattening a scraper reconnect loop. Set 0 to disable.",
     "trustedProxies": [],
-    "_comment_trustedProxies": "#1794 - addresses or CIDRs of YOUR reverse proxy. REQUIRED for the per-IP limits to do anything behind nginx/Caddy/Traefik/ingress: without it every visitor shares the proxy's address, so the limits are skipped and one warning is logged at startup. X-Forwarded-For is believed only from these addresses, because anyone else can forge it. Never list an address you do not control.",
+    "_comment_trustedProxies": "#1794 - addresses or CIDRs of YOUR reverse proxy. REQUIRED for the per-IP limits to do anything behind nginx/Caddy/Traefik/ingress: without it every visitor shares the proxy's address, so the limits are skipped and one warning is logged at startup. X-Forwarded-For is believed only from these addresses, because anyone else can forge it. Never list an address you do not control. A listed proxy MUST append to X-Forwarded-For (nginx: proxy_add_x_forwarded_for); if you list a CDN, anyone who can send from inside its ranges can choose the hop used.",
     "deny": [],
     "_comment_deny": "#1794 - addresses or CIDRs refused at the /ws upgrade, before the handshake. Accepts both \"1.2.3.4\" and \"1.2.3.0/24\". Applies even behind an unconfigured proxy, since it is your explicit instruction. Rejections are counted in /api/stats under websocket.rejectedDeny."
   },
