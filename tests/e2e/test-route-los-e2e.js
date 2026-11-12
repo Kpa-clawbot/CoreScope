@@ -132,7 +132,7 @@ const chipInfo = (page) => page.evaluate(() =>
     assert(c.length === 4, 'expected 4 rows, got ' + c.length);
     assert(c[0] === null, 'row 1 should have no chip');
     assert(/mc-los-tone-good/.test(c[1].cls) && /LOS clear/.test(c[1].text), 'row 2: ' + JSON.stringify(c[1]));
-    assert(/mc-los-tone-bad/.test(c[2].cls) && /LOS blocked/.test(c[2].text), 'row 3: ' + JSON.stringify(c[2]));
+    assert(/mc-los-tone-warn/.test(c[2].cls) && /Terrain in path/.test(c[2].text), 'row 3: ' + JSON.stringify(c[2]));
     assert(/LOS n\/a/.test(c[3].text), 'row 4: ' + JSON.stringify(c[3]));
   });
 
@@ -180,7 +180,7 @@ const chipInfo = (page) => page.evaluate(() =>
     assert(rec.count === 1, 'elevation requests: ' + rec.count);
     const c = await chipInfo(page);
     assert(/mc-los-tone-(good|warn|bad)/.test(c[2].cls), 'row 3 chip lost its verdict: ' + JSON.stringify(c[2]));
-    assert(/LOS (clear|marginal|blocked)/.test(c[2].text), 'row 3 text: ' + c[2].text);
+    assert(/LOS (clear|marginal)|Terrain in path/.test(c[2].text), 'row 3 text: ' + c[2].text);
   });
 
   await step('reload with &los=2 opens the panel on leg 2', async () => {

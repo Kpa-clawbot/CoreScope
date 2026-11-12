@@ -202,26 +202,44 @@
     return ERROR_REASONS[r.error] || ERROR_REASONS.upstream;
   }
 
+  // Every leg drawn here is a hop of a real packet's resolved path, so the
+  // packet was heard across it. A "blocked" model verdict therefore means
+  // "terrain in the way of the assumed antennas", not "cannot work"; the
+  // planner (which shares MeshLOS.VERDICTS) keeps the hard wording.
+  var SOFT_BLOCKED = 'Terrain in path';
+  var HEARD_ANYWAY = 'The packet was heard on this hop anyway: the antennas may be higher than assumed, or the hop may be mis-resolved.';
+
+  function fmtAnt(m) { return String(Math.round(Number(m) * 10) / 10); }
+
+  function antennaNote(an) {
+    return fmtAnt(an.antennaAM) + ' m / ' + fmtAnt(an.antennaBM) + ' m antennas';
+  }
+
   // r: a MeshLOS.analyze() result, an error result, or null while loading.
   function chipText(r) {
     if (!r) return 'LOS…';
     if (r.error) return 'LOS n/a';
-    return r.verdict === 'blocked' ? 'LOS blocked' : r.verdict === 'marginal' ? 'LOS marginal' : 'LOS clear';
+    return r.verdict === 'blocked' ? SOFT_BLOCKED : r.verdict === 'marginal' ? 'LOS marginal' : 'LOS clear';
   }
 
   function chipTone(r) {
     if (!r || r.error) return 'muted';
+    if (r.verdict === 'blocked') return 'warn';
     var v = verdicts()[r.verdict];
     return v ? v.tone : 'muted';
   }
 
   function verdictSummary(an) {
     var v = verdicts()[an.verdict];
-    if (an.verdict === 'blocked' && an.obstructionM > 0) {
-      return v.label + ' — terrain ' + fmtObstruction(an.obstructionM) + ' m above the line of sight';
+    var ant = ' at ' + antennaNote(an);
+    if (an.verdict === 'blocked') {
+      var head = an.obstructionM > 0
+        ? 'terrain ' + fmtObstruction(an.obstructionM) + ' m above the line' + ant
+        : 'terrain in path' + ant;
+      return head + '. ' + HEARD_ANYWAY;
     }
-    if (an.clearance === Infinity) return v.label;
-    return v.label + ' — ' + Math.round(an.clearance * 100) + '% of first Fresnel zone';
+    if (an.clearance === Infinity) return v.label + ant;
+    return v.label + ' — ' + Math.round(an.clearance * 100) + '% of first Fresnel zone' + ant;
   }
 
   function chipTitle(r, prevName) {
@@ -233,11 +251,12 @@
 
   // Map marker tooltip for a warn/bad leg.
   function markerText(an, nameA) {
+    var ant = ' at ' + antennaNote(an);
     if (an.obstructionM > 0) {
-      return 'Terrain ' + fmtObstruction(an.obstructionM) + ' m above line of sight, ' +
-        fmtKm(an.worstKm) + ' km from ' + nameA;
+      return 'Terrain ' + fmtObstruction(an.obstructionM) + ' m above line of sight' + ant + ', ' +
+        fmtKm(an.worstKm) + ' km from ' + nameA + '. Heard on this hop anyway.';
     }
-    return 'Fresnel zone ' + Math.round(an.clearance * 100) + '% clear';
+    return 'Fresnel zone ' + Math.round(an.clearance * 100) + '% clear' + ant;
   }
 
   function parseSetting(name, raw) {
@@ -635,7 +654,9 @@
     var pill;
     if (an) {
       var v = verdicts()[an.verdict];
-      pill = '<span class="mc-los-pill mc-los-tone-' + v.tone + '" title="' + esc(v.detail) + '">' + esc(v.label) + '</span>';
+      var blk = an.verdict === 'blocked';
+      pill = '<span class="mc-los-pill mc-los-tone-' + chipTone(an) + '" title="' +
+        esc(blk ? v.detail + ' ' + HEARD_ANYWAY : v.detail) + '">' + esc(blk ? SOFT_BLOCKED : v.label) + '</span>';
     } else {
       pill = '<span class="mc-los-pill mc-los-tone-muted' + (st ? '' : ' mc-los-loading') + '">' + (st ? 'n/a' : 'Checking…') + '</span>';
     }

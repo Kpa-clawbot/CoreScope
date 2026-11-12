@@ -370,12 +370,13 @@ async function main() {
     assert(I.chipText(clear) === 'LOS clear' && I.chipTone(clear) === 'good', 'clear: "LOS clear", good');
     assert(I.chipText(clear60) === 'LOS clear' && I.chipTone(clear60) === 'good', 'clear60: "LOS clear", good');
     assert(I.chipText(marginal) === 'LOS marginal' && I.chipTone(marginal) === 'warn', 'marginal: "LOS marginal", warn');
-    assert(I.chipText(blocked) === 'LOS blocked' && I.chipTone(blocked) === 'bad', 'blocked: "LOS blocked", bad');
+    assert(I.chipText(blocked) === 'Terrain in path' && I.chipTone(blocked) === 'warn', 'blocked on a travelled leg: "Terrain in path", warn tone');
     const pct = Math.round(clear.clearance * 100);
-    assert(I.chipTitle(clear, 'CLTR') === 'Line of sight from CLTR: Clear — ' + pct + '% of first Fresnel zone',
-      'clear title: "Line of sight from CLTR: Clear — ' + pct + '% of first Fresnel zone"');
-    assert(/: Marginal — \d+% of first Fresnel zone$/.test(I.chipTitle(marginal, 'X')), 'marginal title gives the Fresnel %');
-    assert(/: Blocked — terrain \d+ m above the line of sight$/.test(I.chipTitle(blocked, 'X')), 'blocked title gives the obstruction height');
+    assert(I.chipTitle(clear, 'CLTR') === 'Line of sight from CLTR: Clear — ' + pct + '% of first Fresnel zone at 40 m / 40 m antennas',
+      'clear title: "Line of sight from CLTR: Clear — ' + pct + '% of first Fresnel zone at 40 m / 40 m antennas"');
+    assert(/: Marginal — \d+% of first Fresnel zone at 5 m \/ 5 m antennas$/.test(I.chipTitle(marginal, 'X')), 'marginal title gives the Fresnel %');
+    assert(/: terrain \d+ m above the line at 5 m \/ 5 m antennas\. The packet was heard on this hop anyway: .*mis-resolved\.$/.test(I.chipTitle(blocked, 'X')), 'blocked title gives the obstruction height, the heights, and the heard-anyway note');
+
     const tooLong = { error: 'too_long', distanceKm: 412.1 };
     const upstream = { error: 'upstream' };
     const unknown = { error: 'unknown_point', distanceKm: 3 };
@@ -388,8 +389,8 @@ async function main() {
     assert(/Node location unknown to the server$/.test(I.chipTitle(unknown, 'X')), 'unknown_point title: "Node location unknown to the server"');
     assert(/Elevation lookups are rate-limited; try again shortly$/.test(I.chipTitle(limited, 'X')), 'rate_limited title: "Elevation lookups are rate-limited; try again shortly"');
     assert(I.chipTitle(null, 'X') === 'Line of sight from X: checking terrain', 'loading title');
-    assert(/^Terrain \d+ m above line of sight, [\d.]+ km from Hill$/.test(I.markerText(blocked, 'Hill')), 'obstruction marker tooltip (obstructionM > 0)');
-    assert(/^Fresnel zone \d+% clear$/.test(I.markerText(marginal, 'Hill')), 'marginal marker tooltip (no obstruction)');
+    assert(/^Terrain \d+ m above line of sight at 5 m \/ 5 m antennas, [\d.]+ km from Hill\. Heard on this hop anyway\.$/.test(I.markerText(blocked, 'Hill')), 'obstruction marker tooltip (obstructionM > 0)');
+    assert(/^Fresnel zone \d+% clear at 5 m \/ 5 m antennas$/.test(I.markerText(marginal, 'Hill')), 'marginal marker tooltip (no obstruction)');
   }
 
   console.log('\n=== fmtClearance ===');
@@ -489,19 +490,19 @@ async function main() {
     await flush();
     const c1 = chipOf(rows[1]), c2 = chipOf(rows[2]), c5 = chipOf(rows[5]);
     assert(c1.textContent === 'LOS clear' && /mc-los-tone-good/.test(c1.className), 'flat leg → "LOS clear", good tone');
-    assert(c2.textContent === 'LOS blocked' && /mc-los-tone-bad/.test(c2.className), 'ridge leg → "LOS blocked", bad tone');
+    assert(c2.textContent === 'Terrain in path' && /mc-los-tone-warn/.test(c2.className), 'ridge leg → "Terrain in path", warn tone');
     assert(c5.textContent === 'LOS n/a' && /mc-los-tone-muted/.test(c5.className), 'unknown_point leg → "LOS n/a", muted');
-    assert(/^Line of sight from CLTR Repeater: Clear — \d+% of first Fresnel zone$/.test(c1.title), 'chip title names the previous hop (' + c1.title + ')');
+    assert(/^Line of sight from CLTR Repeater: Clear — \d+% of first Fresnel zone at 30 m \/ 30 m antennas$/.test(c1.title), 'chip title names the previous hop (' + c1.title + ')');
     assert(/Node location unknown to the server/.test(c5.title), 'unknown_point chip title');
-    assert(/Blocked/.test(c2.getAttribute('aria-label')) && /Show terrain profile$/.test(c2.getAttribute('aria-label')), 'aria-label carries the verdict');
+    assert(/heard on this hop anyway/.test(c2.getAttribute('aria-label')) && /Show terrain profile$/.test(c2.getAttribute('aria-label')), 'aria-label carries the verdict');
     assert(rows[1].querySelector('.mc-rt-name').classList.contains('mc-los-has-chip'), 'name cell flagged for the chip layout');
     assert(rows[1].querySelector('.mc-los-name-text').textContent === 'CJS SF Mission', 'name text wrapped for its own ellipsis');
     const layer = t.I.state.layer;
     const mks = liveMarkers(t.made, layer);
     assert(mks.length === 1, 'one obstruction marker (blocked leg only) (got ' + mks.length + ')');
-    assert(mks[0].opts.icon.className === 'mc-los-obstruction mc-los-tone-bad', 'marker divIcon classes');
+    assert(mks[0].opts.icon.className === 'mc-los-obstruction mc-los-tone-warn', 'marker divIcon classes');
     assert(/#ph-warning/.test(mks[0].opts.icon.html), 'marker uses the phosphor warning glyph');
-    assert(/^Terrain \d+ m above line of sight, [\d.]+ km from CJS SF Mission$/.test(mks[0].tooltip), 'marker tooltip (' + mks[0].tooltip + ')');
+    assert(/^Terrain \d+ m above line of sight at 30 m \/ 30 m antennas, [\d.]+ km from CJS SF Mission\. Heard on this hop anyway\.$/.test(mks[0].tooltip), 'marker tooltip (' + mks[0].tooltip + ')');
     const mid = t.ctx.MeshLOS.intermediatePoint(B, C, 0.5);
     assert(Math.abs(mks[0].ll[0] - mid.lat) < 1e-3 && Math.abs(mks[0].ll[1] - mid.lon) < 1e-3, 'marker sits at the worst point (ridge peak, mid-leg)');
 
