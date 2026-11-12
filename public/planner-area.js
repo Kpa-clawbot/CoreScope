@@ -572,6 +572,11 @@
     }
     function onPtrDown(e) {
       if (!drawing) return;
+      // Zoom buttons, attribution and the LOS panel sit in the map container but outside the map pane,
+      // and Leaflet's disableClickPropagation does not stop pointerdown: leave those taps alone.
+      var pane = map.getPane && map.getPane('mapPane');
+      // The container itself (no tile drawn there yet) is still the map.
+      if (pane && e.target && e.target !== drawing.container && !pane.contains(e.target)) return;
       if (e.isPrimary === false) { resetGesture(); return; }       // second finger (pinch): cancel cleanly
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       if (drawing.pid !== null) return;

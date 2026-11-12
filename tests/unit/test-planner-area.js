@@ -364,6 +364,8 @@ function drawMap(opts) {
     getContainer: () => c, fitBounds() {}, getZoom: () => 9, on() {}, off() {},
     mouseEventToLatLng: (e) => ({ lat: e.lat, lng: e.lng }),
     dragging: { enabled: () => st.dragOn, disable() { st.dragOn = false; st.log.push('off'); }, enable() { st.dragOn = true; st.log.push('on'); } } };
+  const pane = { contains: (t) => !!t && t.inPane === true };
+  map.getPane = (n) => (n === 'mapPane' ? pane : null);
   return { map, c, st };
 }
 function drawSetup(opts) {
@@ -416,6 +418,43 @@ test('draw: two taps pick the corners', () => {
   d.fire('pointermove', { pointerId: 3, pointerType: 'touch', lat: 30.2, lng: -97.8 });   // rubber band follows
   d.fire('pointerdown', Object.assign({ clientX: 200, clientY: 200, lat: 30.45, lng: -97.55 }, t));
   d.fire('pointerup', Object.assign({ clientX: 200, clientY: 200, lat: 30.45, lng: -97.55 }, t));
+  assert(lastBbox(d) && JSON.stringify(lastBbox(d)).includes('30.45'), JSON.stringify(d.calls));
+  d.inst.unmount();
+});
+
+test('draw: a pointerdown on a map control (outside the map pane) is ignored', () => {
+  const d = drawSetup();
+  d.start();
+  d.fire('pointerdown', { target: { inPane: false }, clientX: 5, clientY: 5, lat: 30, lng: -98 });
+  assert.deepStrictEqual(d.c._captured, [], 'no pointer capture');
+  d.fire('pointerup', { target: { inPane: false }, clientX: 5, clientY: 5, lat: 30, lng: -98 });
+  assert.strictEqual(d.calls.length, 0);
+  d.fire('pointerdown', { target: { inPane: true }, clientX: 10, clientY: 10, lat: 30, lng: -98 });   // a map tap still works
+  assert.deepStrictEqual(d.c._captured, [1]);
+  d.inst.unmount();
+});
+
+test('draw: a drag that starts on the bare map container (no tile there yet) still draws', () => {
+  const d = drawSetup();
+  d.start();
+  d.fire('pointerdown', { target: d.c, clientX: 10, clientY: 10, lat: 30, lng: -98 });
+  d.fire('pointerup', { target: d.c, clientX: 100, clientY: 100, lat: 30.4, lng: -97.6 });
+  assert(lastBbox(d) && JSON.stringify(lastBbox(d)).includes('30.4'), JSON.stringify(d.calls));
+  d.inst.unmount();
+});
+
+test('draw: after the first corner, a tap on a control does not finish the rectangle', () => {
+  const d = drawSetup();
+  d.start();
+  const map = { target: { inPane: true } }, ctl = { target: { inPane: false } };
+  d.fire('pointerdown', Object.assign({ clientX: 10, clientY: 10, lat: 30, lng: -98 }, map));
+  d.fire('pointerup', Object.assign({ clientX: 10, clientY: 10, lat: 30, lng: -98 }, map));
+  d.fire('pointerdown', Object.assign({ clientX: 300, clientY: 300, lat: 30.45, lng: -97.55 }, ctl));
+  d.fire('pointerup', Object.assign({ clientX: 300, clientY: 300, lat: 30.45, lng: -97.55 }, ctl));
+  assert.strictEqual(d.calls.length, 0, 'control tap must not set the second corner');
+  assert.strictEqual(nListeners(d), 4, 'still drawing');
+  d.fire('pointerdown', Object.assign({ clientX: 200, clientY: 200, lat: 30.45, lng: -97.55 }, map));
+  d.fire('pointerup', Object.assign({ clientX: 200, clientY: 200, lat: 30.45, lng: -97.55 }, map));
   assert(lastBbox(d) && JSON.stringify(lastBbox(d)).includes('30.45'), JSON.stringify(d.calls));
   d.inst.unmount();
 });
