@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -167,7 +168,7 @@ func (l *rateLimiter) sweepLocked(now time.Time) {
 func (a *authService) allow(w http.ResponseWriter, r *http.Request, l *rateLimiter, extraKeys ...string) bool {
 	keys := extraKeys
 	if ip, distinct := a.ipr.clientIP(r); distinct && ip != nil {
-		keys = append([]string{"ip:" + ip.String()}, extraKeys...)
+		keys = append([]string{rateLimitIPKey(ip)}, extraKeys...)
 	} else {
 		a.warnIndistinct.Do(func() {
 			log.Printf("[users] rate limits by IP are off: requests arrive from a proxy and userManagement.trustedProxies is empty; per-address limits still apply, and the webhook limiter is off too")
@@ -180,6 +181,18 @@ func (a *authService) allow(w http.ResponseWriter, r *http.Request, l *rateLimit
 		}
 	}
 	return true
+}
+
+// rateLimitIPKey is the rate-limit key for a client address. IPv4 (and an
+// IPv4-mapped IPv6 address) is keyed by the full address; any other IPv6
+// address by its /64, the smallest block an ISP hands one subscriber, so one
+// attacker cannot mint 2^64 keys (buckets in memory, rows in the shared
+// store). Every IP-keyed limiter goes through allow, hence through here.
+func rateLimitIPKey(ip net.IP) string {
+	if v4 := ip.To4(); v4 != nil {
+		return "ip:" + v4.String()
+	}
+	return "ip:" + ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
 // writeTooManyRequests answers 429 with a Retry-After of at least 1 s.

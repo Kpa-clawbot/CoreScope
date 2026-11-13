@@ -356,3 +356,81 @@ func TestUsersPGURLSetsSearchPath(t *testing.T) {
 }
 
 func dbschemaWriterDSN(path string) string { return dbschema.WriterDSN(path) }
+
+// TestVerifyUsersRedactsSecrets: a mismatching secret column is reported by
+// name and row, never by value.
+func TestVerifyUsersRedactsSecrets(t *testing.T) {
+	a, _ := seedUsers(t)
+	b := filepath.Join(t.TempDir(), "users-b.db")
+	data, err := os.ReadFile(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const (
+		newHash  = "LEAK-password-hash-value"
+		newUnsub = "LEAK-unsub-token-value"
+		newMail  = "leak-email@example.net"
+	)
+	db, err := sql.Open("sqlite3", dbschemaWriterDSN(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range []string{
+		`UPDATE users SET password_hash = '` + newHash + `' WHERE email = 'bob@example.org'`,
+		`UPDATE notification_prefs SET unsub_token = '` + newUnsub + `'`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, out := run(t, "verify-users", "-a", "sqlite:"+a, "-b", "sqlite:"+b)
+	wantFail(t, code, out, "MISMATCH", "password_hash", "<redacted, ")
+	for _, leak := range []string{newHash, newUnsub, "bob@example.org"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("output leaks %q:\n%s", leak, out)
+		}
+	}
+
+	// An email mismatch is redacted too (both sides' values): restore the
+	// other columns so the email is the first difference reported.
+	da, err := sql.Open("sqlite3", sqliteReadOnlyDSN(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer da.Close()
+	var orig string
+	if err := da.QueryRow(`SELECT password_hash FROM users WHERE email = 'bob@example.org'`).Scan(&orig); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE email = 'bob@example.org'`, orig); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE users SET email = '` + newMail + `' WHERE email = 'bob@example.org'`); err != nil {
+		t.Fatal(err)
+	}
+	code, out = run(t, "verify-users", "-a", "sqlite:"+a, "-b", "sqlite:"+b)
+	wantFail(t, code, out, "MISMATCH")
+	for _, leak := range []string{newMail, "bob@example.org", newHash} {
+		if strings.Contains(out, leak) {
+			t.Errorf("output leaks %q:\n%s", leak, out)
+		}
+	}
+}
+
+func TestRedactedValue(t *testing.T) {
+	for _, c := range []struct {
+		v    any
+		want string
+	}{{nil, "<redacted>"}, {"", "<redacted>"}, {"abcd", "<redacted, 4 bytes>"}, {[]byte{1, 2, 3}, "<redacted, 3 bytes>"}} {
+		if got := redactedValue(c.v); got != c.want {
+			t.Errorf("redactedValue(%v) = %q, want %q", c.v, got, c.want)
+		}
+	}
+	if secretColumn("display_name") || !secretColumn("password_enc") || !secretColumn("unsub_token") || !secretColumn("to_email") {
+		t.Error("secretColumn misclassifies")
+	}
+}

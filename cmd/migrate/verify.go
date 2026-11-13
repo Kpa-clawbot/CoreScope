@@ -19,6 +19,9 @@ type side struct {
 	q      queryer
 	kind   backend
 	schema *schema
+	// redact hides secret columns' values in difference reports (the users
+	// store, whose rows hold password hashes, tokens and email addresses).
+	redact bool
 }
 
 type tableResult struct {
@@ -170,6 +173,19 @@ func compareTable(ctx context.Context, a, b side, t *table, absentOnA map[string
 	if err != nil {
 		return err
 	}
+	show := func(idx int, v any) string {
+		if (a.redact || b.redact) && secretColumn(cols[idx]) {
+			return redactedValue(v)
+		}
+		return formatValue(v)
+	}
+	describe := func(row []any) string {
+		parts := make([]string, len(t.pk))
+		for i, idx := range t.pk {
+			parts[i] = t.cols[idx].name + "=" + show(idx, row[idx])
+		}
+		return strings.Join(parts, ", ")
+	}
 	diffs := 0
 	for okA || okB {
 		c := 0
@@ -193,7 +209,7 @@ func compareTable(ctx context.Context, a, b side, t *table, absentOnA map[string
 				res.unfinishedA++
 			} else {
 				diffs++
-				note(fmt.Sprintf("first difference at %s: row exists on side a only", describePK(t, na)))
+				note(fmt.Sprintf("first difference at %s: row exists on side a only", describe(na)))
 			}
 			if okA, err = advance(sa, na, "a"); err != nil {
 				return err
@@ -205,7 +221,7 @@ func compareTable(ctx context.Context, a, b side, t *table, absentOnA map[string
 				res.extraB++
 			} else {
 				diffs++
-				note(fmt.Sprintf("first difference at %s: row exists on side b only", describePK(t, nb)))
+				note(fmt.Sprintf("first difference at %s: row exists on side b only", describe(nb)))
 			}
 			if okB, err = advance(sb, nb, "b"); err != nil {
 				return err
@@ -222,7 +238,7 @@ func compareTable(ctx context.Context, a, b side, t *table, absentOnA map[string
 				for i := range cols {
 					if string(appendValue(nil, na[i])) != string(appendValue(nil, nb[i])) {
 						note(fmt.Sprintf("first difference at %s: column %s is %s on side a, %s on side b",
-							describePK(t, na), cols[i], formatValue(na[i]), formatValue(nb[i])))
+							describe(na), cols[i], show(i, na[i]), show(i, nb[i])))
 						break
 					}
 				}
@@ -239,6 +255,35 @@ func compareTable(ctx context.Context, a, b side, t *table, absentOnA map[string
 	res.digestB = hex.EncodeToString(hb.Sum(nil))
 	res.ok = diffs == 0
 	return nil
+}
+
+// secretColumn reports whether a users-store column holds a credential, a
+// token or its hash, or an email address: never printed by verify-users.
+func secretColumn(name string) bool {
+	for _, w := range []string{"token", "hash", "secret", "password", "email", "challenge", "_enc", "key", "detail"} {
+		if strings.Contains(name, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactedValue stands in for a secret value: its size only.
+func redactedValue(v any) string {
+	n := 0
+	switch x := v.(type) {
+	case nil:
+	case string:
+		n = len(x)
+	case []byte:
+		n = len(x)
+	default:
+		n = len(fmt.Sprint(x))
+	}
+	if n == 0 {
+		return "<redacted>"
+	}
+	return fmt.Sprintf("<redacted, %d bytes>", n)
 }
 
 // reportResults logs one line per table and returns an error if any differ.

@@ -211,6 +211,7 @@ func runVerifyUsers(ctx context.Context, args []string, lg *log.Logger, sw *scru
 	defer closeB()
 	fixupUsersSchema(sa.schema, sa.kind)
 	fixupUsersSchema(sb.schema, sb.kind)
+	sa.redact, sb.redact = true, true
 	lg.Printf("verifying %s (a) against %s (b)", a.display, b.display)
 	results, err := compareTables(ctx, sa, sb)
 	if err != nil {
