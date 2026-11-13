@@ -18,6 +18,7 @@ import (
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/dbschema/pgschema"
 	"github.com/meshcore-analyzer/dbx"
+	"github.com/meshcore-analyzer/users"
 )
 
 // pgxStdlibDriver is pgx's own database/sql driver (registered by its stdlib
@@ -34,6 +35,11 @@ type copyJob struct {
 	src   side
 	batch int
 	rows  int64 // total rows written
+
+	// users marks a copy-users job: the target is the Postgres accounts
+	// schema (connected to with search_path set), created through
+	// users.OpenPostgres instead of pgschema.Apply.
+	users bool
 
 	// allowPending is -allow-pending-migrations on a SQLite source: tables
 	// and nullable columns the source never got (their migrations did not
@@ -383,7 +389,13 @@ func (j *copyJob) upsertTable(ctx context.Context, ex execer, kind backend, t *t
 // Per-table transactions would instead leave a half-loaded target that the
 // operator has to drop by hand.
 func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
-	admin, err := sql.Open(dbx.PostgresDriverName, to.url)
+	connURL := to.url
+	if j.users {
+		if connURL, err = usersPGURL(to.url); err != nil {
+			return err
+		}
+	}
+	admin, err := sql.Open(dbx.PostgresDriverName, connURL)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", to.display, err)
 	}
@@ -394,12 +406,23 @@ func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
 	if err := refuseForeignSchema(ctx, admin, to); err != nil {
 		return err
 	}
-	if err := pgschema.Apply(ctx, admin, j.lg.Printf); err != nil {
+	if j.users {
+		// Same migrations the server runs; the schema must be owned by the
+		// connecting role. It takes the URL without search_path: it sets its own.
+		st, err := users.OpenPostgres(to.url)
+		if err != nil {
+			return fmt.Errorf("create accounts schema on %s: %w", to.display, err)
+		}
+		st.Close()
+	} else if err := pgschema.Apply(ctx, admin, j.lg.Printf); err != nil {
 		return fmt.Errorf("create schema on %s: %w", to.display, err)
 	}
 	tgt, err := loadSchema(ctx, admin, postgresBackend)
 	if err != nil {
 		return fmt.Errorf("read schema of %s: %w", to.display, err)
+	}
+	if j.users {
+		fixupUsersSchema(tgt, postgresBackend)
 	}
 	plan, err := j.plan(ctx, tgt)
 	if err != nil {
@@ -409,7 +432,7 @@ func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
 		return err
 	}
 
-	wdb, err := sql.Open(pgxStdlibDriver, to.url)
+	wdb, err := sql.Open(pgxStdlibDriver, connURL)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", to.display, err)
 	}

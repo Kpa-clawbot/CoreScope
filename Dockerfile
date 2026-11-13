@@ -142,6 +142,7 @@ WORKDIR /build/migrate
 COPY cmd/migrate/go.mod cmd/migrate/go.sum ./
 COPY internal/dbschema/ ../../internal/dbschema/
 COPY internal/dbx/ ../../internal/dbx/
+COPY internal/users/ ../../internal/users/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \

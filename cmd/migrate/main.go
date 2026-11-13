@@ -17,6 +17,8 @@
 //	migrate -db path/to/file.db
 //	migrate copy   -from <db> -to <db> [-batch 5000]
 //	migrate verify -a <db> -b <db>
+//	migrate copy-users   -from sqlite:<users.db> -to postgres://...
+//	migrate verify-users -a <db> -b <db>
 //
 // where <db> is sqlite:<path> or a postgres:// / postgresql:// URL. Keep the
 // password out of the URL (argv is visible in ps): use PGPASSWORD or
@@ -40,13 +42,21 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "copy" || os.Args[1] == "verify") {
+	if len(os.Args) > 1 && isSubcommand(os.Args[1]) {
 		os.Exit(runSubcommand(os.Args[1], os.Args[2:], os.Stderr))
 	}
 	legacyMain()
 }
 
-// runSubcommand runs copy or verify, writing all output to w through the
+func isSubcommand(s string) bool {
+	switch s {
+	case "copy", "verify", "copy-users", "verify-users":
+		return true
+	}
+	return false
+}
+
+// runSubcommand runs copy, verify, copy-users or verify-users, writing all output to w through the
 // password scrubber, and returns the process exit code.
 func runSubcommand(cmd string, args []string, w io.Writer) int {
 	sw := newScrubWriter(w)
@@ -55,9 +65,14 @@ func runSubcommand(cmd string, args []string, w io.Writer) int {
 	defer stop()
 
 	var err error
-	if cmd == "copy" {
+	switch cmd {
+	case "copy":
 		err = runCopy(ctx, args, lg, sw)
-	} else {
+	case "copy-users":
+		err = runCopyUsers(ctx, args, lg, sw)
+	case "verify-users":
+		err = runVerifyUsers(ctx, args, lg, sw)
+	default:
 		err = runVerify(ctx, args, lg, sw)
 	}
 	switch {

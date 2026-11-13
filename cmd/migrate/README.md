@@ -4,13 +4,15 @@ Operator tool that brings a CoreScope database to the current schema and moves
 an installation between SQLite and PostgreSQL. Built with the other binaries
 (`make build` puts `corescope-migrate` in `dist/`). The Docker image ships it too, at `/app/corescope-migrate`.
 
-Three modes:
+Modes:
 
 | Mode | Command | Use |
 |------|---------|-----|
 | Legacy | `corescope-migrate -db <sqlite path>` | Bring a SQLite file to the current schema |
 | Copy | `corescope-migrate copy -from <db> -to <db>` | Copy a whole database between backends, verified |
 | Verify | `corescope-migrate verify -a <db> -b <db>` | Compare two databases |
+| Copy users | `corescope-migrate copy-users -from sqlite:<users.db> -to postgres://…` | Move the optional accounts store to PostgreSQL, verified |
+| Verify users | `corescope-migrate verify-users -a <db> -b <db>` | Compare two account stores |
 
 ## `<db>` forms
 
@@ -92,6 +94,43 @@ Compares row counts and an ordered content digest per table. On a mismatch it
 prints the first differing primary key and exits 1. `copy` runs the same check
 itself; run `verify` again later to confirm a restored or reloaded database.
 
+## copy-users
+
+```bash
+corescope-migrate copy-users -from sqlite:<users.db> -to postgres://<accounts role>@host/db [-batch 5000]
+```
+
+Moves the user-accounts store (`userManagement`, SQLite `users.db`) into the
+PostgreSQL schema `corescope_users`. It reuses the `copy` machinery, so the
+same guarantees apply: one transaction with COPY, digests verified before
+COMMIT, a failure leaves the target empty, passwords redacted in all output.
+
+- Source is a SQLite `users.db` only, opened read-only; the target is
+  PostgreSQL only. **Stop the CoreScope server first.**
+- The source `schema_version` must equal the one this binary's accounts store
+  creates. If not, the tool refuses; start the server once on the source so it
+  migrates `users.db`, then rerun.
+- The schema `corescope_users` is created through the same code the server uses
+  (`users.OpenPostgres`), so migrations match exactly. The connecting role must
+  own the schema (or be able to create it); use the accounts role from
+  [docs/postgresql.md](../../docs/postgresql.md), not the measurement writer.
+- A non-empty target is refused (every table empty except `schema_version`).
+  Every table present in the target schema is copied, in foreign-key order,
+  with all ids preserved; identity sequences are set to MAX(id)+1.
+  `schema_version` is not copied. `mail_events` keeps its insertion order
+  (SQLite's implicit rowid becomes the Postgres `rowid` column).
+
+## verify-users
+
+```bash
+corescope-migrate verify-users -a sqlite:<users.db> -b postgres://<accounts role>@host/db
+```
+
+`verify` for account stores: row counts and an ordered digest per table, on a
+SQLite `users.db` or the Postgres `corescope_users` schema. Put the Postgres
+store (the copy) as `-b`; its schema is the reference. `copy-users` runs the
+same check itself.
+
 ## Examples
 
 SQLite to PostgreSQL (the target role must own the schema; see
@@ -120,5 +159,13 @@ corescope-migrate copy \
 then set the driver back to `sqlite`.
 
 The usage text shows only password-less URLs.
+
+Accounts store, same way (stop the server first):
+
+```bash
+export PGPASSWORD=…            # the accounts role's password
+corescope-migrate copy-users -from sqlite:/data/users.db -to postgres://corescope_users@db:5432/corescope
+corescope-migrate verify-users -a sqlite:/data/users.db -b postgres://corescope_users@db:5432/corescope
+```
 
 Exit codes: 0 success, 1 failure or verify mismatch, 2 usage error.
