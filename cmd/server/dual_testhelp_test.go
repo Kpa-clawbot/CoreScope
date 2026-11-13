@@ -2,12 +2,12 @@ package main
 
 import (
 	"database/sql"
-	_ "embed"
 	"path/filepath"
 	"reflect"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/meshcore-analyzer/dbschema"
 )
 
 // The dual-backend harness: the same end-state schema on SQLite and on
@@ -15,8 +15,9 @@ import (
 // method returns identical results from each. It is how the server's SQL is
 // proven equivalent on both backends rather than merely runnable on Postgres.
 
-//go:embed testdata/sqlite-endstate-schema.sql
-var sqliteEndStateSchema string
+// sqliteEndStateSchema is the SQLite end-state schema (kept as a name for the
+// tests that already use it; the source of truth is dbschema.SQLiteEndState).
+var sqliteEndStateSchema = dbschema.SQLiteEndState
 
 type dualDB struct {
 	sqlite, pg     *DB     // server handles: read-only, exactly as production opens them
@@ -37,7 +38,7 @@ func newDualTestDB(t *testing.T) *dualDB {
 	}
 	t.Cleanup(func() { rw.Close() })
 	rw.SetMaxOpenConns(1)
-	if _, err := rw.Exec(sqliteEndStateSchema); err != nil {
+	if _, err := rw.Exec(dbschema.SQLiteEndState); err != nil {
 		t.Fatalf("apply SQLite end-state schema: %v", err)
 	}
 	sq, err := OpenDB(path)
