@@ -2,33 +2,47 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 #
-# Adds a postgres service, a one-shot postgres-init that provisions the two
-# roles and the database with scripts/postgres-roles.sh, and points the prod
-# container at it: the ingestor connects as the writer (it owns the schema and
-# runs the migrations), the server as the read-only reader (it refuses to start
-# with any other). Both run in the one prod container, so they are given
-# separate DSNs, DB_DSN_INGESTOR and DB_DSN_SERVER; docker/entrypoint-go.sh
-# hands each process its own as DB_DSN.
+# Four services:
+#   postgres       PostgreSQL 17, data in a named volume, not published.
+#   postgres-init  one-shot: scripts/postgres-roles.sh provisions the writer
+#                  and reader roles and the database (idempotent, every `up`).
+#   prod           caddy + mosquitto + the server. DISABLE_INGESTOR=true, and
+#                  only the READER DSN: the writer credential is never in this
+#                  container's environment or files.
+#   ingestor       the same image running /app/corescope-ingestor directly as a
+#                  non-root uid, with the WRITER DSN. No supervisord, caddy or
+#                  mosquitto. It shares prod's network namespace, so the
+#                  broker is still mqtt://localhost:1883 in config.json, and
+#                  prod's data directory, for config.json, users.db and the
+#                  file queues in <data dir>/shared.
+# The separate container is the security boundary for the writer credential;
+# the in-container separation docker/entrypoint-go.sh still applies to the
+# server (its own uid, a whitelisted environment) is defence in depth.
 #
-# On PostgreSQL the entrypoint also runs the server as its own account,
-# corescope-server (uid SERVER_RUN_AS_UID, default 1001; never 0 or the
-# ingestor's uid), so it cannot read the writer DSN from another process's
-# environment. What it writes moves to <data dir>/shared (users.db, its
-# backups, the prune and multibyte queues). In the data directory, config.json
-# must be readable by that uid, and .env, if any, must not be (chmod 600);
-# the entrypoint refuses to start otherwise. See docker/entrypoint-go.sh.
+# Because the ingestor joins prod's network namespace, recreating or
+# restarting prod needs the ingestor restarted too: use `docker compose up -d`
+# (it does both), not `docker restart` on prod alone.
 #
-# Required in .env next to this file (generate each with e.g. `openssl rand -hex 24`; the DSNs
-# below carry them unencoded, so keep them to URL-safe characters):
+# In the data directory:
+#   - config.json must not set db.driver or db.dsn: the database is chosen from
+#     the environment only, and the entrypoint refuses a dsn there. On start
+#     it becomes group 61001 (CORESCOPE_SHARE_GID), mode 0660, so the server
+#     can save geo-filter edits and the ingestor can read it.
+#   - .env, if any, must not be readable by the server's uid (chmod 600).
+# gid 61001 is above the range given to ordinary users (GID_MAX 60000), so on
+# the host those files are not opened to a real user's group. The ingestor's
+# uid (INGESTOR_UID, 1000) and the server's (SERVER_RUN_AS_UID, 1001) must
+# differ from each other and from 0.
+#
+# Required in .env next to this file (generate each with e.g.
+# `openssl rand -hex 24`; the DSNs below carry them unencoded, so keep them to
+# URL-safe characters):
 #   POSTGRES_PASSWORD           the postgres superuser, used only by postgres-init
 #   CORESCOPE_WRITER_PASSWORD   the ingestor's role
 #   CORESCOPE_READER_PASSWORD   the server's role
 # Optional: CORESCOPE_DB (corescope), CORESCOPE_WRITER (corescope_writer),
-# CORESCOPE_READER (corescope_reader), SERVER_RUN_AS_UID (1001).
-#
-# Do not set db.driver or db.dsn in config.json as well: the server prefers
-# config.json over DB_DSN, and would then connect with the ingestor's DSN
-# (the entrypoint refuses a db.dsn in config.json for that reason).
+# CORESCOPE_READER (corescope_reader), SERVER_RUN_AS_UID (1001),
+# INGESTOR_UID / INGESTOR_GID (1000), CORESCOPE_SHARE_GID (61001).
 #
 # Postgres is reachable only on the compose network. To reach it from the host
 # (psql, backups), add to the postgres service:  ports: ["127.0.0.1:5432:5432"]
@@ -38,6 +52,8 @@
 # never in the URL, where `ps` would show it:
 #   PGPASSWORD=<writer password> corescope-migrate copy \
 #     -from sqlite:<path to meshcore.db> -to postgres://corescope_writer@<host>:5432/corescope
+# The ingestor refuses to start on an empty PostgreSQL while <data dir>/meshcore.db
+# still holds data (CORESCOPE_SQLITE_GUARD_PATH below).
 
 x-corescope-db: &corescope-db
   CORESCOPE_DB: ${CORESCOPE_DB:-corescope}
@@ -88,9 +104,46 @@ services:
         condition: service_completed_successfully
     environment:
       - DB_DRIVER=postgres
+      - DISABLE_INGESTOR=true
       - SERVER_RUN_AS_UID=${SERVER_RUN_AS_UID:-1001}
-      - DB_DSN_INGESTOR=postgres://${CORESCOPE_WRITER:-corescope_writer}:${CORESCOPE_WRITER_PASSWORD:?set CORESCOPE_WRITER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
+      - CORESCOPE_SHARE_GID=${CORESCOPE_SHARE_GID:-61001}
+      # The ingestor runs in its own container; both point at one stats file
+      # in the shared (setgid) directory so the perf page shows its I/O.
+      - CORESCOPE_INGESTOR_STATS=/app/data/shared/ingestor-stats.json
       - DB_DSN_SERVER=postgres://${CORESCOPE_READER:-corescope_reader}:${CORESCOPE_READER_PASSWORD:?set CORESCOPE_READER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
+
+  ingestor:
+    image: corescope:latest
+    container_name: corescope-ingestor
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+      prod:
+        condition: service_started
+    network_mode: "service:prod"
+    user: "${INGESTOR_UID:-1000}:${INGESTOR_GID:-1000}"
+    group_add:
+      - "${CORESCOPE_SHARE_GID:-61001}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    working_dir: /app
+    entrypoint: ["/app/corescope-ingestor", "-config", "/app/data/config.json"]
+    volumes:
+      - ${PROD_DATA_DIR:-~/meshcore-data}:/app/data
+    environment:
+      - DB_DRIVER=postgres
+      - DB_DSN=postgres://${CORESCOPE_WRITER:-corescope_writer}:${CORESCOPE_WRITER_PASSWORD:?set CORESCOPE_WRITER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
+      # On PostgreSQL DB_PATH only anchors the file queues it shares with the
+      # server, in the directory prod's entrypoint prepares.
+      - DB_PATH=/app/data/shared/meshcore.db
+      - CORESCOPE_SQLITE_GUARD_PATH=/app/data/meshcore.db
+      - CORESCOPE_INGESTOR_STATS=/app/data/shared/ingestor-stats.json
 
 volumes:
   postgres-data:

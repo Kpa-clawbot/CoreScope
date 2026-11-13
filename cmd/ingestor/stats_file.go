@@ -145,8 +145,11 @@ func writeStatsAtomic(path string, b []byte) error {
 	tmp := path + ".tmp"
 	// O_NOFOLLOW: if tmp is a pre-existing symlink, openat fails with ELOOP
 	// instead of clobbering the symlink target. O_TRUNC zeroes existing
-	// regular-file content. 0o600 — no need for world-readable.
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|oNoFollow, 0o600)
+	// regular-file content. 0o640: never world-readable, but group-readable so
+	// a server in another container (PostgreSQL Docker layout) that shares
+	// the directory's group can read it — the file holds performance
+	// counters only, no secrets.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|oNoFollow, 0o640)
 	if err != nil {
 		return err
 	}

@@ -69,9 +69,30 @@ valid_name() {
   [ "${#2}" -le 63 ] || die "$1 \"$2\" is longer than 63 characters"
 }
 
+# url_decode <text>: %XX sequences decoded (anything else left as it is).
+url_decode() {
+  printf '%s\n' "$1" | awk '
+    BEGIN { hex = "0123456789abcdef" }
+    {
+      out = ""; s = $0
+      while ((i = index(s, "%")) > 0) {
+        h = tolower(substr(s, i + 1, 2))
+        a = index(hex, substr(h, 1, 1)); b = index(hex, substr(h, 2, 1))
+        if (length(h) == 2 && a && b) { out = out substr(s, 1, i - 1) sprintf("%c", (a - 1) * 16 + b - 1); s = substr(s, i + 3) }
+        else { out = out substr(s, 1, i); s = substr(s, i + 1) }
+      }
+      print out s
+    }'
+}
+
 # admin_url_has_password <url-or-conninfo>: a password in the URL's userinfo,
-# or a password parameter (URL query or conninfo keyword).
+# or a password parameter (URL query or conninfo keyword), checked on the
+# text as given and percent-decoded (libpq decodes URL keys: %70assword=).
 admin_url_has_password() {
+  _admin_url_has_password "$1" || _admin_url_has_password "$(url_decode "$1")"
+}
+
+_admin_url_has_password() {
   case "$1" in
     *://*)
       _auth=${1#*://}
@@ -203,9 +224,20 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 -- Explicit, because before PostgreSQL 15 public is not owned by the database
 -- owner and the writer's CREATE came only from PUBLIC.
 SELECT format('GRANT USAGE, CREATE ON SCHEMA public TO %I', :'writer') \gexec
+-- The reader's privileges are rebuilt from nothing on every run: whatever it
+-- was given since (on tables, sequences, functions, or in the writer's
+-- default privileges, schema-wide or global) goes, then SELECT on tables
+-- comes back.
+SELECT format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', :'reader') \gexec
+SELECT format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM %I', :'reader') \gexec
+SELECT format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM %I', :'reader') \gexec
+SELECT format('REVOKE ALL ON SCHEMA public FROM %I', :'reader') \gexec
+SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I %s REVOKE ALL ON %s FROM %I',
+              :'writer', s, o, :'reader')
+  FROM (VALUES ('IN SCHEMA public'), ('')) AS sc(s),
+       (VALUES ('TABLES'), ('SEQUENCES'), ('FUNCTIONS'), ('TYPES')) AS ob(o) \gexec
 SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'reader') \gexec
 SELECT format('GRANT SELECT ON ALL TABLES IN SCHEMA public TO %I', :'reader') \gexec
-SELECT format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM %I', :'reader') \gexec
 SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT SELECT ON TABLES TO %I',
               :'writer', :'reader') \gexec
 

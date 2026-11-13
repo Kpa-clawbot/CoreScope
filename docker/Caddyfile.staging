@@ -1,3 +1,9 @@
+# Global options. The admin API (localhost:2019 by default) would let any
+# process in the container rewrite the proxy; nothing here needs it.
+{
+    admin off
+}
+
 :81 {
     reverse_proxy localhost:3000
 }

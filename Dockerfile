@@ -195,6 +195,12 @@ COPY docker/supervisord-go.conf /etc/supervisor/conf.d/supervisord.conf
 COPY docker/supervisord-go-no-mosquitto.conf /etc/supervisor/conf.d/supervisord-no-mosquitto.conf
 COPY docker/supervisord-go-no-caddy.conf /etc/supervisor/conf.d/supervisord-no-caddy.conf
 COPY docker/supervisord-go-no-mosquitto-no-caddy.conf /etc/supervisor/conf.d/supervisord-no-mosquitto-no-caddy.conf
+# DISABLE_INGESTOR=true: the same four without the ingestor (it runs in its
+# own container on PostgreSQL; see docker-compose.postgres.yml).
+COPY docker/supervisord-go-no-ingestor.conf /etc/supervisor/conf.d/supervisord-no-ingestor.conf
+COPY docker/supervisord-go-no-ingestor-no-mosquitto.conf /etc/supervisor/conf.d/supervisord-no-ingestor-no-mosquitto.conf
+COPY docker/supervisord-go-no-ingestor-no-caddy.conf /etc/supervisor/conf.d/supervisord-no-ingestor-no-caddy.conf
+COPY docker/supervisord-go-no-ingestor-no-mosquitto-no-caddy.conf /etc/supervisor/conf.d/supervisord-no-ingestor-no-mosquitto-no-caddy.conf
 COPY docker/mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY docker/Caddyfile /etc/caddy/Caddyfile
 
@@ -206,6 +212,8 @@ RUN mkdir -p /app/data /var/lib/mosquitto /data/caddy && \
 COPY docker/entrypoint-go.sh /entrypoint.sh
 # Sourced by the entrypoint, so deliberately not executable.
 COPY docker/select-service-user.sh /select-service-user.sh
+# supervisord's command for the server (environment whitelist on PostgreSQL).
+COPY docker/server-exec.sh /server-exec.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 80 443 1883
