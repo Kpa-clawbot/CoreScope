@@ -168,7 +168,7 @@ type pgsObs struct {
 	ID, TxID                                               int
 	ObserverID, ObserverName, IATA, Direction, Path, Stamp string
 	SNR, RSSI                                              *float64
-	Score                                                  *int
+	Score                                                  *float64
 }
 
 type pgsTx struct {

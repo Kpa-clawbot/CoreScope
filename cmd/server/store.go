@@ -90,7 +90,7 @@ type StoreObs struct {
 	Direction      string
 	SNR            *float64
 	RSSI           *float64
-	Score          *int
+	Score          *float64
 	PathJSON       string
 	Timestamp      string
 	// Width in hex characters, only when PathJSON matches this observation's
@@ -1012,7 +1012,7 @@ func (s *PacketStore) Load() error {
 	var obsID sql.NullInt64
 	var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 	var snr, rssi sql.NullFloat64
-	var score sql.NullInt64
+	var score sql.NullFloat64
 	var obsRawHex sql.NullString
 	var resolvedPathStr sql.NullString
 	var scopeName sql.NullString
@@ -1087,7 +1087,7 @@ func (s *PacketStore) Load() error {
 				Direction:      internStr(nullStrVal(direction)),
 				SNR:            nullFloatPtr(snr),
 				RSSI:           nullFloatPtr(rssi),
-				Score:          nullIntPtr(score),
+				Score:          nullFloatPtr(score),
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 				relayHopHexLen: n,
@@ -1348,7 +1348,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	var obsID sql.NullInt64
 	var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 	var snr, rssi sql.NullFloat64
-	var score sql.NullInt64
+	var score sql.NullFloat64
 	var obsRawHex sql.NullString
 	var resolvedPathStr sql.NullString
 	var scopeName sql.NullString
@@ -1415,7 +1415,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				Direction:      internStr(nullStrVal(direction)),
 				SNR:            nullFloatPtr(snr),
 				RSSI:           nullFloatPtr(rssi),
-				Score:          nullIntPtr(score),
+				Score:          nullFloatPtr(score),
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 				relayHopHexLen: n,
@@ -3060,7 +3060,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		relayHopHexLen                                                     uint8
 		scopeName                                                          *string
 		snr, rssi                                                          *float64
-		score                                                              *int
+		score                                                              *float64
 	}
 
 	var tempRows []tempRow
@@ -3074,7 +3074,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		var obsIDVal sql.NullInt64
 		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 		var snrVal, rssiVal sql.NullFloat64
-		var scoreVal sql.NullInt64
+		var scoreVal sql.NullFloat64
 		var obsRawHex sql.NullString
 		var scopeName sql.NullString
 
@@ -3118,7 +3118,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			scopeName:      nullStrPtr(scopeName),
 			snr:            nullFloatPtr(snrVal),
 			rssi:           nullFloatPtr(rssiVal),
-			score:          nullIntPtr(scoreVal),
+			score:          nullFloatPtr(scoreVal),
 		}
 		if obsIDVal.Valid {
 			oid := int(obsIDVal.Int64)
@@ -3460,7 +3460,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		observerIATA   string
 		direction      string
 		snr, rssi      *float64
-		score          *int
+		score          *float64
 		pathJSON       string
 		relayHopHexLen uint8
 		timestamp      string
@@ -3471,7 +3471,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		var oid, txID int
 		var observerID, observerName, observerIATA, direction, pathJSON, ts sql.NullString
 		var snr, rssi sql.NullFloat64
-		var score sql.NullInt64
+		var score sql.NullFloat64
 		var obsRawHex sql.NullString
 
 		scanArgs3 := []interface{}{&oid, &txID, &observerID, &observerName, &observerIATA, &direction,
@@ -3492,7 +3492,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			direction:      internStr(nullStrVal(direction)),
 			snr:            nullFloatPtr(snr),
 			rssi:           nullFloatPtr(rssi),
-			score:          nullIntPtr(score),
+			score:          nullFloatPtr(score),
 			pathJSON:       nullStrVal(pathJSON),
 			relayHopHexLen: observedRelayHopHexLen(nullStrVal(obsRawHex), nullStrVal(pathJSON)),
 			timestamp:      nullStrVal(ts),
@@ -4302,7 +4302,7 @@ func enrichObsFields(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 		"direction":     strOrNil(obs.Direction),
 		"snr":           floatPtrOrNil(obs.SNR),
 		"rssi":          floatPtrOrNil(obs.RSSI),
-		"score":         intPtrOrNil(obs.Score),
+		"score":         floatPtrOrNil(obs.Score),
 		"path_json":     strOrNil(obs.PathJSON),
 		"radio":         strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 	}

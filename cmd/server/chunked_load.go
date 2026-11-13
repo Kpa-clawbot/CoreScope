@@ -548,7 +548,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 	var obsID sql.NullInt64
 	var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 	var snr, rssi sql.NullFloat64
-	var score sql.NullInt64
+	var score sql.NullFloat64
 	var obsRawHex sql.NullString
 	var resolvedPathStr sql.NullString
 	var scopeName sql.NullString
@@ -627,7 +627,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				Direction:      internStr(nullStrVal(direction)),
 				SNR:            nullFloatPtr(snr),
 				RSSI:           nullFloatPtr(rssi),
-				Score:          nullIntPtr(score),
+				Score:          nullFloatPtr(score),
 				PathJSON:       obsPJ,
 				// Keep only this frame's relay eligibility, not its raw bytes.
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),

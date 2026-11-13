@@ -626,7 +626,7 @@ type Observation struct {
 	Direction    *string  `json:"direction"`
 	SNR          *float64 `json:"snr"`
 	RSSI         *float64 `json:"rssi"`
-	Score        *int     `json:"score"`
+	Score        *float64 `json:"score"`
 	Hash         *string  `json:"hash"`
 	RouteType    *int     `json:"route_type"`
 	PayloadType  *int     `json:"payload_type"`
@@ -2804,7 +2804,8 @@ func scanPacketRow(rows *sql.Rows) map[string]interface{} {
 	var id int
 	var rawHex, ts, obsID, obsName, direction, hash, pathJSON, decodedJSON, createdAt sql.NullString
 	var snr, rssi sql.NullFloat64
-	var score, routeType, payloadType, payloadVersion sql.NullInt64
+	var routeType, payloadType, payloadVersion sql.NullInt64
+	var score sql.NullFloat64
 
 	if err := rows.Scan(&id, &rawHex, &ts, &obsID, &obsName, &direction, &snr, &rssi, &score, &hash, &routeType, &payloadType, &payloadVersion, &pathJSON, &decodedJSON, &createdAt); err != nil {
 		return nil
@@ -2818,7 +2819,7 @@ func scanPacketRow(rows *sql.Rows) map[string]interface{} {
 		"direction":       nullStr(direction),
 		"snr":             nullFloat(snr),
 		"rssi":            nullFloat(rssi),
-		"score":           nullInt(score),
+		"score":           nullFloat(score),
 		"hash":            nullStr(hash),
 		"route_type":      nullInt(routeType),
 		"payload_type":    nullInt(payloadType),
