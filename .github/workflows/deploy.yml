@@ -1116,12 +1116,12 @@ jobs:
       - name: Build corescope-decrypt (static, linux/amd64)
         run: |
           cd cmd/decrypt
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-amd64 .
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s -Wl,-z,stack-size=8388608' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-amd64 .
 
       - name: Build corescope-decrypt (static, linux/arm64)
         run: |
           cd cmd/decrypt
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-arm64 .
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s -Wl,-z,stack-size=8388608' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-arm64 .
 
       - name: Verify release binaries are static and runnable
         run: |
