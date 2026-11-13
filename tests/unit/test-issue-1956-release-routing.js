@@ -178,7 +178,7 @@ function context(ref = 'refs/tags/v9.8.7', event = 'workflow_dispatch', inputs =
 // That is what keeps a gate red rather than skipped, which branch protection
 // would count as passing.
 function route(ctx, failedJob, ingestor = 'true') {
-  for (const name of ['changes', 'go-test', 'race-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+  for (const name of ['changes', 'go-test', 'race-test', 'musl-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
     const job = block(deploy, name, 2);
     assert.ok(job, `missing ${name} job`);
     const needs = value(job, 'needs', 4).replace(/[\[\]\s]/g, '').split(',').filter(Boolean);
@@ -313,7 +313,9 @@ assert.deepEqual(builds.map(command => command.slice(1, 5)), [
   ['linux', 'arm64', '1', 'zig cc -target aarch64-linux-musl'],
 ]);
 for (const command of builds) {
-  assert.ok(command.includes("-ldflags=-s -w -extldflags '-static -Wl,-s' -X main.version=v9.8.7"), 'binary version must come from tag, and the artifact must stay static');
+  // -Wl,-z,stack-size=8388608 gives musl threads 8 MiB stacks: without it deep
+  // SQLite queries overflow musl's 128 KiB default and SIGSEGV (see AGENTS.md).
+  assert.ok(command.includes("-ldflags=-s -w -extldflags '-static -Wl,-s -Wl,-z,stack-size=8388608' -X main.version=v9.8.7"), 'binary version must come from tag, the artifact must stay static, and musl threads must get 8 MiB stacks');
   assert.ok(command.includes('-tags'), 'netgo/osusergo/sqlite_omit_load_extension must survive');
 }
 const upload = steps(release).filter(step => step.includes('uses: softprops/action-gh-release@v2'));
