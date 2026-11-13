@@ -107,9 +107,6 @@ services:
       - DISABLE_INGESTOR=true
       - SERVER_RUN_AS_UID=${SERVER_RUN_AS_UID:-1001}
       - CORESCOPE_SHARE_GID=${CORESCOPE_SHARE_GID:-61001}
-      # The ingestor runs in its own container; both point at one stats file
-      # in the shared (setgid) directory so the perf page shows its I/O.
-      - CORESCOPE_INGESTOR_STATS=/app/data/shared/ingestor-stats.json
       - DB_DSN_SERVER=postgres://${CORESCOPE_READER:-corescope_reader}:${CORESCOPE_READER_PASSWORD:?set CORESCOPE_READER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
 
   ingestor:
@@ -143,7 +140,6 @@ services:
       # server, in the directory prod's entrypoint prepares.
       - DB_PATH=/app/data/shared/meshcore.db
       - CORESCOPE_SQLITE_GUARD_PATH=/app/data/meshcore.db
-      - CORESCOPE_INGESTOR_STATS=/app/data/shared/ingestor-stats.json
 
 volumes:
   postgres-data:

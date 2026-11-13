@@ -61,10 +61,9 @@ prepare_service_user || exit 1
 # from the container's environment, never from .env or config.json.
 #
 # What the server writes lives in /app/data/shared: users.db (-wal, -shm,
-# backups/) and the two file queues it shares with the ingestor,
-# prune-requests/ and mbcap-snapshot/. Both services point there (the
-# server's -db and the ingestor's DB_PATH only anchor these paths on
-# PostgreSQL). Ownership:
+# backups/). Nothing else is shared on PostgreSQL: geo-prune requests, the
+# multibyte snapshot and the ingestor's statistics go through the database
+# (corescope_control, ingestor_stats). Ownership:
 #   - group corescope-share, gid CORESCOPE_SHARE_GID (default 61001). It sits
 #     above the range given to ordinary users (GID_MAX 60000), so on the host
 #     a bind-mounted config.json or shared directory is not opened to some
@@ -72,9 +71,7 @@ prepare_service_user || exit 1
 #     (its own container: group_add; this container: added here) is in it.
 #   - /app/data/shared root:corescope-share 3770: group-writable for users.db
 #     and its -wal/-shm, sticky so the server cannot rename or remove what is
-#     not its own (the root-owned queue directories). Its subdirectories
-#     prune-requests/ and mbcap-snapshot/ are 2770, not sticky, as each side
-#     removes files the other wrote. backups/ is the server's, 0700.
+#     not its own. backups/ is the server's, 0700.
 #   - users.db and its -shm are created here, the server's, 0660. With
 #     fs.protected_regular=2 a sticky group-writable directory refuses to
 #     open another user's file with O_CREAT, so the server must own -shm
@@ -274,8 +271,6 @@ setup_server_account() {
   fi
 
   shared_dir "$SHARED_DIR" 3770 || return 1
-  shared_dir "$SHARED_DIR/prune-requests" 2770 || return 1
-  shared_dir "$SHARED_DIR/mbcap-snapshot" 2770 || return 1
   shared_dir "$SHARED_DIR/backups" 0700 || return 1
   chown "$SERVER_ACCOUNT" "$SHARED_DIR/backups" || return 1
   find "$SHARED_DIR/backups" -mindepth 1 ! -type l -exec chown "$SERVER_ACCOUNT:$SHARE_GROUP" {} + || return 1
@@ -315,7 +310,7 @@ setup_server_account() {
   fi
 
   # What the server can and cannot reach, checked as the server.
-  if ! as_server "test -x /app/data && test -w $SHARED_DIR/prune-requests && test -w $SHARED_DIR/users.db"; then
+  if ! as_server "test -x /app/data && test -w $SHARED_DIR/users.db"; then
     pg_log "$SERVER_ACCOUNT cannot reach $SHARED_DIR; /app/data must be searchable (o+x) by it"
     return 1
   fi
