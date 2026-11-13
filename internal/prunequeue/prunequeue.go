@@ -22,13 +22,17 @@
 //
 // The server polls result-<id>.json to surface progress on
 // GET /api/admin/prune-geo-filter/status?id=<id>.
+//
+// Queue abstracts the channel: NewFS is this marker-file layout (SQLite,
+// shared data directory); NewPG carries the same JSON documents in the
+// <schema>.prune_requests / prune_results control tables, so a PostgreSQL
+// deployment needs no shared filesystem.
 package prunequeue
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -110,7 +114,7 @@ func validID(id string) bool {
 // RequestPath returns the full path for the request-<id>.json marker.
 func RequestPath(dbPath, id string) (string, error) {
 	if !validID(id) {
-		return "", errors.New("invalid prune request id")
+		return "", errInvalidID
 	}
 	return filepath.Join(QueueDir(dbPath), "request-"+id+".json"), nil
 }
@@ -118,7 +122,7 @@ func RequestPath(dbPath, id string) (string, error) {
 // ResultPath returns the full path for the result-<id>.json marker.
 func ResultPath(dbPath, id string) (string, error) {
 	if !validID(id) {
-		return "", errors.New("invalid prune request id")
+		return "", errInvalidID
 	}
 	return filepath.Join(QueueDir(dbPath), "result-"+id+".json"), nil
 }
@@ -126,7 +130,7 @@ func ResultPath(dbPath, id string) (string, error) {
 // WriteRequest atomically writes a request file (temp file + rename).
 func WriteRequest(dbPath string, req Request) error {
 	if !validID(req.ID) {
-		return errors.New("invalid prune request id")
+		return errInvalidID
 	}
 	b, err := json.MarshalIndent(req, "", "  ")
 	if err != nil {
@@ -145,7 +149,7 @@ func WriteRequest(dbPath string, req Request) error {
 // the only writer.
 func WriteResult(dbPath string, res Result) error {
 	if !validID(res.ID) {
-		return errors.New("invalid prune request id")
+		return errInvalidID
 	}
 	b, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
@@ -167,7 +171,7 @@ func WriteResult(dbPath string, res Result) error {
 // file does not yet exist (request still pending or unknown id).
 func ReadResult(dbPath, id string) (*Result, error) {
 	if !validID(id) {
-		return nil, errors.New("invalid prune request id")
+		return nil, errInvalidID
 	}
 	root, err := openQueueRoot(QueueDir(dbPath), false)
 	if err != nil {
@@ -195,7 +199,7 @@ func ReadResult(dbPath, id string) (*Result, error) {
 // (i.e. the ingestor has not processed it yet).
 func RequestExists(dbPath, id string) (bool, error) {
 	if !validID(id) {
-		return false, errors.New("invalid prune request id")
+		return false, errInvalidID
 	}
 	root, err := openQueueRoot(QueueDir(dbPath), false)
 	if err != nil {

@@ -21,6 +21,10 @@
 // The file is rewritten in full each cycle (idempotent overwrite). The
 // ingestor reads the file at most once per persist tick; if absent, the
 // tick is a no-op.
+//
+// Store abstracts the handoff: NewFS is this file layout (SQLite, shared data
+// directory); NewPG keeps each snapshot as a row of <schema>.mbcap_snapshots,
+// so a PostgreSQL deployment needs no shared filesystem.
 package mbcapqueue
 
 import (
@@ -81,12 +85,9 @@ func SnapshotPath(dbPath string) string {
 // WriteSnapshot atomically replaces snapshot.json with the given payload.
 // Uses tmp-then-rename so a reader never sees a torn file.
 func WriteSnapshot(dbPath string, snap Snapshot) error {
-	if snap.WrittenAt.IsZero() {
-		snap.WrittenAt = time.Now().UTC()
-	}
-	b, err := json.Marshal(snap)
+	b, err := marshalSnapshot(snap)
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return err
 	}
 	root, err := openQueueRoot(QueueDir(dbPath), true)
 	if err != nil {
@@ -97,6 +98,19 @@ func WriteSnapshot(dbPath string, snap Snapshot) error {
 		return fmt.Errorf("write: %w", err)
 	}
 	return nil
+}
+
+// marshalSnapshot stamps a zero WrittenAt with the current time and encodes
+// the snapshot as both stores keep it.
+func marshalSnapshot(snap Snapshot) ([]byte, error) {
+	if snap.WrittenAt.IsZero() {
+		snap.WrittenAt = time.Now().UTC()
+	}
+	b, err := json.Marshal(snap)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+	return b, nil
 }
 
 // ReadSnapshot loads the current snapshot.json. Returns os.ErrNotExist
