@@ -40,6 +40,17 @@ type client struct {
 
 func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mailer.Fake) {
 	t.Helper()
+	set := testUserMgmtSettings(t, adminEmails...)
+	st, err := users.Open(set.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newTestAuthServiceOn(t, set, st)
+}
+
+// testUserMgmtSettings are the settings newTestAuthService runs on.
+func testUserMgmtSettings(t *testing.T, adminEmails ...string) *userMgmtSettings {
+	t.Helper()
 	set := &userMgmtSettings{
 		dbPath: filepath.Join(t.TempDir(), "users.db"), adminEmails: map[string]bool{},
 		sessionTTL: 30 * 24 * time.Hour, provider: "fake",
@@ -50,10 +61,13 @@ func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mai
 	for _, e := range adminEmails {
 		set.adminEmails[e] = true
 	}
-	st, err := users.Open(set.dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	return set
+}
+
+// newTestAuthServiceOn builds an auth service on st with a fake mailer; st
+// is closed in Cleanup.
+func newTestAuthServiceOn(t *testing.T, set *userMgmtSettings, st *users.Store) (*authService, *mailer.Fake) {
+	t.Helper()
 	fake := &mailer.Fake{}
 	a := newAuthService(set, st, fake)
 	t.Cleanup(func() {

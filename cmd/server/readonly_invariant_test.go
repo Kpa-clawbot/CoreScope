@@ -256,8 +256,11 @@ func TestOpenDBRefusesMissingDatabase(t *testing.T) {
 
 // TestUsersOpenIsTheOnlyServerWritePath pins the single exception to the
 // read-only invariant (user management, opt-in): cmd/server may open a
-// writable store only via users.Open, exactly once, and always passing the
-// measurement DB path as forbidden.
+// writable account store only via users.Open, exactly once, always passing
+// the measurement DB path as forbidden, or via users.OpenPostgres, exactly
+// once, on the accounts DSN and only after checkAccountsPG (the accounts
+// role can write nothing but its own schema). The control pool is pinned
+// separately (TestPostgresOpenIsOnlyInOpenPostgresDB, controlPGFile).
 func TestUsersOpenIsTheOnlyServerWritePath(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -265,7 +268,11 @@ func TestUsersOpenIsTheOnlyServerWritePath(t *testing.T) {
 	}
 	call := regexp.MustCompile(`users\.Open\(`)
 	want := regexp.MustCompile(`users\.Open\(set\.dbPath, measurementDBPath\)`)
-	calls, good := 0, 0
+	pgCall := regexp.MustCompile(`users\.OpenPostgres\(`)
+	pgWant := regexp.MustCompile(`users\.OpenPostgres\(set\.dsn\)`)
+	// Any other exported opener the users package may grow.
+	other := regexp.MustCompile(`users\.Open[A-Za-z0-9_]*\(`)
+	calls, good, pgCalls, pgGood := 0, 0, 0, 0
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -277,9 +284,27 @@ func TestUsersOpenIsTheOnlyServerWritePath(t *testing.T) {
 		}
 		calls += len(call.FindAll(src, -1))
 		good += len(want.FindAll(src, -1))
+		pgCalls += len(pgCall.FindAll(src, -1))
+		pgGood += len(pgWant.FindAll(src, -1))
+		for _, m := range other.FindAll(src, -1) {
+			if string(m) != "users.Open(" && string(m) != "users.OpenPostgres(" {
+				t.Errorf("%s: %s: an account store opener other than users.Open / users.OpenPostgres", name, m)
+			}
+		}
+		if i := pgWant.FindIndex(src); i != nil {
+			// The role check must come first, in the same function.
+			body := src[:i[0]]
+			fn := strings.LastIndex(string(body), "\nfunc ")
+			if fn < 0 || !strings.Contains(string(body[fn:]), "s.checkAccountsPG(set.dsn)") {
+				t.Errorf("%s: users.OpenPostgres(set.dsn) is not preceded by s.checkAccountsPG(set.dsn) in its function", name)
+			}
+		}
 	}
 	if calls != 1 || good != 1 {
 		t.Fatalf("users.Open calls in cmd/server: %d total, %d with the measurement DB forbidden; want exactly 1 and 1", calls, good)
+	}
+	if pgCalls != 1 || pgGood != 1 {
+		t.Fatalf("users.OpenPostgres calls in cmd/server: %d total, %d on set.dsn; want exactly 1 and 1", pgCalls, pgGood)
 	}
 }
 

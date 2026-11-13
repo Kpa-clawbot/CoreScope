@@ -16,8 +16,11 @@ import (
 
 // UserManagementConfig is the "userManagement" block of config.json.
 type UserManagementConfig struct {
-	Enabled          bool                    `json:"enabled"`
-	DBPath           string                  `json:"dbPath,omitempty"`
+	Enabled bool   `json:"enabled"`
+	DBPath  string `json:"dbPath,omitempty"`
+	// DSN puts the accounts in PostgreSQL (schema corescope_users) instead
+	// of users.db; empty takes DB_DSN_ACCOUNTS. Never logged.
+	DSN              string                  `json:"dsn,omitempty"`
 	AdminEmails      []string                `json:"adminEmails,omitempty"`
 	PublicBaseURL    string                  `json:"publicBaseUrl,omitempty"`
 	SessionDays      int                     `json:"sessionDays,omitempty"`
@@ -340,6 +343,7 @@ func (c *Config) UserManagementEnabled() bool {
 // userMgmtSettings is the validated, resolved form the auth service runs on.
 type userMgmtSettings struct {
 	dbPath         string
+	dsn            string // non-empty: accounts in PostgreSQL (users.OpenPostgres), dbPath unused for the store
 	adminEmails    map[string]bool
 	baseURL        *url.URL // no trailing slash, no query or fragment
 	secureCookie   bool
@@ -360,6 +364,9 @@ type userMgmtSettings struct {
 
 const defaultSessionDays = 30
 
+// accountsDSNEnv fills userManagement.dsn when the config leaves it empty.
+const accountsDSNEnv = "DB_DSN_ACCOUNTS"
+
 // fakeMailerAllowed is flipped only by the e2etest build (auth_e2e.go).
 var fakeMailerAllowed bool
 
@@ -372,6 +379,12 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 	set.dbPath = strings.TrimSpace(u.DBPath)
 	if set.dbPath == "" {
 		set.dbPath = filepath.Join(filepath.Dir(measurementDBPath), "users.db")
+	}
+	// As with db.dsn (applyDBEnv), the config file wins and the environment
+	// only fills an empty value; an empty DB_DSN_ACCOUNTS counts as unset.
+	set.dsn = strings.TrimSpace(u.DSN)
+	if set.dsn == "" {
+		set.dsn = strings.TrimSpace(getenv(accountsDSNEnv))
 	}
 	for _, raw := range u.AdminEmails {
 		e, err := users.NormalizeEmail(raw)
