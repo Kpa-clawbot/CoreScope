@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,11 +77,11 @@ func OpenPostgresDBWithStatementTimeout(dsn string, statementTimeoutSec int) (*D
 		return nil, fmt.Errorf("statement timeout is %ds; use 0 to disable it or a positive number of seconds", statementTimeoutSec)
 	}
 	params := pgServerParams(statementTimeoutSec)
-	roDSN, password, err := pgServerDSN(dsn, params)
+	roDSN, secrets, err := pgServerDSN(dsn, params)
 	if err != nil {
 		return nil, err
 	}
-	scrub := func(err error) error { return scrubPGSecret(err, password) }
+	scrub := func(err error) error { return scrubPGSecret(err, secrets...) }
 
 	conn, err := sql.Open(dbx.PostgresDriverName, roDSN)
 	if err != nil {
@@ -145,49 +146,81 @@ func verifyPostgresSessionParams(ctx context.Context, conn *sql.DB, params []pgP
 }
 
 // pgWritePrivileges is the has_table_privilege list that counts as write
-// power for a server major version (server_version_num). MAINTAIN (VACUUM,
-// REINDEX, REFRESH MATERIALIZED VIEW, LOCK ...) exists from Postgres 17.
+// power for a server major version (server_version_num). TRIGGER lets a role
+// attach a trigger that runs as whoever writes the table next (the ingestor);
+// MAINTAIN (VACUUM, REINDEX, REFRESH MATERIALIZED VIEW, LOCK ...) exists from
+// Postgres 17.
 func pgWritePrivileges(serverVersionNum int) string {
-	privs := "INSERT, UPDATE, DELETE, TRUNCATE"
+	privs := "INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER"
 	if serverVersionNum >= 170000 {
 		privs += ", MAINTAIN"
 	}
 	return privs
 }
 
-// verifyPostgresNoWritePrivilege refuses a role that could write any relation
-// in its current schema, directly or through a role it belongs to.
-//
-// Membership is followed through pg_auth_members to every role reachable,
-// ignoring the INHERIT flags: a role that does not inherit a membership can
-// still SET ROLE to it and write. Each reachable role is then checked with
-// has_table_privilege / has_any_column_privilege evaluated AS that role, which
-// accounts for its own inherited grants, ownership, superuser and the
-// pg_write_all_data / pg_maintain predefined roles. This was chosen over
-// refusing every non-pg_* membership: it is exact, so a deployment that
-// grants SELECT through a group role (a common setup) still starts, and it
-// needs no allowlist of predefined roles to keep current across releases.
-//
-// Relations are tables, partitioned tables, views (packets_v is
-// auto-updatable, so INSERT on it writes transmissions), foreign tables and
-// materialized views; column-level INSERT/UPDATE grants count too.
-func verifyPostgresNoWritePrivilege(ctx context.Context, conn *sql.DB) error {
-	var role, schema string
-	var versionNum int
-	if err := conn.QueryRowContext(ctx, `SELECT current_user, COALESCE(current_schema(), ''), current_setting('server_version_num')::int`).Scan(&role, &schema, &versionNum); err != nil {
-		return fmt.Errorf("read current role and schema: %w", err)
-	}
-	if schema == "" {
-		return fmt.Errorf("postgres role %q has no current schema; set search_path in db.dsn to the CoreScope schema", role)
-	}
+// pgReachableRoles is a CTE naming every role the session can act as: the
+// session user and the current user (which differ when the role parameter
+// was set by options or ALTER ROLE ... SET role), plus every role either is a
+// member of, transitively. INHERIT flags are ignored on purpose: a role that
+// does not inherit a membership can still SET ROLE to it.
+const pgReachableRoles = `
+	WITH RECURSIVE reach(oid) AS (
+		SELECT oid FROM pg_roles WHERE rolname IN (current_user, session_user)
+		UNION
+		SELECT m.roleid FROM pg_auth_members m JOIN reach r ON m.member = r.oid
+	)`
 
-	rows, err := conn.QueryContext(ctx, `
-		WITH RECURSIVE reach(oid) AS (
-			SELECT oid FROM pg_roles WHERE rolname = current_user
-			UNION
-			SELECT m.roleid FROM pg_auth_members m JOIN reach r ON m.member = r.oid
-		)
-		SELECT c.relname, pg_get_userbyid(r.oid)
+// pgWritePowerChecks are the ways a reachable role could write, each a query
+// on pgReachableRoles returning one finding per row. Placeholders: the write
+// privilege list (pgWritePrivileges).
+var pgWritePowerChecks = []struct {
+	what  string
+	query string
+	args  bool // takes the privilege list as its one argument
+}{
+	{
+		// Role attributes are not inherited, but each is usable after
+		// SET ROLE: SUPERUSER bypasses every check, CREATEROLE can create
+		// and grant roles, BYPASSRLS ignores row-level security.
+		what: "role attributes",
+		query: pgReachableRoles + `
+		SELECT format('role %I has %s', p.rolname, concat_ws(', ',
+			CASE WHEN p.rolsuper THEN 'SUPERUSER' END,
+			CASE WHEN p.rolcreaterole THEN 'CREATEROLE' END,
+			CASE WHEN p.rolbypassrls THEN 'BYPASSRLS' END))
+		FROM reach r JOIN pg_roles p ON p.oid = r.oid
+		WHERE p.rolsuper OR p.rolcreaterole OR p.rolbypassrls
+		ORDER BY 1`,
+	},
+	{
+		// Owning, or creating objects in, a schema on the search path lets a
+		// role plant a function or operator that shadows one the ingestor
+		// calls, which then runs as the ingestor. pg_catalog is searched
+		// first and only superusers can create in it; the session's own temp
+		// schema holds nothing another session resolves.
+		what: "schema privileges",
+		query: pgReachableRoles + `
+		SELECT format('role %I %s schema %I', pg_get_userbyid(r.oid),
+			CASE WHEN n.nspowner = r.oid THEN 'owns' ELSE 'can CREATE in' END, n.nspname)
+		FROM reach r
+		CROSS JOIN pg_namespace n
+		WHERE n.nspname = ANY (current_schemas(true))
+		  AND n.nspname <> 'pg_catalog'
+		  AND n.oid <> pg_my_temp_schema()
+		  AND (n.nspowner = r.oid OR has_schema_privilege(r.oid, n.oid, 'CREATE'))
+		ORDER BY 1`,
+	},
+	{
+		// Each reachable role is checked AS that role, which accounts for its
+		// inherited grants, ownership and the pg_write_all_data / pg_maintain
+		// predefined roles. Relations are tables, partitioned tables, views
+		// (packets_v is auto-updatable: INSERT on it writes transmissions),
+		// foreign tables and materialized views; column-level INSERT/UPDATE
+		// grants count too.
+		what: "table privileges",
+		query: pgReachableRoles + `
+		SELECT CASE WHEN pg_get_userbyid(r.oid) = current_user THEN c.relname
+			ELSE format('%s (via role %I)', c.relname, pg_get_userbyid(r.oid)) END
 		FROM reach r
 		CROSS JOIN pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -195,26 +228,46 @@ func verifyPostgresNoWritePrivilege(ctx context.Context, conn *sql.DB) error {
 		  AND c.relkind IN ('r', 'p', 'v', 'f', 'm')
 		  AND (has_table_privilege(r.oid, c.oid, ?)
 		       OR has_any_column_privilege(r.oid, c.oid, 'INSERT, UPDATE'))
-		ORDER BY 1, 2`, pgWritePrivileges(versionNum))
-	if err != nil {
-		return fmt.Errorf("check table privileges: %w", err)
+		ORDER BY 1`,
+		args: true,
+	},
+}
+
+// verifyPostgresNoWritePrivilege refuses a session that could gain write
+// power over the CoreScope database, as any role it can act as (see
+// pgReachableRoles): a write privilege on a relation in its schema, a
+// dangerous role attribute, or ownership of / CREATE on a schema it searches.
+//
+// Reachable roles are each checked exactly, rather than refusing every
+// membership outside an allowlist of predefined roles: a deployment that
+// grants SELECT through a group role (a common setup) still starts, and no
+// allowlist has to track new predefined roles across releases.
+func verifyPostgresNoWritePrivilege(ctx context.Context, conn *sql.DB) error {
+	var role, sessionRole, schema string
+	var versionNum int
+	if err := conn.QueryRowContext(ctx, `SELECT current_user, session_user, COALESCE(current_schema(), ''), current_setting('server_version_num')::int`).Scan(&role, &sessionRole, &schema, &versionNum); err != nil {
+		return fmt.Errorf("read current role and schema: %w", err)
 	}
-	defer rows.Close()
-	var writable []string
-	for rows.Next() {
-		var rel, via string
-		if err := rows.Scan(&rel, &via); err != nil {
-			return fmt.Errorf("check table privileges: %w", err)
+	if schema == "" {
+		return fmt.Errorf("postgres role %q has no current schema; set search_path in db.dsn to the CoreScope schema", role)
+	}
+
+	var findings []string
+	for _, chk := range pgWritePowerChecks {
+		var args []any
+		if chk.args {
+			args = append(args, pgWritePrivileges(versionNum))
 		}
-		if via != role {
-			rel += fmt.Sprintf(" (via role %q)", via)
+		got, err := pgQueryStrings(ctx, conn, chk.query, args...)
+		if err != nil {
+			return fmt.Errorf("check %s: %w", chk.what, err)
 		}
-		writable = append(writable, rel)
+		if chk.what == "table privileges" && len(got) > 0 {
+			got = []string{"can write " + strings.Join(pgFirstN(got, 5), ", ")}
+		}
+		findings = append(findings, got...)
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("check table privileges: %w", err)
-	}
-	if len(writable) == 0 {
+	if len(findings) == 0 {
 		return nil
 	}
 
@@ -228,18 +281,46 @@ func verifyPostgresNoWritePrivilege(ctx context.Context, conn *sql.DB) error {
 		WHERE n.nspname = current_schema() AND c.relname = 'schema_version'`).Scan(&o); err == nil {
 		owner = pgQuoteIdent(o)
 	}
-	shown := writable
-	if len(shown) > 5 {
-		shown = append(append([]string{}, shown[:5]...), fmt.Sprintf("and %d more", len(writable)-5))
+	who := fmt.Sprintf("postgres role %q", role)
+	if sessionRole != role {
+		who = fmt.Sprintf("postgres session user %q (current role %q)", sessionRole, role)
 	}
 	s := pgQuoteIdent(schema)
-	return fmt.Errorf("postgres role %q can write to relations in schema %q (%s); the server must connect as a read-only role "+
-		"that is not a member of any role with write privileges. Create one and put it in db.dsn:\n"+
+	return fmt.Errorf("%s could gain write access to schema %q: %s. The server must connect as a read-only role "+
+		"with no SUPERUSER/CREATEROLE/BYPASSRLS, no ownership of or CREATE on any schema in its search_path, and no "+
+		"membership in a role with write privileges. Create one and put it in db.dsn:\n"+
 		"  CREATE ROLE corescope_reader LOGIN PASSWORD '...';\n"+
 		"  GRANT USAGE ON SCHEMA %s TO corescope_reader;\n"+
 		"  GRANT SELECT ON ALL TABLES IN SCHEMA %s TO corescope_reader;\n"+
-		"  ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s GRANT SELECT ON TABLES TO corescope_reader;",
-		role, schema, strings.Join(shown, ", "), s, s, owner, s)
+		"  ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s GRANT SELECT ON TABLES TO corescope_reader;\n"+
+		"and if PUBLIC can create in a schema on the path (the public schema before Postgres 15): REVOKE CREATE ON SCHEMA public FROM PUBLIC;",
+		who, schema, strings.Join(pgFirstN(findings, 8), "; "), s, s, owner, s)
+}
+
+// pgQueryStrings runs a query returning one text column and collects it.
+func pgQueryStrings(ctx context.Context, conn *sql.DB, query string, args ...any) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// pgFirstN returns at most n items, summarising the rest as "and K more".
+func pgFirstN(items []string, n int) []string {
+	if len(items) <= n {
+		return items
+	}
+	return append(append([]string{}, items[:n]...), fmt.Sprintf("and %d more", len(items)-n))
 }
 
 // pgQuoteIdent quotes a Postgres identifier for display in a SQL hint.
@@ -249,12 +330,14 @@ func pgQuoteIdent(s string) string {
 
 // pgServerDSN returns dsn with params set (replacing any value already there,
 // matching keys case-insensitively as Postgres matches parameter names), plus
-// the DSN's password so callers can scrub it from driver errors. It accepts
+// every password the DSN carries (URL userinfo, a password= query parameter,
+// or a password keyword), raw and percent-encoded, so callers can scrub them
+// from driver errors. It accepts
 // both DSN forms libpq and pgx do: a postgres:// or postgresql:// URL, and a
 // keyword=value string. An options parameter that sets one of params is an
 // error rather than something to drop silently: it shows a configuration that
 // expects a different value. Errors never quote the DSN.
-func pgServerDSN(dsn string, params []pgParam) (string, string, error) {
+func pgServerDSN(dsn string, params []pgParam) (string, []string, error) {
 	forced := make(map[string]bool, len(params))
 	for _, p := range params {
 		forced[p.name] = true
@@ -264,11 +347,13 @@ func pgServerDSN(dsn string, params []pgParam) (string, string, error) {
 		u, err := url.Parse(trimmed)
 		if err != nil {
 			// Not wrapped: url.Error echoes the DSN, password included.
-			return "", "", errors.New("db.dsn: unparseable postgres URL")
+			return "", nil, errors.New("db.dsn: unparseable postgres URL")
 		}
-		password := ""
+		var secrets []string
 		if u.User != nil {
-			password, _ = u.User.Password()
+			if pw, ok := u.User.Password(); ok {
+				secrets = pgSecretForms(secrets, pw)
+			}
 		}
 		q := u.Query()
 		for key, vals := range q {
@@ -277,10 +362,15 @@ func pgServerDSN(dsn string, params []pgParam) (string, string, error) {
 				delete(q, key)
 				continue
 			}
-			if lk == "options" {
+			switch lk {
+			case "password":
+				for _, v := range vals {
+					secrets = pgSecretForms(secrets, v)
+				}
+			case "options":
 				for _, v := range vals {
 					if err := checkPGOptions(v, params); err != nil {
-						return "", "", err
+						return "", nil, err
 					}
 				}
 			}
@@ -289,15 +379,15 @@ func pgServerDSN(dsn string, params []pgParam) (string, string, error) {
 			q.Set(p.name, p.value)
 		}
 		u.RawQuery = q.Encode()
-		return u.String(), password, nil
+		return u.String(), secrets, nil
 	}
 
 	pairs, err := parsePGKeywordValue(trimmed)
 	if err != nil {
-		return "", "", err
+		return "", nil, err
 	}
 	var b strings.Builder
-	password := ""
+	var secrets []string
 	for _, kv := range pairs {
 		lk := strings.ToLower(kv[0])
 		if forced[lk] {
@@ -305,10 +395,10 @@ func pgServerDSN(dsn string, params []pgParam) (string, string, error) {
 		}
 		switch lk {
 		case "password":
-			password = kv[1]
+			secrets = pgSecretForms(secrets, kv[1])
 		case "options":
 			if err := checkPGOptions(kv[1], params); err != nil {
-				return "", "", err
+				return "", nil, err
 			}
 		}
 		writePGKeywordValue(&b, kv[0], kv[1])
@@ -316,7 +406,19 @@ func pgServerDSN(dsn string, params []pgParam) (string, string, error) {
 	for _, p := range params {
 		writePGKeywordValue(&b, p.name, p.value)
 	}
-	return b.String(), password, nil
+	return b.String(), secrets, nil
+}
+
+// pgSecretForms appends pw and its percent-encoded spellings (what a URL DSN
+// echoed verbatim would contain) to secrets, skipping empty and repeated ones.
+func pgSecretForms(secrets []string, pw string) []string {
+	for _, f := range []string{pw, url.QueryEscape(pw), url.PathEscape(pw), url.UserPassword("", pw).String()[1:]} {
+		if f == "" || slices.Contains(secrets, f) {
+			continue
+		}
+		secrets = append(secrets, f)
+	}
+	return secrets
 }
 
 // checkPGOptions refuses an options value (command-line switches sent to the
@@ -420,14 +522,27 @@ type pgSecretError struct {
 func (e *pgSecretError) Error() string { return e.msg }
 func (e *pgSecretError) Unwrap() error { return e.err }
 
-// scrubPGSecret returns err with every occurrence of password in its text
+// scrubPGSecret returns err with every occurrence of each secret in its text
 // replaced. pgx's own errors omit the password, but this keeps that true
 // whatever a future driver version or a wrapped error decides to print.
-func scrubPGSecret(err error, password string) error {
-	if err == nil || password == "" || !strings.Contains(err.Error(), password) {
+// Longer secrets are replaced first so one that contains another is not left
+// half-redacted.
+func scrubPGSecret(err error, secrets ...string) error {
+	if err == nil {
 		return err
 	}
-	return &pgSecretError{msg: strings.ReplaceAll(err.Error(), password, "********"), err: err}
+	sorted := slices.Clone(secrets)
+	slices.SortFunc(sorted, func(a, b string) int { return len(b) - len(a) })
+	msg := err.Error()
+	for _, s := range sorted {
+		if s != "" {
+			msg = strings.ReplaceAll(msg, s, "********")
+		}
+	}
+	if msg == err.Error() {
+		return err
+	}
+	return &pgSecretError{msg: msg, err: err}
 }
 
 const (

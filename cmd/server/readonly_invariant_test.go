@@ -560,7 +560,7 @@ func TestPostgresOpenIsOnlyInOpenPostgresDB(t *testing.T) {
 		}
 		if name == "db_postgres.go" {
 			good += len(want.FindAll(src, -1))
-			if !strings.Contains(string(src), "roDSN, password, err := pgServerDSN(dsn, params)") {
+			if !strings.Contains(string(src), "roDSN, secrets, err := pgServerDSN(dsn, params)") {
 				t.Error("db_postgres.go no longer derives roDSN from pgServerDSN")
 			}
 		}

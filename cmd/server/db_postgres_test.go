@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -56,7 +58,7 @@ func TestPGServerDSNURL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: %v", in, err)
 		}
-		if pw != "s3cret" {
+		if !slices.Contains(pw, "s3cret") {
 			t.Errorf("%q: password = %q", in, pw)
 		}
 		u, err := url.Parse(out)
@@ -90,7 +92,7 @@ func TestPGServerDSNKeywordValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pw != `p w'x\y` {
+	if !slices.Contains(pw, `p w'x\y`) {
 		t.Errorf("password = %q", pw)
 	}
 	pairs, err := parsePGKeywordValue(out)
@@ -440,6 +442,21 @@ func TestOpenPostgresDBRefusesIndirectWritePower(t *testing.T) {
 		{"membership in pg_write_all_data", 140000, func(*sql.DB, string) []string {
 			return []string{`GRANT pg_write_all_data TO {role}`}
 		}, "pg_write_all_data"},
+		{"trigger privilege", 0, func(*sql.DB, string) []string {
+			return []string{`GRANT TRIGGER ON nodes TO {role}`}
+		}, "nodes"},
+		{"createrole attribute", 0, func(*sql.DB, string) []string {
+			return []string{`ALTER ROLE {role} CREATEROLE`}
+		}, "CREATEROLE"},
+		{"bypassrls through a group", 0, func(_ *sql.DB, group string) []string {
+			return []string{`ALTER ROLE ` + group + ` BYPASSRLS`, `GRANT ` + group + ` TO {role}`}
+		}, "BYPASSRLS"},
+		{"superuser group, not inherited", 0, func(_ *sql.DB, group string) []string {
+			return []string{`ALTER ROLE ` + group + ` SUPERUSER`, `ALTER ROLE {role} NOINHERIT`, `GRANT ` + group + ` TO {role}`}
+		}, "SUPERUSER"},
+		{"create on the search_path schema", 0, func(*sql.DB, string) []string {
+			return []string{`GRANT CREATE ON SCHEMA {schema} TO {role}`}
+		}, "can CREATE in schema"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -655,5 +672,106 @@ func TestPostgresDBStatsNoValueYet(t *testing.T) {
 	db.postgresDBStats()
 	if *calls != 1 {
 		t.Errorf("queries = %d, want 1 (failure cached)", *calls)
+	}
+}
+
+func TestPGServerDSNCollectsEveryPassword(t *testing.T) {
+	_, secrets, err := pgServerDSN("postgres://u:inline@h/db?Password=q%20s%2Bcret&sslmode=disable", testPGParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"inline", "q s+cret", "q+s%2Bcret", "q%20s+cret"} {
+		if !slices.Contains(secrets, want) {
+			t.Errorf("secrets lack %q: %q", want, secrets)
+		}
+	}
+	err = scrubPGSecret(errors.New("x q s+cret y q+s%2Bcret z q%20s+cret inline"), secrets...)
+	for _, leak := range []string{"inline", "cret"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("scrubbed error still has %q: %v", leak, err)
+		}
+	}
+}
+
+// pgDSNWithSearchPath returns dsn with path appended to its search_path.
+func pgDSNWithSearchPath(t *testing.T, dsn, extra string) string {
+	t.Helper()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal("unparseable DSN")
+	}
+	q := u.Query()
+	q.Set("search_path", q.Get("search_path")+","+extra)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// A schema on the search_path owned by a role the session can reach lets it
+// plant objects that later run as the writer.
+func TestOpenPostgresDBRefusesOwnedSearchPathSchema(t *testing.T) {
+	seed := pgSchemaSeed(t)
+	group := pgGroupRole(t, seed)
+	extra := group + "_s"
+	role, _, dsn := pgTestRole(t, seed, append(append([]string{}, pgReadOnlyGrants...),
+		`GRANT `+group+` TO {role}`, `CREATE SCHEMA `+extra+` AUTHORIZATION `+group)...)
+	t.Cleanup(func() { seed.Exec(`DROP SCHEMA IF EXISTS ` + extra + ` CASCADE`) })
+
+	d, err := OpenPostgresDB(pgDSNWithSearchPath(t, dsn, extra))
+	if err == nil {
+		d.Close()
+		t.Fatal("OpenPostgresDB accepted a role that owns a schema on its search_path")
+	}
+	for _, want := range []string{role, "owns schema " + extra} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q:\n%v", want, err)
+		}
+	}
+}
+
+// The role parameter can make current_user a lesser role than session_user;
+// the session user can SET ROLE back, so its own write power counts.
+func TestOpenPostgresDBChecksSessionUser(t *testing.T) {
+	seed := pgSchemaSeed(t)
+	lesser := pgGroupRole(t, seed)
+	role, _, dsn := pgTestRole(t, seed,
+		`GRANT USAGE ON SCHEMA {schema} TO `+lesser,
+		`GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO `+lesser,
+		`GRANT `+lesser+` TO {role}`,
+		`GRANT USAGE ON SCHEMA {schema} TO {role}`,
+		`GRANT INSERT ON nodes TO {role}`,
+		`ALTER ROLE {role} SET role = `+lesser)
+
+	d, err := OpenPostgresDB(dsn)
+	if err == nil {
+		d.Close()
+		t.Fatal("OpenPostgresDB accepted a session user with INSERT behind a read-only current role")
+	}
+	for _, want := range []string{"session user " + strconv.Quote(role), "nodes"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q:\n%v", want, err)
+		}
+	}
+}
+
+// A wrong password given as a password= query parameter never surfaces.
+func TestOpenPostgresDBConnectErrorOmitsQueryPassword(t *testing.T) {
+	seed := pgSchemaSeed(t)
+	_, password, dsn := pgTestRole(t, seed, pgReadOnlyGrants...)
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.User(u.User.Username())
+	q := u.Query()
+	q.Set("password", password+"wrong")
+	u.RawQuery = q.Encode()
+
+	d, err := OpenPostgresDB(u.String())
+	if err == nil {
+		d.Close()
+		t.Fatal("OpenPostgresDB succeeded with a wrong password")
+	}
+	if strings.Contains(err.Error(), password) {
+		t.Errorf("error leaks the password: %v", err)
 	}
 }
