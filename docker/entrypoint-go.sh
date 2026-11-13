@@ -294,6 +294,12 @@ setup_server_account() {
   CORESCOPE_SERVER_USER=$SERVER_ACCOUNT
   CORESCOPE_SERVER_DB_PATH=$SHARED_DIR/meshcore.db
   CORESCOPE_INGESTOR_DB_PATH=$SHARED_DIR/meshcore.db
+  # The ingestor's DB_PATH now only anchors the shared file queues, so its
+  # empty-database guard would no longer see the operator's SQLite data.
+  # Point the guard at that file explicitly: the ingestor refuses to start on
+  # an empty PostgreSQL while it still holds transmissions.
+  CORESCOPE_SQLITE_GUARD_PATH=${DB_PATH:-/app/data/meshcore.db}
+  export CORESCOPE_SQLITE_GUARD_PATH
   pg_log "server runs as $SERVER_ACCOUNT (uid $uid), ingestor as $CORESCOPE_SERVICE_USER (uid $ingest_uid); shared files in $SHARED_DIR"
 }
 

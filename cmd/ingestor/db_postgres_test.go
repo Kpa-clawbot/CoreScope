@@ -189,3 +189,42 @@ func TestRedactDSNError(t *testing.T) {
 		t.Fatalf("an error without secrets was rewrapped: %v", got)
 	}
 }
+
+// TestEmptyPostgresGuardChecksExtraPath: in the Docker image on Postgres the
+// ingestor's dbPath points into /app/data/shared (it only anchors the file
+// queues), so the operator's SQLite data at /app/data/meshcore.db would be
+// invisible to the guard. CORESCOPE_SQLITE_GUARD_PATH names that file, and an
+// empty Postgres must still be refused while it holds transmissions.
+func TestEmptyPostgresGuardChecksExtraPath(t *testing.T) {
+	pg := dbxtest.OpenPostgres(t)
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "meshcore.db")
+	populatedSQLite(t, legacy, 2)
+	queue := filepath.Join(dir, "shared", "meshcore.db") // absent, as in the image
+	t.Setenv(sqliteGuardEnv, legacy)
+
+	s, err := openPostgresStoreDB(pg, queue, 300)
+	if err == nil {
+		s.Close()
+		t.Fatal("opened an empty Postgres database while the guard path still holds transmissions")
+	}
+	var refusal *emptyPostgresTargetError
+	if !errors.As(err, &refusal) || !strings.Contains(err.Error(), legacy+" still holds 2 transmissions") {
+		t.Fatalf("want the guard's refusal naming %s, got %v", legacy, err)
+	}
+}
+
+func TestSQLiteGuardPaths(t *testing.T) {
+	t.Setenv(sqliteGuardEnv, "")
+	if got := sqliteGuardPaths("data/meshcore.db"); len(got) != 1 {
+		t.Fatalf("unset env: %v", got)
+	}
+	t.Setenv(sqliteGuardEnv, "./data/meshcore.db")
+	if got := sqliteGuardPaths("data/meshcore.db"); len(got) != 1 {
+		t.Fatalf("same path after Clean must not be checked twice: %v", got)
+	}
+	t.Setenv(sqliteGuardEnv, "/app/data/meshcore.db")
+	if got := sqliteGuardPaths("/app/data/shared/meshcore.db"); len(got) != 2 || got[1] != "/app/data/meshcore.db" {
+		t.Fatalf("extra path: %v", got)
+	}
+}

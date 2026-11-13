@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -72,8 +73,10 @@ func openPostgresStoreDB(db *sql.DB, queuePath string, sampleIntervalSec int) (*
 	if err := pgschema.Apply(context.Background(), db, log.Printf); err != nil {
 		return nil, fmt.Errorf("applying postgres schema: %w", err)
 	}
-	if err := refuseEmptyPostgresOverSQLite(db, queuePath); err != nil {
-		return nil, err
+	for _, p := range sqliteGuardPaths(queuePath) {
+		if err := refuseEmptyPostgresOverSQLite(db, p); err != nil {
+			return nil, err
+		}
 	}
 
 	s, err := newStore(db, queuePath, sampleIntervalSec)
@@ -108,6 +111,23 @@ func refuseEmptyPostgresOverSQLite(db *sql.DB, sqlitePath string) error {
 	}
 	return &emptyPostgresTargetError{fmt.Sprintf(`refusing to start on an empty PostgreSQL database while %s still holds %d transmissions: copy it first with "corescope-migrate copy -from sqlite:%s -to <postgres url>", or move %s aside to start with an empty database`,
 		sqlitePath, n, sqlitePath, sqlitePath)}
+}
+
+// sqliteGuardEnv names an extra SQLite file the empty-target guard checks.
+// The Docker image sets it on Postgres: there the ingestor's DB_PATH points
+// into /app/data/shared (it only anchors the file queues), while an
+// operator's existing SQLite data is still at /app/data/meshcore.db.
+const sqliteGuardEnv = "CORESCOPE_SQLITE_GUARD_PATH"
+
+// sqliteGuardPaths returns the SQLite files the guard must check: queuePath
+// (the configured dbPath) and, when set and different, $CORESCOPE_SQLITE_GUARD_PATH.
+func sqliteGuardPaths(queuePath string) []string {
+	paths := []string{queuePath}
+	if extra := strings.TrimSpace(os.Getenv(sqliteGuardEnv)); extra != "" &&
+		filepath.Clean(extra) != filepath.Clean(queuePath) {
+		paths = append(paths, extra)
+	}
+	return paths
 }
 
 // emptyPostgresTargetError is the empty-target guard's refusal.
