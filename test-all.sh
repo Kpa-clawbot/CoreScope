@@ -207,6 +207,7 @@ node tests/unit/test-payload-labels-namespace.js
 node tests/unit/test-payload-labels-surfaces.js
 node tests/unit/test-perf-anomaly.js
 node tests/unit/test-perf-db-engine.js
+node tests/unit/test-dockerfile-modules.js
 node tests/unit/test-perf-disk-io-1120.js
 node tests/unit/test-perf-go-runtime.js
 node tests/unit/test-perf-render-1258.js

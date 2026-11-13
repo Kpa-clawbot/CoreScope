@@ -78,6 +78,7 @@ COPY internal/lora/ ../../internal/lora/
 COPY internal/users/ ../../internal/users/
 COPY internal/channel/ ../../internal/channel/
 COPY internal/mailer/ ../../internal/mailer/
+COPY internal/dbx/ ../../internal/dbx/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \
@@ -103,6 +104,7 @@ COPY internal/dbschema/ ../../internal/dbschema/
 COPY internal/prunequeue/ ../../internal/prunequeue/
 COPY internal/perfio/ ../../internal/perfio/
 COPY internal/mbcapqueue/ ../../internal/mbcapqueue/
+COPY internal/dbx/ ../../internal/dbx/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \
@@ -120,6 +122,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 WORKDIR /build/decrypt
 COPY cmd/decrypt/go.mod cmd/decrypt/go.sum ./
 COPY internal/channel/ ../../internal/channel/
+COPY internal/dbschema/ ../../internal/dbschema/
+COPY internal/dbx/ ../../internal/dbx/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \
@@ -132,6 +136,24 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
     -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}' -X main.version=${APP_VERSION}" \
     -o /corescope-decrypt .
+
+# Build migrate CLI (schema upgrade, and copy/verify between SQLite and Postgres)
+WORKDIR /build/migrate
+COPY cmd/migrate/go.mod cmd/migrate/go.sum ./
+COPY internal/dbschema/ ../../internal/dbschema/
+COPY internal/dbx/ ../../internal/dbx/
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/tmp/zig-cache \
+    go mod download
+COPY cmd/migrate/ ./
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/tmp/zig-cache \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -tags ${GO_BUILD_TAGS} \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}'" \
+    -o /corescope-migrate .
 
 # Runtime image
 FROM alpine:3.24
@@ -158,7 +180,7 @@ ENV CORESCOPE_SERVICE_USER=root
 WORKDIR /app
 
 # Go binaries (statically linked; they do not use this image's libc)
-COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /app/
+COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /corescope-migrate /app/
 
 # Frontend assets + config
 COPY public/ ./public/
