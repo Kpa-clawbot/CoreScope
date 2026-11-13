@@ -62,7 +62,7 @@ linked companions only:
 - The ingestor drops every `meshcore/client/{PUBLIC_KEY}/…` message (`packets`, `rf`, `regions`)
   whose pubkey is not linked to an account, before any handler runs. Drops are counted as
   `client_unlinked_dropped` in the ingestor stats file and never logged per message.
-- It reads the linked pubkeys from `users.db` (read-only) every 60 s, which picks up unlinks. A
+- It reads the linked pubkeys from `users.db` (read-only) every 60 s, which picks up unlinks. On a PostgreSQL install it reads `corescope_users.companion_links` over its own database connection when that schema exists (accounts in PostgreSQL, see [User accounts in PostgreSQL](postgresql.md#user-accounts-in-postgresql)), and `users.db` when it does not. Between running `scripts/postgres-roles.sh` with an accounts password and the server's first start with the accounts DSN, the schema exists without tables: nothing is filtered and one warning is logged. A
   pubkey it does not know triggers one extra read at most every 5 s, so a companion linked a
   moment ago is accepted within seconds.
 - `/api/config/client` then carries `clientRxRequireLinkedCompanion: true`, and RX holds its queue

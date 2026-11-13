@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- **PostgreSQL as an alternative database** - set `db.driver` to `postgres` and `db.dsn` (or `DB_DRIVER` / `DB_DSN`). SQLite stays the default and nothing migrates automatically. The ingestor is the only writer; the server connects with a read-only role and refuses to start if its role can write. `users.db` stays SQLite. See [docs/postgresql.md](docs/postgresql.md).
+- **PostgreSQL as an alternative database** - set `db.driver` to `postgres` and `db.dsn` (or `DB_DRIVER` / `DB_DSN`). SQLite stays the default and nothing migrates automatically. The ingestor is the only writer; the server connects with a read-only role and refuses to start if its role can write. Optional user accounts stay in the SQLite `users.db` unless you opt in to keeping them in PostgreSQL (`userManagement.dsn` / `DB_DSN_ACCOUNTS`, their own role, several server replicas; `corescope-migrate copy-users` moves an existing `users.db`). See [docs/postgresql.md](docs/postgresql.md).
 - `corescope-migrate copy -from <db> -to <db>` and `corescope-migrate verify -a <db> -b <db>` move an installation between SQLite and Postgres in either direction and compare the result. `<db>` is `sqlite:<path>` or a `postgres://` URL. The copy refuses a non-empty target and is verified before it commits. See [cmd/migrate/README.md](cmd/migrate/README.md).
 - The Docker image takes `DB_DSN_INGESTOR` (writer role) and `DB_DSN_SERVER` (read-only role), so the server process never sees the writer credentials.
 - `corescope-decrypt -db` reads a Postgres database (a `postgres://` URL, opened read-only) as well as a SQLite file.

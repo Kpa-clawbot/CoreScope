@@ -37,9 +37,10 @@ There is no general claim that PostgreSQL is faster. In one operator soak test o
 implementation, retention pruning ran about 2.5x faster on PostgreSQL; choose by workload and
 hosting, not by that number.
 
-The result of every API call is the same on both backends. Two things stay on SQLite either
-way: the optional user-accounts database `users.db` (see [Backups and restore](#backups-and-restore))
-and a few SQLite-specific features (see [What is SQLite-only](#what-is-sqlite-only)).
+The result of every API call is the same on both backends. A few SQLite-specific features stay
+on SQLite (see [What is SQLite-only](#what-is-sqlite-only)). The optional user accounts live in
+a SQLite file, `users.db`, unless you move them into PostgreSQL too (see
+[User accounts in PostgreSQL](#user-accounts-in-postgresql)).
 
 ## Requirements
 
@@ -72,7 +73,9 @@ goes through the database instead:
 - the ingestor's statistics (perf page, `/api/healthz` ingest liveness, `/api/mqtt/status`)
   through the `ingestor_stats` table.
 
-The server writes only those control rows, through a separate pool of at most two connections.
+The server writes only those control rows, through a separate pool of at most two connections
+(plus the account store's own connection, when accounts are in PostgreSQL; see
+[User accounts in PostgreSQL](#user-accounts-in-postgresql)).
 Its main pool stays forced read-only. The control pool is opened only when the server's role is a
 member of `corescope_control_client` and that group holds exactly the control grants above; the
 ingestor re-applies those grants at every start. If not, the server still starts, logs one
@@ -158,7 +161,8 @@ Keep the `/app/data` mount. See [In the Docker image](#in-the-docker-image) for 
 container does with it on PostgreSQL (`/app/data/shared`, the separate server user). The server
 and the ingestor no longer exchange files: prune requests, the multibyte snapshot and the
 ingestor's statistics go through the database. What still needs the directory is `users.db` (and
-its backups) when user accounts are enabled, plus the data directory's `config.json`.
+its backups) when user accounts are enabled and kept in SQLite, plus the data directory's
+`config.json`. With accounts in PostgreSQL the server writes nothing to disk.
 
 If you already have SQLite data, copy it before the first start; see
 [Moving an existing SQLite install](#moving-an-existing-sqlite-install).
@@ -183,6 +187,8 @@ If you already have SQLite data, copy it before the first start; see
    | `CORESCOPE_WRITER_PASSWORD` | — | Required |
    | `CORESCOPE_READER` | `corescope_reader` | Reader role |
    | `CORESCOPE_READER_PASSWORD` | — | Required |
+   | `CORESCOPE_ACCOUNTS` | `corescope_accounts` | Accounts role name (only with the next variable) |
+   | `CORESCOPE_ACCOUNTS_PASSWORD` | unset | Optional. When set, also creates the accounts role and schema `corescope_users`; see [User accounts in PostgreSQL](#user-accounts-in-postgresql). Unset: neither is created. |
 
    Names must match `^[a-z_][a-z0-9_]{0,62}$`, must not start with `pg_`, and must not be an
    existing superuser. The script is idempotent and never drops anything: a second run resets
@@ -293,13 +299,16 @@ Whichever layout, the entrypoint arranges the following on PostgreSQL:
   (`docker/server-exec.sh`), so `PG*`, `POSTGRES_*` and other secrets do not reach it. A new
   environment variable the server must read has to be added to that list.
 - What the server writes to disk lives in **`/app/data/shared`**: `users.db` (with its
-  `-wal`/`-shm` and `backups/`); the geo-prune and multibyte exchanges go through the
-  database. The directory is group `corescope-share` (gid `CORESCOPE_SHARE_GID`, default 61001,
+  `-wal`/`-shm` and `backups/`), only when accounts are enabled and not in PostgreSQL; the
+  geo-prune and multibyte exchanges go through the database. The directory is group `corescope-share` (gid `CORESCOPE_SHARE_GID`, default 61001,
   above the range of ordinary users) and sticky. The ingestor's `DB_PATH` points into it (on
   PostgreSQL `DB_PATH` only locates local files such as `users.db`, not the database). A
   `users.db` left in `/app/data` by an earlier SQLite run is moved there once, with its backups.
 - If you set `userManagement.dbPath`, it must be under `/app/data/shared`; the entrypoint warns
-  otherwise, because the server can write only there.
+  otherwise, because the server can write only there. (Unused when accounts are in PostgreSQL.)
+- `DB_DSN_ACCOUNTS` (the accounts store, see
+  [User accounts in PostgreSQL](#user-accounts-in-postgresql)) is passed to the server only.
+  The ingestor never receives it.
 - `config.json` must not contain a `dsn`: the container refuses to start. It is made group
   `corescope-share`, mode 0660, so the geo-filter editor can save into it and the ingestor can
   read it; `/app/data` itself is not opened up. It must be readable by the server user.
@@ -353,9 +362,12 @@ standby.
 the database (geo-prune requests and results and the multibyte snapshot in the
 `corescope_control` schema, the ingestor's statistics in `ingestor_stats`). No `ReadWriteMany`
 volume is needed, servers can be spread across nodes, and the pods need no volume at all. The one
-exception is **user management**: `users.db` is still a SQLite file on disk, written by the
-server, until accounts move to PostgreSQL. If you enable it, mount a volume for the server and run
-a **single server replica**; several replicas must not share that file.
+exception is **user management with `users.db`**: by default the accounts are a SQLite file on
+disk, written by the server. In that case mount a volume for the server and run a **single
+server replica**; several replicas must not share that file. To run several replicas with
+accounts, keep them in PostgreSQL instead (`userManagement.dsn` / `DB_DSN_ACCOUNTS`, see
+[User accounts in PostgreSQL](#user-accounts-in-postgresql)): the pods then need no volume and
+any number of replicas works.
 
 **Control role.** The reader must belong to `corescope_control_client`, which
 `scripts/postgres-roles.sh` creates. A cluster set up before this existed needs one re-run of the
@@ -375,7 +387,9 @@ refused for a second or two; the binaries retry the first connect for up to 30 s
 **Roles and secrets.** Run `scripts/postgres-roles.sh` inside the PostgreSQL pod over its local
 socket (`kubectl exec … sh -s < scripts/postgres-roles.sh`), with the passwords in that pod's
 environment from a Secret, so they never appear on a command line. Keep the writer DSN in a Secret
-key mounted **only** into the ingestor and the reader DSN only into the servers.
+key mounted **only** into the ingestor and the reader DSN only into the servers. With accounts in
+PostgreSQL, also set `CORESCOPE_ACCOUNTS_PASSWORD` for that run and keep the accounts DSN in its
+own Secret key (`accounts-dsn` below), mounted **only** into the servers: never into the ingestor.
 
 **Moving data.** Run `corescope-migrate copy` as a one-shot Job (image `/app/corescope-migrate`),
 with the ingestor scaled to 0 first, `PGPASSWORD` from the Secret and a password-less URL. If the
@@ -391,6 +405,8 @@ resources, probes and Pod Security settings — the image runs as non-root uid 1
 # Secret "corescope-postgres": keys writer-dsn and reader-dsn, created out of band, e.g.
 #   writer-dsn: postgres://corescope_writer:<pw>@postgres:5432/corescope?sslmode=disable
 #   reader-dsn: postgres://corescope_reader:<pw>@postgres:5432/corescope?sslmode=disable
+# With user accounts in PostgreSQL, a third key (never mounted into the ingestor):
+#   accounts-dsn: postgres://corescope_accounts:<pw>@postgres:5432/corescope?sslmode=disable
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: corescope-ingestor}
@@ -431,8 +447,9 @@ spec:
         - name: server
           image: <registry>/corescope:<version>
           # No volume: on PostgreSQL nothing is shared with the ingestor through files.
-          # With user management on, also mount a volume for users.db (below) and keep
-          # replicas: 1.
+          # With user management on and the accounts in users.db (SQLite), also mount a
+          # volume for it (below) and keep replicas: 1. With the accounts in PostgreSQL
+          # (DB_DSN_ACCOUNTS below), no volume and any replica count.
           command: ["/app/corescope-server", "-config-dir", "/app/config",
                     "-public", "/app/public", "-port", "3000"]
           workingDir: /app
@@ -440,15 +457,18 @@ spec:
             - {name: DB_DRIVER, value: postgres}
             - name: DB_DSN
               valueFrom: {secretKeyRef: {name: corescope-postgres, key: reader-dsn}}
+            # Only with user accounts in PostgreSQL (userManagement.enabled in config.json):
+            # - name: DB_DSN_ACCOUNTS
+            #   valueFrom: {secretKeyRef: {name: corescope-postgres, key: accounts-dsn}}
           ports: [{name: http, containerPort: 3000}]
           readinessProbe: {httpGet: {path: /api/healthz, port: http}}
           volumeMounts:
             - {name: config, mountPath: /app/config, readOnly: true}
-            # Only with user management enabled (single replica):
+            # Only with user accounts in users.db (SQLite, single replica):
             # - {name: data, mountPath: /app/data}
       volumes:
         - {name: config, secret: {secretName: corescope-config}}
-        # Only with user management enabled (single replica):
+        # Only with user accounts in users.db (SQLite, single replica):
         # - {name: data, persistentVolumeClaim: {claimName: corescope-data}}
 ---
 apiVersion: policy/v1
@@ -620,6 +640,185 @@ Copy PostgreSQL into a new SQLite file the same way, then set the driver back.
    (or set the driver to `sqlite`), and drop `docker-compose.postgres.yml` from the `-f` list.
 4. Start the ingestor, then the server.
 
+## User accounts in PostgreSQL
+
+The optional [user accounts](user-guide/accounts.md) (`userManagement.enabled`) have two
+stores. Choose one:
+
+| | `users.db` (default) | PostgreSQL schema `corescope_users` |
+|---|---|---|
+| Where | A SQLite file next to the analyzer database, or at `userManagement.dbPath` | Schema `corescope_users` in the CoreScope database |
+| Selected by | Nothing (the default) | `userManagement.dsn`, or `DB_DSN_ACCOUNTS` when `dsn` is empty |
+| Disk | A volume the server writes to | None |
+| Server replicas | One | Any number |
+| Backup | Scheduled snapshots and `/api/admin/users-backup` | `pg_dump -n corescope_users` (the snapshots are off, the endpoint answers 501) |
+
+With no accounts DSN set, nothing here applies and `users.db` works as before. The accounts
+store also works when the measurement database is SQLite; the rest of this section assumes
+PostgreSQL for both.
+
+### Create the role
+
+Set `CORESCOPE_ACCOUNTS_PASSWORD` when you run `scripts/postgres-roles.sh` (a second run on an
+existing install is safe):
+
+```bash
+export PG_ADMIN_URL='postgres://postgres@db.example.org:5432/postgres?sslmode=require'
+export PGPASSWORD='<superuser-password>'
+export CORESCOPE_WRITER_PASSWORD='<writer-password>'
+export CORESCOPE_READER_PASSWORD='<reader-password>'
+export CORESCOPE_ACCOUNTS_PASSWORD='<accounts-password>'
+sh scripts/postgres-roles.sh
+```
+
+Besides the writer and reader URLs it prints a third, without the password:
+
+```
+CORESCOPE_ACCOUNTS_URL=postgres://corescope_accounts@db.example.org:5432/corescope
+```
+
+The script creates the role `corescope_accounts` (override the name with `CORESCOPE_ACCOUNTS`)
+and makes it the owner of schema `corescope_users`. The role may connect to the database and
+has nothing in schema `public` or `corescope_control`, no role memberships, no `TEMPORARY`, at
+most 32 connections and the same statement and idle-transaction timeouts as the reader. The
+store creates and migrates its own tables in that schema.
+
+It also creates the group role `corescope_users_reader` (fixed name, `NOLOGIN`) and grants it to
+the writer. That is how the ingestor reads two tables, the approved channel proposals and the
+linked companions (see [What changes with several replicas](#what-changes-with-several-replicas)).
+The script does this on every run, with or without accounts.
+
+### Give the server the DSN
+
+The accounts DSN goes to the **servers only**, never to the ingestor. Set it in the server's
+environment, next to its reader DSN:
+
+```
+# /etc/corescope/server.env
+DB_DRIVER=postgres
+DB_DSN=postgres://corescope_reader:<reader-password>@db.example.org:5432/corescope?sslmode=require
+DB_DSN_ACCOUNTS=postgres://corescope_accounts:<accounts-password>@db.example.org:5432/corescope?sslmode=require
+```
+
+or as `userManagement.dsn` in `config.json`. `config.json` wins; the environment variable is used
+only when `dsn` is empty. Because the config file is typically shared with the ingestor and holds
+no passwords, prefer the environment. The DSN is never logged. `userManagement.dbPath` is
+unused once a DSN is set.
+
+With Compose, set `CORESCOPE_ACCOUNTS_PASSWORD` in `.env` as well. `postgres-init` then sets up the
+role and schema and `prod` gets `DB_DSN_ACCOUNTS`; the ingestor does not. Without it `prod` gets
+an empty value, which the entrypoint drops. In the single-container layout and in Kubernetes
+(see [Kubernetes and high availability](#kubernetes-and-high-availability)) pass the variable to
+the server container only. The Docker image's server user gets it through its environment
+allow-list.
+
+You still need `userManagement.enabled` and the rest of the block (`publicBaseUrl`, mail
+settings) in `config.json`, as in the [accounts guide](user-guide/accounts.md).
+
+### The startup safety check
+
+The server's rule is that it never writes measurement data. The accounts role can write (it owns
+its schema), so the server proves at startup that it can write nothing else. It refuses to start
+when the accounts role:
+
+- is the same role as the server's measurement reader, or
+- could write the measurement schema or the `corescope_control` schema as itself or through any
+  role it is a member of: superuser or `CREATEROLE`, owner of or `CREATE` on either schema,
+  `INSERT`, `UPDATE`, `DELETE` or `TRUNCATE` on a table (or `INSERT`/`UPDATE` on a column), or
+  `UPDATE`/`USAGE` on a sequence.
+
+The role from `scripts/postgres-roles.sh` passes. The refusal messages are listed under
+[Troubleshooting](#accounts). The check runs on the measurement connection and reads the
+catalog only.
+
+### Move an existing `users.db`
+
+Skip this for a new install. Stop every CoreScope server first: the copy reads one snapshot and
+accounts changed afterwards are not copied. `copy-users` creates the schema's tables if needed
+and refuses a target that already has rows. Connect as the accounts role; keep the password out
+of the URL:
+
+```bash
+export PGPASSWORD='<accounts-password>'     # or use ~/.pgpass
+corescope-migrate copy-users \
+  -from sqlite:/app/data/shared/users.db \
+  -to 'postgres://corescope_accounts@db.example.org:5432/corescope?sslmode=require'
+```
+
+`-batch` (default 5000) sets the rows per `COPY` call. The copy is verified before it finishes.
+To check the two stores again later, or compare a backup:
+
+```bash
+corescope-migrate verify-users \
+  -a sqlite:/app/data/shared/users.db \
+  -b 'postgres://corescope_accounts@db.example.org:5432/corescope?sslmode=require'
+```
+
+`-a` and `-b` each take a `sqlite:<users.db>` path or a `postgres://` URL. In the Docker image
+run the tool as for [`copy`](#moving-an-existing-sqlite-install)
+(`run --rm --no-deps -e PGPASSWORD --entrypoint /app/corescope-migrate prod copy-users ...`).
+Then set the accounts DSN, start the servers, and keep the old `users.db` until you are sure.
+
+### What changes with several replicas
+
+With the accounts in PostgreSQL you can run any number of servers:
+
+- The cleanup job (janitor) and the notification check run on one replica at a time, under a
+  PostgreSQL advisory lock. A mail is claimed in the database before it is sent, so an overlap
+  does not send it twice.
+- Login and other rate limits are counted in the database, so all replicas share one limit. They
+  use fixed windows, so up to twice the limit can pass around a window boundary. If the database
+  cannot be reached, each replica limits on its own in memory.
+- Approved channels and observer logins are reloaded from the database every 30 seconds, so a
+  change made through one replica reaches the others within that time.
+- The ingestor reads `corescope_users.proposals` and `corescope_users.companion_links` over its
+  own database connection, in a read-only transaction, through the group role
+  `corescope_users_reader`. It does not need `dbPath` or a copy of `users.db`. On each read
+  (approved channels once a minute, linked companions every 60 s plus misses) it checks whether
+  schema `corescope_users` exists. If it does, it reads that schema. If it does not, it reads
+  `users.db` read-only at `userManagement.dbPath` (or next to `dbPath`), as on SQLite, so
+  Postgres measurement data with the accounts in `users.db` still gets channel proposals and
+  `clientRxCoverage.requireLinkedCompanion`. The schema exists once you opt in: running
+  `scripts/postgres-roles.sh` with `CORESCOPE_ACCOUNTS_PASSWORD` creates it, as does the server's
+  first start with an accounts DSN. Between the script and that first server start the schema
+  exists but has no tables: the ingestor then sees no approved channels beyond the configured
+  ones, and does not filter linked companions (it warns once). Start the server soon after
+  running the script, or leave `CORESCOPE_ACCOUNTS_PASSWORD` unset until you move the accounts.
+- The scheduled users backup is off and `GET /api/admin/users-backup` answers 501. "Download my
+  data" still works.
+
+### Back up the accounts
+
+`pg_dump` of the measurement tables does not contain the accounts. Dump the schema, as the
+accounts role or a superuser:
+
+```bash
+pg_dump -Fc -n corescope_users \
+  -h db.example.org -U corescope_accounts -d corescope \
+  -f corescope-users-$(date -u +%Y%m%dT%H%M%SZ).dump
+```
+
+The dump holds every password hash and mail address: protect it like the database. To restore,
+stop the servers, restore into an empty database or schema with `pg_restore`, and start them.
+The schema version check refuses a dump from a newer CoreScope.
+
+### Roll back to `users.db`
+
+There is no copy from PostgreSQL back to SQLite for accounts: `corescope-migrate copy-users`
+only reads a `users.db`. Rolling back therefore returns to the `users.db` you left behind, and
+accounts created or changed in PostgreSQL since the move are not in it. Keep that file (and stop
+the servers before you copy, so it is a clean snapshot) until you are sure.
+
+1. Stop every server.
+2. Remove `userManagement.dsn` and `DB_DSN_ACCOUNTS`. In the Docker image with Compose, unset
+   `CORESCOPE_ACCOUNTS_PASSWORD`.
+3. Put the `users.db` back where the server looks for it (`userManagement.dbPath`, or next to the
+   analyzer database; `/app/data/shared/users.db` in the Docker image), with a volume, and start
+   a single server.
+
+Drop the schema (`DROP SCHEMA corescope_users CASCADE`, as a superuser) and the accounts role only
+when you no longer need them.
+
 ## Backups and restore
 
 `GET /api/backup` is a SQLite feature. On PostgreSQL it returns HTTP 501:
@@ -684,11 +883,13 @@ to a new SQLite file (see [Switching back to SQLite](#switching-back-to-sqlite))
 
 - `config.json`, `theme.json`, deployment settings and secrets, as in
   [Backup & Restore](deployment.md#backup--restore).
-- `users.db`, if user accounts are enabled. It is **still SQLite on PostgreSQL installs** and is
+- The user accounts, if enabled. By default they are in `users.db`, a SQLite file, which is
   backed up as before, through `/api/admin/users-backup` or its scheduled snapshots; see the
-  [account backup guide](user-guide/accounts.md#backups). A `pg_dump` does not contain it. In
-  the Docker image on PostgreSQL it is `/app/data/shared/users.db`, with snapshots in
-  `/app/data/shared/backups/`.
+  [account backup guide](user-guide/accounts.md#backups). A `pg_dump` of the measurement tables
+  does not contain it. In the Docker image on PostgreSQL it is `/app/data/shared/users.db`, with
+  snapshots in `/app/data/shared/backups/`. With the accounts in PostgreSQL they are the schema
+  `corescope_users`: dump it with `pg_dump -n corescope_users` (see
+  [Back up the accounts](#back-up-the-accounts)).
 - `config.json` is rewritten by geo-filter saves. A save is normally atomic. When the config
   directory is not writable (the Docker image on PostgreSQL), the server first copies the
   current file to `config.json.bak` in the shared directory (`/app/data/shared`) and then
@@ -706,7 +907,7 @@ These do not apply on PostgreSQL:
 | WAL checkpoints, incremental vacuum, planner-statistics refresh | Do not run. The ingestor logs once that maintenance is handled by PostgreSQL autovacuum. |
 | `GET /api/backup` | 501, use `pg_dump` |
 | `GET /api/perf/sqlite` | 404 `{"error":"not available: the database is PostgreSQL"}` |
-| `users.db` | Stays SQLite |
+| `users.db` | Used unless accounts are moved to PostgreSQL (`userManagement.dsn`); see [User accounts in PostgreSQL](#user-accounts-in-postgresql) |
 
 Retention settings (`retention.*Days`) work the same on both backends. They run in the ingestor.
 
@@ -779,6 +980,40 @@ disabling it.
 The DSN is not valid. Use a `postgres://user:pass@host:5432/db?sslmode=...` URL and
 percent-encode special characters in the password.
 
+### Accounts
+
+These apply to accounts in PostgreSQL (`userManagement.dsn` / `DB_DSN_ACCOUNTS`). The server
+refuses to start; nothing else is changed.
+
+**`userManagement.dsn connects as "<role>", the measurement reader role: give the account store its own role (one that owns schema corescope_users and can write nothing else), so the server's measurement connection stays read-only`**
+The accounts DSN uses the same role as `db.dsn`. Create the accounts role with
+`scripts/postgres-roles.sh` and `CORESCOPE_ACCOUNTS_PASSWORD`, and use it in the accounts DSN.
+
+**`userManagement.dsn connects as postgres role "<role>", which could write outside the account store: <list>. The accounts role may own schema corescope_users and nothing else: revoke these (and any membership granting them), so the server cannot write measurement data (schema "<schema>") or the control tables (schema "corescope_control")`**
+The list names each way the role could write the measurement or control schema, for example
+`role <role> has SUPERUSER`, `role <role> owns schema <schema>`, `can write <schema>.<table>
+(via role <other>)` or `can advance or set sequence ...`. Revoke the privilege or the role
+membership that grants it. Re-running `scripts/postgres-roles.sh` resets the role it created.
+Do not use a superuser or the writer role as the accounts role.
+
+**`userManagement.dsn: unparseable Postgres DSN`**, **`userManagement.dsn: no user to connect as`**
+The DSN is not valid, or names no user (and `PGUSER` is unset). Use a `postgres://user:pass@host/db`
+URL and percent-encode special characters in the password. The message never quotes the DSN.
+
+**`accounts role check: ...`**
+The check could not read the catalog on the measurement connection; the text after the colon names
+the step and the database error.
+
+**The ingestor does not see new approved channels or linked companions.**
+It reads `corescope_users` through the group role `corescope_users_reader`, which the writer must
+belong to; re-run `scripts/postgres-roles.sh`. Right after the script (with an accounts password)
+and before the server's first start with the accounts DSN, the schema exists without tables, so
+nothing is read until the server has created them. Without the schema the ingestor reads
+`users.db` instead. The ingestor's log is the place to look.
+
+**`GET /api/admin/users-backup` answers 501.**
+Expected with the accounts in PostgreSQL. Use `pg_dump -n corescope_users`.
+
 ### Ingestor
 
 **`refusing to start on an empty PostgreSQL database while <path> still holds N transmissions: ...`**
@@ -828,7 +1063,8 @@ its uid or gid belongs to another account or group (choose another value);
 `corescope-server cannot reach /app/data/shared` (`/app/data` must be searchable by others);
 `/app/config.json must be a regular file in /app/data` (not a symlink or a file elsewhere).
 `WARNING: userManagement.dbPath ... is outside /app/data/shared` is not fatal: move `users.db`
-into the shared directory and point `dbPath` at it.
+into the shared directory and point `dbPath` at it (or move the accounts to PostgreSQL, which
+needs no file).
 
 **A geo-filter save is logged as non-atomic**
 Expected when `config.json`'s directory is not writable by the server (the Docker image on

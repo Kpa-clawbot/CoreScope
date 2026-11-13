@@ -14,7 +14,7 @@ CoreScope stores its measurement data (packets, nodes, observers) in either **SQ
 Backend selection is `db.driver` and `db.dsn` (or `DB_DRIVER` and `DB_DSN`); see
 [Configuration](configuration.md#database).
 
-User accounts, when enabled, use a separate SQLite file (`users.db`) on both backends.
+User accounts, when enabled, use a separate SQLite file (`users.db`) on both backends, or schema `corescope_users` in PostgreSQL when `userManagement.dsn` is set; see [User accounts in PostgreSQL](../postgresql.md#user-accounts-in-postgresql).
 
 > The rest of this page applies to SQLite databases only.
 

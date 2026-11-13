@@ -80,5 +80,15 @@ CoreScope stores its measurement data in SQLite or, optionally, PostgreSQL
   host. Keep it that way, or bind it to `127.0.0.1`, and use `sslmode=require`
   (or stricter) for a database on another host.
 
-`users.db` (user accounts) is always SQLite and is not covered by these roles;
+`users.db` (user accounts) is a SQLite file by default and is not covered by these roles;
 protect its file and its backups as described in the user-management docs.
+
+With accounts in PostgreSQL (`userManagement.dsn` / `DB_DSN_ACCOUNTS`) they use a separate
+role (`corescope_accounts`, created by `scripts/postgres-roles.sh` only when you set its
+password). It owns schema `corescope_users` and has no privilege in the measurement schema or in
+`corescope_control`. Give its DSN to the servers only: the ingestor never needs it, and the
+reader role must not be used for it. The server checks this at startup and refuses to start if
+the accounts role is the reader or could write measurement or control tables through any role it
+reaches. The ingestor reads two account tables (approved channels, linked companions) read-only
+through the group role `corescope_users_reader`. The accounts schema holds password hashes and
+mail addresses: restrict and encrypt `pg_dump -n corescope_users` output like the database.

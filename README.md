@@ -202,15 +202,18 @@ automatically, and the same binaries serve both backends.
 - `corescope-migrate copy` moves an existing SQLite database into PostgreSQL
   (and back), then `corescope-migrate verify` compares the two. See
   [cmd/migrate/README.md](cmd/migrate/README.md).
-- Optional user accounts (`users.db`) stay SQLite on both backends.
+- Optional user accounts are a SQLite file (`users.db`) by default, on both
+  backends. With `userManagement.dsn` (or `DB_DSN_ACCOUNTS`) they live in a
+  PostgreSQL schema instead, with their own role, so several server replicas can
+  share them. See [docs/postgresql.md](docs/postgresql.md#user-accounts-in-postgresql).
 - In Docker, run PostgreSQL with Compose: the ingestor is its own container,
   alone with the writer DSN and not root, while the main container (caddy,
   mosquitto, server) starts with `DISABLE_INGESTOR=true` and only the read-only
   DSN (`DB_DSN_SERVER`). The writer credential is never in the server's
   container. The container selects the database from its environment
   (`DB_DRIVER`, `DB_DSN_*`), never from `config.json`, and refuses a
-  `config.json` that carries a `dsn`. Files the server still writes (`users.db`,
-  the shared file queues, the ingestor stats file) live in `/app/data/shared`;
+  `config.json` that carries a `dsn`. Files the server still writes (`users.db`
+  unless accounts are in PostgreSQL, the shared file queues, the ingestor stats file) live in `/app/data/shared`;
   the server runs as its own user (`SERVER_RUN_AS_UID`, default 1001). Running
   both services in one container on PostgreSQL still works but logs a warning
   and is not recommended. `corescope-migrate` is in the image at
@@ -313,7 +316,7 @@ binaries another way.
 
 PostgreSQL support uses the pure-Go [`pgx`](https://github.com/jackc/pgx) driver,
 so it adds no cgo requirement. The SQLite driver is still linked in, because
-SQLite is the default backend, `users.db` is always SQLite, and
+SQLite is the default backend, `users.db` is SQLite unless accounts are moved to PostgreSQL, and
 `corescope-migrate` reads and writes both.
 
 ### Test Suite

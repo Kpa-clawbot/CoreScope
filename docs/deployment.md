@@ -76,7 +76,7 @@ docker run -d --name corescope \
 | `-p 80:80` | Yes | HTTP web UI |
 | `-p 443:443` | No | HTTPS (only if using built-in Caddy with a domain) |
 | `-p 1883:1883` | No | MQTT broker (expose if external gateways connect directly) |
-| `-v /your/data:/app/data` | Yes | Persistent data: SQLite DB (default), config.json, theme.json, `users.db` |
+| `-v /your/data:/app/data` | Yes | Persistent data: SQLite DB (default), config.json, theme.json, `users.db` (unless accounts are in PostgreSQL) |
 | `-v /your/Caddyfile:/etc/caddy/Caddyfile:ro` | No | Custom Caddyfile for HTTPS |
 | `-v /your/caddy-data:/data/caddy` | No | Caddy TLS certificate storage |
 | `-e DISABLE_MOSQUITTO=true` | No | Skip the internal Mosquitto broker (use your own) |
@@ -666,7 +666,7 @@ recommended. See [In the Docker image](postgresql.md#in-the-docker-image) and, f
 [Kubernetes](postgresql.md#kubernetes-and-high-availability).
 
 In the Docker image on PostgreSQL the server runs as its own user (`corescope-server`, uid
-`SERVER_RUN_AS_UID`, default 1001) and what it writes to disk (`users.db` and its `backups/`) lives in `/app/data/shared`. `config.json` must not contain a `dsn`, and
+`SERVER_RUN_AS_UID`, default 1001) and what it writes to disk (`users.db` and its `backups/`, unless the accounts are in PostgreSQL) lives in `/app/data/shared`. `config.json` must not contain a `dsn`, and
 `/app/data/.env` must not be readable by that user. `corescope-migrate` is shipped in the image
 at `/app/corescope-migrate`; the guide shows how to run it.
 
@@ -675,7 +675,7 @@ at `/app/corescope-migrate`; the guide shows how to run it.
 This section covers SQLite, the default. For PostgreSQL, see
 [Backups and restore](postgresql.md#backups-and-restore): `GET /api/backup` answers HTTP 501
 there and you use `pg_dump` and `pg_restore`. Backing up `config.json`, `theme.json`, secrets
-and `users.db` (always SQLite) is the same on both.
+and `users.db` (a SQLite file unless the accounts are in PostgreSQL, which `pg_dump -n corescope_users` covers) is the same on both.
 
 ### Backup
 
@@ -727,7 +727,7 @@ previous completed backup.
 This is a point-in-time telemetry snapshot, not continuous replication or a full
 instance backup. Keep protected copies off the CoreScope host, and also preserve:
 - `config.json`, `theme.json`, deployment settings, and any configured keys/secrets.
-- When accounts are enabled, **`users.db` separately**: use the
+- When accounts are enabled, **`users.db` separately** (with accounts in PostgreSQL: [`pg_dump -n corescope_users`](postgresql.md#back-up-the-accounts)): use the
   [account backup and restore guide](user-guide/accounts.md#backups), which covers
   its own snapshot endpoint and scheduled backups. Do not copy that database live.
 
