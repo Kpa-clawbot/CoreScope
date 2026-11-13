@@ -50,7 +50,8 @@ type DB struct {
 	hashMigrationDone       atomic.Bool // ingestor's content-hash migration seen done; latched (hashMigrationComplete)
 	advertEvidenceReadHook  func()      // test-only: immediately before a bulk mask query
 	conn                    *sql.DB
-	path                    string // filesystem path to the database file
+	pg                      bool   // opened on Postgres (see backend.go); always the v3 schema
+	path                    string // filesystem path to the database file; empty on Postgres
 	isV3                    bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
 	hasResolvedPath         bool   // observations table has resolved_path column
 	hasObsRawHex            bool   // observations table has raw_hex column (#881)
