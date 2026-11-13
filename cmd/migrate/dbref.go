@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -65,6 +66,20 @@ func parseDBRef(s string) (dbRef, error) {
 		return ref, nil
 	default:
 		return dbRef{}, errors.New("unrecognised database argument: want sqlite:<path> or a postgres:// URL")
+	}
+}
+
+// usageFor returns a flag.Usage that shows synopsis, an example and the
+// password advice before the flag list.
+func usageFor(fs *flag.FlagSet, synopsis, example string) func() {
+	return func() {
+		w := fs.Output()
+		fmt.Fprintf(w, "usage: corescope-migrate %s\n\n", synopsis)
+		fmt.Fprintf(w, "<db> is sqlite:<path> or postgres://user@host[:port]/dbname[?sslmode=…]\n")
+		fmt.Fprintf(w, "Do not put the password in the URL: arguments are visible to every user in ps.\n")
+		fmt.Fprintf(w, "Supply it with PGPASSWORD or a ~/.pgpass file (or PGPASSFILE) instead.\n\n")
+		fmt.Fprintf(w, "example:\n  %s\n\nflags:\n", example)
+		fs.PrintDefaults()
 	}
 }
 
