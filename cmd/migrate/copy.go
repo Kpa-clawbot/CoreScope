@@ -416,6 +416,12 @@ func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
 		st.Close()
 	} else if err := pgschema.Apply(ctx, admin, j.lg.Printf); err != nil {
 		return fmt.Errorf("create schema on %s: %w", to.display, err)
+	} else if err := pgschema.EnsureControlGrants(ctx, admin); err != nil {
+		// As the ingestor does at every start: scripts/postgres-roles.sh grants
+		// the control tables only if they exist, and Apply just created them,
+		// so a server started straight after the copy would otherwise be
+		// refused USAGE on corescope_control. No-op without the role.
+		return fmt.Errorf("grant the control tables on %s: %w", to.display, err)
 	}
 	tgt, err := loadSchema(ctx, admin, postgresBackend)
 	if err != nil {

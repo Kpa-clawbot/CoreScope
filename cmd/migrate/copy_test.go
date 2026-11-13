@@ -14,6 +14,7 @@ import (
 
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/dbschema/pgschema"
+	"github.com/meshcore-analyzer/dbx"
 	"github.com/meshcore-analyzer/dbx/dbxtest"
 )
 
@@ -911,5 +912,44 @@ func TestPostgresForeignSchemaRefused(t *testing.T) {
 		if n != 0 {
 			t.Errorf("%s was created in a foreign schema", tbl)
 		}
+	}
+}
+
+// A server started straight after a copy (CI's E2E job, or before the first
+// ingestor start) needs the control grants: scripts/postgres-roles.sh grants
+// the control tables only if they exist, and the copy creates them. The copy
+// therefore grants them as the ingestor does. Its own database, because
+// corescope_control has a fixed name that tests sharing one cannot isolate.
+func TestCopyToPostgresGrantsControlTables(t *testing.T) {
+	adminDSN := os.Getenv("CORESCOPE_TEST_PG_DSN")
+	if adminDSN == "" {
+		t.Skip("CORESCOPE_TEST_PG_DSN not set; skipping Postgres test")
+	}
+	target := usersPGTarget(t) // a fresh database; its accounts role is unused here
+	pgURL := usersPGAdminURL(t, target)
+	admin, err := sql.Open(dbx.PostgresDriverName, pgURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	// The group role is cluster-wide and shared by every test: create it if
+	// missing, never drop it.
+	if _, err := admin.Exec(`DO $$ BEGIN
+		IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'corescope_control_client') THEN
+			CREATE ROLE corescope_control_client NOLOGIN;
+		END IF;
+	END $$`); err != nil && !strings.Contains(err.Error(), "already exists") {
+		t.Fatal(err)
+	}
+	src := filepath.Join(t.TempDir(), "src.db")
+	newSource(t, src, srcMigrations())
+	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", pgURL)
+	wantOK(t, code, out)
+	state, detail, err := pgschema.CheckControlGrants(t.Context(), admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != pgschema.ControlExact {
+		t.Fatalf("control grants after copy: %v (%s); want exact", state, detail)
 	}
 }
