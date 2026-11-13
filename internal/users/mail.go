@@ -56,42 +56,43 @@ func (s *Store) LogMail(userID *int64, to, purpose, messageID string) (int64, er
 	if messageID != "" {
 		mid = messageID
 	}
-	res, err := s.db.Exec(`INSERT INTO mail_log (user_id, to_email, purpose, provider_message_id, sent_at, last_event, last_event_at)
-		VALUES (?, ?, ?, ?, ?, 'sent', ?)`, nullInt(userID), to, purpose, mid, now, now)
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO mail_log (user_id, to_email, purpose, provider_message_id, sent_at, last_event, last_event_at)
+		VALUES (?, ?, ?, ?, ?, 'sent', ?) RETURNING id`, nullInt(userID), to, purpose, mid, now, now).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // RecordMailEvent appends a provider event to the mail with that provider
 // message id. Duplicates (same event and time) are ignored; the summary
-// columns follow the newest event. found is false for unknown ids.
+// columns follow the newest event. found is false for unknown ids. The
+// newest-event test is part of the UPDATE, so concurrent webhooks for one
+// mail (Postgres replicas) cannot move the summary back to an older event.
 func (s *Store) RecordMailEvent(messageID, event string, at time.Time, reason string) (userID *int64, found bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, false, err
 	}
 	defer tx.Rollback()
-	var id, lastAt int64
+	var id int64
 	var uid sql.NullInt64
-	err = tx.QueryRow(`SELECT id, user_id, last_event_at FROM mail_log WHERE provider_message_id = ?`, messageID).
-		Scan(&id, &uid, &lastAt)
+	err = tx.QueryRow(`SELECT id, user_id FROM mail_log WHERE provider_message_id = ?`, messageID).
+		Scan(&id, &uid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO mail_events (mail_id, event, at, reason) VALUES (?, ?, ?, ?)`,
-		id, event, unix(at), reason); err != nil {
+	if _, err := tx.Exec(`INSERT INTO mail_events (mail_id, event, at, reason) VALUES (?, ?, ?, ?)
+		ON CONFLICT (mail_id, event, at) DO NOTHING`, id, event, unix(at), reason); err != nil {
 		return nil, false, err
 	}
-	if unix(at) >= lastAt {
-		if _, err := tx.Exec(`UPDATE mail_log SET last_event = ?, last_event_at = ?, last_reason = ? WHERE id = ?`,
-			event, unix(at), reason, id); err != nil {
-			return nil, false, err
-		}
+	if _, err := tx.Exec(`UPDATE mail_log SET last_event = ?, last_event_at = ?, last_reason = ? WHERE id = ? AND last_event_at <= ?`,
+		event, unix(at), reason, id, unix(at)); err != nil {
+		return nil, false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, false, err
@@ -103,6 +104,8 @@ func (s *Store) RecordMailEvent(messageID, event string, at time.Time, reason st
 	return userID, true, nil
 }
 
+// eventsFor lists a mail's events by time, then insertion order (SQLite's
+// rowid; the Postgres table has an identity column of that name).
 func (s *Store) eventsFor(mailID int64) ([]MailEvent, error) {
 	rows, err := s.db.Query(`SELECT event, at, reason FROM mail_events WHERE mail_id = ? ORDER BY at, rowid`, mailID)
 	if err != nil {
@@ -149,7 +152,9 @@ func (s *Store) MailAllForUser(userID int64) ([]MailRecord, error) {
 }
 
 func (s *Store) mailForUser(userID int64, limit int) ([]MailRecord, error) {
-	rows, err := s.db.Query(`SELECT `+mailCols+` FROM mail_log WHERE user_id = ? ORDER BY sent_at DESC, id DESC LIMIT ?`, userID, limit)
+	lim, largs := limitClause(limit)
+	rows, err := s.db.Query(`SELECT `+mailCols+` FROM mail_log WHERE user_id = ? ORDER BY sent_at DESC, id DESC`+lim,
+		append([]any{userID}, largs...)...)
 	if err != nil {
 		return nil, err
 	}

@@ -6,8 +6,13 @@ import (
 	"fmt"
 )
 
-// migrations[i] upgrades the schema from version i to i+1. Forward-only:
-// never edit a shipped entry, append a new one.
+// migrations[i] upgrades the SQLite schema from version i to i+1.
+// Forward-only: never edit a shipped entry, append a new one.
+//
+// Every new migration goes to BOTH backends: append the SQLite statements
+// here and the Postgres equivalent to pgMigrations (postgres_schema.go),
+// whose types follow AGENTS.md (TEXT COLLATE "C", BIGINT). The versions
+// stay equal: TestPostgresMigrationsMatchSQLite fails otherwise.
 var migrations = [][]string{
 	{ // v1: sub-project A
 		`CREATE TABLE users (

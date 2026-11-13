@@ -160,8 +160,14 @@ func (s *Store) NotifyPrefsFor(userID int64) (NotifyPrefs, error) {
 		return NotifyPrefs{}, err
 	}
 	d := DefaultNotifyPrefs(userID)
-	if _, err := s.db.Exec(`INSERT OR IGNORE INTO notification_prefs (user_id, enabled, events, unsub_token, updated_at)
-		VALUES (?, ?, ?, ?, ?)`, userID, d.Enabled, strings.Join(d.Events, ","), tok, unix(s.now())); err != nil {
+	en := 0
+	if d.Enabled {
+		en = 1
+	}
+	// A concurrent first use (another replica) may insert first; its row,
+	// token included, is then the one both callers read back.
+	if _, err := s.db.Exec(`INSERT INTO notification_prefs (user_id, enabled, events, unsub_token, updated_at)
+		VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, userID, en, strings.Join(d.Events, ","), tok, unix(s.now())); err != nil {
 		return NotifyPrefs{}, err
 	}
 	p, err := s.getPrefs(userID)
@@ -221,26 +227,29 @@ func (s *Store) SetNotifyPrefs(userID int64, enabled bool, events []string) (Not
 }
 
 // DisableNotifyByToken turns notifications off for the user holding the
-// unsubscribe token. wasEnabled reports whether they were on.
+// unsubscribe token. wasEnabled reports whether they were on; of
+// concurrent calls with one token, exactly one reports true.
 // ErrTokenInvalid for an empty or unknown token.
 func (s *Store) DisableNotifyByToken(token string) (userID int64, wasEnabled bool, err error) {
 	if token == "" {
 		return 0, false, ErrTokenInvalid
 	}
-	var en int
-	err = s.db.QueryRow(`SELECT user_id, enabled FROM notification_prefs WHERE unsub_token = ?`, token).Scan(&userID, &en)
+	err = s.db.QueryRow(`UPDATE notification_prefs SET enabled = 0, updated_at = ? WHERE unsub_token = ? AND enabled != 0
+		RETURNING user_id`, unix(s.now()), token).Scan(&userID)
+	if err == nil {
+		return userID, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, false, err
+	}
+	err = s.db.QueryRow(`SELECT user_id FROM notification_prefs WHERE unsub_token = ?`, token).Scan(&userID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, ErrTokenInvalid
 	}
 	if err != nil {
 		return 0, false, err
 	}
-	if en != 0 {
-		if _, err := s.db.Exec(`UPDATE notification_prefs SET enabled = 0, updated_at = ? WHERE user_id = ?`, unix(s.now()), userID); err != nil {
-			return 0, false, err
-		}
-	}
-	return userID, en != 0, nil
+	return userID, false, nil
 }
 
 // AllNotifyPrefs returns every preferences row, by user id.
@@ -265,12 +274,17 @@ func (s *Store) AllNotifyPrefs() ([]NotifyPrefs, error) {
 // user's watch list in one transaction, in order, while the list holds
 // fewer than max entries (max <= 0: no limit). It reports how many were
 // added, how many were already watched and how many the limit left out.
+// The user is locked first (Postgres), so concurrent calls cannot both pass
+// the limit check.
 func (s *Store) AddWatches(userID int64, pubkeys []string, max int) (added, already, overLimit int, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, 0, 0, err
 	}
 	defer tx.Rollback()
+	if err := s.lockUser(tx, userID); err != nil {
+		return 0, 0, 0, err
+	}
 	have := map[string]bool{}
 	rows, err := tx.Query(`SELECT pubkey FROM notification_watches WHERE user_id = ?`, userID)
 	if err != nil {
@@ -396,7 +410,8 @@ func (s *Store) AllNotifyStates() ([]NotifyState, error) {
 
 // WriteNotifyStates upserts the rows in one transaction. Rows of users
 // deleted since the caller read them are skipped instead of failing the
-// whole write on the foreign key.
+// whole write on the foreign key. The CASTs type the SELECT list for
+// Postgres, which cannot infer a bare placeholder's type there.
 func (s *Store) WriteNotifyStates(list []NotifyState) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -404,7 +419,8 @@ func (s *Store) WriteNotifyStates(list []NotifyState) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(`INSERT INTO notification_state (user_id, event, subject, state, changed_at)
-		SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)
+		SELECT CAST(? AS BIGINT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS BIGINT)
+		WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)
 		ON CONFLICT (user_id, event, subject) DO UPDATE SET state = excluded.state, changed_at = excluded.changed_at`)
 	if err != nil {
 		return err

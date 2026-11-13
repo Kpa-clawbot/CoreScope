@@ -17,7 +17,9 @@ const (
 
 // IssueToken creates a one-time token and invalidates the user's earlier
 // unused tokens for the same purpose, so only the newest link works.
-// newEmail is stored for PurposeEmailChange and ignored when empty.
+// newEmail is stored for PurposeEmailChange and ignored when empty. The
+// user is locked first (Postgres), so two concurrent issues cannot both
+// leave a live token.
 func (s *Store) IssueToken(userID int64, p Purpose, ttl time.Duration, newEmail string) (string, error) {
 	raw, hash, err := NewToken()
 	if err != nil {
@@ -29,6 +31,9 @@ func (s *Store) IssueToken(userID int64, p Purpose, ttl time.Duration, newEmail 
 		return "", err
 	}
 	defer tx.Rollback()
+	if err := s.lockUser(tx, userID); err != nil {
+		return "", err
+	}
 	if _, err := tx.Exec(`UPDATE tokens SET used_at = ? WHERE user_id = ? AND purpose = ? AND used_at IS NULL`,
 		unix(now), userID, string(p)); err != nil {
 		return "", err
@@ -82,6 +87,8 @@ func (s *Store) TokenUser(raw string, p Purpose) (int64, error) {
 
 // ConsumeToken validates and burns a token. A purpose mismatch returns
 // ErrTokenInvalid without burning it. Expired tokens return ErrTokenExpired.
+// The burn is conditional (used_at IS NULL), so of concurrent consumers
+// exactly one succeeds; the others get ErrTokenInvalid.
 func (s *Store) ConsumeToken(raw string, p Purpose) (userID int64, newEmail string, err error) {
 	hash := HashToken(raw)
 	tx, err := s.db.Begin()

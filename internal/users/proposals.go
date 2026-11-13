@@ -109,13 +109,17 @@ func nullableID(v sql.NullInt64) *int64 {
 // Propose opens a proposal for (kind, subject) in one transaction. A revoked
 // row becomes pending again under the new proposer; pending, approved and
 // rejected rows refuse. Duplicates are checked before the limits, so a
-// duplicate is reported as one.
+// duplicate is reported as one. Proposal writers are serialized (Postgres
+// table lock): the limits count across rows.
 func (s *Store) Propose(kind, subject string, userID int64, lim ProposalLimits) (*Proposal, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := s.lockTable(tx, "proposals"); err != nil {
+		return nil, err
+	}
 	now := unix(s.now())
 	cur, err := scanProposal(tx.QueryRow(`SELECT `+proposalCols+` FROM proposals WHERE kind = ? AND subject = ?`, kind, subject))
 	switch {
@@ -151,12 +155,8 @@ func (s *Store) Propose(kind, subject string, userID int64, lim ProposalLimits) 
 	}
 	var id int64
 	if cur == nil {
-		res, err := tx.Exec(`INSERT INTO proposals (kind, subject, status, proposer_id, created_at) VALUES (?, ?, 'pending', ?, ?)`,
-			kind, subject, userID, now)
-		if err != nil {
-			return nil, err
-		}
-		if id, err = res.LastInsertId(); err != nil {
+		if err := tx.QueryRow(`INSERT INTO proposals (kind, subject, status, proposer_id, created_at) VALUES (?, ?, 'pending', ?, ?)
+			RETURNING id`, kind, subject, userID, now).Scan(&id); err != nil {
 			return nil, err
 		}
 	} else {
@@ -176,13 +176,17 @@ func (s *Store) Propose(kind, subject string, userID int64, lim ProposalLimits) 
 // Decide applies action in one transaction: approve and reject from
 // pending, revoke from approved; anything else is ErrProposalTransition.
 // Approve refuses with ErrProposalApprovedLimit when maxApproved (> 0)
-// proposals of the same kind are approved already.
+// proposals of the same kind are approved already. Serialized with the
+// other proposal writers like Propose.
 func (s *Store) Decide(id int64, action ProposalAction, reviewerID int64, note string, maxApproved int) (*Proposal, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := s.lockTable(tx, "proposals"); err != nil {
+		return nil, err
+	}
 	p, err := scanProposal(tx.QueryRow(`SELECT `+proposalCols+` FROM proposals WHERE id = ?`, id))
 	if err != nil {
 		return nil, err
@@ -249,8 +253,9 @@ func (s *Store) AllProposalsByUser(userID int64) ([]Proposal, error) {
 }
 
 func (s *Store) proposalsByUser(userID int64, limit int) ([]Proposal, error) {
+	lim, largs := limitClause(limit)
 	return s.queryProposals(`SELECT `+proposalCols+` FROM proposals WHERE proposer_id = ?
-		ORDER BY created_at DESC, id DESC LIMIT ?`, userID, limit)
+		ORDER BY created_at DESC, id DESC`+lim, append([]any{userID}, largs...)...)
 }
 
 func (s *Store) queryProposals(q string, args ...any) ([]Proposal, error) {
