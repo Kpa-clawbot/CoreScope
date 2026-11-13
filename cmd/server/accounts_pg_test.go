@@ -27,7 +27,10 @@ import (
 // $CORESCOPE_TEST_PG_DSN and dropped in Cleanup. users.OpenPostgres always
 // uses schema corescope_users, so tests cannot share a database through
 // per-test schemas the way dbxtest does (cmd/migrate's usersPGTarget does
-// the same). Skips without the variable.
+// the same). The DSN connects as a fresh role holding nothing beyond
+// PUBLIC's privileges, owner of schema corescope_users there, as
+// scripts/postgres-roles.sh sets up the accounts role: the store creates
+// neither and refuses a superuser. Skips without the variable.
 func accountsPGTarget(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv("CORESCOPE_TEST_PG_DSN")
@@ -47,21 +50,50 @@ func accountsPGTarget(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Cleanups run last-registered first: the database goes, then the role
+	// (which owned only its schema there), then the admin connection.
+	t.Cleanup(func() { admin.Close() })
+	role, password, _ := pgTestRole(t, admin)
 	if _, err := admin.Exec(`CREATE DATABASE "` + name + `"`); err != nil {
-		admin.Close()
 		t.Fatalf("create test database: %v", err)
 	}
 	t.Cleanup(func() {
 		if _, err := admin.Exec(`DROP DATABASE IF EXISTS "` + name + `" WITH (FORCE)`); err != nil {
 			t.Errorf("drop test database: %v", err)
 		}
-		admin.Close()
 	})
 	u.Path = "/" + name
 	q := u.Query()
 	q.Del("search_path")
 	u.RawQuery = q.Encode()
+	inDB, err := sql.Open(dbx.PostgresDriverName, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = inDB.Exec(`CREATE SCHEMA ` + users.PostgresSchema + ` AUTHORIZATION ` + role)
+	inDB.Close()
+	if err != nil {
+		t.Fatalf("create schema %s: %v", users.PostgresSchema, err)
+	}
+	u.User = url.UserPassword(role, password)
 	return u.String()
+}
+
+// pgExecRetry runs stmt, retrying while another session updates the same
+// catalog row (GRANT/REVOKE on the shared test database from a parallel
+// test process fails with "tuple concurrently updated").
+func pgExecRetry(t *testing.T, db *sql.DB, stmt string) {
+	t.Helper()
+	for i := 0; ; i++ {
+		_, err := db.Exec(stmt)
+		if err == nil {
+			return
+		}
+		if i == 20 || !strings.Contains(err.Error(), "tuple concurrently updated") {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // pgReplicaStores opens n account stores on one fresh Postgres database, as n
@@ -202,6 +234,26 @@ func TestAccountsPGRoleCheck(t *testing.T) {
 	member, _, _ := pgTestRole(t, seed, `GRANT `+group+` TO {role}`)
 	if err := verifyAccountsPGRole(ctx, d.conn, member); err == nil || !strings.Contains(err.Error(), "via role "+group) {
 		t.Fatalf("a role writing through a group: err = %v", err)
+	}
+
+	// The measurement database: CREATE on it through a group, or owning it,
+	// would let the role create a schema the ingestor's writer writes
+	// through. The test database's owner stands in for an owning role.
+	var dbName, dbOwner string
+	if err := seed.QueryRow(`SELECT current_database(), pg_get_userbyid(datdba) FROM pg_database WHERE datname = current_database()`).
+		Scan(&dbName, &dbOwner); err != nil {
+		t.Fatal(err)
+	}
+	dbGroup := pgGroupRole(t, seed)
+	creator, _, _ := pgTestRole(t, seed, `GRANT `+dbGroup+` TO {role}`)
+	pgExecRetry(t, seed, `GRANT CREATE ON DATABASE "`+dbName+`" TO `+dbGroup)
+	// Before pgGroupRole's DROP OWNED, which would REVOKE it without the retry.
+	t.Cleanup(func() { pgExecRetry(t, seed, `REVOKE CREATE ON DATABASE "`+dbName+`" FROM `+dbGroup) })
+	if err := verifyAccountsPGRole(ctx, d.conn, creator); err == nil || !strings.Contains(err.Error(), "role "+dbGroup+" can CREATE in database "+dbName) {
+		t.Fatalf("a role with CREATE on the database through a group: err = %v", err)
+	}
+	if err := verifyAccountsPGRole(ctx, d.conn, dbOwner); err == nil || !strings.Contains(err.Error(), "owns database "+dbName) {
+		t.Fatalf("the database owner: err = %v", err)
 	}
 
 	var control bool

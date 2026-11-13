@@ -18,12 +18,32 @@ const PostgresSchema = "corescope_users"
 
 // UsersReaderRole is the role the ingestor connects as (or is a member of)
 // to read the approved channel proposals and the companion links. When it
-// exists, OpenPostgres grants it USAGE on the schema and SELECT on those two
-// tables, nothing else; when it does not, OpenPostgres grants nothing.
+// exists, OpenPostgres grants it USAGE on the schema and SELECT on the
+// pgReaderColumns of those two tables, nothing else; when it does not,
+// OpenPostgres grants nothing.
 const UsersReaderRole = "corescope_users_reader"
 
-// pgReaderTables are the tables UsersReaderRole may read.
-var pgReaderTables = []string{"proposals", "companion_links"}
+// pgReaderColumns are the columns UsersReaderRole may read: exactly those the
+// ingestor's two queries use (cmd/ingestor approvedChannelsQuery and
+// linkedCompanionsQuery), so notes, user ids and names stay private.
+// scripts/postgres-roles.sh grants the same; keep the two in step.
+var pgReaderColumns = []struct {
+	table   string
+	columns string
+}{
+	{"proposals", "id, kind, subject, status, decided_at"},
+	{"companion_links", "pubkey"},
+}
+
+// ErrPostgresSchemaMissing and ErrPostgresRoleRefused are wrapped by the
+// OpenPostgres errors for a schema that does not exist and for a connecting
+// role holding more than the accounts role may (pgRolePowers). Both mean the
+// same fix: run scripts/postgres-roles.sh with CORESCOPE_ACCOUNTS_PASSWORD and
+// connect as the accounts role it sets up.
+var (
+	ErrPostgresSchemaMissing = errors.New("users: the account schema does not exist in this database, and the account store does not create it")
+	ErrPostgresRoleRefused   = errors.New("users: the account store's Postgres role holds more than the accounts role may")
+)
 
 // pgUndefinedObject is Postgres' SQLSTATE undefined_object (here: the role
 // was dropped between the existence check and the GRANT).
@@ -31,7 +51,8 @@ const pgUndefinedObject = "42704"
 
 const (
 	// pgMigrateLockKey is the pg_advisory_lock key held while the schema is
-	// created and migrated ("CoreUsrs"; pgschema uses "CoreScop"), so
+	// migrated and its reader grants applied ("CoreUsrs"; pgschema uses
+	// "CoreScop"; scripts/postgres-roles.sh takes it for its grants too), so
 	// replicas starting together migrate one at a time.
 	pgMigrateLockKey int64 = 0x436f726555737273
 	// pgMaxOpenConns bounds the pool. Account traffic is small; more than
@@ -44,9 +65,11 @@ const (
 
 // OpenPostgres opens the account store in schema corescope_users of the
 // Postgres database named by dsn (a postgres:// URL or a keyword=value
-// string), creating the schema if absent and applying pending migrations.
-// The schema must be owned by the connecting role. Errors never contain the
-// DSN.
+// string) and applies pending migrations. The schema must exist and be owned
+// by the connecting role (scripts/postgres-roles.sh creates it); the store
+// never creates it, so the role needs no CREATE on the database. A role that
+// could create schemas or roles is refused (pgRefuseRolePowers). Errors never
+// contain the DSN.
 func OpenPostgres(dsn string) (*Store, error) {
 	return openPostgres(dsn, PostgresSchema)
 }
@@ -93,6 +116,10 @@ func openPostgres(dsn, schema string) (*Store, error) {
 		s.Close()
 		return nil, fmt.Errorf("users: connect postgres: %w", err)
 	}
+	if err := pgRefuseRolePowers(ctx, db); err != nil {
+		s.Close()
+		return nil, err
+	}
 	// On error the store is closed, which ends the session and so releases
 	// the advisory lock whatever state migratePostgres left it in.
 	if err := s.migratePostgres(ctx, schema); err != nil {
@@ -115,8 +142,64 @@ func validSchemaName(s string) bool {
 	return true
 }
 
-// migratePostgres creates schema if needed, brings it to the current
-// version and grants UsersReaderRole its reads, on one connection that holds
+// pgRolePowers lists what the session's roles (current_user and
+// session_user, and every role either is a member of, transitively, INHERIT
+// ignored: SET ROLE works without it) hold beyond owning the account schema:
+// SUPERUSER, CREATEROLE or BYPASSRLS, and ownership of or CREATE on the
+// current database (has_database_privilege counts PUBLIC's grants). A role
+// that can create a schema can create one named after the ingestor's writer
+// role, which comes first in the writer's default search_path ("$user"), and
+// plant tables or triggers the writer then writes through.
+const pgRolePowers = `
+	WITH RECURSIVE reach(oid) AS (
+		SELECT oid FROM pg_roles WHERE rolname IN (current_user, session_user)
+		UNION
+		SELECT m.roleid FROM pg_auth_members m JOIN reach r ON m.member = r.oid
+	)
+	SELECT format('role %I has %s', p.rolname, concat_ws(', ',
+		CASE WHEN p.rolsuper THEN 'SUPERUSER' END,
+		CASE WHEN p.rolcreaterole THEN 'CREATEROLE' END,
+		CASE WHEN p.rolbypassrls THEN 'BYPASSRLS' END))
+	FROM reach r JOIN pg_roles p ON p.oid = r.oid
+	WHERE p.rolsuper OR p.rolcreaterole OR p.rolbypassrls
+	UNION ALL
+	SELECT format('role %I %s database %I', pg_get_userbyid(r.oid),
+		CASE WHEN d.datdba = r.oid THEN 'owns' ELSE 'can CREATE in' END, d.datname)
+	FROM reach r JOIN pg_database d ON d.datname = current_database()
+	WHERE d.datdba = r.oid OR has_database_privilege(r.oid, d.oid, 'CREATE')
+	ORDER BY 1`
+
+// pgRefuseRolePowers refuses a connection whose roles hold any of
+// pgRolePowers, whatever the measurement backend: the accounts role may own
+// its schema and nothing else.
+func pgRefuseRolePowers(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, pgRolePowers)
+	if err != nil {
+		return fmt.Errorf("users: check the Postgres role: %w", err)
+	}
+	defer rows.Close()
+	var findings []string
+	for rows.Next() {
+		var f string
+		if err := rows.Scan(&f); err != nil {
+			return fmt.Errorf("users: check the Postgres role: %w", err)
+		}
+		findings = append(findings, f)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("users: check the Postgres role: %w", err)
+	}
+	if len(findings) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: it may own schema %s and nothing more, but %s. "+
+		"With that it could create a schema or role the ingestor writes through. Connect as the accounts role "+
+		"scripts/postgres-roles.sh sets up (CORESCOPE_ACCOUNTS), or revoke these and any membership granting them",
+		ErrPostgresRoleRefused, PostgresSchema, strings.Join(findings, "; "))
+}
+
+// migratePostgres checks schema, brings it to the current version and
+// grants UsersReaderRole its reads, on one connection that holds
 // pgMigrateLockKey throughout (concurrent GRANTs on one object can fail with
 // "tuple concurrently updated").
 func (s *Store) migratePostgres(ctx context.Context, schema string) error {
@@ -150,11 +233,8 @@ func pgMigrateLocked(ctx context.Context, conn *sql.Conn, schema string) error {
 		Scan(&owner, &me)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// Checked first because CREATE SCHEMA IF NOT EXISTS needs CREATE on
-		// the database even when the schema exists.
-		if _, err := conn.ExecContext(ctx, `CREATE SCHEMA "`+schema+`"`); err != nil {
-			return fmt.Errorf("users: create schema %s: %w", schema, err)
-		}
+		return fmt.Errorf("%w (schema %s): run scripts/postgres-roles.sh with CORESCOPE_ACCOUNTS_PASSWORD set, "+
+			"which creates it owned by the accounts role", ErrPostgresSchemaMissing, schema)
 	case err != nil:
 		return fmt.Errorf("users: look up schema %s: %w", schema, err)
 	case owner != me:
@@ -195,8 +275,11 @@ func pgMigrateLocked(ctx context.Context, conn *sql.Conn, schema string) error {
 }
 
 // pgGrantReader grants UsersReaderRole USAGE on schema and SELECT on
-// pgReaderTables if the role exists. GRANT is idempotent; the connecting
-// role owns the schema and its tables (pgMigrateLocked checked the schema).
+// pgReaderColumns if the role exists. Each table's privileges for the role
+// are rebuilt from nothing (REVOKE ALL also drops column grants), so a
+// table-wide SELECT an earlier version granted goes; in one transaction, so
+// the ingestor never sees the table without its columns. The connecting role
+// owns the schema and its tables (pgMigrateLocked checked the schema).
 func pgGrantReader(ctx context.Context, conn *sql.Conn, schema string) error {
 	var exists bool
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ?)`, UsersReaderRole).Scan(&exists); err != nil {
@@ -206,8 +289,11 @@ func pgGrantReader(ctx context.Context, conn *sql.Conn, schema string) error {
 		return nil
 	}
 	stmts := []string{`GRANT USAGE ON SCHEMA "` + schema + `" TO ` + UsersReaderRole}
-	for _, t := range pgReaderTables {
-		stmts = append(stmts, `GRANT SELECT ON "`+schema+`".`+t+` TO `+UsersReaderRole)
+	for _, rc := range pgReaderColumns {
+		table := `"` + schema + `".` + rc.table
+		stmts = append(stmts,
+			`REVOKE ALL ON `+table+` FROM `+UsersReaderRole,
+			`GRANT SELECT (`+rc.columns+`) ON `+table+` TO `+UsersReaderRole)
 	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {

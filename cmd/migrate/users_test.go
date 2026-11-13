@@ -20,8 +20,12 @@ import (
 // schema corescope_users, so tests cannot share a database the way dbxtest
 // shares one through per-test schemas. Each test gets its own throwaway
 // DATABASE instead (created from $CORESCOPE_TEST_PG_DSN, dropped in
-// t.Cleanup), inside which corescope_users is unique and owned by the
-// connecting role, as OpenPostgres requires. Skips without the variable.
+// t.Cleanup), and a fresh login role holding nothing beyond PUBLIC's
+// privileges that owns an empty corescope_users there: what
+// scripts/postgres-roles.sh sets up for the accounts role, which
+// OpenPostgres requires (it creates no schema and refuses a superuser).
+// The URL connects as that role. cmd/server's accountsPGTarget does the same
+// (two package mains cannot share a test helper). Skips without the variable.
 func usersPGTarget(t testing.TB) string {
 	t.Helper()
 	dsn := os.Getenv("CORESCOPE_TEST_PG_DSN")
@@ -36,25 +40,61 @@ func usersPGTarget(t testing.TB) string {
 	if _, err := rand.Read(b[:]); err != nil {
 		t.Fatal(err)
 	}
-	name := "migrate_users_" + hex.EncodeToString(b[:])
+	suffix := hex.EncodeToString(b[:])
+	name, role, password := "migrate_users_"+suffix, "migrate_acct_"+suffix, "pw"+suffix
 	admin, err := sql.Open(dbx.PostgresDriverName, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Cleanups run last-registered first: the database goes, then the role
+	// (which owned only its schema there), then the admin connection.
+	t.Cleanup(func() { admin.Close() })
+	if _, err := admin.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + password + `'`); err != nil {
+		t.Fatalf("create test role: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec(`DROP ROLE IF EXISTS ` + role); err != nil {
+			t.Errorf("drop test role: %v", err)
+		}
+	})
 	if _, err := admin.Exec(`CREATE DATABASE "` + name + `"`); err != nil {
-		admin.Close()
 		t.Fatalf("create test database: %v", err)
 	}
 	t.Cleanup(func() {
 		if _, err := admin.Exec(`DROP DATABASE IF EXISTS "` + name + `" WITH (FORCE)`); err != nil {
 			t.Errorf("drop test database: %v", err)
 		}
-		admin.Close()
 	})
 	u.Path = "/" + name
 	q := u.Query()
 	q.Del("search_path")
 	u.RawQuery = q.Encode()
+	inDB, err := sql.Open(dbx.PostgresDriverName, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = inDB.Exec(`CREATE SCHEMA ` + usersPGSchema + ` AUTHORIZATION ` + role)
+	inDB.Close()
+	if err != nil {
+		t.Fatalf("create schema %s: %v", usersPGSchema, err)
+	}
+	u.User = url.UserPassword(role, password)
+	return u.String()
+}
+
+// usersPGAdminURL is target (from usersPGTarget) as $CORESCOPE_TEST_PG_DSN's
+// own role, normally a superuser.
+func usersPGAdminURL(t testing.TB, target string) string {
+	t.Helper()
+	u, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := url.Parse(os.Getenv("CORESCOPE_TEST_PG_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = admin.User
 	return u.String()
 }
 
@@ -297,15 +337,50 @@ func TestCopyUsersRefusesVersionMismatch(t *testing.T) {
 
 	code, out := run(t, "copy-users", "-from", "sqlite:"+path, "-to", pgURL)
 	wantFail(t, code, out, "account schema version", "start the CoreScope server once")
-	// Nothing was created in the target.
+	// Nothing was created in the target's (pre-created, empty) schema.
 	admin, err := sql.Open(dbx.PostgresDriverName, pgURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer admin.Close()
 	var n int
-	if err := admin.QueryRow(`SELECT COUNT(*) FROM pg_namespace WHERE nspname = 'corescope_users'`).Scan(&n); err != nil || n != 0 {
-		t.Errorf("corescope_users exists after a refusal: n=%d err=%v", n, err)
+	if err := admin.QueryRow(`SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'corescope_users'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("corescope_users holds %d relations after a refusal: err=%v", n, err)
+	}
+}
+
+// The real workflow needs the roles script first: without schema
+// corescope_users, or connected as a superuser, copy-users says so and what
+// to run, and creates nothing.
+func TestCopyUsersNeedsTheRolesScript(t *testing.T) {
+	pgURL := usersPGTarget(t)
+	path, _ := seedUsers(t)
+	adminURL := usersPGAdminURL(t, pgURL)
+	admin, err := sql.Open(dbx.PostgresDriverName, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	// As a superuser: refused by the store's role check.
+	var super bool
+	if err := admin.QueryRow(`SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
+		t.Fatal(err)
+	}
+	if super {
+		code, out := run(t, "copy-users", "-from", "sqlite:"+path, "-to", adminURL)
+		wantFail(t, code, out, "SUPERUSER", "scripts/postgres-roles.sh", "CORESCOPE_ACCOUNTS_PASSWORD", "-to")
+	}
+
+	// Schema missing: the store does not create it.
+	if _, err := admin.Exec(`DROP SCHEMA ` + usersPGSchema + ` CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	code, out := run(t, "copy-users", "-from", "sqlite:"+path, "-to", pgURL)
+	wantFail(t, code, out, "does not exist", "scripts/postgres-roles.sh", "CORESCOPE_ACCOUNTS_PASSWORD", "-to")
+	var n int
+	if err := admin.QueryRow(`SELECT COUNT(*) FROM pg_namespace WHERE nspname = ?`, usersPGSchema).Scan(&n); err != nil || n != 0 {
+		t.Errorf("%s created by a refused copy: n=%d err=%v", usersPGSchema, n, err)
 	}
 }
 

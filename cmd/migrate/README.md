@@ -160,12 +160,15 @@ then set the driver back to `sqlite`.
 
 The usage text shows only password-less URLs.
 
-Accounts store, same way (stop the server first):
+Accounts store, same way (stop the server first). The target schema must already exist:
+run `scripts/postgres-roles.sh` with `CORESCOPE_ACCOUNTS_PASSWORD` set, which creates
+`corescope_users` owned by the accounts role, and copy as that role. A superuser, the database
+owner or a role with CREATE on the database is refused.
 
 ```bash
 export PGPASSWORD=…            # the accounts role's password
-corescope-migrate copy-users -from sqlite:/data/users.db -to postgres://corescope_users@db:5432/corescope
-corescope-migrate verify-users -a sqlite:/data/users.db -b postgres://corescope_users@db:5432/corescope
+corescope-migrate copy-users -from sqlite:/data/users.db -to postgres://corescope_accounts@db:5432/corescope
+corescope-migrate verify-users -a sqlite:/data/users.db -b postgres://corescope_accounts@db:5432/corescope
 ```
 
 Exit codes: 0 success, 1 failure or verify mismatch, 2 usage error.

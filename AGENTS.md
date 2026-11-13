@@ -155,10 +155,18 @@ SQLite is the default. PostgreSQL 16+ is an operator opt-in (`db.driver` / `db.d
   `internal/users`.
 - **On Postgres the accounts credential owns only `corescope_users`.** It is its
   own role (`corescope_accounts`, `scripts/postgres-roles.sh`), never the
-  reader's, and goes to the server only, never the ingestor. At startup
+  reader's, and goes to the server only, never the ingestor. The roles script
+  creates the schema; `users.OpenPostgres` never does, refuses a missing one,
+  and refuses a role that is superuser, CREATEROLE or BYPASSRLS, or owns or can
+  CREATE in its database, through any membership
+  (`TestOpenPostgresRefusesPowerfulRoles`): CREATE would let it plant a schema
+  named after the writer ("$user" in its search_path). At startup
   `verifyAccountsPGRole` (`cmd/server/accounts_pg.go`) refuses a role that is
-  the reader or that could write the measurement or `corescope_control` schema,
-  directly or through any role it reaches (`TestAccountsPGRoleCheck`). Don't add
+  the reader, that could write the measurement or `corescope_control` schema,
+  or that owns or can CREATE in the measurement database, directly or through
+  any role it reaches (`TestAccountsPGRoleCheck`). The reader group gets
+  column-only SELECT (`pgReaderColumns`, kept equal to the roles script by
+  `TestReaderColumnsMatchRolesScript`). Don't add
   a second server write path to Postgres: the measurement connection stays
   `default_transaction_read_only=on`.
 - **The ingestor reads the accounts store, never writes it.** On SQLite it opens `users.db`

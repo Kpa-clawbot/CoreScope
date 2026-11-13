@@ -346,7 +346,9 @@ observers](../observer-mqtt-logins.md).
 By default accounts are the SQLite file `users.db`, which needs a disk and a single server.
 Set `userManagement.dsn` (or the environment variable `DB_DSN_ACCOUNTS`) to a PostgreSQL
 role of their own and the accounts live in schema `corescope_users` instead: no disk, and any
-number of server replicas. The role, the startup check, moving an existing `users.db`, backups
+number of server replicas. `scripts/postgres-roles.sh` creates that role and the schema; the
+server does not create the schema and refuses a superuser or a role that owns the database or
+can `CREATE` in it. The order of steps, the role, the startup check, moving an existing `users.db`, backups
 and rollback are in
 [User accounts in PostgreSQL](../postgresql.md#user-accounts-in-postgresql). Nothing else about
 accounts changes for users or admins.

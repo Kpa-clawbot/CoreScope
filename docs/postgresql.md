@@ -657,6 +657,23 @@ With no accounts DSN set, nothing here applies and `users.db` works as before. T
 store also works when the measurement database is SQLite; the rest of this section assumes
 PostgreSQL for both.
 
+The steps, in this order:
+
+1. Run `scripts/postgres-roles.sh` with `CORESCOPE_ACCOUNTS_PASSWORD` ([Create the role](#create-the-role)).
+   It creates the accounts role and schema `corescope_users`, owned by that role. Neither the
+   server nor `corescope-migrate` creates the schema: without it they refuse to start.
+2. Optional: copy an existing `users.db` with `corescope-migrate copy-users`, connected as the
+   accounts role ([Move an existing `users.db`](#move-an-existing-usersdb)).
+3. Start the servers with `DB_DSN_ACCOUNTS` (or `userManagement.dsn`) set to the accounts role
+   ([Give the server the DSN](#give-the-server-the-dsn)). The first start creates the tables in
+   the schema.
+
+The accounts role must not be a superuser, must not own the database and must not have `CREATE`
+on it (directly, through `PUBLIC` or through any role it is a member of). With `CREATE` it could
+create a schema named after the writer role, which comes first in the writer's `search_path`, and
+plant tables the ingestor then writes through. The store refuses such a role whatever the
+measurement backend, and the server's startup check refuses it too.
+
 ### Create the role
 
 Set `CORESCOPE_ACCOUNTS_PASSWORD` when you run `scripts/postgres-roles.sh` (a second run on an
@@ -678,15 +695,20 @@ CORESCOPE_ACCOUNTS_URL=postgres://corescope_accounts@db.example.org:5432/coresco
 ```
 
 The script creates the role `corescope_accounts` (override the name with `CORESCOPE_ACCOUNTS`)
-and makes it the owner of schema `corescope_users`. The role may connect to the database and
-has nothing in schema `public` or `corescope_control`, no role memberships, no `TEMPORARY`, at
-most 32 connections and the same statement and idle-transaction timeouts as the reader. The
-store creates and migrates its own tables in that schema.
+and creates schema `corescope_users` owned by it. The role may connect to the database and
+nothing more on it (no `CREATE`, no `TEMPORARY`; a re-run revokes any it was given), has nothing
+in schema `public` or `corescope_control`, no role memberships, at most 32 connections and the
+same statement and idle-transaction timeouts as the reader. The store creates and migrates its
+own tables in that schema; it never creates the schema itself.
 
 It also creates the group role `corescope_users_reader` (fixed name, `NOLOGIN`) and grants it to
-the writer. That is how the ingestor reads two tables, the approved channel proposals and the
-linked companions (see [What changes with several replicas](#what-changes-with-several-replicas)).
-The script does this on every run, with or without accounts.
+the writer. That is how the ingestor reads the approved channel proposals and the linked
+companions (see [What changes with several replicas](#what-changes-with-several-replicas)). The
+group gets `SELECT` on only the columns the ingestor reads, `proposals (id, kind, subject,
+status, decided_at)` and `companion_links (pubkey)`, never a whole table: notes, user ids and
+names stay private. The store grants the same each time it opens, and a re-run of the script
+replaces a table-wide `SELECT` from an earlier version with these. The script creates the group
+on every run, with or without accounts.
 
 ### Give the server the DSN
 
@@ -725,7 +747,14 @@ when the accounts role:
 - could write the measurement schema or the `corescope_control` schema as itself or through any
   role it is a member of: superuser or `CREATEROLE`, owner of or `CREATE` on either schema,
   `INSERT`, `UPDATE`, `DELETE` or `TRUNCATE` on a table (or `INSERT`/`UPDATE` on a column), or
-  `UPDATE`/`USAGE` on a sequence.
+  `UPDATE`/`USAGE` on a sequence, or
+- owns the measurement database or has `CREATE` on it, as itself or through any role it is a
+  member of.
+
+The store checks again when it opens, in the database the accounts DSN names, whatever the
+measurement backend: it refuses a role that is a superuser or has `CREATEROLE` or `BYPASSRLS`, or
+that owns that database or has `CREATE` on it, as itself or through any membership. It also
+refuses to start when schema `corescope_users` does not exist.
 
 The role from `scripts/postgres-roles.sh` passes. The refusal messages are listed under
 [Troubleshooting](#accounts). The check runs on the measurement connection and reads the
@@ -733,10 +762,12 @@ catalog only.
 
 ### Move an existing `users.db`
 
-Skip this for a new install. Stop every CoreScope server first: the copy reads one snapshot and
-accounts changed afterwards are not copied. `copy-users` creates the schema's tables if needed
-and refuses a target that already has rows. Connect as the accounts role; keep the password out
-of the URL:
+Skip this for a new install. Run `scripts/postgres-roles.sh` with `CORESCOPE_ACCOUNTS_PASSWORD`
+first: it creates schema `corescope_users`, which `copy-users` needs. Stop every CoreScope server
+first too: the copy reads one snapshot and accounts changed afterwards are not copied.
+`copy-users` creates the schema's tables if needed and refuses a target that already has rows.
+Connect as the accounts role (a superuser is refused, as the server would refuse it); keep the
+password out of the URL:
 
 ```bash
 export PGPASSWORD='<accounts-password>'     # or use ~/.pgpass
@@ -779,8 +810,8 @@ With the accounts in PostgreSQL you can run any number of servers:
   `users.db` read-only at `userManagement.dbPath` (or next to `dbPath`), as on SQLite, so
   Postgres measurement data with the accounts in `users.db` still gets channel proposals and
   `clientRxCoverage.requireLinkedCompanion`. The schema exists once you opt in: running
-  `scripts/postgres-roles.sh` with `CORESCOPE_ACCOUNTS_PASSWORD` creates it, as does the server's
-  first start with an accounts DSN. Between the script and that first server start the schema
+  `scripts/postgres-roles.sh` with `CORESCOPE_ACCOUNTS_PASSWORD` creates it (nothing else does),
+  and the server's first start with an accounts DSN creates its tables. Between the two the schema
   exists but has no tables: the ingestor then sees no approved channels beyond the configured
   ones, and does not filter linked companions (it warns once). Start the server soon after
   running the script, or leave `CORESCOPE_ACCOUNTS_PASSWORD` unset until you move the accounts.
@@ -799,7 +830,9 @@ pg_dump -Fc -n corescope_users \
 ```
 
 The dump holds every password hash and mail address: protect it like the database. To restore,
-stop the servers, restore into an empty database or schema with `pg_restore`, and start them.
+stop the servers, restore into an empty database or schema with `pg_restore`, re-run
+`scripts/postgres-roles.sh` (so the schema is the accounts role's and the reader group's column
+grants are back), and start them.
 The schema version check refuses a dump from a newer CoreScope.
 
 ### Roll back to `users.db`
@@ -995,6 +1028,19 @@ The list names each way the role could write the measurement or control schema, 
 (via role <other>)` or `can advance or set sequence ...`. Revoke the privilege or the role
 membership that grants it. Re-running `scripts/postgres-roles.sh` resets the role it created.
 Do not use a superuser or the writer role as the accounts role.
+
+**`users: the account schema does not exist in this database, and the account store does not create it (schema corescope_users): run scripts/postgres-roles.sh with CORESCOPE_ACCOUNTS_PASSWORD set, which creates it owned by the accounts role`**
+The schema was never created: the store does not create it. Run the roles script with an accounts
+password (see [Create the role](#create-the-role)), check that the accounts DSN names the
+CoreScope database, and start the server again. `corescope-migrate copy-users` prints the same.
+
+**`users: the account store's Postgres role holds more than the accounts role may: it may own schema corescope_users and nothing more, but <list>. ...`**
+The accounts DSN connects as a role that could create schemas or roles: the list names each
+finding, for example `role <role> has SUPERUSER`, `role <role> owns database <db>` or `role
+<group> can CREATE in database <db>`. Connect as the role `scripts/postgres-roles.sh` created, or
+revoke the attribute, the database privilege or the membership that grants it. Re-running the
+script resets the role it created. `corescope-migrate copy-users` refuses a superuser `-to` the
+same way.
 
 **`userManagement.dsn: unparseable Postgres DSN`**, **`userManagement.dsn: no user to connect as`**
 The DSN is not valid, or names no user (and `PGUSER` is unset). Use a `postgres://user:pass@host/db`

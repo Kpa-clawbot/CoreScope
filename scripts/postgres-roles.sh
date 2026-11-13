@@ -32,17 +32,25 @@
 #           a fixed-name NOLOGIN group role, granted to the writer (INHERIT,
 #           no SET, no ADMIN), never to the reader: the ingestor reads the
 #           approved channel proposals and the linked companions through it.
-#           The accounts store, owner of those tables, grants it USAGE on
-#           schema corescope_users and SELECT on proposals and companion_links
-#           when it opens; this script grants it nothing. Created on every
-#           run, accounts or not, and shared by every CoreScope database on
-#           the cluster.
+#           USAGE on schema corescope_users and SELECT on only the columns
+#           the ingestor reads: proposals (id, kind, subject, status,
+#           decided_at) and companion_links (pubkey), never a whole table.
+#           The accounts store, owner of those tables, grants the same when
+#           it opens (internal/users pgReaderColumns; keep the two in step);
+#           this script grants them, after revoking whatever the group held
+#           there before, when the tables exist. Created on every run,
+#           accounts or not, and shared by every CoreScope database on the
+#           cluster.
 #   accounts
 #           optional, only with CORESCOPE_ACCOUNTS_PASSWORD: the role the
 #           server's user accounts store connects as (DB_DSN_ACCOUNTS), apart
 #           from its read-only measurement connection. Owns schema
-#           corescope_users in the CoreScope database and creates its tables
-#           there. CONNECT on the database and nothing in schema public or
+#           corescope_users in the CoreScope database, which this script
+#           creates, and creates its tables there. CONNECT on the database and
+#           nothing else on it: never CREATE (it could create a schema named
+#           after the writer, first in the writer's search_path, and plant
+#           tables the ingestor writes through; the store and the server
+#           refuse to start with it). Nothing in schema public or
 #           corescope_control, no role memberships and no members, no
 #           TEMPORARY, at most 32 connections, statement_timeout 120s /
 #           idle_in_transaction_session_timeout 60s, not read-only.
@@ -365,6 +373,8 @@ SELECT format('REVOKE ALL ON DATABASE %I FROM %I', :'db', :'reader') \gexec
 SELECT format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO %I', :'db', :'writer') \gexec
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'db', :'reader') \gexec
 \if :has_accounts
+-- REVOKE ALL first: drops a CREATE (or TEMPORARY) granted by an earlier run
+-- or by anyone since. PUBLIC's went above.
 SELECT format('REVOKE ALL ON DATABASE %I FROM %I', :'db', :'accounts') \gexec
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'db', :'accounts') \gexec
 \endif
@@ -426,23 +436,37 @@ SELECT format('GRANT %s ON TABLE corescope_control.%I TO %I', p, t, :'ctl')
 \endif
 COMMIT;
 
--- The accounts schema: the accounts role's, created here so that the store
--- never needs CREATE on the database. Nobody else gets anything in it from
--- this script; the store grants the users reader group its SELECTs, which
--- are left as they are.
+-- The accounts schema: the accounts role's, created here because the store
+-- never creates it (the role has no CREATE on the database). Nobody else gets
+-- anything in it but the users reader group's USAGE and column SELECTs,
+-- rebuilt from nothing on every run, so a table-wide SELECT an earlier
+-- version granted goes. The store grants the same columns when it opens;
+-- holding its lock (internal/users pgMigrateLockKey) keeps the two from
+-- racing on one table's privileges.
 \if :has_accounts
+\set users_lock_key 4859228302506947187
+BEGIN;
+SELECT pg_advisory_xact_lock(:users_lock_key) \g /dev/null
 SELECT format('CREATE SCHEMA corescope_users AUTHORIZATION %I', :'accounts')
  WHERE NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'corescope_users') \gexec
 -- Reached only when the schema is the accounts role's or CORESCOPE_ADOPT=1.
 SELECT format('ALTER SCHEMA corescope_users OWNER TO %I', :'accounts') \gexec
-SELECT format('REVOKE ALL ON SCHEMA corescope_users FROM PUBLIC, %I, %I, %I', :'writer', :'reader', :'ctl') \gexec
-SELECT format('REVOKE ALL ON ALL TABLES IN SCHEMA corescope_users FROM PUBLIC, %I, %I, %I', :'writer', :'reader', :'ctl') \gexec
-SELECT format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA corescope_users FROM PUBLIC, %I, %I, %I', :'writer', :'reader', :'ctl') \gexec
-SELECT format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA corescope_users FROM %I, %I, %I', :'writer', :'reader', :'ctl') \gexec
-SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I %s REVOKE ALL ON %s FROM %I, %I, %I',
-              :'accounts', s, o, :'writer', :'reader', :'ctl')
+SELECT format('REVOKE ALL ON SCHEMA corescope_users FROM PUBLIC, %I, %I, %I, %I', :'writer', :'reader', :'ctl', :'users_reader') \gexec
+SELECT format('REVOKE ALL ON ALL TABLES IN SCHEMA corescope_users FROM PUBLIC, %I, %I, %I, %I', :'writer', :'reader', :'ctl', :'users_reader') \gexec
+SELECT format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA corescope_users FROM PUBLIC, %I, %I, %I, %I', :'writer', :'reader', :'ctl', :'users_reader') \gexec
+SELECT format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA corescope_users FROM %I, %I, %I, %I', :'writer', :'reader', :'ctl', :'users_reader') \gexec
+SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I %s REVOKE ALL ON %s FROM %I, %I, %I, %I',
+              :'accounts', s, o, :'writer', :'reader', :'ctl', :'users_reader')
   FROM (VALUES ('IN SCHEMA corescope_users'), ('')) AS sc(s),
        (VALUES ('TABLES'), ('SEQUENCES'), ('FUNCTIONS'), ('TYPES')) AS ob(o) \gexec
+-- Exactly the columns cmd/ingestor's two queries read (approvedChannelsQuery,
+-- linkedCompanionsQuery). The tables exist once the store has opened.
+SELECT format('GRANT USAGE ON SCHEMA corescope_users TO %I', :'users_reader') \gexec
+SELECT format('GRANT SELECT (%s) ON TABLE corescope_users.%I TO %I', c, t, :'users_reader')
+  FROM (VALUES ('proposals', 'id, kind, subject, status, decided_at'),
+               ('companion_links', 'pubkey')) AS g(t, c)
+ WHERE to_regclass(format('corescope_users.%I', t)) IS NOT NULL \gexec
+COMMIT;
 \endif
 
 -- Connection URLs, without passwords. HOST is a directory for a Unix socket;

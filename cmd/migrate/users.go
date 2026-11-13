@@ -16,8 +16,25 @@ import (
 )
 
 // usersPGSchema is the Postgres schema the account store lives in
-// (users.OpenPostgres creates it; it is not exported).
-const usersPGSchema = "corescope_users"
+// (users.PostgresSchema). scripts/postgres-roles.sh creates it, owned by the
+// accounts role; users.OpenPostgres never does.
+const usersPGSchema = users.PostgresSchema
+
+// usersPGSetupHint is appended to copy-users errors that mean the target was
+// not set up the way the accounts store requires.
+const usersPGSetupHint = "copy-users writes as the accounts role: first run scripts/postgres-roles.sh with " +
+	"CORESCOPE_ACCOUNTS_PASSWORD set (it creates schema " + usersPGSchema + " owned by that role), then pass " +
+	"that role's URL (CORESCOPE_ACCOUNTS_URL, password in PGPASSWORD) as -to. A superuser, or a role that " +
+	"owns the database or can CREATE in it, is refused"
+
+// withUsersPGSetupHint adds usersPGSetupHint to err when it is a missing
+// accounts schema or a refused role.
+func withUsersPGSetupHint(err error) error {
+	if errors.Is(err, users.ErrPostgresSchemaMissing) || errors.Is(err, users.ErrPostgresRoleRefused) {
+		return fmt.Errorf("%w. %s", err, usersPGSetupHint)
+	}
+	return err
+}
 
 // usersPGURL is raw (a postgres:// URL) with search_path set to the accounts
 // schema, so the generic copy/verify machinery, which reads current_schema(),
@@ -120,10 +137,11 @@ func runCopyUsers(ctx context.Context, args []string, lg *log.Logger, sw *scrubW
 	fs := flag.NewFlagSet("copy-users", flag.ContinueOnError)
 	fs.SetOutput(lg.Writer())
 	fromArg := fs.String("from", "", "source users.db (sqlite:<path>)")
-	toArg := fs.String("to", "", "target Postgres database (postgres://user@host/db); schema corescope_users is created and must be empty")
+	toArg := fs.String("to", "", "target Postgres database as the accounts role (postgres://<accounts role>@host/db); schema "+
+		usersPGSchema+" must already exist, owned by that role (scripts/postgres-roles.sh creates it), and be empty")
 	batch := fs.Int("batch", 5000, "rows per COPY call")
 	fs.Usage = usageFor(fs, "copy-users -from sqlite:<users.db> -to postgres://<accounts role>@host/db [-batch 5000]",
-		"corescope-migrate copy-users -from sqlite:/var/lib/corescope/users.db -to postgres://corescope_users@db.example/corescope")
+		"corescope-migrate copy-users -from sqlite:/var/lib/corescope/users.db -to postgres://corescope_accounts@db.example/corescope")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -160,7 +178,7 @@ func runCopyUsers(ctx context.Context, args []string, lg *log.Logger, sw *scrubW
 		absent: map[string]bool{}, absentCols: map[string]map[string]bool{}}
 	start := time.Now()
 	if err := job.intoPostgres(ctx, to); err != nil {
-		return err
+		return withUsersPGSetupHint(err)
 	}
 	lg.Printf("OK: copied %d rows into %s schema %s in %s; the copy is verified", job.rows, to.display, usersPGSchema, time.Since(start).Round(time.Millisecond))
 	return nil
@@ -175,7 +193,7 @@ func runVerifyUsers(ctx context.Context, args []string, lg *log.Logger, sw *scru
 	aArg := fs.String("a", "", "first account store (sqlite:<users.db> or postgres://user@host/db)")
 	bArg := fs.String("b", "", "second account store; its schema is the reference (normally the copy)")
 	fs.Usage = usageFor(fs, "verify-users -a <db> -b <db>",
-		"corescope-migrate verify-users -a sqlite:/var/lib/corescope/users.db -b postgres://corescope_users@db.example/corescope")
+		"corescope-migrate verify-users -a sqlite:/var/lib/corescope/users.db -b postgres://corescope_accounts@db.example/corescope")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}

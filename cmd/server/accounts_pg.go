@@ -47,7 +47,8 @@ const pgReachableFrom = `
 
 // accountsWritePowerChecks are the ways a role reachable from the accounts
 // role could write the measurement schema (the measurement pool's
-// current_schema()) or the control schema. Placeholders: the role name, then
+// current_schema()) or the control schema, or create a schema in the
+// measurement database. Placeholders: the role name, then
 // the write privilege list when args is set.
 var accountsWritePowerChecks = []struct {
 	what  string
@@ -62,6 +63,22 @@ var accountsWritePowerChecks = []struct {
 			CASE WHEN p.rolcreaterole THEN 'CREATEROLE' END))
 		FROM reach r JOIN pg_roles p ON p.oid = r.oid
 		WHERE p.rolsuper OR p.rolcreaterole
+		ORDER BY 1`,
+	},
+	{
+		// Owning the database, or CREATE on it, lets the role create a
+		// schema named after the ingestor's writer role, first in the
+		// writer's default search_path ("$user"), and plant tables or
+		// triggers there that the writer writes through.
+		// has_database_privilege counts PUBLIC's grants. users.OpenPostgres
+		// refuses the same in the database it connects to.
+		what: "database privileges",
+		query: pgReachableFrom + `
+		SELECT format('role %I %s database %I', pg_get_userbyid(r.oid),
+			CASE WHEN d.datdba = r.oid THEN 'owns' ELSE 'can CREATE in' END, d.datname)
+		FROM reach r
+		JOIN pg_database d ON d.datname = current_database()
+		WHERE d.datdba = r.oid OR has_database_privilege(r.oid, d.oid, 'CREATE')
 		ORDER BY 1`,
 	},
 	{

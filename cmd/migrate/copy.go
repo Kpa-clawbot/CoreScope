@@ -411,7 +411,7 @@ func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
 		// connecting role. It takes the URL without search_path: it sets its own.
 		st, err := users.OpenPostgres(to.url)
 		if err != nil {
-			return fmt.Errorf("create accounts schema on %s: %w", to.display, err)
+			return fmt.Errorf("open the accounts store on %s: %w", to.display, err)
 		}
 		st.Close()
 	} else if err := pgschema.Apply(ctx, admin, j.lg.Printf); err != nil {

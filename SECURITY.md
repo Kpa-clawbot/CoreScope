@@ -85,10 +85,18 @@ protect its file and its backups as described in the user-management docs.
 
 With accounts in PostgreSQL (`userManagement.dsn` / `DB_DSN_ACCOUNTS`) they use a separate
 role (`corescope_accounts`, created by `scripts/postgres-roles.sh` only when you set its
-password). It owns schema `corescope_users` and has no privilege in the measurement schema or in
-`corescope_control`. Give its DSN to the servers only: the ingestor never needs it, and the
-reader role must not be used for it. The server checks this at startup and refuses to start if
-the accounts role is the reader or could write measurement or control tables through any role it
-reaches. The ingestor reads two account tables (approved channels, linked companions) read-only
-through the group role `corescope_users_reader`. The accounts schema holds password hashes and
+password). The script creates schema `corescope_users` owned by it; the server never creates
+it, so the role needs and gets no `CREATE` on the database (a re-run revokes one granted since).
+It has no privilege in the measurement schema or in `corescope_control`. Give its DSN to the
+servers only: the ingestor never needs it, and the reader role must not be used for it. The
+server checks this at startup and refuses to start if the accounts role is the reader, could
+write measurement or control tables, or owns or can `CREATE` in the measurement database,
+through any role it reaches. The account store itself refuses a role that is a superuser, has
+`CREATEROLE` or `BYPASSRLS`, or owns or can `CREATE` in its database, through any membership:
+with `CREATE` it could make a schema named after the writer role, first in the writer's
+`search_path`, and plant tables the ingestor writes through. The ingestor reads two account
+tables (approved channels, linked companions) read-only through the group role
+`corescope_users_reader`, which holds `SELECT` on only the columns it reads
+(`proposals (id, kind, subject, status, decided_at)`, `companion_links (pubkey)`), never notes,
+user ids or names. The accounts schema holds password hashes and
 mail addresses: restrict and encrypt `pg_dump -n corescope_users` output like the database.

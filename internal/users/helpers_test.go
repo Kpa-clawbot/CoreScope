@@ -1,7 +1,6 @@
 package users
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -49,10 +48,11 @@ func newSQLiteTestStore(t *testing.T) (*Store, *fakeClock) {
 }
 
 // newPostgresTestStore opens a store in a fresh schema (created and dropped
-// by dbxtest). Skips without $CORESCOPE_TEST_PG_DSN.
+// by dbxtest) as a fresh unprivileged role owning it (newPostgresTestTarget).
+// Skips without $CORESCOPE_TEST_PG_DSN.
 func newPostgresTestStore(t *testing.T) (*Store, *fakeClock) {
 	t.Helper()
-	st, err := openPostgres(os.Getenv(testPGDSNEnv), newPostgresTestSchema(t))
+	st, err := openPostgres(newPostgresTestTarget(t))
 	if err != nil {
 		t.Fatalf("openPostgres: %v", err)
 	}

@@ -2,11 +2,14 @@ package users
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -45,12 +48,103 @@ func pgTestDSN(t *testing.T) string {
 	return dsn
 }
 
+func pgTestSuffix(t *testing.T) string {
+	t.Helper()
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// pgTestRole creates a role with the given attributes (CREATE ROLE's
+// defaults otherwise: no SUPERUSER, CREATEROLE, CREATEDB or BYPASSRLS),
+// dropped in Cleanup with whatever it owns in admin's database, after the
+// cleanups registered later (stores, databases). login gives it a password,
+// returned. Skips when the test role may not create roles.
+func pgTestRole(t *testing.T, admin *sql.DB, login bool, attrs string) (role, password string) {
+	t.Helper()
+	role = "users_test_" + pgTestSuffix(t)
+	opts := "NOLOGIN"
+	if login {
+		password = "pw" + pgTestSuffix(t)
+		opts = "LOGIN PASSWORD '" + password + "'"
+	}
+	if _, err := admin.Exec(`CREATE ROLE ` + role + ` ` + opts + ` ` + attrs); err != nil {
+		t.Skipf("cannot create a role here: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DROP OWNED BY ` + role, `DROP ROLE ` + role} {
+			if _, err := admin.Exec(q); err != nil {
+				t.Errorf("%s: %v", q, err)
+			}
+		}
+	})
+	return role, password
+}
+
+// pgTestRoleDSN is $CORESCOPE_TEST_PG_DSN as role (with password), on
+// database db ("" keeps the DSN's), without a search_path.
+func pgTestRoleDSN(t *testing.T, role, password, db string) string {
+	t.Helper()
+	u, err := url.Parse(pgTestDSN(t))
+	if err != nil || u.Scheme == "" {
+		t.Skip("CORESCOPE_TEST_PG_DSN is not a URL; skipping")
+	}
+	u.User = url.UserPassword(role, password)
+	if db != "" {
+		u.Path = "/" + db
+	}
+	q := u.Query()
+	q.Del("search_path")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// pgTestDatabase creates a database (owned by owner unless ""), dropped in
+// Cleanup before the roles created earlier. Skips when the test role may not
+// create databases.
+func pgTestDatabase(t *testing.T, admin *sql.DB, owner string) string {
+	t.Helper()
+	name := "users_test_" + pgTestSuffix(t)
+	stmt := `CREATE DATABASE ` + name
+	if owner != "" {
+		stmt += ` OWNER ` + owner
+	}
+	if _, err := admin.Exec(stmt); err != nil {
+		t.Skipf("cannot create a database here: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + name + ` WITH (FORCE)`); err != nil {
+			t.Errorf("drop database %s: %v", name, err)
+		}
+	})
+	return name
+}
+
+// newPostgresTestTarget returns a DSN for a fresh login role holding nothing
+// beyond PUBLIC's privileges, as scripts/postgres-roles.sh sets up the
+// accounts role, and an empty schema it owns (dropped when the test ends,
+// after the stores opened later). OpenPostgres refuses the superuser that
+// $CORESCOPE_TEST_PG_DSN usually is. Skips without the variable.
+func newPostgresTestTarget(t *testing.T) (dsn, schema string) {
+	t.Helper()
+	admin := dbxtest.OpenPostgres(t) // skips without $CORESCOPE_TEST_PG_DSN
+	if err := admin.QueryRow(`SELECT current_schema()`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	role, password := pgTestRole(t, admin, true, "")
+	if _, err := admin.Exec(`ALTER SCHEMA "` + schema + `" OWNER TO ` + role); err != nil {
+		t.Fatal(err)
+	}
+	return pgTestRoleDSN(t, role, password, ""), schema
+}
+
 // twoPostgresStores opens two stores (two pools, as two replicas would) on
 // one fresh schema, sharing one clock.
 func twoPostgresStores(t *testing.T) (*Store, *Store, *fakeClock) {
 	t.Helper()
-	dsn := pgTestDSN(t)
-	schema := newPostgresTestSchema(t)
+	dsn, schema := newPostgresTestTarget(t)
 	a, err := openPostgres(dsn, schema)
 	if err != nil {
 		t.Fatal(err)
@@ -111,8 +205,7 @@ func countOutcomes(t *testing.T, errs []error, want error) (ok, lost int) {
 const racers = 8
 
 func TestOpenPostgresFreshSchemaThenNoOp(t *testing.T) {
-	dsn := pgTestDSN(t)
-	schema := newPostgresTestSchema(t)
+	dsn, schema := newPostgresTestTarget(t)
 	st, err := openPostgres(dsn, schema)
 	if err != nil {
 		t.Fatal(err)
@@ -144,8 +237,7 @@ func TestOpenPostgresFreshSchemaThenNoOp(t *testing.T) {
 }
 
 func TestOpenPostgresConcurrentOpensBothSucceed(t *testing.T) {
-	dsn := pgTestDSN(t)
-	schema := newPostgresTestSchema(t)
+	dsn, schema := newPostgresTestTarget(t)
 	stores := make([]*Store, 2)
 	errs := race(2, func(i int) error {
 		st, err := openPostgres(dsn, schema)
@@ -170,7 +262,6 @@ func TestOpenPostgresConcurrentOpensBothSucceed(t *testing.T) {
 // OpenPostgres itself uses corescope_users. The test leaves an existing
 // schema of that name alone (skips) and drops the one it created.
 func TestOpenPostgresUsesCorescopeUsersSchema(t *testing.T) {
-	dsn := pgTestDSN(t)
 	admin := dbxtest.OpenPostgres(t)
 	var exists bool
 	if err := admin.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = ?)`, PostgresSchema).Scan(&exists); err != nil {
@@ -179,12 +270,17 @@ func TestOpenPostgresUsesCorescopeUsersSchema(t *testing.T) {
 	if exists {
 		t.Skipf("schema %s already exists in the test database; not touching it", PostgresSchema)
 	}
+	role, password := pgTestRole(t, admin, true, "")
+	// As scripts/postgres-roles.sh does: the store no longer creates it.
+	if _, err := admin.Exec(`CREATE SCHEMA "` + PostgresSchema + `" AUTHORIZATION ` + role); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		if _, err := admin.Exec(`DROP SCHEMA IF EXISTS "` + PostgresSchema + `" CASCADE`); err != nil {
 			t.Errorf("drop %s: %v", PostgresSchema, err)
 		}
 	})
-	st, err := OpenPostgres(dsn)
+	st, err := OpenPostgres(pgTestRoleDSN(t, role, password, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +295,8 @@ func TestOpenPostgresUsesCorescopeUsersSchema(t *testing.T) {
 }
 
 func TestOpenPostgresKeywordValueDSN(t *testing.T) {
-	cfg, err := pgx.ParseConfig(pgTestDSN(t))
+	dsn, schema := newPostgresTestTarget(t)
+	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +306,6 @@ func TestOpenPostgresKeywordValueDSN(t *testing.T) {
 	if cfg.TLSConfig == nil {
 		kv += " sslmode=disable"
 	}
-	schema := newPostgresTestSchema(t)
 	st, err := openPostgres(kv, schema)
 	if err != nil {
 		t.Fatalf("keyword=value DSN: %v", err)
@@ -239,8 +335,7 @@ func TestOpenPostgresErrorsHideDSN(t *testing.T) {
 }
 
 func TestOpenPostgresRejectsNewerSchema(t *testing.T) {
-	dsn := pgTestDSN(t)
-	schema := newPostgresTestSchema(t)
+	dsn, schema := newPostgresTestTarget(t)
 	st, err := openPostgres(dsn, schema)
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +350,7 @@ func TestOpenPostgresRejectsNewerSchema(t *testing.T) {
 }
 
 func TestOpenPostgresRefusesSchemaOfAnotherRole(t *testing.T) {
-	dsn := pgTestDSN(t)
+	dsn, _ := newPostgresTestTarget(t)
 	admin := dbxtest.OpenPostgres(t)
 	var b [6]byte
 	rand.Read(b[:])
@@ -652,5 +747,119 @@ func TestPostgresUpdatePendingRegistrationWaitsForActivation(t *testing.T) {
 	}
 	if got, _ := a.GetByID(u.ID); got.PasswordHash != u.PasswordHash || got.Status != StatusActive {
 		t.Fatalf("user = %+v; the stale registration overwrote it", got)
+	}
+}
+
+// The store never creates its schema: a missing one is an error that says
+// how to create it, and nothing is created.
+func TestOpenPostgresMissingSchemaIsAnError(t *testing.T) {
+	dsn, own := newPostgresTestTarget(t)
+	missing := own + "_missing"
+	_, err := openPostgres(dsn, missing)
+	if err == nil || !strings.Contains(err.Error(), "does not exist") || !strings.Contains(err.Error(), "scripts/postgres-roles.sh") ||
+		!strings.Contains(err.Error(), "CORESCOPE_ACCOUNTS_PASSWORD") || !errors.Is(err, ErrPostgresSchemaMissing) {
+		t.Fatalf("open of a missing schema err = %v", err)
+	}
+	admin := dbxtest.OpenPostgres(t)
+	var made bool
+	if err := admin.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = ?)`, missing).Scan(&made); err != nil || made {
+		t.Fatalf("schema %s created anyway: %v, %v", missing, made, err)
+	}
+}
+
+// A role that could create a schema or a role is refused before the schema
+// is looked at, whatever reaches it: its own attributes, a membership chain
+// (NOINHERIT does not matter: SET ROLE still works), owning the database or
+// CREATE on it. The error names the finding and never the DSN.
+func TestOpenPostgresRefusesPowerfulRoles(t *testing.T) {
+	admin := dbxtest.OpenPostgres(t)
+	refused := func(t *testing.T, role, password, db, want string) {
+		t.Helper()
+		_, err := openPostgres(pgTestRoleDSN(t, role, password, db), "users_test_unused")
+		if err == nil {
+			t.Fatalf("role %s accepted, want refusal for %q", role, want)
+		}
+		if !errors.Is(err, ErrPostgresRoleRefused) {
+			t.Errorf("role %s: err = %v, not ErrPostgresRoleRefused", role, err)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, want) || !strings.Contains(msg, "postgres-roles.sh") {
+			t.Fatalf("role %s: err = %v; want it to name %q", role, err, want)
+		}
+		if strings.Contains(msg, password) || strings.Contains(msg, "does not exist") {
+			t.Fatalf("role %s: err = %v (leaks the password or got past the role check)", role, err)
+		}
+	}
+	for _, attr := range []string{"SUPERUSER", "CREATEROLE", "BYPASSRLS"} {
+		t.Run(attr, func(t *testing.T) {
+			role, password := pgTestRole(t, admin, true, attr)
+			refused(t, role, password, "", "role "+role+" has "+attr)
+		})
+	}
+	t.Run("membership", func(t *testing.T) {
+		top, _ := pgTestRole(t, admin, false, "CREATEROLE")
+		mid, _ := pgTestRole(t, admin, false, "")
+		role, password := pgTestRole(t, admin, true, "NOINHERIT")
+		for _, g := range []string{`GRANT ` + top + ` TO ` + mid, `GRANT ` + mid + ` TO ` + role} {
+			if _, err := admin.Exec(g); err != nil {
+				t.Fatalf("%s: %v", g, err)
+			}
+		}
+		refused(t, role, password, "", "role "+top+" has CREATEROLE")
+	})
+	t.Run("owns database", func(t *testing.T) {
+		role, password := pgTestRole(t, admin, true, "")
+		db := pgTestDatabase(t, admin, role)
+		refused(t, role, password, db, "role "+role+" owns database "+db)
+	})
+	t.Run("CREATE on database", func(t *testing.T) {
+		group, _ := pgTestRole(t, admin, false, "")
+		role, password := pgTestRole(t, admin, true, "NOINHERIT")
+		if _, err := admin.Exec(`GRANT ` + group + ` TO ` + role); err != nil {
+			t.Fatal(err)
+		}
+		// A database of its own: GRANTs on the shared test database's row
+		// would race other test processes ("tuple concurrently updated").
+		db := pgTestDatabase(t, admin, "")
+		if _, err := admin.Exec(`GRANT CREATE ON DATABASE ` + db + ` TO ` + group); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, role, password, db, "role "+group+" can CREATE in database "+db)
+	})
+	t.Run("PUBLIC CREATE on database", func(t *testing.T) {
+		role, password := pgTestRole(t, admin, true, "")
+		db := pgTestDatabase(t, admin, "")
+		if _, err := admin.Exec(`GRANT CREATE ON DATABASE ` + db + ` TO PUBLIC`); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, role, password, db, "role "+role+" can CREATE in database "+db)
+	})
+}
+
+// scripts/postgres-roles.sh grants the users reader group the same columns
+// as pgGrantReader, so whichever ran last the ingestor reads the same.
+func TestReaderColumnsMatchRolesScript(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "scripts", "postgres-roles.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	const grant = `GRANT SELECT (%s) ON TABLE corescope_users.%I TO %I`
+	i := strings.Index(text, grant)
+	if i < 0 || strings.Count(text, grant) != 1 {
+		t.Fatalf("roles script: want exactly one %q", grant)
+	}
+	block := text[i:]
+	block = block[:strings.Index(block, `\gexec`)]
+	got := map[string]string{}
+	for _, m := range regexp.MustCompile(`\('([a-z_]+)', '([a-z_, ]+)'\)`).FindAllStringSubmatch(block, -1) {
+		got[m[1]] = m[2]
+	}
+	want := map[string]string{}
+	for _, rc := range pgReaderColumns {
+		want[rc.table] = rc.columns
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("roles script grants %v, pgReaderColumns %v", got, want)
 	}
 }
