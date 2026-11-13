@@ -544,9 +544,6 @@ type PacketStore struct {
 	// Hot startup atomic gates — see contract below.
 	//
 	// Contract / ordering invariant (PR #1187):
-	//   * hashMigrationComplete (set by migrateContentHashesAsync) gates
-	//     content-hash–dependent code paths (e.g. dedup correctness on the
-	//     write side). Set true ONLY after the migration loop finishes.
 	//   * backgroundLoadDone is set true exactly once, after
 	//     loadBackgroundChunks finishes its loop AND its post-load index
 	//     rebuild. It gates "hot startup has finished filling
@@ -594,9 +591,6 @@ type PacketStore struct {
 	// loadBackgroundChunks after the chunk walk; surfaced via the typed
 	// perf payload for prod observability.
 	loadCoverageRatio float64
-
-	// Async hash migration state: set after migrateContentHashesAsync completes.
-	hashMigrationComplete atomic.Bool
 
 	// Chunked startup load state (#1009). LoadChunked closes
 	// firstChunkReady after the first chunk is merged so the HTTP
