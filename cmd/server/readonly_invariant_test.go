@@ -531,3 +531,41 @@ func read(db *DB) {
 		t.Errorf("violations:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
 }
+
+// TestPostgresOpenIsOnlyInOpenPostgresDB pins the Postgres side of the
+// read-only invariant: the analyzer database is opened on Postgres in exactly
+// one place, OpenPostgresDB, from the DSN pgDSNWithReadOnly produced — so every
+// connection starts with default_transaction_read_only=on and the role's
+// write privileges are checked before the handle is used.
+func TestPostgresOpenIsOnlyInOpenPostgresDB(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	driverUse := regexp.MustCompile(`\bPostgresDriverName\b`)
+	want := regexp.MustCompile(`sql\.Open\(dbx\.PostgresDriverName, roDSN\)`)
+	var uses []string
+	good := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range driverUse.FindAll(src, -1) {
+			uses = append(uses, name)
+		}
+		if name == "db_postgres.go" {
+			good += len(want.FindAll(src, -1))
+			if !strings.Contains(string(src), "roDSN, password, err := pgDSNWithReadOnly(dsn)") {
+				t.Error("db_postgres.go no longer derives roDSN from pgDSNWithReadOnly")
+			}
+		}
+	}
+	if len(uses) != 1 || uses[0] != "db_postgres.go" || good != 1 {
+		t.Fatalf("Postgres driver uses in cmd/server: %v (read-only opens: %d); want exactly one, sql.Open(dbx.PostgresDriverName, roDSN) in db_postgres.go", uses, good)
+	}
+}

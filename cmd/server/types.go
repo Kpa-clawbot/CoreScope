@@ -277,7 +277,11 @@ type SqliteRowCounts struct {
 	Observers     int `json:"observers"`
 }
 
+// SqliteStats is the /api/perf database block. Engine names the backend
+// ("sqlite" or "postgres"); on Postgres the SQLite-only WAL and freelist
+// figures are zero and Rows are pg_stat_user_tables estimates.
 type SqliteStats struct {
+	Engine     string           `json:"engine"`
 	DbSizeMB   float64          `json:"dbSizeMB"`
 	WalSizeMB  float64          `json:"walSizeMB"`
 	FreelistMB float64          `json:"freelistMB"`

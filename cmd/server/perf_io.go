@@ -247,7 +247,12 @@ func readIngestorIOSample() *PerfIOSample {
 }
 
 // handlePerfSqlite returns SQLite WAL size + cache hit-rate stats.
+// Not available on Postgres, which has no SQLite pages or WAL file to report.
 func (s *Server) handlePerfSqlite(w http.ResponseWriter, r *http.Request) {
+	if s.db.isPostgres() {
+		writeError(w, http.StatusNotFound, "not available: the database is PostgreSQL")
+		return
+	}
 	resp := PerfSqliteResponse{}
 	if s.db != nil && s.db.conn != nil {
 		var pageCount, pageSize int64

@@ -1076,10 +1076,14 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		breakdownNote = memBreakdownNote
 	}
 
-	// SQLite stats
+	// Database stats (reported under "sqlite" for compatibility; engine says which)
 	var sqliteStats *SqliteStats
-	if s.db != nil {
+	if s.db.isPostgres() {
+		ss := s.db.postgresDBStats()
+		sqliteStats = &ss
+	} else if s.db != nil {
 		ss := s.db.GetDBSizeStatsTyped()
+		ss.Engine = "sqlite"
 		sqliteStats = &ss
 	}
 
@@ -4143,13 +4147,13 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 		Reason:      "geo-prune",
 		Pubkeys:     pubkeys,
 	}
-	if err := prunequeue.WriteRequest(s.db.path, req); err != nil {
+	if err := prunequeue.WriteRequest(s.db.queueAnchor(), req); err != nil {
 		log.Printf("[geo-prune] failed to enqueue request %s: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue prune request")
 		return
 	}
 	log.Printf("[geo-prune] enqueued request %s for %d node(s) (queue dir=%s)",
-		id, len(pubkeys), prunequeue.QueueDir(s.db.path))
+		id, len(pubkeys), prunequeue.QueueDir(s.db.queueAnchor()))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -4175,7 +4179,7 @@ func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	res, err := prunequeue.ReadResult(s.db.path, id)
+	res, err := prunequeue.ReadResult(s.db.queueAnchor(), id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid prune request id") {
 			writeError(w, http.StatusBadRequest, "invalid id")
@@ -4200,7 +4204,7 @@ func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	pending, err := prunequeue.RequestExists(s.db.path, id)
+	pending, err := prunequeue.RequestExists(s.db.queueAnchor(), id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid prune request id") {
 			writeError(w, http.StatusBadRequest, "invalid id")

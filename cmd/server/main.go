@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -161,7 +160,11 @@ func main() {
 
 	// Resolve DB path
 	resolvedDB := cfg.ResolveDBPath(configDir)
-	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, resolvedDB, publicDir)
+	dbDesc := resolvedDB
+	if d, _ := cfg.DB.GetDriver(); d == dbconfig.DriverPostgres {
+		dbDesc = "postgres" // never the DSN: it may carry a password
+	}
+	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, dbDesc, publicDir)
 	if len(cfg.NodeBlacklist) > 0 {
 		log.Printf("[config] nodeBlacklist: %d node(s) will be hidden from API", len(cfg.NodeBlacklist))
 		for _, pk := range cfg.NodeBlacklist {
@@ -174,14 +177,28 @@ func main() {
 	if err := cfg.DB.Validate(); err != nil {
 		log.Fatalf("[db] %v", err)
 	}
-	if d, _ := cfg.DB.GetDriver(); d == dbconfig.DriverPostgres {
-		log.Fatalf("[db] db.driver=postgres is not supported yet; use sqlite")
+	driver, err := cfg.DB.GetDriver()
+	if err != nil {
+		log.Fatalf("[db] %v", err)
 	}
 
-	// Open database
-	database, err := OpenDB(resolvedDB)
-	if err != nil {
-		log.Fatalf("[db] failed to open %s: %v", resolvedDB, err)
+	// Open database. The DSN is never logged: it may carry a password.
+	var database *DB
+	if driver == dbconfig.DriverPostgres {
+		database, err = OpenPostgresDB(cfg.DB.DSN)
+		if err != nil {
+			log.Fatalf("[db] failed to open postgres: %v", err)
+		}
+		log.Printf("[db] opened postgres (read-only role verified)")
+		// The file queues shared with the ingestor (geo-prune requests, the
+		// multibyte snapshot) live beside the configured dbPath on both
+		// backends; on Postgres there is no database file to anchor them.
+		database.queuePath = resolvedDB
+	} else {
+		database, err = OpenDB(resolvedDB)
+		if err != nil {
+			log.Fatalf("[db] failed to open %s: %v", resolvedDB, err)
+		}
 	}
 	var dbCloseOnce sync.Once
 	dbClose := func() error {
@@ -192,9 +209,9 @@ func main() {
 	defer dbClose()
 
 	// Verify DB has expected tables
-	var tableName string
-	err = database.conn.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='transmissions'").Scan(&tableName)
-	if err == sql.ErrNoRows {
+	if ok, err := dbschema.TableExists(database.conn, "transmissions"); err != nil {
+		log.Fatalf("[db] probe for table 'transmissions': %v", err)
+	} else if !ok {
 		log.Fatalf("[db] table 'transmissions' not found — is this a CoreScope database?")
 	}
 
