@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema"
 )
 
@@ -168,6 +169,13 @@ func main() {
 				log.Printf("[config]   blacklisted: %s", trimmed)
 			}
 		}
+	}
+
+	if err := cfg.DB.Validate(); err != nil {
+		log.Fatalf("[db] %v", err)
+	}
+	if d, _ := cfg.DB.GetDriver(); d == dbconfig.DriverPostgres {
+		log.Fatalf("[db] db.driver=postgres is not supported yet; use sqlite")
 	}
 
 	// Open database

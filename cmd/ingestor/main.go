@@ -25,6 +25,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // finishIngestStartup keeps required migrations ahead of ingestion, but lets
@@ -82,6 +83,13 @@ func main() {
 	}
 
 	sources := cfg.ResolvedSources()
+
+	if err := cfg.DB.Validate(); err != nil {
+		log.Fatalf("[db] %v", err)
+	}
+	if d, _ := cfg.DB.GetDriver(); d == dbconfig.DriverPostgres {
+		log.Fatalf("[db] db.driver=postgres is not supported yet; use sqlite")
+	}
 
 	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
 	if err != nil {

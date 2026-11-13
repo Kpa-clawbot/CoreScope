@@ -563,6 +563,7 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		cfg.migrateDeprecatedConfig()
 		cfg.applyListLimitsDefaults()
 		applyCORSEnv(cfg)
+		applyDBEnv(cfg)
 		cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
 		return cfg, nil
 	}
@@ -570,6 +571,7 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 	cfg.migrateDeprecatedConfig()
 	cfg.applyListLimitsDefaults()
 	applyCORSEnv(cfg)
+	applyDBEnv(cfg)
 	cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
 	return cfg, nil // defaults
 }
@@ -796,6 +798,23 @@ func (h HealthThresholds) ToClientMs() map[string]int {
 		"relayActiveMs":    int(h.RelayActiveHours * hourMs),
 		"observerOnlineMs": h.ObserverOnlineMinutes * minMs,
 		"observerStaleMs":  h.ObserverStaleMinutes * minMs,
+	}
+}
+
+// applyDBEnv fills db.driver / db.dsn from DB_DRIVER / DB_DSN. As with
+// ResolveDBPath, a value set in the config file wins over the environment.
+func applyDBEnv(cfg *Config) {
+	if v := os.Getenv("DB_DRIVER"); v != "" && (cfg.DB == nil || cfg.DB.Driver == "") {
+		if cfg.DB == nil {
+			cfg.DB = &DBConfig{}
+		}
+		cfg.DB.Driver = v
+	}
+	if v := os.Getenv("DB_DSN"); v != "" && (cfg.DB == nil || cfg.DB.DSN == "") {
+		if cfg.DB == nil {
+			cfg.DB = &DBConfig{}
+		}
+		cfg.DB.DSN = v
 	}
 }
 
