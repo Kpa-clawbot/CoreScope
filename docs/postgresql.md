@@ -15,7 +15,7 @@ a PostgreSQL install. For SQLite maintenance (WAL, auto-vacuum) see the
 - [Set up with Docker Compose](#set-up-with-docker-compose)
 - [Set up without Compose](#set-up-without-compose) (includes the Docker image and Kubernetes)
 - [Moving an existing SQLite install](#moving-an-existing-sqlite-install)
-- [Switching back to SQLite](#switching-back-to-sqlite)
+- [Switching back to SQLite](#switching-back-to-sqlite) (includes leaving a multi-replica Kubernetes deployment)
 - [Backups and restore](#backups-and-restore)
 - [What is SQLite-only](#what-is-sqlite-only)
 - [Monitoring](#monitoring)
@@ -502,6 +502,9 @@ spec:
 Labels matter: the Service and the server Deployment select `app: corescope`, so the ingestor
 must carry a different label or the Service would route HTTP traffic to it.
 
+This layout depends on PostgreSQL: SQLite cannot be shared by several server replicas. To go
+back, see [From a multi-replica Kubernetes deployment](#from-a-multi-replica-kubernetes-deployment).
+
 ## Moving an existing SQLite install
 
 `corescope-migrate copy` streams every row of a SQLite database into an empty PostgreSQL
@@ -648,6 +651,41 @@ Copy PostgreSQL into a new SQLite file the same way, then set the driver back.
 3. Remove `db.driver`, `db.dsn`, `DB_DRIVER`, `DB_DSN`, `DB_DSN_INGESTOR` and `DB_DSN_SERVER`
    (or set the driver to `sqlite`), and drop `docker-compose.postgres.yml` from the `-f` list.
 4. Start the ingestor, then the server.
+
+### From a multi-replica Kubernetes deployment
+
+Going back to SQLite also means going back to **one server**. Several server replicas work only
+on PostgreSQL. SQLite needs the server and the ingestor on the same machine, sharing one
+database file on a local disk: its write-ahead log relies on shared memory, so the file must
+never be on a network filesystem. Plan the move as leaving the high-availability layout, not
+just as a driver change.
+
+Reads can stay up until the last step:
+
+1. **Provision a volume for the SQLite file**: a `ReadWriteOnce` claim on one node. If you kept
+   the volume that held the SQLite file before the move, move its old `meshcore.db` (with `-wal`
+   and `-shm`) aside rather than deleting it, so it remains a fallback.
+2. **Scale the ingestor to zero.** The PostgreSQL server replicas keep serving. Packets heard
+   from now until step 5 are not recorded.
+3. **Copy** with a one-off Job that mounts that volume and connects to PostgreSQL as the
+   writer role (password from the Secret in `PGPASSWORD`, never on the command line):
+   `corescope-migrate copy -from 'postgres://corescope_writer@postgres:5432/corescope' -to
+   sqlite:/app/data/meshcore.db`. It verifies the copy before renaming the file into place. The
+   Job's pod needs the label your NetworkPolicy admits (for example `app: corescope-migrate`).
+4. **Deploy the single-pod SQLite layout** next to the running replicas, under a label the
+   Service does not select yet. Use one Deployment with `replicas: 1` and `strategy:
+   Recreate`, the volume from step 1, no `DB_DRIVER` / `DB_DSN*`, and the server and the ingestor
+   in the same pod: either the image's default command (both under supervisord) or two
+   containers sharing the volume. Wait until `/api/healthz` reports ready.
+5. **Switch the Service's selector** to the new pod, then scale the PostgreSQL server Deployment
+   to zero. The new pod's ingestor started recording in step 4, so the gap in the data runs from
+   step 2 to step 4.
+6. **Keep PostgreSQL** until you are satisfied. It is your way back: the move in
+   [Moving an existing SQLite install](#moving-an-existing-sqlite-install) works again from the
+   new file.
+
+User accounts are a separate store with no copy back to `users.db`. See
+[Roll back to `users.db`](#roll-back-to-usersdb) before you remove `DB_DSN_ACCOUNTS`.
 
 ## User accounts in PostgreSQL
 
