@@ -75,8 +75,11 @@ type Store struct {
 	// pg is true when db is the Postgres driver (dbx). Statements whose
 	// portable form costs SQLite on the ingest hot path are chosen per
 	// backend once, in prepareStatements; see portable_sql.go.
-	pg    bool
-	path  string // filesystem path to the SQLite DB (used to resolve queue dirs)
+	pg bool
+	// path is the configured dbPath. On SQLite it is the database file; on
+	// Postgres it is only the anchor for the file queues shared with the
+	// server (prunequeue, mbcapqueue) and is never opened as a database.
+	path  string
 	Stats DBStats
 	// plannerStatsAt is when RefreshPlannerStats last succeeded in this
 	// process, in Unix nanoseconds (0: not yet).
@@ -181,7 +184,24 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("dbschema.Apply: %w", err)
 	}
 
-	s := &Store{db: db, pg: dbx.IsPostgres(db), path: dbPath, sampleIntervalSec: sampleIntervalSec}
+	s, err := newStore(db, dbPath, sampleIntervalSec)
+	if err != nil {
+		return nil, err
+	}
+	s.scheduleSQLiteAsyncMigrations()
+	s.loadAdvertEvidenceStatus()
+	// The observation_hops backfill is deliberately NOT scheduled here; see
+	// ScheduleObservationHopsBackfill (called from main once ingest is live).
+
+	return s, nil
+}
+
+// newStore is the setup shared by both backends once the schema is in place:
+// the Store itself, its prepared statements and the restored scope-match
+// tally. Backend-specific work (SQLite's legacy async migrations, Postgres's
+// empty-target guard) stays with the openers.
+func newStore(db *sql.DB, path string, sampleIntervalSec int) (*Store, error) {
+	s := &Store{db: db, pg: dbx.IsPostgres(db), path: path, sampleIntervalSec: sampleIntervalSec}
 	if err := s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}
@@ -192,9 +212,24 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 	if err := s.LoadScopeMatchTotals(); err != nil {
 		log.Printf("[regions] restoring scope-match tally: %v", err)
 	}
+	return s, nil
+}
 
-	// Schedule async migrations. These must NOT block boot. See
-	// async_migration.go for the convention.
+// loadAdvertEvidenceStatus restores whether the advert route evidence
+// backfill has completed. A missing/failed completion lookup leaves
+// preservation enabled. This lifecycle state is restored on restart,
+// independently of main's startup.
+func (s *Store) loadAdvertEvidenceStatus() {
+	var evidenceStatus string
+	_ = s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name='advert_route_evidence_v1'`).Scan(&evidenceStatus)
+	s.advertEvidenceComplete.Store(evidenceStatus == "done")
+}
+
+// scheduleSQLiteAsyncMigrations schedules the legacy SQLite data migrations.
+// These must NOT block boot. See async_migration.go for the convention. A
+// Postgres database is created at the end state (pgschema seeds every one of
+// them as done), so they never run there.
+func (s *Store) scheduleSQLiteAsyncMigrations() {
 	// PREFLIGHT: async=true reason="composite index build on observations (1.9M+ rows in prod) — converted from sync after v3.8.3"
 	var idxDone int
 	if s.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'obs_observer_ts_idx_v1'").Scan(&idxDone) != nil {
@@ -246,7 +281,7 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 	// — so the range is fixed here, before ingest starts.
 	// PREFLIGHT: async=true reason="id-cursor scan of transmissions (86k+ rows in prod) in 5000-row batches, writer lock released between batches; only pre-#787 rows are written"
 	var hashMigrateMaxID int64
-	if err := db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM transmissions`).Scan(&hashMigrateMaxID); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM transmissions`).Scan(&hashMigrateMaxID); err != nil {
 		log.Printf("[migration/async] %s not scheduled (retried next boot): read max id: %v", contentHashMigrationName, err)
 	} else if err := s.RunAsyncMigration(context.Background(), contentHashMigrationName,
 		func(ctx context.Context, _ *sql.DB) error {
@@ -255,16 +290,6 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		}); err != nil {
 		log.Printf("[migration/async] scheduling %s failed: %v", contentHashMigrationName, err)
 	}
-
-	// A missing/failed completion lookup leaves preservation enabled. This
-	// lifecycle state is restored on restart, independently of main's startup.
-	var evidenceStatus string
-	_ = db.QueryRow(`SELECT status FROM _async_migrations WHERE name='advert_route_evidence_v1'`).Scan(&evidenceStatus)
-	s.advertEvidenceComplete.Store(evidenceStatus == "done")
-	// The observation_hops backfill is deliberately NOT scheduled here; see
-	// ScheduleObservationHopsBackfill (called from main once ingest is live).
-
-	return s, nil
 }
 
 func applySchema(db *sql.DB) error {
@@ -1577,6 +1602,9 @@ func (s *Store) PruneOldMetrics(retentionDays int) (int64, error) {
 // CheckAutoVacuum inspects the current auto_vacuum mode and logs a warning
 // if not INCREMENTAL. Performs opt-in full VACUUM if db.vacuumOnStartup is set (#919).
 func (s *Store) CheckAutoVacuum(cfg *Config) {
+	if s.pg {
+		return // SQLite-only; see postgresMaintenanceNote
+	}
 	var autoVacuum int
 	if err := s.db.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err != nil {
 		log.Printf("[db] warning: could not read auto_vacuum: %v", err)
@@ -1621,6 +1649,9 @@ func (s *Store) CheckAutoVacuum(cfg *Config) {
 // RunIncrementalVacuum returns free pages to the OS (#919).
 // Safe to call on auto_vacuum=NONE databases (noop).
 func (s *Store) RunIncrementalVacuum(pages int) {
+	if s.pg {
+		return // SQLite-only; see postgresMaintenanceNote
+	}
 	// Tagged for /api/perf writer-lock visibility (#1340).
 	if _, err := s.instrumentedExec("vacuum", fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
 		log.Printf("[vacuum] incremental_vacuum error: %v", err)
@@ -1670,7 +1701,7 @@ func (s *Store) RunIncrementalVacuum(pages int) {
 // Returns whether the statistics were refreshed. This function owns its
 // logging; callers need add nothing.
 func (s *Store) RefreshPlannerStats(analysisLimit int) bool {
-	if analysisLimit < 0 {
+	if analysisLimit < 0 || s.pg {
 		return false
 	}
 	first := !s.hasPlannerStats()
@@ -1724,7 +1755,7 @@ func (s *Store) RefreshPlannerStats(analysisLimit int) bool {
 // already sized for. It also records the refresh time, so the daily refresh
 // then waits 24 hours (#2146).
 func (s *Store) EnsurePlannerStats(analysisLimit int) bool {
-	if s.hasPlannerStats() {
+	if s.pg || s.hasPlannerStats() {
 		return false
 	}
 	log.Printf("[analyze] this database has no planner statistics; building them now. " +
@@ -1822,6 +1853,9 @@ func (s *Store) hasPlannerStats() bool {
 // TRUNCATE resets the WAL file to zero bytes when all frames are checkpointed;
 // if active readers hold frames, it checkpoints what it can and leaves the rest.
 func (s *Store) Checkpoint() int {
+	if s.pg {
+		return 0 // no WAL file to truncate; see postgresMaintenanceNote
+	}
 	var busy, walFrames, checkpointed int
 	if err := s.db.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &walFrames, &checkpointed); err != nil {
 		log.Printf("[db] WAL checkpoint error: %v", err)
@@ -1839,6 +1873,9 @@ func (s *Store) Checkpoint() int {
 // because new observations get path_json at write time; this only touches NULL rows.
 // Idempotent: skips if migration already recorded.
 func (s *Store) BackfillPathJSONAsync() {
+	if s.pg {
+		return // legacy SQLite rows only; Postgres starts at the end state
+	}
 	s.backfillWg.Add(1)
 	go func() {
 		defer s.backfillWg.Done()

@@ -87,16 +87,23 @@ func main() {
 	if err := cfg.DB.Validate(); err != nil {
 		log.Fatalf("[db] %v", err)
 	}
+	var store *Store
 	if d, _ := cfg.DB.GetDriver(); d == dbconfig.DriverPostgres {
-		log.Fatalf("[db] db.driver=postgres is not supported yet; use sqlite")
-	}
-
-	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
-	if err != nil {
-		log.Fatalf("db: %v", err)
+		// cfg.DBPath stays the anchor for the file queues shared with the
+		// server. Never log the DSN: it carries the password.
+		store, err = OpenPostgresStore(cfg.DB.DSN, cfg.DBPath, cfg.MetricsSampleInterval())
+		if err != nil {
+			log.Fatalf("db: %v", err)
+		}
+		log.Printf("[db] opened postgres")
+	} else {
+		store, err = OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
+		if err != nil {
+			log.Fatalf("db: %v", err)
+		}
+		log.Printf("SQLite opened: %s", cfg.DBPath)
 	}
 	defer store.Close()
-	log.Printf("SQLite opened: %s", cfg.DBPath)
 
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()
@@ -583,15 +590,18 @@ func main() {
 	// if the server's read connection holds frames, remaining pages stay in the
 	// WAL until the next tick. Staggered 30s after startup to avoid competing
 	// with the initial burst of ingest writes.
+	// SQLite only: Postgres has no WAL file to truncate (postgresMaintenanceNote).
 	walCheckpointTicker := time.NewTicker(1 * time.Hour)
-	go func() {
-		time.Sleep(30 * time.Second)
-		store.Checkpoint()
-		for range walCheckpointTicker.C {
+	if !store.pg {
+		go func() {
+			time.Sleep(30 * time.Second)
 			store.Checkpoint()
-		}
-	}()
-	log.Printf("[db] WAL checkpoint scheduled every 1h")
+			for range walCheckpointTicker.C {
+				store.Checkpoint()
+			}
+		}()
+		log.Printf("[db] WAL checkpoint scheduled every 1h")
+	}
 
 	// Daily planner statistics refresh (#2058), in two parts.
 	//
@@ -609,10 +619,14 @@ func main() {
 	// an unbounded ANALYZE does: 2.0s against 242.9s on a 9.4 GB database, both
 	// timed warm. Cold, on a first start, it is 3m43.9s.
 	{
+		// SQLite only: Postgres keeps its own statistics (autovacuum's
+		// ANALYZE), and has no sqlite_stat1 or stamp file next to a database.
 		analysisLimit := cfg.AnalysisLimit()
-		if analysisLimit < 0 {
+		switch {
+		case store.pg:
+		case analysisLimit < 0:
 			log.Printf("[analyze] planner statistics refresh disabled (db.analysisLimit=%d)", analysisLimit)
-		} else {
+		default:
 			go func() {
 				// Before the stagger, and only on a database that has never been
 				// analyzed: the stagger is a 2 minute window in which the first

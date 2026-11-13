@@ -20,11 +20,6 @@ import (
 // nodes. Every 4th packet is an advert from one of the nodes; each packet is
 // heard by 1-3 observers, so later observations take the duplicate-hash path.
 func BenchmarkInsertTransmissionHotPath(b *testing.B) {
-	const (
-		callsPerOp = 2000
-		observers  = 3
-		nodes      = 50
-	)
 	// OpenStore logs its config; keep the benchmark lines readable.
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(os.Stderr)
@@ -33,7 +28,24 @@ func BenchmarkInsertTransmissionHotPath(b *testing.B) {
 		b.Fatal(err)
 	}
 	defer s.Close()
+	benchInsertTransmissionHotPath(b, s)
+}
 
+// BenchmarkInsertTransmissionHotPathPostgres is the same mix against
+// Postgres (informational: it includes a network round trip per statement).
+// Skips without $CORESCOPE_TEST_PG_DSN.
+func BenchmarkInsertTransmissionHotPathPostgres(b *testing.B) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	benchInsertTransmissionHotPath(b, openPostgresTestStore(b, filepath.Join(b.TempDir(), "bench.db")))
+}
+
+func benchInsertTransmissionHotPath(b *testing.B, s *Store) {
+	const (
+		callsPerOp = 2000
+		observers  = 3
+		nodes      = 50
+	)
 	obsIDs := make([]string, observers)
 	for i := range obsIDs {
 		obsIDs[i] = fmt.Sprintf("%064x", 0xb0+i)

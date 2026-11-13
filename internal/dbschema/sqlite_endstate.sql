@@ -1,5 +1,6 @@
--- End-state SQLite schema of a freshly booted ingestor (cmd/ingestor OpenStore).
--- Regenerate when the schema changes; TestSQLiteEndStateSchemaFixture in cmd/ingestor keeps it honest.
+-- End-state SQLite schema of a freshly booted ingestor (cmd/ingestor OpenStore),
+-- exported as dbschema.SQLiteEndState. TestSQLiteEndStateMatchesIngestor in
+-- cmd/ingestor fails when the ingestor's schema drifts from this file.
 
 -- table _async_migrations
 CREATE TABLE _async_migrations (

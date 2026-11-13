@@ -46,7 +46,18 @@ var (
 // days > 0 installs the index (or refreshes its triggers);
 // ScheduleObservationHopsBackfill then fills whatever part of the window is not
 // yet covered.
+//
+// On Postgres the index does not exist (it is SQLite-only for now): a
+// positive days is logged once and treated as 0, and the hop tables are never
+// touched. The reach panel falls back to its path scan.
 func (s *Store) ConfigureObservationHops(days int) error {
+	if s.pg {
+		if days > 0 {
+			log.Printf("[hop-index] warning: retention.hopIndexDays=%d ignored: the hop index is SQLite-only, the reach panel uses its path scan on PostgreSQL", days)
+		}
+		s.hopIndexDays = 0
+		return nil
+	}
 	s.hopIndexDays = days
 	if days <= 0 {
 		start := time.Now()

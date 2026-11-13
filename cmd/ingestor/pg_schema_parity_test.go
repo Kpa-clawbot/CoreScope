@@ -48,6 +48,21 @@ func TestPgSchemaParity(t *testing.T) {
 	}
 }
 
+// TestPgSchemaParityExceptions: the type-class exception list is exactly
+// observations.score (int on SQLite, real on Postgres) and nothing else.
+// Adding an entry is a schema decision; make it here, on purpose.
+func TestPgSchemaParityExceptions(t *testing.T) {
+	want := map[string][2]string{"observations.score": {"int", "real"}}
+	if len(typeClassException) != len(want) {
+		t.Fatalf("typeClassException has %d entries, want exactly %v: %v", len(typeClassException), want, typeClassException)
+	}
+	for k, v := range want {
+		if typeClassException[k] != v {
+			t.Fatalf("typeClassException[%q] = %v, want %v", k, typeClassException[k], v)
+		}
+	}
+}
+
 // parityExcluded reports tables deliberately absent from one side.
 func parityExcluded(table string) bool {
 	return strings.HasPrefix(table, "observation_hops") || table == "schema_version" ||
@@ -414,6 +429,18 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
+// typeClassException lists the columns whose type class deliberately differs,
+// keyed by exact "table.column" and pinned to the exact (SQLite, Postgres)
+// pair, so no other column and no other mismatch can slip through.
+// TestPgSchemaParityExceptions keeps it at exactly this one entry.
+var typeClassException = map[string][2]string{
+	// SQLite declares INTEGER, but the ingestor writes the envelope's score
+	// as a float64 and SQLite's INTEGER affinity keeps a fraction (0.75 stays
+	// 0.75). A BIGINT would lose it (pgx truncates a float64 bound to int8
+	// without an error), so Postgres declares DOUBLE PRECISION.
+	"observations.score": {"int", "real"},
+}
+
 // diffSchemas lists every difference between the SQLite and Postgres
 // descriptions, one self-explanatory line each.
 func diffSchemas(lite, post *schemaDesc) []string {
@@ -434,7 +461,7 @@ func diffSchemas(lite, post *schemaDesc) []string {
 				add("column %s.%s: in SQLite, missing in Postgres", tbl, col)
 				continue
 			}
-			if lc.typeClass != pc.typeClass {
+			if lc.typeClass != pc.typeClass && typeClassException[tbl+"."+col] != [2]string{lc.typeClass, pc.typeClass} {
 				add("column %s.%s: type class SQLite %s, Postgres %s", tbl, col, lc.typeClass, pc.typeClass)
 			}
 			if lc.notNull != pc.notNull {
