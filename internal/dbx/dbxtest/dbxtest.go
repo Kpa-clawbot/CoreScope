@@ -8,9 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"net/url"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/meshcore-analyzer/dbx"
@@ -93,18 +91,12 @@ func dropSchema(t testing.TB, admin *sql.DB, schema string) {
 	}
 }
 
-// withSearchPath adds search_path=<schema> to a URL or keyword/value DSN.
+// withSearchPath sets search_path=<schema> in a URL or keyword/value DSN.
 func withSearchPath(dsn, schema string) (string, error) {
-	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-		u, err := url.Parse(dsn)
-		if err != nil {
-			// Not wrapped: url.Error echoes the DSN, password included.
-			return "", errors.New("unparseable $" + dsnEnv + " URL")
-		}
-		q := u.Query()
-		q.Set("search_path", schema)
-		u.RawQuery = q.Encode()
-		return u.String(), nil
+	out, err := dbx.WithSearchPath(dsn, schema)
+	if err != nil {
+		// Its own words: dbx's error is phrased for db.dsn.
+		return "", errors.New("unparseable $" + dsnEnv + " URL")
 	}
-	return dsn + " search_path=" + schema, nil
+	return out, nil
 }

@@ -70,6 +70,10 @@ func OpenPostgresDB(dsn string) (*DB, error) {
 // statement_timeout bounds what one request to the unauthenticated public API
 // can cost the database.
 //
+// Unless the DSN sets search_path, both pools get the reader's search_path
+// pinned with "$user" resolved (pinPostgresSearchPath), so a schema named
+// after the role cannot shadow the CoreScope tables.
+//
 // The one exception is the control schema (control_pg.go): the column-level
 // INSERT the group role corescope_control_client holds there is allowed, and
 // when the role inherits that group with exactly the control grants a second,
@@ -91,6 +95,15 @@ func OpenPostgresDBWithStatementTimeout(dsn string, statementTimeoutSec int) (*D
 	}
 	scrub := func(err error) error { return scrubPGSecret(err, secrets...) }
 
+	// The first connect gets its own budget so waiting for the network does
+	// not eat into the checks below. It is the search_path probe's, when
+	// there is one, and the main pool's otherwise.
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), pgConnectWait+pgOpenTimeout)
+	defer pingCancel()
+	if dsn, roDSN, err = pinPostgresSearchPath(pingCtx, dsn, roDSN); err != nil {
+		return nil, scrub(err)
+	}
+
 	conn, err := sql.Open(dbx.PostgresDriverName, roDSN)
 	if err != nil {
 		return nil, scrub(err)
@@ -103,9 +116,6 @@ func OpenPostgresDBWithStatementTimeout(dsn string, statementTimeoutSec int) (*D
 		return nil, fmt.Errorf(format, scrub(err))
 	}
 
-	// The first connect gets its own budget so waiting for the network does
-	// not eat into the checks below.
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), pgConnectWait+pgOpenTimeout)
 	err = pingPostgres(pingCtx, conn)
 	pingCancel()
 	if err != nil {
@@ -113,13 +123,17 @@ func OpenPostgresDBWithStatementTimeout(dsn string, statementTimeoutSec int) (*D
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pgOpenTimeout)
 	defer cancel()
-	if err := pgschema.AssertReady(ctx, conn); err != nil {
-		return fail("%w", err)
-	}
 	if err := verifyPostgresSessionParams(ctx, conn, params); err != nil {
 		return fail("%w", err)
 	}
+	// The privilege check comes before the schema version: a role that owns
+	// the first schema on its path (one named after it, which the search_path
+	// pin keeps) has no CoreScope tables there, and "start the ingestor
+	// first" would hide what is actually wrong with it.
 	if err := verifyPostgresNoWritePrivilege(ctx, conn); err != nil {
+		return fail("%w", err)
+	}
+	if err := pgschema.AssertReady(ctx, conn); err != nil {
 		return fail("%w", err)
 	}
 
@@ -142,6 +156,31 @@ func OpenPostgresDBWithStatementTimeout(dsn string, statementTimeoutSec int) (*D
 		return fail("%w", err)
 	}
 	return d, nil
+}
+
+// pinPostgresSearchPath pins the reader's search_path (dbx.ResolveSearchPath)
+// in both DSNs: dsn, from which the control pool derives its own, and roDSN,
+// pgServerDSN's read-only form of it, which the probe connects with (so the
+// probe, too, can only read). Without the pin a schema named after the
+// reader role, first in the default search_path, would feed the server
+// tables of its creator's choosing. A search_path the DSN sets is kept.
+//
+// "$user" is kept only when the reader owns that schema, and
+// verifyPostgresNoWritePrivilege then refuses the reader for owning a schema
+// on its path: the pin never refuses anything itself, so that check's
+// explanation is the one an operator sees.
+func pinPostgresSearchPath(ctx context.Context, dsn, roDSN string) (string, string, error) {
+	path, pin, err := dbx.ResolveSearchPath(ctx, roDSN, dbx.SearchPathProbe{Role: "reader", Ping: pingPostgres, Logf: log.Printf})
+	if err != nil || !pin {
+		return dsn, roDSN, err
+	}
+	if dsn, err = dbx.WithSearchPath(dsn, path); err != nil {
+		return "", "", err
+	}
+	if roDSN, err = dbx.WithSearchPath(roDSN, path); err != nil {
+		return "", "", err
+	}
+	return dsn, roDSN, nil
 }
 
 // verifyPostgresSessionParams checks that each forced parameter took effect.
@@ -463,30 +502,40 @@ func pgServerDSN(dsn string, params []pgParam) (string, []string, error) {
 				secrets = pgSecretForms(secrets, pw)
 			}
 		}
-		q := u.Query()
-		for key, vals := range q {
+		// The query is filtered segment by segment rather than decoded and
+		// re-encoded: pgx reads it as libpq does ("+" is a plus sign, %20 a
+		// space), and a net/url round trip would turn one into the other in
+		// the values kept (options, a pinned search_path).
+		var kept []string
+		for _, seg := range strings.Split(u.RawQuery, "&") {
+			if seg == "" {
+				continue
+			}
+			k, v, _ := strings.Cut(seg, "=")
+			key, kerr := url.PathUnescape(k)
+			val, verr := url.PathUnescape(v)
+			if kerr != nil || verr != nil {
+				return "", nil, errors.New("db.dsn: unparseable postgres URL")
+			}
 			lk := strings.ToLower(key)
 			if forced[lk] {
-				delete(q, key)
 				continue
 			}
 			switch lk {
 			case "password":
-				for _, v := range vals {
-					secrets = pgSecretForms(secrets, v)
-				}
+				secrets = pgSecretForms(secrets, val)
 			case "options":
-				for _, v := range vals {
-					if err := checkPGOptions(v, params); err != nil {
-						return "", nil, err
-					}
+				if err := checkPGOptions(val, params); err != nil {
+					return "", nil, err
 				}
 			}
+			kept = append(kept, seg)
 		}
 		for _, p := range params {
-			q.Set(p.name, p.value)
+			// %20, not "+": pgx reads "+" in a query value as a plus sign.
+			kept = append(kept, p.name+"="+strings.ReplaceAll(url.QueryEscape(p.value), "+", "%20"))
 		}
-		u.RawQuery = q.Encode()
+		u.RawQuery = strings.Join(kept, "&")
 		return u.String(), secrets, nil
 	}
 

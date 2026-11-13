@@ -104,9 +104,10 @@ func TestOpenPostgresDropsSchemaOnCleanup(t *testing.T) {
 
 func TestWithSearchPath(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"postgres://u:p@h:5432/db?sslmode=disable", "postgres://u:p@h:5432/db?search_path=s1&sslmode=disable"},
+		{"postgres://u:p@h:5432/db?sslmode=disable", "postgres://u:p@h:5432/db?sslmode=disable&search_path=s1"},
+		{"postgres://u:p@h:5432/db?search_path=x&sslmode=disable", "postgres://u:p@h:5432/db?sslmode=disable&search_path=s1"},
 		{"postgresql://h/db", "postgresql://h/db?search_path=s1"},
-		{"host=h dbname=db", "host=h dbname=db search_path=s1"},
+		{"host=h dbname=db", "host=h dbname=db search_path='s1'"},
 	}
 	for _, tc := range cases {
 		got, err := withSearchPath(tc.in, "s1")

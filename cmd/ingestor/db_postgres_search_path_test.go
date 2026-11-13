@@ -11,71 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/meshcore-analyzer/dbx"
 )
 
-func TestSafeSearchPath(t *testing.T) {
-	for _, tc := range []struct{ setting, user, owner, want string }{
-		{`"$user", public`, "corescope", "", "public"},                       // the standard setup
-		{`"$user", public`, "corescope", "intruder", "public"},               // planted
-		{`"$user", public`, "corescope", "corescope", `"corescope", public`}, // the writer's own
-		{`$user,public`, "w", "w", `"w", public`},
-		{`"$user", public`, `we"ird`, `we"ird`, `"we""ird", public`},
-		{`myschema`, "corescope", "intruder", "myschema"},
-		{`"my, schema", public`, "corescope", "", `"my, schema", public`},
-		{`"$user"`, "corescope", "", ""},
-		{``, "corescope", "", ""},
-	} {
-		if got := safeSearchPath(tc.setting, tc.user, tc.owner); got != tc.want {
-			t.Errorf("safeSearchPath(%q, %q, %q) = %q; want %q", tc.setting, tc.user, tc.owner, got, tc.want)
-		}
-	}
-}
-
-func TestSetsSearchPath(t *testing.T) {
-	for dsn, want := range map[string]bool{
-		"postgres://u@h/db":                                           false,
-		"postgres://u@h/db?search_path=s":                             true,
-		"postgres://u@h/db?options=-c%20search_path%3Ds":              true,
-		"postgres://u@h/db?options=--search-path%3Ds":                 true,
-		"postgres://u@h/db?options=-c%20statement_timeout%3D5":        false,
-		"host=h user=u dbname=db":                                     false,
-		"host=h user=u dbname=db search_path=s":                       true,
-		"host=h user=u dbname=db options='-c search_path=s'":          true,
-		"host=h user=u dbname=db application_name=search_path_lookup": false,
-	} {
-		cfg, err := pgx.ParseConfig(dsn)
-		if err != nil {
-			t.Fatalf("%s: %v", dsn, err)
-		}
-		if got := setsSearchPath(cfg.RuntimeParams); got != want {
-			t.Errorf("setsSearchPath(%s) = %v; want %v", dsn, got, want)
-		}
-	}
-}
-
-// The pinned value reaches pgx's startup parameters intact in both DSN forms.
-func TestWithSearchPathParam(t *testing.T) {
-	for _, dsn := range []string{"postgres://u:p@h:5432/db?sslmode=disable", "host=h user=u password='a b' dbname=db"} {
-		for _, path := range []string{"public", `"corescope", public`, `"it's", public`, `"back\slash"`, ""} {
-			got, err := withSearchPathParam(dsn, path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cfg, err := pgx.ParseConfig(got)
-			if err != nil {
-				t.Fatalf("%q: %v", got, err)
-			}
-			if v, ok := cfg.RuntimeParams["search_path"]; !ok || v != path {
-				t.Errorf("%s + %q: search_path = %q (%v)", dsn, path, v, ok)
-			}
-			if cfg.User != "u" || cfg.Database != "db" {
-				t.Errorf("%s + %q: lost the rest of the DSN: %+v", dsn, path, cfg)
-			}
-		}
-	}
-}
+// The search_path rules themselves (setsSearchPath, safeSearchPath,
+// WithSearchPath) are unit-tested in internal/dbx; these tests pin the
+// ingestor's use of them against a real database.
 
 // searchPathTestDB creates a throwaway database (the pinning is about which
 // schema the writer's unqualified names land in, so it needs a database whose
