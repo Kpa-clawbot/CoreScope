@@ -334,11 +334,31 @@ type rowQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// schemaColumns returns the set of column names present on the given table via
-// PRAGMA table_info. Unlike the previous inline scans, a query or scan error is
-// returned rather than swallowed (#1901). The table name is a trusted literal
-// supplied by the caller, not user input.
+// schemaColumns returns the set of column names present on the given table. It
+// asks information_schema first (Postgres) and falls back to PRAGMA table_info
+// when that does not exist (SQLite), the same order as dbschema's probes and
+// for the same reason. A missing table yields an empty set on both. Unlike the
+// previous inline scans, a query or scan error is returned rather than
+// swallowed (#1901). The table name is a trusted literal supplied by the
+// caller, not user input.
 func schemaColumns(ctx context.Context, q rowQuerier, table string) (map[string]bool, error) {
+	pgRows, err := q.QueryContext(ctx, `SELECT column_name FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = ?`, table)
+	if err == nil {
+		defer pgRows.Close()
+		cols := make(map[string]bool)
+		for pgRows.Next() {
+			var name string
+			if err := pgRows.Scan(&name); err != nil {
+				return nil, err
+			}
+			cols[name] = true
+		}
+		return cols, pgRows.Err()
+	}
+	if !strings.Contains(err.Error(), "no such table") {
+		return nil, err
+	}
 	rows, err := q.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
 		return nil, err
