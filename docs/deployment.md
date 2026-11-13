@@ -663,7 +663,7 @@ server, with only the reader DSN) and `ingestor` (the writer DSN, non-root, read
 `prod`'s network namespace). Use `docker compose ... up -d` rather than restarting `prod` alone, so the
 ingestor follows. Running both in one container still works but logs a warning and is not
 recommended. See [In the Docker image](postgresql.md#in-the-docker-image) and, for clusters,
-[Kubernetes](postgresql.md#kubernetes).
+[Kubernetes](postgresql.md#kubernetes-and-high-availability).
 
 In the Docker image on PostgreSQL the server runs as its own user (`corescope-server`, uid
 `SERVER_RUN_AS_UID`, default 1001) and what it writes (`users.db` and `backups/`, the file

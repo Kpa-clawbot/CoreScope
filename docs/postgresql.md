@@ -280,28 +280,173 @@ Whichever layout, the entrypoint arranges the following on PostgreSQL:
 
 SQLite mode is unchanged: one account for both services and the database where it always was.
 
-### Kubernetes
+### Kubernetes and high availability
 
-The same rules apply in a cluster. A layout that has been run in production:
+PostgreSQL is what lets CoreScope's read side scale out: any number of servers can read the same
+database. The write side cannot. Plan the cluster around that asymmetry.
 
-- **Ingestor:** its own Deployment, `replicas: 1` and `strategy: Recreate`. There is exactly one
-  writer: the servers follow new rows by "id greater than last seen", and a second ingestor also
-  fights the first over the same MQTT client id. Never scale it.
-- **Server:** a separate Deployment, which can scale horizontally (verified with five read-only
-  replicas). Separate containers and pods are the credential boundary: only the ingestor has the
-  writer DSN (from a Secret), the server has the reader DSN.
-- **Users database:** if user management is enabled, `users.db` is SQLite on the shared volume
-  and several server replicas must not share it. Run one server replica in that case.
-- **Network:** keep PostgreSQL on a `ClusterIP` service only, with a `NetworkPolicy` that admits
-  just the CoreScope pods (and the copy Job below).
-- **Roles:** run `scripts/postgres-roles.sh` inside the PostgreSQL pod over its local socket
-  (`kubectl exec`), taking the passwords from the pod's environment, so they never go on a
-  command line.
-- **Moving data:** run `corescope-migrate copy` as a one-shot Job, with the ingestor scaled to
-  zero first and `PGPASSWORD` from a Secret (password-less URL).
-- **First connection:** a new pod's first connection may be refused for a second or two until
-  the NetworkPolicy controller admits it. The binaries are being changed to retry the first
-  connect for up to 30 seconds; until you run a version that does, let the pod restart.
+| Component | Replicas | Why |
+|---|---|---|
+| Ingestor | **exactly 1** | The only writer. Servers follow new rows by "id greater than the last one seen", which is complete only when ids commit in order — one writer, one connection. |
+| Server | 2 or more | Read-only and independent: each loads its own in-memory store from PostgreSQL and polls for new rows. No sticky sessions are needed; each pushes its own live feed over WebSocket. Verified with five replicas. |
+| PostgreSQL | your HA setup | CoreScope needs one stable read-write endpoint (see below). |
+
+> [!WARNING]
+> **Never run more than one ingestor against the same database or broker.** Two ingestors
+> insert the same packets twice over, commit ids out of order (the servers' live feed then
+> silently skips rows), and both connect to MQTT with the same client id, so the broker
+> disconnects each one whenever the other connects — they flap and ingest stalls. In practice
+> this happens in three ways:
+>
+> 1. **The ingestor is a container in the server's Deployment** (the single-pod layout of a
+>    small install). Scaling that Deployment to N starts N ingestors. Split them first.
+> 2. **The ingestor's Deployment uses `RollingUpdate`.** A rollout starts the new pod before
+>    stopping the old one. Use `strategy: Recreate`.
+> 3. **Migrating from a combined pod to the split layout** while the old pods are still running:
+>    the new ingestor and the old pods' ingestors overlap. Scale the old Deployment to 0 (or
+>    remove its ingestor container) before starting the new ingestor Deployment.
+>
+> Never put a HorizontalPodAutoscaler on the ingestor.
+
+**What "HA" means for each piece.** Server replicas make the UI and API survive pod and (with a
+suitable volume, below) node failures. The ingestor is recovered rather than replicated: if it
+dies, Kubernetes restarts it. Its MQTT session is a clean session, so packets published while it
+is down are not delivered to it later — a restart costs the seconds of traffic it was down for.
+That is the trade-off for a single writer; there is no leader election to fail over to a hot
+standby.
+
+**The shared data volume.** The servers and the ingestor exchange a few files beside the
+configured `dbPath`: geo-prune requests and their results (the admin geo-filter prune action),
+the multibyte-capability snapshot the ingestor persists, and the ingestor's statistics for the
+perf page. Ingest and the whole read API work without it; those three features need it.
+
+- With a `ReadWriteOnce` volume (for example `local-path`), every pod that mounts it must run on
+  one node: you get pod-level HA, not node-level.
+- For node-level HA, put `/app/data` on a `ReadWriteMany` volume (NFS, CephFS, Longhorn RWX…) so
+  servers can be spread across nodes.
+- If **user management** is enabled, `users.db` is a SQLite file on that volume, written by the
+  server. Several server replicas must not share it: run a single server replica in that case.
+
+**PostgreSQL itself.** Point both roles at the **primary** through a stable name — for example
+the read-write service of a PostgreSQL operator (CloudNativePG's `<cluster>-rw`). Don't point
+servers at a read replica: replication lag makes the live feed late and a lagging replica can be
+behind the ingestor's own writes. Connections are ordinary pooled connections, so after a
+failover new connections reach the new primary through the same name.
+
+**Network.** Keep PostgreSQL on a `ClusterIP` service only, with a `NetworkPolicy` that admits just
+the CoreScope pods (ingestor, servers) and the one-shot copy Job. On clusters whose policy
+controller admits a new pod's IP asynchronously (k3s/kube-router), a pod's first connection can be
+refused for a second or two; the binaries retry the first connect for up to 30 seconds.
+
+**Roles and secrets.** Run `scripts/postgres-roles.sh` inside the PostgreSQL pod over its local
+socket (`kubectl exec … sh -s < scripts/postgres-roles.sh`), with the passwords in that pod's
+environment from a Secret, so they never appear on a command line. Keep the writer DSN in a Secret
+key mounted **only** into the ingestor and the reader DSN only into the servers.
+
+**Moving data.** Run `corescope-migrate copy` as a one-shot Job (image `/app/corescope-migrate`),
+with the ingestor scaled to 0 first, `PGPASSWORD` from the Secret and a password-less URL. If the
+SQLite file was last written by a CoreScope version older than this one, start the new image on
+SQLite once first so its migrations finish — `copy` refuses an unmigrated source and says so.
+
+#### Reference manifests
+
+A minimal layout (namespace, image, node and storage names are placeholders; add your own
+resources, probes and Pod Security settings — the image runs as non-root uid 1000).
+
+```yaml
+# Secret "corescope-postgres": keys writer-dsn and reader-dsn, created out of band, e.g.
+#   writer-dsn: postgres://corescope_writer:<pw>@postgres:5432/corescope?sslmode=disable
+#   reader-dsn: postgres://corescope_reader:<pw>@postgres:5432/corescope?sslmode=disable
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: corescope-ingestor}
+spec:
+  replicas: 1                      # never more than one
+  strategy: {type: Recreate}       # never two at once, even during a rollout
+  selector: {matchLabels: {app: corescope-ingestor}}
+  template:
+    metadata: {labels: {app: corescope-ingestor}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      containers:
+        - name: ingestor
+          image: <registry>/corescope:<version>
+          command: ["/app/corescope-ingestor", "-config", "/app/config/config.json"]
+          workingDir: /app
+          env:
+            - {name: DB_DRIVER, value: postgres}
+            - name: DB_DSN
+              valueFrom: {secretKeyRef: {name: corescope-postgres, key: writer-dsn}}
+            - {name: CORESCOPE_INGESTOR_STATS, value: /app/data/ingestor-stats.json}
+          volumeMounts:
+            - {name: data, mountPath: /app/data}
+            - {name: config, mountPath: /app/config, readOnly: true}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: corescope-data}}
+        - {name: config, secret: {secretName: corescope-config}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: corescope}
+spec:
+  replicas: 3
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 1, maxSurge: 1}}
+  selector: {matchLabels: {app: corescope}}
+  template:
+    metadata: {labels: {app: corescope}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      containers:
+        - name: server
+          image: <registry>/corescope:<version>
+          # -db only anchors the shared file queues on PostgreSQL
+          command: ["/app/corescope-server", "-config-dir", "/app/config",
+                    "-db", "/app/data/meshcore.db", "-public", "/app/public", "-port", "3000"]
+          workingDir: /app
+          env:
+            - {name: DB_DRIVER, value: postgres}
+            - name: DB_DSN
+              valueFrom: {secretKeyRef: {name: corescope-postgres, key: reader-dsn}}
+            - {name: CORESCOPE_INGESTOR_STATS, value: /app/data/ingestor-stats.json}
+          ports: [{name: http, containerPort: 3000}]
+          readinessProbe: {httpGet: {path: /api/healthz, port: http}}
+          volumeMounts:
+            - {name: data, mountPath: /app/data}
+            - {name: config, mountPath: /app/config, readOnly: true}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: corescope-data}}
+        - {name: config, secret: {secretName: corescope-config}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: corescope}
+spec:
+  minAvailable: 1                  # servers only; a PDB cannot keep a single ingestor up
+  selector: {matchLabels: {app: corescope}}
+---
+apiVersion: v1
+kind: Service                      # selects the servers only
+metadata: {name: corescope}
+spec:
+  selector: {app: corescope}
+  ports: [{name: http, port: 80, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: postgres-from-corescope}
+spec:
+  podSelector: {matchLabels: {app: postgres}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: corescope}}
+        - podSelector: {matchLabels: {app: corescope-ingestor}}
+        - podSelector: {matchLabels: {app: corescope-migrate}}   # the one-shot copy Job
+      ports: [{protocol: TCP, port: 5432}]
+```
+
+Labels matter: the Service and the server Deployment select `app: corescope`, so the ingestor
+must carry a different label or the Service would route HTTP traffic to it.
 
 ## Moving an existing SQLite install
 
