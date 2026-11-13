@@ -203,12 +203,18 @@ automatically, and the same binaries serve both backends.
   (and back), then `corescope-migrate verify` compares the two. See
   [cmd/migrate/README.md](cmd/migrate/README.md).
 - Optional user accounts (`users.db`) stay SQLite on both backends.
-- In the Docker image on PostgreSQL the server runs as its own unprivileged
-  user (`SERVER_RUN_AS_UID`, default 1001) so it cannot read the ingestor's
-  writer DSN, and the files it still writes (`users.db`, the shared file
-  queues) live in `/app/data/shared`. `config.json` must not carry a `dsn`
-  there; use `DB_DSN_INGESTOR` and `DB_DSN_SERVER`. `corescope-migrate` is in the
-  image at `/app/corescope-migrate`.
+- In Docker, run PostgreSQL with Compose: the ingestor is its own container,
+  alone with the writer DSN and not root, while the main container (caddy,
+  mosquitto, server) starts with `DISABLE_INGESTOR=true` and only the read-only
+  DSN (`DB_DSN_SERVER`). The writer credential is never in the server's
+  container. The container selects the database from its environment
+  (`DB_DRIVER`, `DB_DSN_*`), never from `config.json`, and refuses a
+  `config.json` that carries a `dsn`. Files the server still writes (`users.db`,
+  the shared file queues, the ingestor stats file) live in `/app/data/shared`;
+  the server runs as its own user (`SERVER_RUN_AS_UID`, default 1001). Running
+  both services in one container on PostgreSQL still works but logs a warning
+  and is not recommended. `corescope-migrate` is in the image at
+  `/app/corescope-migrate`. Details: [docs/postgresql.md](docs/postgresql.md).
 
 Roles, Docker, backups with `pg_dump` and switching back are covered in
 [docs/postgresql.md](docs/postgresql.md).

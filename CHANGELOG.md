@@ -7,6 +7,7 @@
 - `corescope-migrate copy -from <db> -to <db>` and `corescope-migrate verify -a <db> -b <db>` move an installation between SQLite and Postgres in either direction and compare the result. `<db>` is `sqlite:<path>` or a `postgres://` URL. The copy refuses a non-empty target and is verified before it commits. See [cmd/migrate/README.md](cmd/migrate/README.md).
 - The Docker image takes `DB_DSN_INGESTOR` (writer role) and `DB_DSN_SERVER` (read-only role), so the server process never sees the writer credentials.
 - `corescope-decrypt -db` reads a Postgres database (a `postgres://` URL, opened read-only) as well as a SQLite file.
+- `DISABLE_INGESTOR=true` starts the Docker image without the ingestor, so it can run as its own container. `docker-compose.postgres.yml` now runs the ingestor that way.
 - `corescope-migrate` ships in the Docker image at `/app/corescope-migrate`.
 - `db.statementTimeoutSec` caps each statement the server runs on PostgreSQL (default 120 seconds, `0` disables).
 - `docker-compose.postgres.yml` adds PostgreSQL to the Compose deployment, and `scripts/postgres-roles.sh` creates the writer and read-only roles.
@@ -22,7 +23,8 @@
 - The shared file queues (prune requests, multibyte snapshot) followed planted symlinks; they no longer do.
 
 ### Security
-- In the Docker image on PostgreSQL the server runs as a separate unprivileged user (`SERVER_RUN_AS_UID`, default 1001), so it cannot read the ingestor's writer DSN. The files the server still writes live in `/app/data/shared`.
+- **Container boundary for the writer DSN.** With the Postgres Compose override the ingestor is its own non-root container and the main container (caddy, mosquitto, server) has only the read-only DSN (`DISABLE_INGESTOR=true`). Running both in one container on Postgres still works but is not recommended and logs a warning; there the server runs as a separate unprivileged user (`SERVER_RUN_AS_UID`, default 1001). The container selects Postgres only from its environment, never from `config.json`, and refuses a `config.json` that carries a `dsn`. The server's environment is an allow-list, and the files it writes live in `/app/data/shared` (share group 61001; the ingestor stats file is mode 0640 there).
+- **Caddy's admin API is off** in the image Caddyfiles (`admin off`). This applies to every deployment, SQLite included.
 - The server caps PostgreSQL statements with a timeout (`db.statementTimeoutSec`).
 - `scripts/postgres-roles.sh` refuses a `PG_ADMIN_URL` that contains a password, and refuses to adopt a database or role it did not create unless `CORESCOPE_ADOPT=1`.
 

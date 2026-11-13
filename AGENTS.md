@@ -97,24 +97,33 @@ SQLite is the default. PostgreSQL 16+ is an operator opt-in (`db.driver` / `db.d
   and inherited grants count) or the schema is not ready.
   `TestPostgresOpenIsOnlyInOpenPostgresDB` pins the one open. Deployments use two
   roles from `scripts/postgres-roles.sh`: a writer that owns the schema (ingestor)
-  and a read-only reader (server). The Docker image gives each process its own DSN
-  (`DB_DSN_INGESTOR`, `DB_DSN_SERVER`, both defaulting to `DB_DSN`); the server
-  process never sees the writer DSN, and on Postgres it runs as its own
-  unprivileged account (`docker/entrypoint-go.sh`) whose only writable paths are
-  `/app/data/shared` (`users.db`, the shared file queues) and `config.json`.
-  Never loosen any of this to make a server write work — move the write to the
+  and a read-only reader (server). In Docker the boundary for the writer
+  credential is a **separate ingestor container** (`docker-compose.postgres.yml`):
+  prod runs the server with `DISABLE_INGESTOR=true` and only the reader DSN, and
+  refuses to start if `DB_DSN_INGESTOR` is set. Inside prod the server also runs
+  as its own unprivileged uid with an allow-listed environment
+  (`docker/entrypoint-go.sh`, `docker/server-exec.sh`); its only writable paths
+  are `/app/data/shared` (`users.db`, the shared file queues) and `config.json`.
+  That in-container separation is defence in depth, not the boundary. Never
+  loosen any of this to make a server write work — move the write to the
   ingestor.
+- **The server's environment is an allow-list on Postgres.** In Docker it
+  starts through `docker/server-exec.sh` with `env -i` and a fixed list of
+  variables. A new environment variable the server reads must be added to that
+  list, or the server silently won't see it.
 - **Files exchanged between server and ingestor** (`internal/prunequeue`,
-  `internal/mbcapqueue`) are written with `os.CreateTemp` in the target directory
-  + `os.Rename`, and read only if they are regular files (no symlinks). New code
-  that exchanges files must do the same and live under the queue anchor.
+  `internal/mbcapqueue`) are accessed only through an `os.Root` on the queue
+  directory (`openQueueRoot`), written as a randomly named `O_EXCL` temp file +
+  rename, and read only if they are regular files. New code that exchanges
+  files must do the same and live under the queue anchor.
 - **One writer connection, on both backends.** The ingestor keeps
   `SetMaxOpenConns(1)` on Postgres too (`openPostgresStoreDB`). The reason there is
   not locking: the server tails `transmissions` and `observations` by
   `id > last seen`, which misses nothing only if ids commit in increasing order.
   With two connections id 102 can commit before 101, a poll in between moves the
   cursor past 101, and that row never reaches the live feed. Don't raise it or add
-  a second writer pool.
+  a second writer pool. For the same reason a deployment (Compose, Kubernetes)
+  never runs more than one ingestor; two would also fight over the MQTT client id.
 - **Single exception: `users.db` (optional user management).** When
   `userManagement.enabled`, the server owns a *separate* SQLite file through
   `internal/users` only. `users.Open` refuses the analyzer DB path, and
@@ -465,6 +474,7 @@ One logical change per commit. Each commit is deployable. Each commit has its te
 | Schema change on one backend only | — | SQLite migration + `pgschema` migration + `sqlite_endstate.sql` (MIGRATIONS.md) |
 | `sqlite_master` / `PRAGMA` on Postgres | — | `dbschema.TableExists` / `TableHasColumn` |
 | Second ingestor connection on Postgres | — | Keep `SetMaxOpenConns(1)`: the server tails by id |
+| Server reads a new env var that isn't in `docker/server-exec.sh` | — | Add it to the allow-list; on Postgres the server otherwise never sees it |
 | New `internal/` dependency missing from a Dockerfile stage | — | Add the `COPY internal/<m>/` line to every stage that builds it; `tests/unit/test-dockerfile-modules.js` checks |
 | Missing or removed musl stack flag | 1 | Keep `-Wl,-z,stack-size=8388608` on every musl link |
 

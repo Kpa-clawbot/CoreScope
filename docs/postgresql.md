@@ -13,7 +13,7 @@ a PostgreSQL install. For SQLite maintenance (WAL, auto-vacuum) see the
 - [Requirements](#requirements)
 - [How it works](#how-it-works)
 - [Set up with Docker Compose](#set-up-with-docker-compose)
-- [Set up without Compose](#set-up-without-compose)
+- [Set up without Compose](#set-up-without-compose) (includes the Docker image and Kubernetes)
 - [Moving an existing SQLite install](#moving-an-existing-sqlite-install)
 - [Switching back to SQLite](#switching-back-to-sqlite)
 - [Backups and restore](#backups-and-restore)
@@ -82,7 +82,19 @@ the grants by hand.
 - a `postgres` service (`postgres:17-alpine`, data in the named volume `postgres-data`),
 - a one-shot `postgres-init` service that runs `scripts/postgres-roles.sh` on every `up`
   (it is idempotent, so each start re-applies the roles' passwords and grants),
-- `DB_DRIVER=postgres`, `DB_DSN_INGESTOR` and `DB_DSN_SERVER` on the `prod` container.
+- `DB_DRIVER=postgres`, `DISABLE_INGESTOR=true` and only the reader DSN (`DB_DSN_SERVER`) on
+  `prod`, which now runs Caddy, Mosquitto and the server,
+- an `ingestor` service: the same image running `/app/corescope-ingestor` alone, with the writer
+  DSN. It runs as a non-root uid (`INGESTOR_UID`, default 1000) with the share group added
+  (gid `CORESCOPE_SHARE_GID`, default 61001), read-only, all capabilities dropped. It joins
+  `prod`'s network namespace, so `mqtt://localhost:1883` in `config.json` still reaches the
+  broker, and it mounts the same data directory.
+
+The two containers are the security boundary for the writer credential: it is never in `prod`'s
+environment or files. Because `ingestor` shares `prod`'s network namespace, restarting or
+recreating `prod` alone leaves the ingestor attached to a dead namespace. Use
+`docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d`, which restarts
+both, not `docker restart` on `prod`.
 
 1. Add three secrets to `.env`. Generate each one, for example with `openssl rand -hex 24`;
    the DSNs carry them unencoded, so keep them to URL-safe characters.
@@ -94,8 +106,10 @@ the grants by hand.
    ```
 
    `POSTGRES_PASSWORD` is the `postgres` superuser, used only by `postgres-init`. Optional
-   keys: `CORESCOPE_DB` (default `corescope`), `CORESCOPE_WRITER` (`corescope_writer`) and
-   `CORESCOPE_READER` (`corescope_reader`).
+   keys: `CORESCOPE_DB` (default `corescope`), `CORESCOPE_WRITER` (`corescope_writer`),
+   `CORESCOPE_READER` (`corescope_reader`), `SERVER_RUN_AS_UID` (1001), `INGESTOR_UID` and
+   `INGESTOR_GID` (1000), `CORESCOPE_SHARE_GID` (61001). The two uids must differ from each
+   other and from 0.
 
 2. Start the stack:
 
@@ -106,8 +120,9 @@ the grants by hand.
    The ingestor creates the schema on its first start. Until it exists, the server refuses to
    start (see [Troubleshooting](#troubleshooting)).
 
-3. Do **not** also set `db.driver` or `db.dsn` in `config.json`. The server prefers
-   `config.json` over `DB_DSN`, so it would connect with the wrong DSN.
+3. Do **not** set `db.driver` or `db.dsn` in `config.json`. On PostgreSQL the database is chosen
+   from the container's environment only (`DB_DRIVER`, `DB_DSN*`); a `config.json` that selects
+   PostgreSQL, or contains a `dsn`, is refused at start.
 
 `.env` lives beside the compose file and holds the writer password. Keep it out of git and make
 it readable only by the account that runs Compose (`chmod 600 .env`). Do not put it, or any file
@@ -121,7 +136,9 @@ PostgreSQL is not published to the host; it is reachable only on the Compose net
 ```
 
 Keep the `/app/data` mount. See [In the Docker image](#in-the-docker-image) for what the
-container does with it on PostgreSQL (`/app/data/shared`, the separate server user).
+container does with it on PostgreSQL (`/app/data/shared`, the separate server user). The
+ingestor's I/O statistics for the perf page go through `/app/data/shared/ingestor-stats.json`,
+which the override sets in both containers.
 
 If you already have SQLite data, copy it before the first start; see
 [Moving an existing SQLite install](#moving-an-existing-sqlite-install).
@@ -212,42 +229,79 @@ If you already have SQLite data, copy it before the first start; see
 
 ### In the Docker image
 
-The image runs the server and the ingestor in one container, so it takes two DSNs:
+On PostgreSQL, run the ingestor in its own container, as `docker-compose.postgres.yml` does:
+the writer credential then never reaches the container that runs Caddy and the server.
 
-| Variable | Role | Default |
-|----------|------|---------|
-| `DB_DSN_INGESTOR` | Writer | `DB_DSN` |
-| `DB_DSN_SERVER` | Reader | `DB_DSN` |
+| Container | Settings |
+|-----------|----------|
+| Ingestor (writer) | `DB_DRIVER=postgres`, `DB_DSN` (the writer DSN); run `/app/corescope-ingestor` directly |
+| Server (reader) | `DB_DRIVER=postgres`, `DISABLE_INGESTOR=true`, `DB_DSN_SERVER` (or `DB_DSN`, the reader DSN) |
 
-The entrypoint hands each process its own value as `DB_DSN`, and the server process never
-sees the writer DSN. Set `DB_DRIVER=postgres` alongside them. `DB_DSN`, `DB_DSN_INGESTOR`,
-`DB_DSN_SERVER` and `DB_PATH` must not contain a double quote, a backslash or a newline; the
-container refuses to start otherwise. Use a `postgres://` URL and percent-encode the password.
+With `DISABLE_INGESTOR=true` the container has no ingestor, and refuses to start if
+`DB_DSN_INGESTOR` is set. `DB_DSN`, `DB_DSN_INGESTOR`, `DB_DSN_SERVER` and `DB_PATH` must not
+contain a double quote, a backslash or a newline; use a `postgres://` URL and percent-encode the
+password. Keep DSNs out of `config.json`, version control and shell history; put them in `.env`
+or a secret store.
 
-Keep `DB_DSN_INGESTOR` and `DB_DSN_SERVER` out of `config.json`, your Compose file in version
-control, and shell history. Put them in `.env` or a secret store.
+**Single container (not recommended).** Running both services in one container still works: set
+`DB_DSN_INGESTOR` (writer) and `DB_DSN_SERVER` (reader), each defaulting to `DB_DSN`, and the
+entrypoint gives each process its own as `DB_DSN`. The container logs a warning, and it is not
+the credential boundary: both DSNs are in the container, and Caddy runs as root.
 
-On PostgreSQL the entrypoint also separates the two processes so the server cannot reach the
-writer credential:
+Whichever layout, the entrypoint arranges the following on PostgreSQL:
 
+- Postgres mode is decided from the container's environment only (`DB_DRIVER`, `DB_DSN*`). A
+  `config.json` that selects PostgreSQL while the environment does not is refused, as is a
+  `DB_DRIVER=sqlite` combined with a DSN.
 - The server runs as its own account, `corescope-server`, with the uid in `SERVER_RUN_AS_UID`
-  (default `1001`; set it in the container's environment, not in `.env`). It must not be 0 or
-  the ingestor's uid, or the container refuses to start.
-- Everything the server writes moves to **`/app/data/shared`**: `users.db` (with its `-wal`/`-shm`
-  and `backups/`), `prune-requests/` and `mbcap-snapshot/`. The ingestor's `DB_PATH` is pointed
-  into it too (on PostgreSQL `DB_PATH` only anchors these shared paths). A `users.db` left in
-  `/app/data` by an earlier SQLite run is moved there once, with its backups.
+  (default `1001`; set it in the container's environment, not in `.env`). It must not be 0 (or
+  the ingestor's uid in the single-container layout). Its environment is an allow-list
+  (`docker/server-exec.sh`), so `PG*`, `POSTGRES_*` and other secrets do not reach it. A new
+  environment variable the server must read has to be added to that list.
+- Everything the server writes lives in **`/app/data/shared`**: `users.db` (with its `-wal`/`-shm`
+  and `backups/`), `prune-requests/` and `mbcap-snapshot/`. The directory is group
+  `corescope-share` (gid `CORESCOPE_SHARE_GID`, default 61001, above the range of ordinary
+  users) and sticky. The ingestor's `DB_PATH` points into it (on PostgreSQL `DB_PATH` only
+  anchors these shared paths). A `users.db` left in `/app/data` by an earlier SQLite run is moved
+  there once, with its backups.
 - If you set `userManagement.dbPath`, it must be under `/app/data/shared`; the entrypoint warns
   otherwise, because the server can write only there.
-- `config.json` must not contain a `dsn`: the container refuses to start. It is made
-  group-writable (not `/app/data`) so the geo-filter editor can save into it, and it must be
-  readable by the server user.
+- `config.json` must not contain a `dsn`: the container refuses to start. It is made group
+  `corescope-share`, mode 0660, so the geo-filter editor can save into it and the ingestor can
+  read it; `/app/data` itself is not opened up. It must be readable by the server user.
 - `/app/data/.env` must **not** be readable by the server user (`chmod 600`); the container
   refuses to start otherwise.
-- The empty-database guard (below) still checks your original SQLite file: the entrypoint sets
-  `CORESCOPE_SQLITE_GUARD_PATH` to your `DB_PATH` (default `/app/data/meshcore.db`).
+- The empty-database guard (below) still checks your original SQLite file, through
+  `CORESCOPE_SQLITE_GUARD_PATH` (`/app/data/meshcore.db` in the override; the entrypoint sets it
+  from your `DB_PATH` in the single-container layout).
+- Caddy's admin API is off in the image's Caddyfiles. A custom Caddyfile without a global
+  `admin off` block gets a root-only admin socket and a warning at start; add
+  `{ admin off }` at its top.
 
 SQLite mode is unchanged: one account for both services and the database where it always was.
+
+### Kubernetes
+
+The same rules apply in a cluster. A layout that has been run in production:
+
+- **Ingestor:** its own Deployment, `replicas: 1` and `strategy: Recreate`. There is exactly one
+  writer: the servers follow new rows by "id greater than last seen", and a second ingestor also
+  fights the first over the same MQTT client id. Never scale it.
+- **Server:** a separate Deployment, which can scale horizontally (verified with five read-only
+  replicas). Separate containers and pods are the credential boundary: only the ingestor has the
+  writer DSN (from a Secret), the server has the reader DSN.
+- **Users database:** if user management is enabled, `users.db` is SQLite on the shared volume
+  and several server replicas must not share it. Run one server replica in that case.
+- **Network:** keep PostgreSQL on a `ClusterIP` service only, with a `NetworkPolicy` that admits
+  just the CoreScope pods (and the copy Job below).
+- **Roles:** run `scripts/postgres-roles.sh` inside the PostgreSQL pod over its local socket
+  (`kubectl exec`), taking the passwords from the pod's environment, so they never go on a
+  command line.
+- **Moving data:** run `corescope-migrate copy` as a one-shot Job, with the ingestor scaled to
+  zero first and `PGPASSWORD` from a Secret (password-less URL).
+- **First connection:** a new pod's first connection may be refused for a second or two until
+  the NetworkPolicy controller admits it. The binaries are being changed to retry the first
+  connect for up to 30 seconds; until you run a version that does, let the pod restart.
 
 ## Moving an existing SQLite install
 
@@ -259,8 +313,10 @@ database and verifies the result. It never deletes or overwrites anything.
 
 2. **Stop every writer.** The copy reads one snapshot; rows written after it are not copied.
    The tool prints a warning about this. Stop the ingestor, and the server too for a clean
-   cut-over. With the Docker image the ingestor and server share the one container, so stop it:
-   `docker compose stop prod` (leave the `postgres` service running).
+   cut-over. With the Compose override that is `docker compose -f docker-compose.yml -f
+   docker-compose.postgres.yml stop ingestor prod` (leave `postgres` running). On a first move
+   they have not been started yet; bring up only the database with `up -d postgres
+   postgres-init`.
 
 3. **Copy**, connecting as the writer role:
 
@@ -273,8 +329,7 @@ database and verifies the result. It never deletes or overwrites anything.
 
    **In the Docker image**, `corescope-migrate` is at `/app/corescope-migrate`. Run it in a
    one-off container from the same image, with the data directory mounted and the Compose
-   network, after `docker compose -f docker-compose.yml -f docker-compose.postgres.yml stop prod`
-   and with the `postgres` and `postgres-init` services up:
+   network, with the writers stopped and the `postgres` and `postgres-init` services up:
 
    ```bash
    export PGPASSWORD='<writer-password>'     # the value of CORESCOPE_WRITER_PASSWORD
@@ -339,7 +394,7 @@ database and verifies the result. It never deletes or overwrites anything.
 5. **Switch the configuration** to PostgreSQL as in [Set up with Docker Compose](#set-up-with-docker-compose)
    or [Set up without Compose](#set-up-without-compose).
 
-6. **Start the ingestor, then the server.**
+6. **Start the ingestor, then the server.** With the Compose override, `up -d` starts both.
 
 Keep the old `meshcore.db` file until you are satisfied. The ingestor has a guard for the case
 where you forget the copy: on PostgreSQL it refuses to start on an **empty** PostgreSQL database
@@ -380,7 +435,7 @@ Copy PostgreSQL into a new SQLite file the same way, then set the driver back.
    In the Docker image, run it the same way as in
    [Moving an existing SQLite install](#moving-an-existing-sqlite-install) (`run --rm --no-deps
    --entrypoint /app/corescope-migrate prod copy -from ... -to sqlite:/app/data/meshcore.db`)
-   while the PostgreSQL service is up and `prod` is stopped.
+   while the PostgreSQL service is up and `ingestor` and `prod` are stopped.
 
 3. Remove `db.driver`, `db.dsn`, `DB_DRIVER`, `DB_DSN`, `DB_DSN_INGESTOR` and `DB_DSN_SERVER`
    (or set the driver to `sqlite`), and drop `docker-compose.postgres.yml` from the `-f` list.
@@ -560,15 +615,19 @@ role from `scripts/postgres-roles.sh`.
 Fix the driver name.
 
 **`db.driver=postgres requires db.dsn (or DB_DSN)`**
-Set a DSN. In the Docker image, set `DB_DSN`, or both `DB_DSN_INGESTOR` and `DB_DSN_SERVER`.
+Set a DSN. In the Docker image, set `DB_DSN` (the ingestor container) and `DB_DSN_SERVER` (the
+server container); in the single-container layout, `DB_DSN_INGESTOR` and `DB_DSN_SERVER`.
 
 **`[entrypoint] DB_DSN / DB_DSN_INGESTOR / DB_DSN_SERVER must not contain a double quote, backslash or newline`**
 Use a `postgres://` URL and percent-encode the password.
 
 **Docker image refuses to start on PostgreSQL**
 The entrypoint logs `[entrypoint] postgres: ...` and exits. Typical causes and fixes:
-`config.json sets db.dsn` (remove it; pass `DB_DSN_INGESTOR` and `DB_DSN_SERVER` in the
-environment); `/app/data/.env is readable by corescope-server` (`chmod 600` it);
+`config.json sets db.dsn` (remove it; pass the DSNs in the containers' environment);
+`config.json selects PostgreSQL (db.driver), but the environment does not` (set `DB_DRIVER=postgres`
+and the DSN on the container, and remove `db.driver` from `config.json`);
+`DISABLE_INGESTOR=true but DB_DSN_INGESTOR is set` (the writer DSN must not be given to the
+server container); `DB_DRIVER=... but a DB_DSN* is set` (unset one of them); `/app/data/.env is readable by corescope-server` (`chmod 600` it);
 `config.json is not readable by corescope-server` (make it readable by others or by group
 `corescope-share`); `SERVER_RUN_AS_UID` is not a number, is 0, equals the ingestor's uid, or
 its uid or gid belongs to another account or group (choose another value);
@@ -582,9 +641,20 @@ Expected when `config.json`'s directory is not writable by the server (the Docke
 PostgreSQL): it backed the file up to `config.json.bak` in `/app/data/shared` and rewrote it in
 place. If the save failed midway, copy the `.bak` back.
 
-**The server connects but uses the writer DSN, or the other way round (Compose).**
-Remove `db.driver` and `db.dsn` from `config.json`. The server prefers `config.json` over the
-environment.
+**The ingestor container is up but sees no MQTT broker, or stopped working after `prod` restarted (Compose).**
+The ingestor shares `prod`'s network namespace. Run `docker compose -f docker-compose.yml -f
+docker-compose.postgres.yml up -d` so both are recreated together.
+
+**The server connects with the wrong DSN.**
+Remove `db.driver` and `db.dsn` from `config.json`; the server prefers `config.json` over the
+environment, and on PostgreSQL in the image `config.json` may not select the database.
+
+**The container warns "the ingestor runs in this container, so its writer DSN is in this container too."**
+You are on the single-container layout. Use the Compose override, or run the ingestor as its own
+container and set `DISABLE_INGESTOR=true` on the server's.
+
+**The container warns that `/etc/caddy/Caddyfile` does not disable Caddy's admin API.**
+Add a global block `{ admin off }` at the top of your custom Caddyfile.
 
 ### `corescope-migrate`
 

@@ -258,7 +258,8 @@ CoreScope uses a layered configuration system (highest priority wins):
 | `DB_PATH` | `data/meshcore.db` | SQLite database path. On PostgreSQL it still anchors the directory for shared file queues and `users.db` |
 | `DB_DRIVER` | `sqlite` | `sqlite` or `postgres`. See [Using PostgreSQL](#using-postgresql) |
 | `DB_DSN` | — | PostgreSQL connection URL (when `DB_DRIVER=postgres`) |
-| `DB_DSN_INGESTOR` | `DB_DSN` | Docker image only: the ingestor's (writer) DSN |
+| `DB_DSN_INGESTOR` | `DB_DSN` | Docker image, single-container PostgreSQL only: the ingestor's (writer) DSN |
+| `DISABLE_INGESTOR` | `false` | Docker image: run no ingestor in this container (PostgreSQL Compose runs it as its own `ingestor` service) |
 | `DB_DSN_SERVER` | `DB_DSN` | Docker image only: the server's (read-only) DSN |
 | `DISABLE_MOSQUITTO` | `false` | Skip the internal Mosquitto broker |
 | `DISABLE_CADDY` | `false` | Skip the built-in Caddy reverse proxy |
@@ -656,6 +657,13 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 The ingestor connects as a writer role and the server as a read-only role, which the server
 enforces at startup. Moving an existing SQLite install, running without Compose, backups with
 `pg_dump` and troubleshooting are in the [PostgreSQL guide](postgresql.md).
+
+With the Compose override, PostgreSQL runs as two CoreScope containers: `prod` (Caddy, Mosquitto and the
+server, with only the reader DSN) and `ingestor` (the writer DSN, non-root, read-only, sharing
+`prod`'s network namespace). Use `docker compose ... up -d` rather than restarting `prod` alone, so the
+ingestor follows. Running both in one container still works but logs a warning and is not
+recommended. See [In the Docker image](postgresql.md#in-the-docker-image) and, for clusters,
+[Kubernetes](postgresql.md#kubernetes).
 
 In the Docker image on PostgreSQL the server runs as its own user (`corescope-server`, uid
 `SERVER_RUN_AS_UID`, default 1001) and what it writes (`users.db` and `backups/`, the file

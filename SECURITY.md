@@ -52,11 +52,22 @@ CoreScope stores its measurement data in SQLite or, optionally, PostgreSQL
 - **Statement timeout.** The server caps each PostgreSQL statement
   (`db.statementTimeoutSec`, default 120 seconds, `0` disables) because the
   public API is unauthenticated.
-- **Separate DSNs in Docker.** The image gives the ingestor `DB_DSN_INGESTOR`
-  and the server `DB_DSN_SERVER`, each as its own `DB_DSN`, so the server
-  process never sees the writer credentials. In the Docker image on
-  PostgreSQL the server also runs as a separate unprivileged user from the
-  ingestor (`SERVER_RUN_AS_UID`, default 1001, never root or the ingestor's uid; the entrypoint refuses otherwise), so it cannot read the writer DSN from the ingestor's process environment. In that mode `config.json` must not carry a `dsn`, and the server writes only under `/app/data/shared`.
+- **The boundary is a separate container.** In Docker on PostgreSQL the
+  ingestor runs as its own container (`docker-compose.postgres.yml`), not root,
+  with the writer DSN as its only database credential. The main container
+  (caddy, mosquitto, server) starts with `DISABLE_INGESTOR=true`, has only the
+  read-only DSN (`DB_DSN_SERVER`) and refuses to start if `DB_DSN_INGESTOR` is
+  set. Processes inside one container share supervisord, and caddy runs as
+  root, so running both services in a single container on PostgreSQL is not
+  recommended; it still works and the entrypoint logs a warning. There the
+  server runs as a separate unprivileged user (`SERVER_RUN_AS_UID`, default
+  1001) so it cannot read the ingestor's environment.
+- **Container configuration.** The container picks its database from its
+  environment, never from `config.json`, and refuses a `config.json` that
+  carries a `dsn`. Apart from `config.json` (the geo-filter editor saves into it), the server writes only under `/app/data/shared`.
+- **Caddy admin API off.** The image Caddyfiles set `admin off`, so a local
+  process can no longer reconfigure the reverse proxy through its admin
+  endpoint. This applies to SQLite deployments too.
 - **Redaction.** `corescope-migrate` and the other tools print connection
   URLs with the password removed. Do not rely on that for anything you paste
   elsewhere without checking it.

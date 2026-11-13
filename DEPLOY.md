@@ -63,8 +63,8 @@ All persistent data lives in `/app/data`:
 - `config.json` — custom config (optional)
 - `theme.json` — custom theme (optional)
 
-**PostgreSQL:** the connection strings (`DB_DSN_INGESTOR`, the writer's, and `DB_DSN_SERVER`)
-contain passwords. Keep them in a `.env` or secret store with mode `600`, never in git, in
+**PostgreSQL:** the connection strings (the writer's, given to the separate `ingestor` container, and
+`DB_DSN_SERVER`, the reader's) contain passwords. Keep them in a `.env` or secret store with mode `600`, never in git, in
 `config.json` (which must not contain a `dsn` in the image), or in `/app/data`
 (`/app/data/.env` must be mode `600`). On PostgreSQL the image runs the server as a separate
 user and keeps what it writes (`users.db`, `backups/`, queues) in `/app/data/shared`; see
