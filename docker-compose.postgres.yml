@@ -10,23 +10,34 @@
 # separate DSNs, DB_DSN_INGESTOR and DB_DSN_SERVER; docker/entrypoint-go.sh
 # hands each process its own as DB_DSN.
 #
-# Required in .env (generate each with e.g. `openssl rand -hex 24`; the DSNs
+# On PostgreSQL the entrypoint also runs the server as its own account,
+# corescope-server (uid SERVER_RUN_AS_UID, default 1001; never 0 or the
+# ingestor's uid), so it cannot read the writer DSN from another process's
+# environment. What it writes moves to <data dir>/shared (users.db, its
+# backups, the prune and multibyte queues). In the data directory, config.json
+# must be readable by that uid, and .env, if any, must not be (chmod 600);
+# the entrypoint refuses to start otherwise. See docker/entrypoint-go.sh.
+#
+# Required in .env next to this file (generate each with e.g. `openssl rand -hex 24`; the DSNs
 # below carry them unencoded, so keep them to URL-safe characters):
 #   POSTGRES_PASSWORD           the postgres superuser, used only by postgres-init
 #   CORESCOPE_WRITER_PASSWORD   the ingestor's role
 #   CORESCOPE_READER_PASSWORD   the server's role
 # Optional: CORESCOPE_DB (corescope), CORESCOPE_WRITER (corescope_writer),
-# CORESCOPE_READER (corescope_reader).
+# CORESCOPE_READER (corescope_reader), SERVER_RUN_AS_UID (1001).
 #
 # Do not set db.driver or db.dsn in config.json as well: the server prefers
-# config.json over DB_DSN, and would then connect with the ingestor's DSN.
+# config.json over DB_DSN, and would then connect with the ingestor's DSN
+# (the entrypoint refuses a db.dsn in config.json for that reason).
 #
 # Postgres is reachable only on the compose network. To reach it from the host
 # (psql, backups), add to the postgres service:  ports: ["127.0.0.1:5432:5432"]
 #
 # Existing SQLite data is not moved by this file. Copy it once, before the
-# first start, with
-#   corescope-migrate copy -from sqlite:<path to meshcore.db> -to <writer URL>
+# first start, giving the password through the environment (or ~/.pgpass),
+# never in the URL, where `ps` would show it:
+#   PGPASSWORD=<writer password> corescope-migrate copy \
+#     -from sqlite:<path to meshcore.db> -to postgres://corescope_writer@<host>:5432/corescope
 
 x-corescope-db: &corescope-db
   CORESCOPE_DB: ${CORESCOPE_DB:-corescope}
@@ -77,6 +88,7 @@ services:
         condition: service_completed_successfully
     environment:
       - DB_DRIVER=postgres
+      - SERVER_RUN_AS_UID=${SERVER_RUN_AS_UID:-1001}
       - DB_DSN_INGESTOR=postgres://${CORESCOPE_WRITER:-corescope_writer}:${CORESCOPE_WRITER_PASSWORD:?set CORESCOPE_WRITER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
       - DB_DSN_SERVER=postgres://${CORESCOPE_READER:-corescope_reader}:${CORESCOPE_READER_PASSWORD:?set CORESCOPE_READER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
 

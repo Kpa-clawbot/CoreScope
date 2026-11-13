@@ -615,7 +615,10 @@ jobs:
       - name: Provision Postgres and copy the fixture into it
         if: matrix.backend == 'postgres'
         env:
-          PG_ADMIN_URL: postgres://corescope:corescope@localhost:5432/corescope_test?sslmode=disable
+          # Passwords travel in the environment, never in a URL on a command
+          # line: the roles script refuses one in PG_ADMIN_URL.
+          PG_ADMIN_URL: postgres://corescope@localhost:5432/corescope_test?sslmode=disable
+          PGPASSWORD: corescope
           CORESCOPE_DB: corescope_e2e
           CORESCOPE_WRITER: corescope_writer
           CORESCOPE_WRITER_PASSWORD: e2e-writer-pw
@@ -624,16 +627,16 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --network host \
-            -e PG_ADMIN_URL -e CORESCOPE_DB \
+            -e PG_ADMIN_URL -e PGPASSWORD -e CORESCOPE_DB \
             -e CORESCOPE_WRITER -e CORESCOPE_WRITER_PASSWORD \
             -e CORESCOPE_READER -e CORESCOPE_READER_PASSWORD \
             -v "$PWD/scripts/postgres-roles.sh:/postgres-roles.sh:ro" \
             postgres:17-alpine sh /postgres-roles.sh
           # The fixture is prepared with the legacy `-db` migration, not by a
           # running ingestor, so its async backfills never ran; opt in knowingly.
-          ./corescope-migrate copy -allow-pending-migrations \
+          PGPASSWORD="$CORESCOPE_WRITER_PASSWORD" ./corescope-migrate copy -allow-pending-migrations \
             -from sqlite:test-fixtures/e2e-fixture.db \
-            -to "postgres://${CORESCOPE_WRITER}:${CORESCOPE_WRITER_PASSWORD}@localhost:5432/${CORESCOPE_DB}?sslmode=disable"
+            -to "postgres://${CORESCOPE_WRITER}@localhost:5432/${CORESCOPE_DB}?sslmode=disable"
           rm -rf /tmp/cs-pg && mkdir -p /tmp/cs-pg
           cat > /tmp/cs-pg/config.json <<JSON
           {
