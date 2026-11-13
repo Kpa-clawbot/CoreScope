@@ -388,7 +388,7 @@ func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
 		return fmt.Errorf("open %s: %w", to.display, err)
 	}
 	defer admin.Close()
-	if err := admin.PingContext(ctx); err != nil {
+	if err := pingDB(ctx, admin, postgresBackend); err != nil {
 		return fmt.Errorf("connect to %s: %w", to.display, err)
 	}
 	if err := refuseForeignSchema(ctx, admin, to); err != nil {

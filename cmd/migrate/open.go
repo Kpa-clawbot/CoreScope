@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/dbschema/pgschema"
@@ -35,7 +36,7 @@ func openReadOnly(ctx context.Context, ref dbRef) (*sql.DB, error) {
 		return nil, fmt.Errorf("open %s: %w", ref.display, err)
 	}
 	db.SetMaxOpenConns(1)
-	if err := db.PingContext(ctx); err != nil {
+	if err := pingDB(ctx, db, ref.kind); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("connect to %s: %w", ref.display, err)
 	}
@@ -163,4 +164,18 @@ func openSource(ctx context.Context, ref dbRef, allowPending bool, lg *log.Logge
 		}
 		return nil
 	})
+}
+
+// pgConnectWait bounds how long a first connect rides out a refused or
+// unresolvable endpoint (a new pod's NetworkPolicy not admitting it yet).
+const pgConnectWait = 30 * time.Second
+
+// pingDB pings db; for Postgres it waits out transient connection errors.
+func pingDB(ctx context.Context, db *sql.DB, kind backend) error {
+	err := db.PingContext(ctx)
+	if kind != postgresBackend || err == nil || !dbx.IsTransientConnError(err) {
+		return err
+	}
+	log.Printf("postgres not reachable yet, retrying for up to %s", pgConnectWait)
+	return dbx.PingWithRetry(ctx, db, pgConnectWait)
 }

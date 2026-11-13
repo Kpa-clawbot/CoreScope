@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/dbschema/pgschema"
@@ -66,7 +67,7 @@ func openPostgresStoreDB(db *sql.DB, queuePath string, sampleIntervalSec int) (*
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	if err := db.Ping(); err != nil {
+	if err := pingPostgres(db); err != nil {
 		return nil, fmt.Errorf("pinging postgres: %w", err)
 	}
 	if err := pgschema.Apply(context.Background(), db, log.Printf); err != nil {
@@ -270,4 +271,17 @@ func dsnSecrets(dsn string) []string {
 		}
 	}
 	return out
+}
+
+// pgConnectWait bounds how long a first connect rides out a refused or
+// unresolvable endpoint (a new pod's NetworkPolicy not admitting it yet).
+const pgConnectWait = 30 * time.Second
+
+func pingPostgres(db *sql.DB) error {
+	err := db.Ping()
+	if err == nil || !dbx.IsTransientConnError(err) {
+		return err
+	}
+	log.Printf("postgres not reachable yet, retrying for up to %s", pgConnectWait)
+	return dbx.PingWithRetry(context.Background(), db, pgConnectWait)
 }

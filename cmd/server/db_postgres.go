@@ -90,16 +90,21 @@ func OpenPostgresDBWithStatementTimeout(dsn string, statementTimeoutSec int) (*D
 	conn.SetMaxOpenConns(8)
 	conn.SetMaxIdleConns(4)
 
-	ctx, cancel := context.WithTimeout(context.Background(), pgOpenTimeout)
-	defer cancel()
 	fail := func(format string, err error) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf(format, scrub(err))
 	}
 
-	if err := conn.PingContext(ctx); err != nil {
+	// The first connect gets its own budget so waiting for the network does
+	// not eat into the checks below.
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), pgConnectWait+pgOpenTimeout)
+	err = pingPostgres(pingCtx, conn)
+	pingCancel()
+	if err != nil {
 		return fail("ping failed: %w", err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), pgOpenTimeout)
+	defer cancel()
 	if err := pgschema.AssertReady(ctx, conn); err != nil {
 		return fail("%w", err)
 	}
@@ -683,4 +688,17 @@ func (db *DB) queryPostgresDBStats() (SqliteStats, error) {
 		return result, fmt.Errorf("row estimates: %w", err)
 	}
 	return result, nil
+}
+
+// pgConnectWait bounds how long a first connect rides out a refused or
+// unresolvable endpoint (a new pod's NetworkPolicy not admitting it yet).
+const pgConnectWait = 30 * time.Second
+
+func pingPostgres(ctx context.Context, conn *sql.DB) error {
+	err := conn.PingContext(ctx)
+	if err == nil || !dbx.IsTransientConnError(err) {
+		return err
+	}
+	log.Printf("[db] postgres not reachable yet, retrying for up to %s", pgConnectWait)
+	return dbx.PingWithRetry(ctx, conn, pgConnectWait)
 }

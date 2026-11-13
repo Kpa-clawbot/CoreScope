@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -195,7 +196,7 @@ func openDB(arg string) (*sql.DB, error) {
 	if err != nil {
 		return nil, redactErr(err, u)
 	}
-	if err := db.Ping(); err != nil {
+	if err := pingPostgres(db); err != nil {
 		db.Close()
 		return nil, redactErr(err, u)
 	}
@@ -548,4 +549,17 @@ init();
 </html>`)
 
 	return []byte(b.String())
+}
+
+// pgConnectWait bounds how long the first connect rides out a refused or
+// unresolvable endpoint (a new pod's NetworkPolicy not admitting it yet).
+const pgConnectWait = 30 * time.Second
+
+func pingPostgres(db *sql.DB) error {
+	err := db.Ping()
+	if err == nil || !dbx.IsTransientConnError(err) {
+		return err
+	}
+	log.Printf("postgres not reachable yet, retrying for up to %s", pgConnectWait)
+	return dbx.PingWithRetry(context.Background(), db, pgConnectWait)
 }
