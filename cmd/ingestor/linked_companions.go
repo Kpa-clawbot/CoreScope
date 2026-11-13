@@ -42,7 +42,8 @@ type linkedCompanionSet struct {
 
 	mu       sync.Mutex  // guards everything below
 	db       *sql.DB     // opened lazily, read-only
-	pgDB     *sql.DB     // PostgreSQL: the store's connection; db and path are unused
+	pgDB     *sql.DB     // PostgreSQL: the store's connection (accountsInPostgres picks the source)
+	fromFile bool        // with pgDB: the last read found no accounts schema and read users.db
 	lastRead time.Time   // last read attempt, for the miss gap
 	reads    int         // read attempts (tests)
 	failing  bool        // the last read failed; logged once per failure streak
@@ -134,11 +135,12 @@ func (s *linkedCompanionSet) readLocked() {
 }
 
 // usePostgres reads corescope_users.companion_links through db (the
-// ingestor's store) instead of users.db. db stays the caller's.
+// ingestor's store) while that schema exists, else users.db. db stays the
+// caller's.
 func (s *linkedCompanionSet) usePostgres(db *sql.DB) { s.pgDB = db }
 
 func (s *linkedCompanionSet) source() string {
-	if s.pgDB != nil {
+	if s.pgDB != nil && !s.fromFile {
 		return usersPGSchema + ".companion_links"
 	}
 	return s.path
@@ -146,7 +148,14 @@ func (s *linkedCompanionSet) source() string {
 
 func (s *linkedCompanionSet) query() ([]string, error) {
 	if s.pgDB != nil {
-		return queryUsersPG(s.pgDB, pgUsersQuery(linkedCompanionsQuery, "companion_links"))
+		inPG, err := accountsInPostgres(s.pgDB)
+		if err != nil {
+			return nil, err
+		}
+		s.fromFile = !inPG
+		if inPG {
+			return queryUsersPG(s.pgDB, pgUsersQuery(linkedCompanionsQuery, "companion_links"))
+		}
 	}
 	if s.db == nil {
 		if _, err := os.Stat(s.path); err != nil {
@@ -219,11 +228,12 @@ func newLinkedCompanionFilter(cfg *Config, pgDB *sql.DB) *linkedCompanionSet {
 	if pgDB != nil {
 		s.usePostgres(pgDB)
 	}
-	shown := s.source()
-	if pgDB == nil {
-		if abs, err := filepath.Abs(shown); err == nil {
-			shown = abs
-		}
+	shown := s.path
+	if abs, err := filepath.Abs(shown); err == nil {
+		shown = abs
+	}
+	if pgDB != nil {
+		shown = usersPGSchema + ".companion_links while that schema exists (accounts in PostgreSQL), else " + shown
 	}
 	log.Printf("[companions] only linked companions may publish client data; reading companion_links from %s", shown)
 	s.refresh()

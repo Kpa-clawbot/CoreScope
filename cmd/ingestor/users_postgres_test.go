@@ -221,8 +221,8 @@ func TestLinkedCompanionSetPostgresMissingSchemaPassesAndLogsOnce(t *testing.T) 
 	if !s.Allow(testUnlinkedPK) {
 		t.Fatal("an unreadable accounts schema must pass data, as a missing users.db does")
 	}
-	// Postgres reports a missing schema as a missing relation, so this is the
-	// once-only "no companion_links table" warning.
+	// No accounts schema means users.db, which is missing here too: the
+	// once-per-streak "unavailable" line, as on SQLite.
 	if n := strings.Count(buf.String(), "has no companion_links table") + strings.Count(buf.String(), "linked companions unavailable"); n != 1 {
 		t.Fatalf("logged %d times; want once:\n%s", n, buf.String())
 	}
@@ -255,5 +255,56 @@ func TestLinkedCompanionSetPostgresIsReadOnly(t *testing.T) {
 	s.refresh()
 	if !s.Allow(testCompanionPK) {
 		t.Fatal("reader failed")
+	}
+}
+
+// Postgres measurement data with the accounts still in users.db (one server
+// replica with a volume): no accounts schema, so the approved channels come
+// from the file, as before accounts could move to PostgreSQL.
+func TestChannelKeySetPostgresNoAccountsSchemaReadsUsersDB(t *testing.T) {
+	db, _ := usersPGSchemaForTest(t, false)
+	path := filepath.Join(t.TempDir(), "users.db")
+	writeUsersDB(t, path, testProposal{"#mycity", "approved", 1})
+	s := newChannelKeySet(configuredKeys(), path, 128)
+	t.Cleanup(s.Close)
+	s.usePostgres(db)
+	s.refresh()
+	if _, ok := s.Snapshot()["#mycity"]; !ok || len(s.Snapshot()) != 3 {
+		t.Fatalf("snapshot = %v; want the configured keys plus #mycity from users.db", s.Snapshot())
+	}
+	if s.source() != path {
+		t.Fatalf("source = %q; want %q", s.source(), path)
+	}
+}
+
+// Once the accounts schema exists, it is the source and users.db is ignored.
+func TestChannelKeySetPostgresAccountsSchemaWinsOverUsersDB(t *testing.T) {
+	db, schema := usersPGSchemaForTest(t, true)
+	pgSetProposals(t, db, schema, testProposal{"#othercity", "approved", 1})
+	path := filepath.Join(t.TempDir(), "users.db")
+	writeUsersDB(t, path, testProposal{"#mycity", "approved", 1})
+	s := newChannelKeySet(configuredKeys(), path, 128)
+	t.Cleanup(s.Close)
+	s.usePostgres(db)
+	s.refresh()
+	snap := s.Snapshot()
+	if _, ok := snap["#othercity"]; !ok {
+		t.Fatalf("snapshot = %v; want #othercity from %s", snap, schema)
+	}
+	if _, ok := snap["#mycity"]; ok {
+		t.Fatalf("snapshot = %v; users.db must be ignored while the accounts schema exists", snap)
+	}
+}
+
+func TestLinkedCompanionSetPostgresNoAccountsSchemaReadsUsersDB(t *testing.T) {
+	db, _ := usersPGSchemaForTest(t, false)
+	path := filepath.Join(t.TempDir(), "users.db")
+	setLinks(t, path, testCompanionPK)
+	s := newLinkedCompanionSet(path)
+	t.Cleanup(s.Close)
+	s.usePostgres(db)
+	s.refresh()
+	if !s.Allow(testCompanionPK) || s.Allow(testUnlinkedPK) {
+		t.Fatal("with no accounts schema the links must come from users.db")
 	}
 }

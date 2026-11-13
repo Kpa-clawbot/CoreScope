@@ -6,10 +6,14 @@ import (
 	"strings"
 )
 
-// On PostgreSQL the accounts store is the corescope_users schema of the same
-// database (internal/users.PostgresSchema). The ingestor reads proposals and
-// companion_links there through its own connection, which holds only SELECT
-// through the corescope_users_reader group. Like the SQLite path it never
+// On PostgreSQL the accounts may be in the corescope_users schema of the same
+// database (internal/users.PostgresSchema, userManagement.dsn on the server)
+// or still in users.db (a single server replica with a volume). The ingestor
+// cannot see the server's choice (the accounts DSN never reaches it), so it
+// asks the database on every read: while the schema exists it reads
+// proposals and companion_links there through its own connection, which
+// holds only SELECT through the corescope_users_reader group; while it does
+// not, it reads users.db exactly as on SQLite. Like the SQLite path it never
 // imports internal/users; TestUsersPGSchemaMatchesUsersPackage pins the name.
 
 // usersPGSchema is the accounts schema. A variable only so a test can point
@@ -20,6 +24,17 @@ var usersPGSchema = "corescope_users"
 // pgUsersQuery qualifies the table named after FROM with the accounts schema.
 func pgUsersQuery(query, table string) string {
 	return strings.Replace(query, "FROM "+table, `FROM "`+usersPGSchema+`".`+table, 1)
+}
+
+// accountsInPostgres reports whether the accounts schema exists in db. The
+// schema is created only by an operator opting accounts into PostgreSQL
+// (scripts/postgres-roles.sh with an accounts password, or the server's
+// first start with userManagement.dsn), so its absence means users.db.
+// pg_namespace is readable by every role.
+func accountsInPostgres(db *sql.DB) (bool, error) {
+	var ok bool
+	err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = ?)`, usersPGSchema).Scan(&ok)
+	return ok, err
 }
 
 // queryUsersPG runs query in a READ ONLY transaction on db and scans one

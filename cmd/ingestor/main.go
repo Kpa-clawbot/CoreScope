@@ -137,10 +137,9 @@ func main() {
 	}
 	if cfg.ApprovedChannelsEnabled() {
 		if usersPG != nil {
-			log.Printf("[proposals] reading approved channels from %s.proposals", usersPGSchema)
-		} else {
-			logApprovedChannelsSource(cfg.UsersDBPath())
+			log.Printf("[proposals] reading approved channels from %s.proposals while that schema exists (accounts in PostgreSQL), else from users.db:", usersPGSchema)
 		}
+		logApprovedChannelsSource(cfg.UsersDBPath())
 		keySet.refresh()
 	}
 

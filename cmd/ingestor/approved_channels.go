@@ -37,7 +37,8 @@ type channelKeySet struct {
 	cur        atomic.Pointer[map[string]string]
 
 	db       *sql.DB // opened lazily, read-only
-	pgDB     *sql.DB // PostgreSQL: the store's connection; set, db and path are unused
+	pgDB     *sql.DB // PostgreSQL: the store's connection (accountsInPostgres picks the source)
+	fromFile bool    // with pgDB: the last read found no accounts schema and read users.db
 	failing  bool    // the last read failed; logged once per failure streak
 	approved int     // approved keys in the current snapshot
 }
@@ -83,12 +84,20 @@ func (s *channelKeySet) refresh() {
 }
 
 // usePostgres reads the approved names from corescope_users.proposals through
-// db (the ingestor's store) instead of users.db. db stays the caller's.
+// db (the ingestor's store) while that schema exists, else from users.db.
+// db stays the caller's.
 func (s *channelKeySet) usePostgres(db *sql.DB) { s.pgDB = db }
 
 func (s *channelKeySet) readApproved() ([]string, error) {
 	if s.pgDB != nil {
-		return queryUsersPG(s.pgDB, pgUsersQuery(approvedChannelsQuery, "proposals"), s.max)
+		inPG, err := accountsInPostgres(s.pgDB)
+		if err != nil {
+			return nil, err
+		}
+		s.fromFile = !inPG
+		if inPG {
+			return queryUsersPG(s.pgDB, pgUsersQuery(approvedChannelsQuery, "proposals"), s.max)
+		}
 	}
 	if s.db == nil {
 		if _, err := os.Stat(s.path); err != nil {
@@ -179,7 +188,7 @@ func mergeApprovedKeys(configured map[string]string, names []string) (map[string
 }
 
 func (s *channelKeySet) source() string {
-	if s.pgDB != nil {
+	if s.pgDB != nil && !s.fromFile {
 		return usersPGSchema + ".proposals"
 	}
 	return s.path
