@@ -963,7 +963,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 				Sensors:    counts["sensors"],
 			},
 			SignatureDrops:        s.db.GetSignatureDropCount(),
-			HashMigrationComplete: s.store != nil && s.store.hashMigrationComplete.Load(),
+			HashMigrationComplete: s.db.hashMigrationComplete(),
 
 			TrackedMB:     mem.StoreDataMB, // deprecated alias
 			StoreDataMB:   mem.StoreDataMB,

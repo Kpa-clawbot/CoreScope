@@ -594,9 +594,6 @@ func main() {
 	// process. The server reads the results via the periodic
 	// recompNeighborGraph / fetchResolvedPathForObs paths.
 
-	// Migrate old content hashes in background (one-time, idempotent).
-	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)
-
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("[server] %v", err)
 	}

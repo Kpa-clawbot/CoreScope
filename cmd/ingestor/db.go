@@ -232,6 +232,22 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		log.Printf("[migration/async] scheduling tx_last_seen_backfill_v1 failed: %v", err)
 	}
 
+	// #1856: rewrite content hashes written before #787 (full header byte)
+	// to the payload-type-bits formula, merging rows that then collide. Only
+	// rows present at boot can be stale — this process writes current hashes
+	// — so the range is fixed here, before ingest starts.
+	// PREFLIGHT: async=true reason="id-cursor scan of transmissions (86k+ rows in prod) in 5000-row batches, writer lock released between batches; only pre-#787 rows are written"
+	var hashMigrateMaxID int64
+	if err := db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM transmissions`).Scan(&hashMigrateMaxID); err != nil {
+		log.Printf("[migration/async] %s not scheduled (retried next boot): read max id: %v", contentHashMigrationName, err)
+	} else if err := s.RunAsyncMigration(context.Background(), contentHashMigrationName,
+		func(ctx context.Context, _ *sql.DB) error {
+			_, _, err := s.migrateContentHashes(ctx, contentHashMigrationBatch, hashMigrateMaxID)
+			return err
+		}); err != nil {
+		log.Printf("[migration/async] scheduling %s failed: %v", contentHashMigrationName, err)
+	}
+
 	// A missing/failed completion lookup leaves preservation enabled. This
 	// lifecycle state is restored on restart, independently of main's startup.
 	var evidenceStatus string

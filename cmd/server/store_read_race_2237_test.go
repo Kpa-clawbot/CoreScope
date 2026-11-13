@@ -218,8 +218,9 @@ func TestStatsTrackedBytesRace2237(t *testing.T) {
 	})
 }
 
-// The content-hash migration (hash_migrate.go) rewrites tx.Hash under
-// s.mu.Lock while the observer analytics handler builds its response.
+// A writer rewriting tx.Hash under s.mu.Lock (the server-side content-hash
+// migration did this until #1856 moved it to the ingestor) must not race the
+// observer analytics handler building its response.
 func TestObserverAnalyticsHashMigrationRace2237(t *testing.T) {
 	s := makeRaceStore2237(20)
 	srv := &Server{store: s}
