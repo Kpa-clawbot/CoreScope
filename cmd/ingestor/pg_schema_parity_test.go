@@ -21,8 +21,11 @@ import (
 // uniqueness, partial-ness) and packets_v columns. A schema change on the
 // SQLite side that is not mirrored in a new pgschema migration fails here.
 //
-// Out of scope: the opt-in observation_hops* tables (SQLite-only for now) and
-// Postgres's own schema_version bookkeeping table.
+// Out of scope: the opt-in observation_hops* tables (SQLite-only for now),
+// Postgres's own schema_version bookkeeping table, and the Postgres-only
+// corescope_control schema (server -> ingestor requests; SQLite keeps file
+// queues instead) — describePostgres reads current_schema() only, so it never
+// sees that schema.
 func TestPgSchemaParity(t *testing.T) {
 	pg := dbxtest.OpenPostgres(t)
 	if err := pgschema.Apply(context.Background(), pg, t.Logf); err != nil {

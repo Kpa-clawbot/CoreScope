@@ -149,6 +149,13 @@ CREATE TABLE inactive_nodes (
 			foreign_advert INTEGER DEFAULT 0
 		, default_scope TEXT DEFAULT NULL, configured_scope TEXT DEFAULT NULL, configured_scope_at TEXT DEFAULT NULL, multibyte_sup INTEGER NOT NULL DEFAULT 0, multibyte_evidence TEXT);
 
+-- table ingestor_stats
+CREATE TABLE ingestor_stats (
+			id         INTEGER PRIMARY KEY CHECK (id = 1),
+			updated_at TEXT NOT NULL,
+			payload    TEXT NOT NULL
+		);
+
 -- table key_backfill_done
 CREATE TABLE key_backfill_done (
 			kind TEXT NOT NULL,

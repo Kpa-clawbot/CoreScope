@@ -130,11 +130,11 @@ func TestApplyCreatesSchemaAndIsIdempotent(t *testing.T) {
 	if err := Apply(ctx, db, rec.logf); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if got := versionRows(t, db); len(got) != 1 || got[0] != 1 {
-		t.Fatalf("schema_version = %v, want [1]", got)
+	if got := versionRows(t, db); len(got) != LatestVersion || got[len(got)-1] != LatestVersion {
+		t.Fatalf("schema_version = %v, want 1..%d", got, LatestVersion)
 	}
 	var appliedAt string
-	if err := db.QueryRow(`SELECT applied_at FROM schema_version`).Scan(&appliedAt); err != nil {
+	if err := db.QueryRow(`SELECT applied_at FROM schema_version WHERE version = 1`).Scan(&appliedAt); err != nil {
 		t.Fatal(err)
 	}
 	if !regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$`).MatchString(appliedAt) {
@@ -146,8 +146,8 @@ func TestApplyCreatesSchemaAndIsIdempotent(t *testing.T) {
 		WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 26 { // 25 SQLite tables + schema_version
-		t.Errorf("base tables = %d, want 26", tables)
+	if tables != 27 { // 26 SQLite tables + schema_version
+		t.Errorf("base tables = %d, want 27", tables)
 	}
 	for _, rel := range []string{"packets_v", "idx_observations_dedup", "idx_observers_iata_norm", "idx_tx_last_seen_zero"} {
 		if !relationExists(t, db, rel) {
@@ -157,8 +157,8 @@ func TestApplyCreatesSchemaAndIsIdempotent(t *testing.T) {
 	if err := AssertReady(ctx, db); err != nil {
 		t.Fatalf("AssertReady after Apply: %v", err)
 	}
-	if n := rec.count("applied migration"); n != 1 {
-		t.Fatalf("first Apply logged %d applications, want 1", n)
+	if n := rec.count("applied migration"); n != LatestVersion {
+		t.Fatalf("first Apply logged %d applications, want %d", n, LatestVersion)
 	}
 
 	var again logRecorder
@@ -168,8 +168,8 @@ func TestApplyCreatesSchemaAndIsIdempotent(t *testing.T) {
 	if n := again.count("applied migration"); n != 0 {
 		t.Fatalf("second Apply logged %d applications, want 0", n)
 	}
-	if got := versionRows(t, db); len(got) != 1 {
-		t.Fatalf("schema_version after second Apply = %v, want [1]", got)
+	if got := versionRows(t, db); len(got) != LatestVersion {
+		t.Fatalf("schema_version after second Apply = %v, want 1..%d", got, LatestVersion)
 	}
 }
 
@@ -210,11 +210,11 @@ func TestApplyConcurrentAppliesOnce(t *testing.T) {
 			t.Errorf("Apply #%d: %v", i, err)
 		}
 	}
-	if n := rec.count("applied migration"); n != 1 {
-		t.Errorf("concurrent Apply logged %d applications, want exactly 1", n)
+	if n := rec.count("applied migration"); n != LatestVersion {
+		t.Errorf("concurrent Apply logged %d applications, want exactly %d", n, LatestVersion)
 	}
-	if got := versionRows(t, db); len(got) != 1 || got[0] != 1 {
-		t.Errorf("schema_version = %v, want [1]", got)
+	if got := versionRows(t, db); len(got) != LatestVersion {
+		t.Errorf("schema_version = %v, want 1..%d", got, LatestVersion)
 	}
 }
 

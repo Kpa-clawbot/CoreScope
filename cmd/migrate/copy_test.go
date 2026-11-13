@@ -121,6 +121,7 @@ func newSource(t testing.TB, path string, migrations []string) {
 	mustExec(t, db, `INSERT INTO key_backfill_state (kind, run_fp, cursor, upper, rewritten, started_at) VALUES ('channel', 'fp1', 10, 20, 3, 1740823200)`)
 	mustExec(t, db, `INSERT INTO key_backfill_done (kind, key_fp, done_at) VALUES ('channel', 'b', 1), ('channel', 'a', 2), ('region', 'a', 3)`)
 	mustExec(t, db, `INSERT INTO scope_match_totals (id, since_unix, unique_matches, explicit_over_derived, ambiguous, none_matches, updated_unix) VALUES (1, 1, 2, 3, 4, 5, 6)`)
+	mustExec(t, db, `INSERT INTO ingestor_stats (id, updated_at, payload) VALUES (1, '2026-11-13T03:00:00Z', '{"sampledAt":"2026-11-13T03:00:00Z","tx":1}')`)
 
 	// Nodes (text primary keys, NULLs, unicode).
 	for _, tbl := range []string{"nodes", "inactive_nodes"} {

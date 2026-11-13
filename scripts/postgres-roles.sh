@@ -1,6 +1,7 @@
 #!/bin/sh
 # scripts/postgres-roles.sh — provisions the two PostgreSQL roles CoreScope
-# runs with, and the database they share. Used by CI, by
+# runs with, the group role that lets the server write its requests, and the
+# database they share. Used by CI, by
 # docker-compose.postgres.yml and by the deployment docs; keep it the one
 # place that knows what the roles need.
 #
@@ -10,10 +11,19 @@
 #   reader  the server's role. CONNECT on the database, USAGE on schema public
 #           and SELECT on its tables, now and — through default privileges on
 #           the writer's future tables — after every migration. Nothing else:
-#           no role memberships, no TEMPORARY, at most 32 connections, and
-#           statement_timeout 120s / idle_in_transaction_session_timeout 60s.
-#           The server refuses to start if its role may INSERT, UPDATE, DELETE
-#           or TRUNCATE any table in its schema.
+#           one role membership (corescope_control_client, below), no
+#           TEMPORARY, at most 32 connections, and statement_timeout 120s /
+#           idle_in_transaction_session_timeout 60s. The server refuses to
+#           start if its role may write any table beyond what that group holds.
+#   corescope_control_client
+#           a fixed-name NOLOGIN group role, granted to the reader (INHERIT,
+#           no SET, no ADMIN): USAGE on schema corescope_control, SELECT,
+#           INSERT on its prune_requests and mbcap_snapshots tables and SELECT
+#           on prune_results — the server's requests to the ingestor (pgschema
+#           migration 0002). The ingestor grants those at every start
+#           (pgschema.EnsureControlGrants) once this role exists; this script
+#           grants the same when the tables already exist, so either may run
+#           first. Shared by every CoreScope database on the cluster.
 #
 # Inputs (environment):
 #   PG_ADMIN_URL               superuser connection (URL or conninfo), required.
@@ -34,15 +44,16 @@
 # =all records them in its log, as it would for any client.
 #
 # Ownership: the script marks each role it sets up with a comment naming it the
-# CoreScope writer or reader. Without CORESCOPE_ADOPT=1 it refuses to touch an
+# CoreScope writer, reader or control client group. Without CORESCOPE_ADOPT=1 it refuses to touch an
 # existing role that lacks its mark, or an existing database not owned by the
 # writer, so it never resets another application's password or takes over its
 # database. It never touches a superuser, even with CORESCOPE_ADOPT=1.
 #
 # Idempotent: a second run creates nothing, resets both passwords to the
 # given values, and re-applies every grant and limit (revoking any write
-# privilege or role membership the reader has since been given). It never
-# drops anything.
+# privilege or role membership the reader or the group role has since been
+# given, keeping the reader's membership of the group). It never drops
+# anything.
 #
 # Output (stdout): the two connection URLs, without passwords:
 #   CORESCOPE_WRITER_URL=postgres://<writer>@<host>:<port>/<db>
@@ -124,6 +135,11 @@ valid_name CORESCOPE_WRITER "$CORESCOPE_WRITER"
 valid_name CORESCOPE_READER "$CORESCOPE_READER"
 [ "$CORESCOPE_WRITER" != "$CORESCOPE_READER" ] ||
   die "CORESCOPE_WRITER and CORESCOPE_READER must be different roles"
+# Fixed: pgschema.EnsureControlGrants and the server know it by this name.
+CONTROL_ROLE=corescope_control_client
+for _r in "$CORESCOPE_WRITER" "$CORESCOPE_READER"; do
+  [ "$_r" != "$CONTROL_ROLE" ] || die "$CONTROL_ROLE is reserved for the control group role"
+done
 [ -n "${CORESCOPE_WRITER_PASSWORD:-}" ] || die "CORESCOPE_WRITER_PASSWORD is required"
 [ -n "${CORESCOPE_READER_PASSWORD:-}" ] || die "CORESCOPE_READER_PASSWORD is required"
 export CORESCOPE_WRITER_PASSWORD CORESCOPE_READER_PASSWORD
@@ -134,20 +150,26 @@ command -v psql >/dev/null 2>&1 || die "psql not found"
 # statement text, so a failed ALTER ROLE cannot print a password.
 psql -X -q -At -v ON_ERROR_STOP=1 \
   -v db="$CORESCOPE_DB" -v writer="$CORESCOPE_WRITER" -v reader="$CORESCOPE_READER" \
-  -v adopt="$CORESCOPE_ADOPT" \
+  -v adopt="$CORESCOPE_ADOPT" -v ctl="$CONTROL_ROLE" \
   "$PG_ADMIN_URL" <<'SQL'
 \set VERBOSITY terse
 \getenv writer_pw CORESCOPE_WRITER_PASSWORD
 \getenv reader_pw CORESCOPE_READER_PASSWORD
 \set writer_mark 'CoreScope writer role (scripts/postgres-roles.sh)'
 \set reader_mark 'CoreScope reader role (scripts/postgres-roles.sh)'
+\set ctl_mark 'CoreScope control client group role (scripts/postgres-roles.sh)'
+-- pgschema.advisoryLockKey: the ingestor's migrations and control grants hold
+-- it, so this script's grants on the control tables never race them.
+\set lock_key 4859228302472343408
 
 SELECT set_config('corescope.writer', :'writer', false),
        set_config('corescope.reader', :'reader', false),
        set_config('corescope.db', :'db', false),
        set_config('corescope.adopt', :'adopt', false),
        set_config('corescope.writer_mark', :'writer_mark', false),
-       set_config('corescope.reader_mark', :'reader_mark', false) \g /dev/null
+       set_config('corescope.reader_mark', :'reader_mark', false),
+       set_config('corescope.ctl', :'ctl', false),
+       set_config('corescope.ctl_mark', :'ctl_mark', false) \g /dev/null
 
 -- Refuse rather than demote or take over: a superuser named here is most
 -- likely the operator's own account, and a role or database this script did
@@ -168,7 +190,9 @@ BEGIN
     SELECT v.name, v.kind, v.mark, ro.rolsuper,
            coalesce(shobj_description(ro.oid, 'pg_authid'), '') AS comment
       FROM (VALUES (w, 'writer', current_setting('corescope.writer_mark')),
-                   (r, 'reader', current_setting('corescope.reader_mark'))) AS v(name, kind, mark)
+                   (r, 'reader', current_setting('corescope.reader_mark')),
+                   (current_setting('corescope.ctl'), 'control client group',
+                    current_setting('corescope.ctl_mark'))) AS v(name, kind, mark)
       JOIN pg_roles ro ON ro.rolname = v.name
   LOOP
     IF rec.rolsuper THEN
@@ -188,8 +212,11 @@ SELECT format('CREATE ROLE %I', :'writer')
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'writer') \gexec
 SELECT format('CREATE ROLE %I', :'reader')
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'reader') \gexec
+SELECT format('CREATE ROLE %I NOLOGIN', :'ctl')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'ctl') \gexec
 SELECT format('COMMENT ON ROLE %I IS %L', :'writer', :'writer_mark') \gexec
 SELECT format('COMMENT ON ROLE %I IS %L', :'reader', :'reader_mark') \gexec
+SELECT format('COMMENT ON ROLE %I IS %L', :'ctl', :'ctl_mark') \gexec
 SELECT format('ALTER ROLE %I WITH LOGIN NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
               :'writer', :'writer_pw') \gexec
 SELECT format('ALTER ROLE %I WITH LOGIN NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 32 PASSWORD %L',
@@ -198,13 +225,28 @@ SELECT format('ALTER ROLE %I WITH LOGIN NOCREATEDB NOCREATEROLE NOREPLICATION NO
 SELECT format('ALTER ROLE %I SET default_transaction_read_only = on', :'reader') \gexec
 SELECT format('ALTER ROLE %I SET statement_timeout = %L', :'reader', '120s') \gexec
 SELECT format('ALTER ROLE %I SET idle_in_transaction_session_timeout = %L', :'reader', '60s') \gexec
--- No inherited privileges: drop every membership the reader holds,
--- predefined roles such as pg_write_all_data included.
-SELECT format('REVOKE %I FROM %I GRANTED BY %I', g.rolname, :'reader', pg_get_userbyid(m.grantor))
+-- The group is only a privilege holder: nobody logs in as it.
+SELECT format('ALTER ROLE %I WITH NOLOGIN NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD NULL',
+              :'ctl') \gexec
+-- One transaction, so the reader is never seen without its group membership.
+BEGIN;
+-- No inherited privileges beyond the control group's: drop every membership
+-- the reader holds, predefined roles such as pg_write_all_data included,
+-- except the control group membership this script grants (same grantor, so
+-- the GRANT below resets its options in place), and every membership the
+-- group itself holds.
+SELECT format('REVOKE %I FROM %I GRANTED BY %I', g.rolname, u.rolname, pg_get_userbyid(m.grantor))
   FROM pg_auth_members m
   JOIN pg_roles g ON g.oid = m.roleid
   JOIN pg_roles u ON u.oid = m.member
- WHERE u.rolname = :'reader' \gexec
+ WHERE (u.rolname = :'reader'
+        AND NOT (g.rolname = :'ctl' AND m.grantor = (SELECT oid FROM pg_roles WHERE rolname = current_user)))
+    OR u.rolname = :'ctl' \gexec
+-- Re-granting an existing membership only resets its options; hide the
+-- "already been granted" notice that comes with it.
+SET LOCAL client_min_messages = warning;
+SELECT format('GRANT %I TO %I WITH ADMIN FALSE, INHERIT TRUE, SET FALSE GRANTED BY CURRENT_USER', :'ctl', :'reader') \gexec
+COMMIT;
 
 SELECT format('CREATE DATABASE %I OWNER %I', :'db', :'writer')
  WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db') \gexec
@@ -240,6 +282,28 @@ SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'reader') \gexec
 SELECT format('GRANT SELECT ON ALL TABLES IN SCHEMA public TO %I', :'reader') \gexec
 SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT SELECT ON TABLES TO %I',
               :'writer', :'reader') \gexec
+
+-- The control tables exist once the ingestor has run (pgschema 0002). The
+-- reader reaches them only through the group; the group gets exactly what
+-- pgschema.EnsureControlGrants grants (keep the two in step;
+-- pgschema.ControlGrantsOK checks the result). As superuser these GRANTs are
+-- recorded as the owner's, the writer's, as the ingestor's are.
+BEGIN;
+SELECT pg_advisory_xact_lock(:lock_key) \g /dev/null
+SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'corescope_control') AS has_control \gset
+\if :has_control
+SELECT format('REVOKE ALL ON SCHEMA corescope_control FROM PUBLIC, %I, %I', :'reader', :'ctl') \gexec
+SELECT format('REVOKE ALL ON ALL TABLES IN SCHEMA corescope_control FROM PUBLIC, %I, %I', :'reader', :'ctl') \gexec
+SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA corescope_control REVOKE ALL ON %s FROM %I',
+              :'writer', o, :'reader')
+  FROM (VALUES ('TABLES'), ('SEQUENCES'), ('FUNCTIONS'), ('TYPES')) AS ob(o) \gexec
+SELECT format('GRANT USAGE ON SCHEMA corescope_control TO %I', :'ctl') \gexec
+SELECT format('GRANT %s ON TABLE corescope_control.%I TO %I', p, t, :'ctl')
+  FROM (VALUES ('prune_requests', 'SELECT, INSERT'), ('mbcap_snapshots', 'SELECT, INSERT'),
+               ('prune_results', 'SELECT')) AS g(t, p)
+ WHERE to_regclass(format('corescope_control.%I', t)) IS NOT NULL \gexec
+\endif
+COMMIT;
 
 -- Connection URLs, without passwords. HOST is a directory for a Unix socket;
 -- a URL carries that percent-encoded.

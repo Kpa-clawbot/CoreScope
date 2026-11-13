@@ -546,6 +546,15 @@ func applySchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_cnn_target ON client_node_names(target, observed_at);
 		CREATE INDEX IF NOT EXISTS idx_cnn_prune  ON client_node_names(observed_at);
+
+		-- The ingestor's latest stats document (JSON), one row, for the
+		-- server to read: through the database rather than a file so the
+		-- two need no shared filesystem on Postgres (pgschema 0002).
+		CREATE TABLE IF NOT EXISTS ingestor_stats (
+			id         INTEGER PRIMARY KEY CHECK (id = 1),
+			updated_at TEXT NOT NULL,
+			payload    TEXT NOT NULL
+		);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)
