@@ -1,0 +1,84 @@
+# PostgreSQL for the measurement database. An override for docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#
+# Adds a postgres service, a one-shot postgres-init that provisions the two
+# roles and the database with scripts/postgres-roles.sh, and points the prod
+# container at it: the ingestor connects as the writer (it owns the schema and
+# runs the migrations), the server as the read-only reader (it refuses to start
+# with any other). Both run in the one prod container, so they are given
+# separate DSNs, DB_DSN_INGESTOR and DB_DSN_SERVER; docker/entrypoint-go.sh
+# hands each process its own as DB_DSN.
+#
+# Required in .env (generate each with e.g. `openssl rand -hex 24`; the DSNs
+# below carry them unencoded, so keep them to URL-safe characters):
+#   POSTGRES_PASSWORD           the postgres superuser, used only by postgres-init
+#   CORESCOPE_WRITER_PASSWORD   the ingestor's role
+#   CORESCOPE_READER_PASSWORD   the server's role
+# Optional: CORESCOPE_DB (corescope), CORESCOPE_WRITER (corescope_writer),
+# CORESCOPE_READER (corescope_reader).
+#
+# Do not set db.driver or db.dsn in config.json as well: the server prefers
+# config.json over DB_DSN, and would then connect with the ingestor's DSN.
+#
+# Postgres is reachable only on the compose network. To reach it from the host
+# (psql, backups), add to the postgres service:  ports: ["127.0.0.1:5432:5432"]
+#
+# Existing SQLite data is not moved by this file. Copy it once, before the
+# first start, with
+#   corescope-migrate copy -from sqlite:<path to meshcore.db> -to <writer URL>
+
+x-corescope-db: &corescope-db
+  CORESCOPE_DB: ${CORESCOPE_DB:-corescope}
+  CORESCOPE_WRITER: ${CORESCOPE_WRITER:-corescope_writer}
+  CORESCOPE_READER: ${CORESCOPE_READER:-corescope_reader}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: corescope-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # Over TCP: the image's first-start initialisation runs a temporary
+    # server on the Unix socket only, which a socket check would call ready.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # Runs once per `up`, then exits; idempotent, so every start re-applies the
+  # roles' passwords and grants. Prints the two connection URLs without
+  # passwords.
+  postgres-init:
+    image: postgres:17-alpine
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./scripts/postgres-roles.sh:/usr/local/bin/postgres-roles.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/postgres-roles.sh"]
+    environment:
+      <<: *corescope-db
+      # conninfo rather than a URL, so the superuser password needs no encoding.
+      PG_ADMIN_URL: host=postgres port=5432 user=postgres dbname=postgres sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      CORESCOPE_WRITER_PASSWORD: ${CORESCOPE_WRITER_PASSWORD:?set CORESCOPE_WRITER_PASSWORD in .env}
+      CORESCOPE_READER_PASSWORD: ${CORESCOPE_READER_PASSWORD:?set CORESCOPE_READER_PASSWORD in .env}
+
+  prod:
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    environment:
+      - DB_DRIVER=postgres
+      - DB_DSN_INGESTOR=postgres://${CORESCOPE_WRITER:-corescope_writer}:${CORESCOPE_WRITER_PASSWORD:?set CORESCOPE_WRITER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
+      - DB_DSN_SERVER=postgres://${CORESCOPE_READER:-corescope_reader}:${CORESCOPE_READER_PASSWORD:?set CORESCOPE_READER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
+
+volumes:
+  postgres-data:

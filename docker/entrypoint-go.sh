@@ -24,6 +24,31 @@ fi
 . /select-service-user.sh
 prepare_service_user || exit 1
 
+# One container, one environment, two database roles. On PostgreSQL the
+# ingestor connects as the writer and the server as a read-only role (it
+# refuses to start otherwise), so each gets its own DSN: supervisord hands
+# DB_DSN_INGESTOR to the ingestor and DB_DSN_SERVER to the server, each as
+# DB_DSN, and the server's command drops DB_DSN_INGESTOR from its environment.
+# Both default to DB_DSN, so a deployment that sets only DB_DSN, or nothing
+# (SQLite), runs as before. Set here, after .env has been read, because
+# supervisord refuses a config naming an unset variable.
+: "${DB_DSN_INGESTOR:=${DB_DSN:-}}"
+: "${DB_DSN_SERVER:=${DB_DSN:-}}"
+_nl='
+'
+for _dsn in "$DB_DSN_INGESTOR" "$DB_DSN_SERVER"; do
+  case "$_dsn" in
+    *'"'* | *\\* | *"$_nl"*)
+      # Never print the DSN: it carries a password.
+      echo "[entrypoint] DB_DSN / DB_DSN_INGESTOR / DB_DSN_SERVER must not contain a double quote, backslash or newline;" >&2
+      echo "[entrypoint] use a postgres:// URL and percent-encode the password." >&2
+      exit 1
+      ;;
+  esac
+done
+unset _dsn _nl
+export DB_DSN_INGESTOR DB_DSN_SERVER
+
 SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord.conf"
 if [ "${DISABLE_MOSQUITTO:-false}" = "true" ] && [ "${DISABLE_CADDY:-false}" = "true" ]; then
   echo "[config] internal MQTT broker disabled (DISABLE_MOSQUITTO=true)"
