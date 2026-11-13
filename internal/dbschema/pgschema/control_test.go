@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/meshcore-analyzer/dbx"
 	"github.com/meshcore-analyzer/dbx/dbxtest"
 )
 
@@ -28,11 +29,11 @@ func randHex(t *testing.T, n int) string {
 func tempRole(t *testing.T, db *sql.DB, prefix string) string {
 	t.Helper()
 	name := prefix + "_" + randHex(t, 6)
-	if _, err := db.Exec(`CREATE ROLE ` + quoteIdent(name) + ` NOLOGIN`); err != nil {
+	if _, err := db.Exec(`CREATE ROLE ` + dbx.QuoteIdent(name) + ` NOLOGIN`); err != nil {
 		t.Fatalf("create role %s: %v", name, err)
 	}
 	t.Cleanup(func() {
-		for _, s := range []string{`DROP OWNED BY ` + quoteIdent(name), `DROP ROLE IF EXISTS ` + quoteIdent(name)} {
+		for _, s := range []string{`DROP OWNED BY ` + dbx.QuoteIdent(name), `DROP ROLE IF EXISTS ` + dbx.QuoteIdent(name)} {
 			if _, err := db.Exec(s); err != nil {
 				t.Errorf("%s: %v", s, err)
 			}
@@ -235,7 +236,7 @@ func TestEnsureControlGrantsExactAndIdempotent(t *testing.T) {
 
 	// Extra privileges a careless operator might have handed out: all of
 	// them must go.
-	g := quoteIdent(group)
+	g := dbx.QuoteIdent(group)
 	tables := controlSchema + ".prune_requests, " + controlSchema + ".prune_results, " + controlSchema + ".mbcap_snapshots"
 	mustExec(t, db, `GRANT ALL ON SCHEMA `+controlSchema+` TO `+g)
 	mustExec(t, db, `GRANT ALL ON TABLE `+tables+` TO `+g+` WITH GRANT OPTION`)
@@ -282,8 +283,8 @@ func TestEnsureControlGrantsExactAndIdempotent(t *testing.T) {
 	other := tempRole(t, db, "cs_other")
 	for _, c := range []struct{ do, undo string }{
 		{`GRANT SELECT ON TABLE nodes TO ` + g, `REVOKE SELECT ON TABLE nodes FROM ` + g},
-		{`GRANT CREATE ON DATABASE ` + quoteIdent(currentDatabase(t, db)) + ` TO ` + g, `REVOKE CREATE ON DATABASE ` + quoteIdent(currentDatabase(t, db)) + ` FROM ` + g},
-		{`GRANT ` + quoteIdent(other) + ` TO ` + g, `REVOKE ` + quoteIdent(other) + ` FROM ` + g},
+		{`GRANT CREATE ON DATABASE ` + dbx.QuoteIdent(currentDatabase(t, db)) + ` TO ` + g, `REVOKE CREATE ON DATABASE ` + dbx.QuoteIdent(currentDatabase(t, db)) + ` FROM ` + g},
+		{`GRANT ` + dbx.QuoteIdent(other) + ` TO ` + g, `REVOKE ` + dbx.QuoteIdent(other) + ` FROM ` + g},
 		{`ALTER ROLE ` + g + ` LOGIN`, `ALTER ROLE ` + g + ` NOLOGIN`},
 		{`ALTER ROLE ` + g + ` BYPASSRLS`, `ALTER ROLE ` + g + ` NOBYPASSRLS`},
 	} {
@@ -320,14 +321,14 @@ func TestControlGroupMemberPrivileges(t *testing.T) {
 	if err := ensureControlGrants(ctx, db, group); err != nil {
 		t.Fatal(err)
 	}
-	mustExec(t, db, `GRANT `+quoteIdent(group)+` TO `+quoteIdent(member))
+	mustExec(t, db, `GRANT `+dbx.QuoteIdent(group)+` TO `+dbx.QuoteIdent(member))
 	// What the roles script gives the reader on the main schema.
 	var schema string
 	if err := db.QueryRow(`SELECT current_schema()`).Scan(&schema); err != nil {
 		t.Fatal(err)
 	}
-	mustExec(t, db, `GRANT USAGE ON SCHEMA `+quoteIdent(schema)+` TO `+quoteIdent(member))
-	mustExec(t, db, `GRANT SELECT ON ALL TABLES IN SCHEMA `+quoteIdent(schema)+` TO `+quoteIdent(member))
+	mustExec(t, db, `GRANT USAGE ON SCHEMA `+dbx.QuoteIdent(schema)+` TO `+dbx.QuoteIdent(member))
+	mustExec(t, db, `GRANT SELECT ON ALL TABLES IN SCHEMA `+dbx.QuoteIdent(schema)+` TO `+dbx.QuoteIdent(member))
 
 	var mainTables []string
 	rows, err := db.Query(`SELECT table_name FROM information_schema.tables
@@ -352,7 +353,7 @@ func TestControlGroupMemberPrivileges(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `SET ROLE `+quoteIdent(member)); err != nil {
+	if _, err := conn.ExecContext(ctx, `SET ROLE `+dbx.QuoteIdent(member)); err != nil {
 		t.Fatal(err)
 	}
 	defer conn.ExecContext(context.Background(), `RESET ROLE`)
@@ -407,9 +408,9 @@ func TestControlGroupMemberPrivileges(t *testing.T) {
 	denied(`CREATE TABLE ` + controlSchema + `.sneaky (id int)`)
 	denied(`INSERT INTO ingestor_stats (id, updated_at, payload) VALUES (1, 'now', '{}')`)
 	for _, tbl := range mainTables {
-		denied(`DELETE FROM ` + quoteIdent(tbl) + ` WHERE false`)
-		denied(`UPDATE ` + quoteIdent(tbl) + ` SET ` + firstColumn(t, db, tbl) + ` = ` + firstColumn(t, db, tbl) + ` WHERE false`)
-		denied(`TRUNCATE ` + quoteIdent(tbl))
+		denied(`DELETE FROM ` + dbx.QuoteIdent(tbl) + ` WHERE false`)
+		denied(`UPDATE ` + dbx.QuoteIdent(tbl) + ` SET ` + firstColumn(t, db, tbl) + ` = ` + firstColumn(t, db, tbl) + ` WHERE false`)
+		denied(`TRUNCATE ` + dbx.QuoteIdent(tbl))
 	}
 	denied(`CREATE TABLE sneaky (id int)`)
 }
@@ -421,5 +422,5 @@ func firstColumn(t *testing.T, db *sql.DB, table string) string {
 		WHERE table_schema = current_schema() AND table_name = ? ORDER BY ordinal_position LIMIT 1`, table).Scan(&c); err != nil {
 		t.Fatal(err)
 	}
-	return quoteIdent(c)
+	return dbx.QuoteIdent(c)
 }

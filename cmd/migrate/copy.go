@@ -169,7 +169,7 @@ func (j *copyJob) plan(ctx context.Context, tgt *schema) ([]*table, error) {
 			j.lg.Printf("skipping %s: %s", n, r)
 		} else if tgt.tables[n] == nil {
 			var cnt int64
-			if err := j.src.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+quoteIdent(n)).Scan(&cnt); err != nil {
+			if err := j.src.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+dbx.QuoteIdent(n)).Scan(&cnt); err != nil {
 				return nil, fmt.Errorf("count source table %s: %w", n, err)
 			}
 			j.lg.Printf("WARNING: source table %s (%d rows) has no counterpart in the target schema; it is NOT copied", n, cnt)
@@ -213,7 +213,7 @@ func checkEmpty(ctx context.Context, q queryer, ref dbRef, plan []*table) error 
 			continue
 		}
 		var one int
-		err := q.QueryRowContext(ctx, `SELECT 1 FROM `+quoteIdent(t.name)+` LIMIT 1`).Scan(&one)
+		err := q.QueryRowContext(ctx, `SELECT 1 FROM `+dbx.QuoteIdent(t.name)+` LIMIT 1`).Scan(&one)
 		if err == nil {
 			return fmt.Errorf("target is not empty (table %s has rows); refusing to overwrite. Copy into a fresh target: a SQLite path that does not exist yet, or an empty Postgres database", t.name)
 		}
@@ -285,22 +285,22 @@ func upsertStmt(t *table) string {
 	}
 	quoted := make([]string, len(cols))
 	for i, c := range cols {
-		quoted[i] = quoteIdent(c)
+		quoted[i] = dbx.QuoteIdent(c)
 	}
 	var pk, set []string
 	for _, idx := range t.pk {
-		pk = append(pk, quoteIdent(cols[idx]))
+		pk = append(pk, dbx.QuoteIdent(cols[idx]))
 	}
 	for i, c := range cols {
 		if !containsInt(t.pk, i) {
-			set = append(set, quoteIdent(c)+" = excluded."+quoteIdent(c))
+			set = append(set, dbx.QuoteIdent(c)+" = excluded."+dbx.QuoteIdent(c))
 		}
 	}
 	action := "DO NOTHING"
 	if len(set) > 0 {
 		action = "DO UPDATE SET " + strings.Join(set, ", ")
 	}
-	return "INSERT INTO " + quoteIdent(t.name) + " (" + strings.Join(quoted, ", ") + ") VALUES (" +
+	return "INSERT INTO " + dbx.QuoteIdent(t.name) + " (" + strings.Join(quoted, ", ") + ") VALUES (" +
 		strings.Join(q, ", ") + ") ON CONFLICT (" + strings.Join(pk, ", ") + ") " + action
 }
 
@@ -309,10 +309,10 @@ func insertStmt(t *table) string {
 	quoted := make([]string, len(cols))
 	q := make([]string, len(cols))
 	for i, c := range cols {
-		quoted[i] = quoteIdent(c)
+		quoted[i] = dbx.QuoteIdent(c)
 		q[i] = "?"
 	}
-	return "INSERT INTO " + quoteIdent(t.name) + " (" + strings.Join(quoted, ", ") + ") VALUES (" + strings.Join(q, ", ") + ")"
+	return "INSERT INTO " + dbx.QuoteIdent(t.name) + " (" + strings.Join(quoted, ", ") + ") VALUES (" + strings.Join(q, ", ") + ")"
 }
 
 // unfinishedAsync reports whether raw is an _async_migrations row whose
@@ -599,10 +599,10 @@ func resetIdentities(ctx context.Context, tx *sql.Tx, plan []*table) error {
 		if t.serial == "" {
 			continue
 		}
-		q := `SELECT setval(pg_get_serial_sequence($1, $2), COALESCE((SELECT MAX(` + quoteIdent(t.serial) +
-			`) FROM ` + quoteIdent(t.name) + `), 0) + 1, false)`
+		q := `SELECT setval(pg_get_serial_sequence($1, $2), COALESCE((SELECT MAX(` + dbx.QuoteIdent(t.serial) +
+			`) FROM ` + dbx.QuoteIdent(t.name) + `), 0) + 1, false)`
 		var v sql.NullInt64
-		if err := tx.QueryRowContext(ctx, q, quoteIdent(t.name), t.serial).Scan(&v); err != nil {
+		if err := tx.QueryRowContext(ctx, q, dbx.QuoteIdent(t.name), t.serial).Scan(&v); err != nil {
 			return fmt.Errorf("reset identity %s.%s: %w", t.name, t.serial, err)
 		}
 		if !v.Valid {
@@ -841,7 +841,7 @@ func fixSQLiteSequence(ctx context.Context, db *sql.DB, plan []*table) error {
 		if t.serial == "" {
 			continue
 		}
-		maxQ := `(SELECT MAX(` + quoteIdent(t.serial) + `) FROM ` + quoteIdent(t.name) + `)`
+		maxQ := `(SELECT MAX(` + dbx.QuoteIdent(t.serial) + `) FROM ` + dbx.QuoteIdent(t.name) + `)`
 		res, err := db.ExecContext(ctx, `UPDATE sqlite_sequence SET seq = COALESCE(`+maxQ+`, 0) WHERE name = ?`, t.name)
 		if err != nil {
 			return fmt.Errorf("sqlite_sequence for %s: %w", t.name, err)

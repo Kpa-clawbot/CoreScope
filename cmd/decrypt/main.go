@@ -173,15 +173,10 @@ LIMITATIONS
 	}
 }
 
-// isPostgresURL reports whether the --db argument is a PostgreSQL URL.
-func isPostgresURL(s string) bool {
-	return strings.HasPrefix(s, "postgres://") || strings.HasPrefix(s, "postgresql://")
-}
-
 // openDB opens the CoreScope database read-only. arg is a SQLite file path or a
 // postgres:// / postgresql:// URL. Errors never contain the URL's credentials.
 func openDB(arg string) (*sql.DB, error) {
-	if !isPostgresURL(arg) {
+	if !dbx.IsPostgresURL(arg) {
 		return sql.Open("sqlite3", "file:"+arg+"?mode=ro")
 	}
 	u, err := url.Parse(arg)
@@ -196,7 +191,7 @@ func openDB(arg string) (*sql.DB, error) {
 	if err != nil {
 		return nil, redactErr(err, u)
 	}
-	if err := pingPostgres(db); err != nil {
+	if err := dbx.PingFirst(context.Background(), db, log.Printf); err != nil {
 		db.Close()
 		return nil, redactErr(err, u)
 	}
@@ -549,17 +544,4 @@ init();
 </html>`)
 
 	return []byte(b.String())
-}
-
-// pgConnectWait bounds how long the first connect rides out a refused or
-// unresolvable endpoint (a new pod's NetworkPolicy not admitting it yet).
-const pgConnectWait = 30 * time.Second
-
-func pingPostgres(db *sql.DB) error {
-	err := db.Ping()
-	if err == nil || !dbx.IsTransientConnError(err) {
-		return err
-	}
-	log.Printf("postgres not reachable yet, retrying for up to %s", pgConnectWait)
-	return dbx.PingWithRetry(context.Background(), db, pgConnectWait)
 }

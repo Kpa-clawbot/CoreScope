@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/meshcore-analyzer/dbx"
 )
 
 // normalize converts one value read from either driver into cls. Results are
@@ -247,17 +249,17 @@ func openStream(ctx context.Context, q queryer, kind backend, t *table, cols []s
 		if kind == sqliteBackend {
 			sb.WriteByte('+')
 		}
-		sb.WriteString(quoteIdent(c))
+		sb.WriteString(dbx.QuoteIdent(c))
 	}
 	sb.WriteString(" FROM ")
-	sb.WriteString(quoteIdent(t.name))
+	sb.WriteString(dbx.QuoteIdent(t.name))
 	if ordered {
 		sb.WriteString(" ORDER BY ")
 		for i, idx := range t.pk {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(quoteIdent(t.cols[idx].name))
+			sb.WriteString(dbx.QuoteIdent(t.cols[idx].name))
 		}
 	}
 	rows, err := q.QueryContext(ctx, sb.String())

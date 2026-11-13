@@ -11,6 +11,8 @@ import (
 	"log"
 	"sort"
 	"strings"
+
+	"github.com/meshcore-analyzer/dbx"
 )
 
 // side is one database being compared: a query surface (normally a snapshot
@@ -55,7 +57,7 @@ func compareTables(ctx context.Context, a, b side) ([]tableResult, error) {
 		if at == nil && bookkeepingTables[name] {
 			// A source prepared by `-db` has no _async_migrations; copy
 			// (with -allow-pending-migrations) leaves the target's own rows.
-			if err := b.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+quoteIdent(name)).Scan(&res.rowsB); err != nil {
+			if err := b.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+dbx.QuoteIdent(name)).Scan(&res.rowsB); err != nil {
 				return nil, fmt.Errorf("side b: count %s: %w", name, err)
 			}
 			res.extraB = res.rowsB
@@ -67,7 +69,7 @@ func compareTables(ctx context.Context, a, b side) ([]tableResult, error) {
 		if at == nil {
 			// A table that does not exist holds no rows: equal exactly when
 			// b's table is empty (copy -allow-pending-migrations leaves it so).
-			if err := b.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+quoteIdent(name)).Scan(&res.rowsB); err != nil {
+			if err := b.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+dbx.QuoteIdent(name)).Scan(&res.rowsB); err != nil {
 				return nil, fmt.Errorf("side b: count %s: %w", name, err)
 			}
 			res.ok = res.rowsB == 0

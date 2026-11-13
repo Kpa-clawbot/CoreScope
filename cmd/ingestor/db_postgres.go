@@ -12,7 +12,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/dbschema/pgschema"
@@ -73,7 +72,7 @@ func OpenPostgresStore(dsn, queuePath string, sampleIntervalSec int) (*Store, er
 func pinWriterSearchPath(dsn string) (string, error) {
 	return dbx.PinSearchPath(context.Background(), dsn, dbx.SearchPathProbe{
 		Role: "writer",
-		Ping: func(_ context.Context, db *sql.DB) error { return pingPostgres(db) },
+		Ping: func(_ context.Context, db *sql.DB) error { return dbx.PingFirst(context.Background(), db, log.Printf) },
 		Logf: log.Printf,
 	})
 }
@@ -99,7 +98,7 @@ func openPostgresStoreDB(db *sql.DB, queuePath string, sampleIntervalSec int) (*
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	if err := pingPostgres(db); err != nil {
+	if err := dbx.PingFirst(context.Background(), db, log.Printf); err != nil {
 		return nil, fmt.Errorf("pinging postgres: %w", err)
 	}
 	if err := pgschema.Apply(context.Background(), db, log.Printf); err != nil {
@@ -279,16 +278,12 @@ func sqliteTransmissionCount(path string) (int64, error) {
 // error for one quotes the raw string, password and all, and an unparseable
 // URL is also one redactDSNError cannot reliably take the password out of.
 func checkPostgresDSN(dsn string) error {
-	if isPostgresURL(dsn) {
+	if dbx.IsPostgresURL(dsn) {
 		if _, err := url.Parse(dsn); err != nil {
 			return errors.New("opening postgres: db.dsn is not a valid postgres:// URL")
 		}
 	}
 	return nil
-}
-
-func isPostgresURL(dsn string) bool {
-	return strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://")
 }
 
 // keywordPassword finds password=... in a keyword/value DSN, quoted or not.
@@ -318,7 +313,7 @@ func redactDSNError(err error, dsn string) error {
 // replaced as one before the password inside it.
 func dsnSecrets(dsn string) []string {
 	out := []string{dsn}
-	if isPostgresURL(dsn) {
+	if dbx.IsPostgresURL(dsn) {
 		if u, err := url.Parse(dsn); err == nil && u.User != nil {
 			if pw, ok := u.User.Password(); ok {
 				out = append(out, u.User.String(), pw, url.QueryEscape(pw), url.PathEscape(pw))
@@ -337,17 +332,4 @@ func dsnSecrets(dsn string) []string {
 		}
 	}
 	return out
-}
-
-// pgConnectWait bounds how long a first connect rides out a refused or
-// unresolvable endpoint (a new pod's NetworkPolicy not admitting it yet).
-const pgConnectWait = 30 * time.Second
-
-func pingPostgres(db *sql.DB) error {
-	err := db.Ping()
-	if err == nil || !dbx.IsTransientConnError(err) {
-		return err
-	}
-	log.Printf("postgres not reachable yet, retrying for up to %s", pgConnectWait)
-	return dbx.PingWithRetry(context.Background(), db, pgConnectWait)
 }

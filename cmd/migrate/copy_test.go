@@ -183,7 +183,7 @@ func pgTarget(t testing.TB) (*sql.DB, string) {
 func count(t testing.TB, db *sql.DB, table string) int64 {
 	t.Helper()
 	var n int64
-	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + quoteIdent(table)).Scan(&n); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + dbx.QuoteIdent(table)).Scan(&n); err != nil {
 		t.Fatalf("count %s: %v", table, err)
 	}
 	return n

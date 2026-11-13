@@ -58,9 +58,6 @@ const (
 	// pgMaxOpenConns bounds the pool. Account traffic is small; more than
 	// one connection keeps a slow request from queueing all others.
 	pgMaxOpenConns = 8
-	// pgConnectWait is how long OpenPostgres retries a database that is not
-	// reachable yet (a pod starting before its network is ready).
-	pgConnectWait = 30 * time.Second
 )
 
 // OpenPostgres opens the account store in schema corescope_users of the
@@ -112,7 +109,7 @@ func openPostgres(dsn, schema string) (*Store, error) {
 	db.SetMaxIdleConns(pgMaxOpenConns)
 	s := &Store{db: db, now: time.Now, pg: true, closeHook: func() { stdlib.UnregisterConnConfig(name) }}
 	ctx := context.Background()
-	if err := dbx.PingWithRetry(ctx, db, pgConnectWait); err != nil {
+	if err := dbx.PingWithRetry(ctx, db, dbx.ConnectWait); err != nil {
 		s.Close()
 		return nil, fmt.Errorf("users: connect postgres: %w", err)
 	}

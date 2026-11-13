@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/meshcore-analyzer/dbx"
 	"github.com/meshcore-analyzer/dbx/dbxtest"
 	"github.com/meshcore-analyzer/mbcapqueue"
 )
@@ -30,7 +31,7 @@ func openPostgresTestStore(t testing.TB, queuePath string) *Store {
 		t.Fatal(err)
 	}
 	u, err := url.Parse(os.Getenv("CORESCOPE_TEST_PG_DSN"))
-	if err != nil || !isPostgresURL(u.String()) {
+	if err != nil || !dbx.IsPostgresURL(u.String()) {
 		t.Fatal("CORESCOPE_TEST_PG_DSN must be a postgres:// URL for this test")
 	}
 	q := u.Query()

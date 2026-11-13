@@ -44,7 +44,7 @@ func openScratchDatabase(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	name := "cs_scratch_" + randHex(t, 8)
-	if _, err := admin.Exec(`CREATE DATABASE ` + quoteIdent(name)); err != nil {
+	if _, err := admin.Exec(`CREATE DATABASE ` + dbx.QuoteIdent(name)); err != nil {
 		admin.Close()
 		if strings.Contains(err.Error(), "42501") {
 			t.Skipf("test role may not CREATE DATABASE; skipping: %v", err)
@@ -58,7 +58,7 @@ func openScratchDatabase(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() {
 		db.Close()
-		if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + quoteIdent(name) + ` WITH (FORCE)`); err != nil {
+		if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + dbx.QuoteIdent(name) + ` WITH (FORCE)`); err != nil {
 			t.Errorf("drop scratch database %s: %v", name, err)
 		}
 		admin.Close()
@@ -208,7 +208,7 @@ func TestCheckControlGrantsStates(t *testing.T) {
 	}
 
 	group := tempRole(t, db, "cs_ctl")
-	g := quoteIdent(group)
+	g := dbx.QuoteIdent(group)
 	if s, d := controlStateDetail(t, db, group); s != ControlIncomplete || !strings.Contains(d, "column "+controlSchema+".prune_requests.payload INSERT") {
 		t.Errorf("no grants: %v %q, want incomplete naming the INSERT (payload) grant", s, d)
 	}
@@ -251,7 +251,7 @@ func TestCheckControlGrantsStates(t *testing.T) {
 	mustExec(t, db, `CREATE SEQUENCE cs_seq`)
 	mustExec(t, db, `CREATE TYPE cs_type AS (a int)`)
 	other := tempRole(t, db, "cs_other")
-	o := quoteIdent(other)
+	o := dbx.QuoteIdent(other)
 	for _, c := range []struct{ do, undo, want string }{
 		{`GRANT CREATE ON SCHEMA ` + controlSchema + ` TO ` + g, `REVOKE CREATE ON SCHEMA ` + controlSchema + ` FROM ` + g, "schema " + controlSchema + " CREATE"},
 		{`GRANT USAGE ON SCHEMA ` + controlSchema + ` TO ` + g + ` WITH GRANT OPTION`, `REVOKE GRANT OPTION FOR USAGE ON SCHEMA ` + controlSchema + ` FROM ` + g, "USAGE WITH GRANT OPTION"},
@@ -330,7 +330,7 @@ func TestEnsureControlGrantsRefusesTriggers(t *testing.T) {
 		t.Fatalf("with only internal (FK) triggers: %v", err)
 	}
 	mustExec(t, db, `ALTER TABLE `+controlSchema+`.prune_results DROP CONSTRAINT cs_fk`)
-	mustExec(t, db, `REVOKE ALL ON SCHEMA `+controlSchema+` FROM `+quoteIdent(group))
+	mustExec(t, db, `REVOKE ALL ON SCHEMA `+controlSchema+` FROM `+dbx.QuoteIdent(group))
 
 	for _, tp := range controlTablePrivs {
 		tbl := controlSchema + "." + tp.table
@@ -402,7 +402,7 @@ func TestCheckSingleInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `SET ROLE `+quoteIdent(reader)); err != nil {
+	if _, err := conn.ExecContext(ctx, `SET ROLE `+dbx.QuoteIdent(reader)); err != nil {
 		t.Fatal(err)
 	}
 	defer conn.ExecContext(context.Background(), `RESET ROLE`)

@@ -98,7 +98,7 @@ func OpenPostgresDBWithStatementTimeout(dsn string, statementTimeoutSec int) (*D
 	// The first connect gets its own budget so waiting for the network does
 	// not eat into the checks below. It is the search_path probe's, when
 	// there is one, and the main pool's otherwise.
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), pgConnectWait+pgOpenTimeout)
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), dbx.ConnectWait+pgOpenTimeout)
 	defer pingCancel()
 	if dsn, roDSN, err = pinPostgresSearchPath(pingCtx, dsn, roDSN); err != nil {
 		return nil, scrub(err)
@@ -426,13 +426,13 @@ func verifyPostgresNoWritePrivilege(ctx context.Context, conn *sql.DB) error {
 		SELECT pg_get_userbyid(c.relowner)
 		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE n.nspname = current_schema() AND c.relname = 'schema_version'`).Scan(&o); err == nil {
-		owner = pgQuoteIdent(o)
+		owner = dbx.QuoteIdent(o)
 	}
 	who := fmt.Sprintf("postgres role %q", role)
 	if sessionRole != role {
 		who = fmt.Sprintf("postgres session user %q (current role %q)", sessionRole, role)
 	}
-	s := pgQuoteIdent(schema)
+	s := dbx.QuoteIdent(schema)
 	return fmt.Errorf("%s could gain write access to schema %q: %s. The server must connect as a read-only role "+
 		"with no SUPERUSER/CREATEROLE/BYPASSRLS, no ownership of or CREATE on any schema in its search_path, and no "+
 		"membership in a role with write privileges. Create one and put it in db.dsn:\n"+
@@ -470,11 +470,6 @@ func pgFirstN(items []string, n int) []string {
 	return append(append([]string{}, items[:n]...), fmt.Sprintf("and %d more", len(items)-n))
 }
 
-// pgQuoteIdent quotes a Postgres identifier for display in a SQL hint.
-func pgQuoteIdent(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
-
 // pgServerDSN returns dsn with params set (replacing any value already there,
 // matching keys case-insensitively as Postgres matches parameter names), plus
 // every password the DSN carries (URL userinfo, a password= query parameter,
@@ -490,7 +485,7 @@ func pgServerDSN(dsn string, params []pgParam) (string, []string, error) {
 		forced[p.name] = true
 	}
 	trimmed := strings.TrimSpace(dsn)
-	if strings.HasPrefix(trimmed, "postgres://") || strings.HasPrefix(trimmed, "postgresql://") {
+	if dbx.IsPostgresURL(trimmed) {
 		u, err := url.Parse(trimmed)
 		if err != nil {
 			// Not wrapped: url.Error echoes the DSN, password included.
@@ -842,15 +837,6 @@ func (db *DB) queryPostgresDBStats() (SqliteStats, error) {
 	return result, nil
 }
 
-// pgConnectWait bounds how long a first connect rides out a refused or
-// unresolvable endpoint (a new pod's NetworkPolicy not admitting it yet).
-const pgConnectWait = 30 * time.Second
-
 func pingPostgres(ctx context.Context, conn *sql.DB) error {
-	err := conn.PingContext(ctx)
-	if err == nil || !dbx.IsTransientConnError(err) {
-		return err
-	}
-	log.Printf("[db] postgres not reachable yet, retrying for up to %s", pgConnectWait)
-	return dbx.PingWithRetry(ctx, conn, pgConnectWait)
+	return dbx.PingFirst(ctx, conn, func(format string, args ...any) { log.Printf("[db] "+format, args...) })
 }

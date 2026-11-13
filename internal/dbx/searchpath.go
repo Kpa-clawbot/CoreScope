@@ -167,7 +167,7 @@ func splitSearchPath(setting string) []string {
 // way libpq does ("+" is a plus sign, not a space) and a round trip through
 // net/url would change such values. Errors never quote the DSN.
 func WithSearchPath(dsn, path string) (string, error) {
-	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+	if IsPostgresURL(dsn) {
 		u, err := url.Parse(dsn)
 		if err != nil {
 			// Not wrapped: url.Error echoes the DSN, password included.

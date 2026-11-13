@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/meshcore-analyzer/dbx"
 )
 
 // backend says which database engine a dbRef names.
@@ -50,7 +52,7 @@ func parseDBRef(s string) (dbRef, error) {
 			return dbRef{}, fmt.Errorf("resolve %s: %w", p, err)
 		}
 		return dbRef{kind: sqliteBackend, path: abs, display: "sqlite:" + abs}, nil
-	case strings.HasPrefix(s, "postgres://"), strings.HasPrefix(s, "postgresql://"):
+	case dbx.IsPostgresURL(s):
 		u, err := url.Parse(s)
 		if err != nil {
 			// Not wrapped: url.Error quotes the whole URL, password included.

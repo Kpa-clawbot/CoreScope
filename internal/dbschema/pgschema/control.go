@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/meshcore-analyzer/dbx"
 )
 
 // controlRole is the NOLOGIN group role scripts/postgres-roles.sh grants to
@@ -191,7 +193,7 @@ func ensureControlGrants(ctx context.Context, db *sql.DB, role string) error {
 		return fmt.Errorf("pgschema: control grants: %s not owned by the current role, which therefore cannot grant on them", strings.Join(foreign, ", "))
 	}
 
-	r := quoteIdent(role)
+	r := dbx.QuoteIdent(role)
 	tables := make([]string, len(controlTablePrivs))
 	for i, tp := range controlTablePrivs {
 		tables[i] = controlSchema + "." + tp.table
@@ -411,9 +413,4 @@ func expectedControlACL() []string {
 	}
 	sort.Strings(want)
 	return want
-}
-
-// quoteIdent quotes a Postgres identifier.
-func quoteIdent(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }

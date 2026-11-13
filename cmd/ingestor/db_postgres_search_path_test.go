@@ -29,7 +29,7 @@ func searchPathTestDB(t *testing.T) (string, *sql.DB, string) {
 		t.Skip("CORESCOPE_TEST_PG_DSN not set; skipping Postgres test")
 	}
 	u, err := url.Parse(base)
-	if err != nil || !isPostgresURL(base) {
+	if err != nil || !dbx.IsPostgresURL(base) {
 		t.Fatal("CORESCOPE_TEST_PG_DSN must be a postgres:// URL for this test")
 	}
 	var b [6]byte

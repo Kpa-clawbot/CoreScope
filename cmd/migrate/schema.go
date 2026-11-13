@@ -104,10 +104,6 @@ var bookkeepingTables = map[string]bool{
 	"_async_migrations": true,
 }
 
-func quoteIdent(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
-
 // sqliteReadOnlyDSN opens path read-only as a URI filename. Escaping the path
 // keeps '?', '#' and '%' in file names from being read as URI syntax.
 func sqliteReadOnlyDSN(path string) string {

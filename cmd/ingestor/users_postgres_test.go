@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/meshcore-analyzer/dbx"
 	"github.com/meshcore-analyzer/dbx/dbxtest"
 )
 
@@ -510,7 +511,7 @@ func TestAccountsReaderSessionSettings(t *testing.T) {
 		t.Skip("CORESCOPE_TEST_PG_DSN not set; skipping Postgres test")
 	}
 	u, err := url.Parse(base)
-	if err != nil || !isPostgresURL(base) {
+	if err != nil || !dbx.IsPostgresURL(base) {
 		t.Fatal("CORESCOPE_TEST_PG_DSN must be a postgres:// URL for this test")
 	}
 	q := u.Query()
