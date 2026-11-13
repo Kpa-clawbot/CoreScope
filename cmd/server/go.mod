@@ -40,7 +40,7 @@ replace github.com/meshcore-analyzer/prunequeue => ../../internal/prunequeue
 require (
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/meshcore-analyzer/mbcapqueue v0.0.0
-	golang.org/x/sync v0.10.0
+	golang.org/x/sync v0.17.0
 )
 
 replace github.com/meshcore-analyzer/mbcapqueue => ../../internal/mbcapqueue
@@ -71,3 +71,5 @@ require (
 )
 
 replace github.com/meshcore-analyzer/mailer => ../../internal/mailer
+
+replace github.com/meshcore-analyzer/dbx => ../../internal/dbx

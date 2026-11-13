@@ -20,7 +20,6 @@ package dbschema
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -152,12 +151,11 @@ func AssertReady(ro *sql.DB) error {
 		}
 	}
 	mustTable := func(name string) {
-		var n int
-		err := ro.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n)
-		if errors.Is(err, sql.ErrNoRows) {
-			missing = append(missing, "table:"+name)
-		} else if err != nil {
+		has, err := TableExists(ro, name)
+		if err != nil {
 			missing = append(missing, fmt.Sprintf("table:%s (probe error: %v)", name, err))
+		} else if !has {
+			missing = append(missing, "table:"+name)
 		}
 	}
 
@@ -239,6 +237,9 @@ type Querier interface {
 //
 // Pass the transaction, not the pool, when you are inside one. See Querier.
 func TableHasColumn(db Querier, table, column string) (bool, error) {
+	if found, ok, err := infoSchemaProbe(db, pgColumnProbe, table, column); ok {
+		return found, err
+	}
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
 		return false, err
