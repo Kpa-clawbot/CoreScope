@@ -9,9 +9,11 @@ import (
 	"github.com/meshcore-analyzer/packetpath"
 )
 
-// Unlike INSERT OR IGNORE, a duplicate must not write sqlite_sequence.
+// Unlike ON CONFLICT DO NOTHING, a duplicate must not write sqlite_sequence
+// (nor, on Postgres, draw from the id sequence). The SELECT-list placeholders
+// are cast because Postgres cannot infer their type there.
 const insertAdvertEvidenceSQL = `INSERT INTO advert_route_evidence(tx_id,bit)
-	SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM advert_route_evidence WHERE tx_id=? AND bit=?)`
+	SELECT CAST(? AS BIGINT),CAST(? AS BIGINT) WHERE NOT EXISTS (SELECT 1 FROM advert_route_evidence WHERE tx_id=? AND bit=?)`
 
 // Match the UPSERT's exact expression-index key. NULL observer_idx cannot
 // conflict, so the caller skips it. Only an uncheckpointed old row needs work.
@@ -44,7 +46,7 @@ func (s *Store) preserveLegacyAdvertObservation(txID, observerIdx int64, path st
 // cursors and 500-row transactions make this cancellable/resumable; new traffic
 // records evidence synchronously, so rows beyond either scan need no replay.
 func (s *Store) backfillAdvertEvidence(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO advert_evidence_backfill(id) VALUES(1)`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO advert_evidence_backfill(id) VALUES(1) ON CONFLICT DO NOTHING`); err != nil {
 		return err
 	}
 	for _, source := range []struct{ cursor, table, query string }{

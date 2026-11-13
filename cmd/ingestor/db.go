@@ -16,6 +16,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/dbschema"
+	"github.com/meshcore-analyzer/dbx"
 	"github.com/meshcore-analyzer/packetpath"
 )
 
@@ -70,7 +71,11 @@ func (s *DBStats) SnapshotBackfills() map[string]int64 {
 
 // Store wraps the SQLite database for packet ingestion.
 type Store struct {
-	db    *sql.DB
+	db *sql.DB
+	// pg is true when db is the Postgres driver (dbx). Statements whose
+	// portable form costs SQLite on the ingest hot path are chosen per
+	// backend once, in prepareStatements; see portable_sql.go.
+	pg    bool
 	path  string // filesystem path to the SQLite DB (used to resolve queue dirs)
 	Stats DBStats
 	// plannerStatsAt is when RefreshPlannerStats last succeeded in this
@@ -88,6 +93,9 @@ type Store struct {
 	stmtInsertObservation      *sql.Stmt
 	stmtInsertObservationRadio *sql.Stmt // #1869, sparse rx_radio_id
 	stmtInsertAdvertEvidence   *sql.Stmt
+	// insertTransmission runs stmtInsertTransmission and returns the new id,
+	// the way the backend does it cheapest (insertTransmissionFunc).
+	insertTransmission         func(args ...any) (int64, error)
 	hopBackfillCancel          context.CancelFunc // stops the observation_hops backfill on Close
 	hopIndexDays               int                // retention.hopIndexDays; 0 = no hop index (see ConfigureObservationHops)
 	hopMaintMu                 sync.Mutex         // serializes the hop index backfill and trim
@@ -173,7 +181,7 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("dbschema.Apply: %w", err)
 	}
 
-	s := &Store{db: db, path: dbPath, sampleIntervalSec: sampleIntervalSec}
+	s := &Store{db: db, pg: dbx.IsPostgres(db), path: dbPath, sampleIntervalSec: sampleIntervalSec}
 	if err := s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}
@@ -196,7 +204,7 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 				if _, err := d.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_observations_observer_idx_timestamp ON observations(observer_idx, timestamp)`); err != nil {
 					return err
 				}
-				if _, err := d.ExecContext(ctx, `INSERT OR IGNORE INTO _migrations (name) VALUES ('obs_observer_ts_idx_v1')`); err != nil {
+				if _, err := d.ExecContext(ctx, `INSERT INTO _migrations (name) VALUES ('obs_observer_ts_idx_v1') ON CONFLICT DO NOTHING`); err != nil {
 					return err
 				}
 				log.Println("[migration/async] observations(observer_idx, timestamp) index created")
@@ -978,13 +986,11 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtInsertTransmission, err = s.db.Prepare(`
-		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, scope_name, from_pubkey, last_seen, code1, code2)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
+	s.stmtInsertTransmission, err = s.db.Prepare(insertTransmissionSQL(s.pg))
 	if err != nil {
 		return err
 	}
+	s.insertTransmission = insertTransmissionFunc(s.pg, s.stmtInsertTransmission)
 
 	s.stmtUpdateTxFirstSeen, err = s.db.Prepare("UPDATE transmissions SET first_seen = ? WHERE id = ?")
 	if err != nil {
@@ -1014,12 +1020,12 @@ func (s *Store) prepareStatements() error {
 	s.stmtInsertObservation, err = s.db.Prepare(`
 		INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp, raw_hex, resolved_path)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(transmission_id, observer_idx, COALESCE(path_json, '')) DO UPDATE SET
-			snr           = COALESCE(excluded.snr,           snr),
-			rssi          = COALESCE(excluded.rssi,          rssi),
-			score         = COALESCE(excluded.score,         score),
-			raw_hex       = COALESCE(excluded.raw_hex,       raw_hex),
-			resolved_path = COALESCE(excluded.resolved_path, resolved_path)
+		ON CONFLICT(transmission_id, observer_idx, (COALESCE(path_json, ''))) DO UPDATE SET
+			snr           = COALESCE(excluded.snr,           observations.snr),
+			rssi          = COALESCE(excluded.rssi,          observations.rssi),
+			score         = COALESCE(excluded.score,         observations.score),
+			raw_hex       = COALESCE(excluded.raw_hex,       observations.raw_hex),
+			resolved_path = COALESCE(excluded.resolved_path, observations.resolved_path)
 		RETURNING id
 	`)
 	if err != nil {
@@ -1027,7 +1033,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtInsertObservationRadio, err = s.db.Prepare(`
-		INSERT OR REPLACE INTO observation_radios (observation_id, radio_id) VALUES (?, ?)`)
+		INSERT INTO observation_radios (observation_id, radio_id) VALUES (?, ?)
+		ON CONFLICT (observation_id) DO UPDATE SET radio_id = excluded.radio_id`)
 	if err != nil {
 		return err
 	}
@@ -1036,12 +1043,11 @@ func (s *Store) prepareStatements() error {
 		INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(public_key) DO UPDATE SET
-			name = COALESCE(?, name),
-			role = COALESCE(?, role),
-			lat = COALESCE(?, lat),
-			lon = COALESCE(?, lon),
-			last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?)
-	`)
+			name = COALESCE(?, nodes.name),
+			role = COALESCE(?, nodes.role),
+			lat = COALESCE(?, nodes.lat),
+			lon = COALESCE(?, nodes.lon),
+			last_seen = ` + lastSeenClampSQL(s.pg, "nodes", "last_seen"))
 	if err != nil {
 		return err
 	}
@@ -1055,21 +1061,21 @@ func (s *Store) prepareStatements() error {
 
 	s.stmtUpsertObserver, err = s.db.Prepare(`
 		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, can_relay, can_relay_seen)
-		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), CASE WHEN ? IS NULL THEN 0 ELSE 1 END)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), CASE WHEN CAST(? AS BIGINT) IS NULL THEN 0 ELSE 1 END)
 		ON CONFLICT(id) DO UPDATE SET
-			name = COALESCE(?, name),
-			iata = COALESCE(?, iata),
-			last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
-			packet_count = packet_count + 1,
-			model = COALESCE(?, model),
-			firmware = COALESCE(?, firmware),
-			client_version = COALESCE(?, client_version),
-			radio = COALESCE(?, radio),
-			battery_mv = COALESCE(?, battery_mv),
-			uptime_secs = COALESCE(?, uptime_secs),
-			noise_floor = COALESCE(?, noise_floor),
-			can_relay = COALESCE(?, can_relay),
-			can_relay_seen = CASE WHEN ? IS NULL THEN can_relay_seen ELSE 1 END
+			name = COALESCE(?, observers.name),
+			iata = COALESCE(?, observers.iata),
+			last_seen = ` + lastSeenClampSQL(s.pg, "observers", "last_seen") + `,
+			packet_count = observers.packet_count + 1,
+			model = COALESCE(?, observers.model),
+			firmware = COALESCE(?, observers.firmware),
+			client_version = COALESCE(?, observers.client_version),
+			radio = COALESCE(?, observers.radio),
+			battery_mv = COALESCE(?, observers.battery_mv),
+			uptime_secs = COALESCE(?, observers.uptime_secs),
+			noise_floor = COALESCE(?, observers.noise_floor),
+			can_relay = COALESCE(?, observers.can_relay),
+			can_relay_seen = CASE WHEN CAST(? AS BIGINT) IS NULL THEN observers.can_relay_seen ELSE 1 END
 	`)
 	if err != nil {
 		return err
@@ -1085,8 +1091,8 @@ func (s *Store) prepareStatements() error {
 	// taking MAX with rxTime, so the guard never locks in a past bug's stale future.
 	s.stmtUpdateObserverLastSeen, err = s.db.Prepare(`
 		UPDATE observers SET
-			last_seen      = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
-			last_packet_at = MAX(MIN(COALESCE(last_packet_at, ''), ?), ?)
+			last_seen      = ` + lastSeenClampSQL(s.pg, "observers", "last_seen") + `,
+			last_packet_at = ` + lastSeenClampSQL(s.pg, "observers", "last_packet_at") + `
 		WHERE idx = ?`)
 	if err != nil {
 		return err
@@ -1103,8 +1109,16 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertMetrics, err = s.db.Prepare(`
-		INSERT OR REPLACE INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv)
+		INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (observer_id, timestamp) DO UPDATE SET
+			noise_floor  = excluded.noise_floor,
+			tx_air_secs  = excluded.tx_air_secs,
+			rx_air_secs  = excluded.rx_air_secs,
+			recv_errors  = excluded.recv_errors,
+			battery_mv   = excluded.battery_mv,
+			packets_sent = excluded.packets_sent,
+			packets_recv = excluded.packets_recv
 	`)
 	if err != nil {
 		return err
@@ -1158,7 +1172,8 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	} else {
 		// New transmission
 		isNew = true
-		result, err := s.stmtInsertTransmission.Exec(
+		var err error
+		txID, err = s.insertTransmission(
 			data.RawHex, hash, rxTime,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
 			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
@@ -1172,7 +1187,6 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			s.Stats.WriteErrors.Add(1)
 			return false, fmt.Errorf("insert transmission: %w", err)
 		}
-		txID, _ = result.LastInsertId()
 		s.Stats.TransmissionsInserted.Add(1)
 	}
 
@@ -1421,7 +1435,7 @@ func (s *Store) UpsertObserverRetained(id, name, iata string, meta *ObserverMeta
 			uptime_secs = COALESCE(?, uptime_secs),
 			noise_floor = COALESCE(?, noise_floor),
 			can_relay = COALESCE(?, can_relay),
-			can_relay_seen = CASE WHEN ? IS NULL THEN can_relay_seen ELSE 1 END
+			can_relay_seen = CASE WHEN CAST(? AS BIGINT) IS NULL THEN can_relay_seen ELSE 1 END
 		WHERE id = ?`,
 		name, normalizedIATA, model, firmware, clientVersion, radio,
 		batteryMv, uptimeSecs, noiseFloor, canRelay, canRelay, id,
@@ -2196,7 +2210,7 @@ func (s *Store) MoveStaleNodes(nodeDays int) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(`INSERT OR REPLACE INTO inactive_nodes SELECT * FROM nodes WHERE last_seen < ?`, cutoff)
+	_, err = tx.Exec(moveStaleNodesSQL, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("insert inactive: %w", err)
 	}
@@ -2544,9 +2558,9 @@ func (s *Store) RecordNaiveSkew(observerID string, deltaSec int64, now time.Time
 			clock_skew_seconds = excluded.clock_skew_seconds,
 			clock_last_naive_at = excluded.clock_last_naive_at,
 			clock_skew_count_24h = CASE
-				WHEN clock_last_naive_at IS NULL OR clock_last_naive_at < ?
+				WHEN observers.clock_last_naive_at IS NULL OR observers.clock_last_naive_at < ?
 					THEN 1
-				ELSE COALESCE(clock_skew_count_24h, 0) + 1
+				ELSE COALESCE(observers.clock_skew_count_24h, 0) + 1
 			END
 	`, observerID, deltaSec, nowStr, cutoff)
 	return err

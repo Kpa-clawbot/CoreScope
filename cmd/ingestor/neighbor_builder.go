@@ -198,7 +198,7 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 	JOIN transmissions t ON t.id = o.transmission_id
 	LEFT JOIN observers obs ON obs.idx = o.observer_idx
 	WHERE o.timestamp > ?
-	AND o.direction IS NOT 'tx' -- the observer's own transmission, not a reception (#667)
+	AND o.direction IS DISTINCT FROM 'tx' -- the observer's own transmission, not a reception (#667)
 	ORDER BY o.timestamp
 	LIMIT ?`, watermarkEpoch, neighborBuilderMaxBatch)
 	if err != nil {
@@ -260,11 +260,7 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 	// show up on /api/perf under component=neighbor_builder.
 	var inserted int
 	err = s.WriterTx("neighbor_builder", func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
-			VALUES (?, ?, 1, ?)
-			ON CONFLICT(node_a, node_b) DO UPDATE SET
-			  count = count + 1,
-			  last_seen = MAX(last_seen, excluded.last_seen)`)
+		stmt, err := tx.Prepare(neighborEdgeUpsertSQL)
 		if err != nil {
 			return fmt.Errorf("prepare: %w", err)
 		}
@@ -286,6 +282,14 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 	}
 	return inserted, nil
 }
+
+// neighborEdgeUpsertSQL adds one sighting of an edge. last_seen keeps
+// SQLite's two-argument MAX semantics, NULL included (see sqlMax2).
+var neighborEdgeUpsertSQL = `INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
+	VALUES (?, ?, 1, ?)
+	ON CONFLICT(node_a, node_b) DO UPDATE SET
+	  count = neighbor_edges.count + 1,
+	  last_seen = ` + sqlMax2("neighbor_edges.last_seen", "excluded.last_seen")
 
 // canonEdge orders the pair so node_a <= node_b (matches the existing
 // schema convention used by the loader and the bridge recomputer).

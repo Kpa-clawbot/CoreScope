@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/mbcapqueue"
 )
 
@@ -187,24 +188,8 @@ func containsCI(s, sub string) bool {
 // RunMultibyteCapPersist on legacy DBs that pre-date the
 // internal/dbschema migration (#1386).
 func (s *Store) hasMultibyteSupColumns() bool {
-	rows, err := s.db.Query(`PRAGMA table_info(nodes)`)
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt interface{}
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return false
-		}
-		if name == "multibyte_sup" {
-			return true
-		}
-	}
-	return false
+	has, err := dbschema.TableHasColumn(s.db, "nodes", "multibyte_sup")
+	return err == nil && has
 }
 
 // multibyteStatusToInt mirrors the mapping the server used before relocation.
