@@ -15,6 +15,7 @@ type MultibyteCapPersistStats struct {
 	UpdatedActive   int64 // rows updated in nodes
 	UpdatedInactive int64 // rows updated in inactive_nodes
 	Skipped         int   // entries skipped (status=="unknown")
+	Ignored         int   // entries ignored: no such node, a repeated pubkey, or past the node count
 }
 
 // RunMultibyteCapPersist consumes the latest multi-byte capability snapshot
@@ -36,28 +37,34 @@ type MultibyteCapPersistStats struct {
 // DB value with a snapshot blank. Same guarantee the original
 // server-side helper enforced before relocation.
 //
+// The snapshot is untrusted input (the server is public-facing): only
+// entries for existing nodes are applied, each pubkey once, and no more
+// entries are looked at than there are nodes (nodes + inactive_nodes); the
+// rest are counted in Ignored.
+//
 // Safe to call from a ticker; no-op when no snapshot has been written
-// (cold start), when the snapshot is empty, when the snapshot is
-// malformed (#1386), or when running against a legacy DB that
-// pre-dates the multibyte_sup migration (#1386).
+// (cold start), when the snapshot is empty, or when running against a
+// legacy DB that pre-dates the multibyte_sup migration (#1386). A malformed
+// newest snapshot (#1386) is logged and discarded together with the older
+// ones (see discardMalformedMultibyteSnapshots), so a bad row neither
+// blocks the prune nor lets the table grow.
 func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 	var stats MultibyteCapPersistStats
 	snap, err := s.mbcap.ReadSnapshot()
 	if err != nil {
 		// os.ErrNotExist is the steady state until the server's first
-		// analytics cycle completes — silent no-op. A malformed file
-		// is operator-actionable: log it (but still no-op, no error
-		// surfaced to the ticker — a corrupt snapshot must not stop
-		// the maintenance loop).
+		// analytics cycle completes — silent no-op. A malformed snapshot
+		// is operator-actionable: log it and discard it (no error
+		// surfaced to the ticker — a corrupt snapshot must not stop the
+		// maintenance loop). Any other error is the store failing to
+		// read (a database error on Postgres): retried next tick.
 		if errors.Is(err, os.ErrNotExist) {
 			return stats, nil
 		}
-		// All other ReadSnapshot errors today are wrap-arounds of
-		// io / unmarshal failures — both classify as "malformed
-		// snapshot on disk" from this loop's perspective.
 		var jsonErr *json.SyntaxError
 		if errors.As(err, &jsonErr) || isMalformedSnapshotErr(err) {
-			log.Printf("[multibyte-persist] malformed snapshot in %s (no-op): %v", s.mbcap.Location(), err)
+			log.Printf("[multibyte-persist] malformed snapshot in %s (discarded): %v", s.mbcap.Location(), err)
+			s.discardMalformedMultibyteSnapshots()
 			return stats, nil
 		}
 		log.Printf("[multibyte-persist] read snapshot: %v (no-op)", err)
@@ -83,6 +90,11 @@ func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 		return stats, err
 	}
 	defer tx.Rollback() //nolint:errcheck
+	// The bound on entries: an honest snapshot has at most one per node.
+	var nodeCount int
+	if err := tx.QueryRow(`SELECT (SELECT COUNT(*) FROM nodes) + (SELECT COUNT(*) FROM inactive_nodes)`).Scan(&nodeCount); err != nil {
+		return stats, err
+	}
 	// Combined dispatch: each pubkey lives in exactly one of nodes /
 	// inactive_nodes. The pre-#1386 implementation issued one UPDATE
 	// against each table per entry — 50% guaranteed-empty. We now
@@ -105,13 +117,25 @@ func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 	}
 	defer stmtProbe.Close()
 
-	for _, e := range snap.Entries {
+	entries := snap.Entries
+	if len(entries) > nodeCount {
+		stats.Ignored += len(entries) - nodeCount
+		entries = entries[:nodeCount]
+	}
+	seen := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		if _, dup := seen[e.PublicKey]; dup {
+			stats.Ignored++
+			continue
+		}
+		seen[e.PublicKey] = struct{}{}
 		sup := multibyteStatusToInt(e.Status)
 		if sup == 0 {
 			stats.Skipped++
 			continue
 		}
-		// Probe once. If hit, UPDATE nodes; else UPDATE inactive_nodes.
+		// Probe once. If hit, UPDATE nodes; else UPDATE inactive_nodes,
+		// where no row matched means no such node.
 		var hit int
 		if err := stmtProbe.QueryRow(e.PublicKey).Scan(&hit); err == nil {
 			if r, err := stmtN.Exec(sup, e.Evidence, e.PublicKey); err == nil {
@@ -120,10 +144,14 @@ func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 				}
 			}
 		} else {
-			if r, err := stmtI.Exec(sup, e.Evidence, e.PublicKey); err == nil {
-				if n, _ := r.RowsAffected(); n > 0 {
-					stats.UpdatedInactive += n
-				}
+			r, err := stmtI.Exec(sup, e.Evidence, e.PublicKey)
+			if err != nil {
+				continue
+			}
+			if n, _ := r.RowsAffected(); n > 0 {
+				stats.UpdatedInactive += n
+			} else {
+				stats.Ignored++
 			}
 		}
 	}
@@ -131,9 +159,9 @@ func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 		return stats, err
 	}
 	s.pruneMultibyteSnapshots()
-	if stats.UpdatedActive+stats.UpdatedInactive > 0 {
-		log.Printf("[multibyte-persist] applied snapshot: %d entries (%d skipped); updated %d active + %d inactive nodes",
-			stats.ReadEntries, stats.Skipped, stats.UpdatedActive, stats.UpdatedInactive)
+	if stats.UpdatedActive+stats.UpdatedInactive > 0 || stats.Ignored > 0 {
+		log.Printf("[multibyte-persist] applied snapshot: %d entries (%d skipped, %d ignored); updated %d active + %d inactive nodes",
+			stats.ReadEntries, stats.Skipped, stats.Ignored, stats.UpdatedActive, stats.UpdatedInactive)
 	}
 	return stats, nil
 }
@@ -152,8 +180,23 @@ func (s *Store) pruneMultibyteSnapshots() {
 	}
 }
 
+// discardMalformedMultibyteSnapshots drops every snapshot after the newest
+// one failed to parse: Prune(0) is the only removal the mbcapqueue.Store API
+// offers, and keeping the multibyteSnapshotsKept newest would keep the bad
+// one, which would then be read (and the table never pruned) on every tick.
+// The older snapshots are never read anyway. A snapshot the server inserts
+// between the read and this prune is lost with them; its next analytics
+// cycle writes another. On SQLite this is a no-op: the single file is
+// replaced by the next write and cannot accumulate.
+func (s *Store) discardMalformedMultibyteSnapshots() {
+	if err := s.mbcap.Prune(0); err != nil {
+		log.Printf("[multibyte-persist] discarding malformed snapshot in %s: %v", s.mbcap.Location(), err)
+	}
+}
+
 // isMalformedSnapshotErr returns true if err looks like a JSON parse /
-// IO-truncation failure surfaced by mbcapqueue.ReadSnapshot. The
+// IO-truncation failure, or a document over the size cap ("exceeds"),
+// surfaced by mbcapqueue.ReadSnapshot. The
 // queue wraps errors with %w but mbcapqueue currently formats with
 // %w only for "read:"/"unmarshal:" prefixes — we substring-match
 // those so the operator-actionable log message is unambiguous.
@@ -162,7 +205,7 @@ func isMalformedSnapshotErr(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	for _, frag := range []string{"unmarshal", "invalid character", "unexpected end of JSON"} {
+	for _, frag := range []string{"unmarshal", "invalid character", "unexpected end of JSON", "exceeds"} {
 		if containsCI(msg, frag) {
 			return true
 		}

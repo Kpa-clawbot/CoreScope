@@ -107,7 +107,7 @@ func TestPostgresPruneRequestEndToEnd(t *testing.T) {
 		t.Fatalf("WriteRequest: %v", err)
 	}
 
-	s.RunPendingPruneRequests()
+	s.RunPendingPruneRequests(testPruneFilter)
 
 	if pending, err := server.RequestExists(id); err != nil || pending {
 		t.Errorf("request still pending after the pass: %v %v", pending, err)
@@ -135,7 +135,7 @@ func TestPostgresPruneRequestEndToEnd(t *testing.T) {
 	if _, err := s.db.Exec(`INSERT INTO "`+ctl+`".prune_results (id, created_at, payload) VALUES (?, '2000-01-01T00:00:00.000000000Z', '{}')`, old); err != nil {
 		t.Fatal(err)
 	}
-	s.RunPendingPruneRequests()
+	s.RunPendingPruneRequests(testPruneFilter)
 	if r, err := server.ReadResult(old); r != nil || err != nil {
 		t.Errorf("result older than %s survived the pass: %+v %v", pruneResultsMaxAge, r, err)
 	}
@@ -152,9 +152,9 @@ func TestPostgresPruneRequestEndToEnd(t *testing.T) {
 func TestPostgresUnreadablePruneRequestGetsErrorResult(t *testing.T) {
 	s := openPostgresTestStore(t, filepath.Join(t.TempDir(), "meshcore.db"))
 	ctl := isolateControlTables(t, s)
-	if _, err := s.db.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen)
-		VALUES ('aaaa', 'a', 'companion', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
-		       ('bbbb', 'b', 'companion', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen)
+		VALUES ('aaaa', 'a', 'companion', 1.0, 1.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+		       ('bbbb', 'b', 'companion', 1.0, 1.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	server := prunequeue.NewPG(s.db, ctl)
@@ -171,7 +171,7 @@ func TestPostgresUnreadablePruneRequestGetsErrorResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s.RunPendingPruneRequests()
+	s.RunPendingPruneRequests(testPruneFilter)
 
 	for _, c := range []struct{ id, want string }{{garbled, "invalid character"}, {misnamed, "request names id"}} {
 		if pending, err := server.RequestExists(c.id); err != nil || pending {
@@ -213,7 +213,7 @@ func TestSQLiteUnreadablePruneRequestRemoved(t *testing.T) {
 	if err := os.WriteFile(p, []byte("not-json{{{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s.RunPendingPruneRequests()
+	s.RunPendingPruneRequests(testPruneFilter)
 	if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("unreadable request file left behind (%v)", err)
 	}

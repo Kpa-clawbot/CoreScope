@@ -697,12 +697,15 @@ func main() {
 	// Postgres); the ingestor (which holds the
 	// write handle) executes the DELETEs. Process on startup, then every
 	// 15 seconds — short enough for a one-click UX, long enough to avoid
-	// useless wake-ups.
-	store.RunPendingPruneRequests()
+	// useless wake-ups. Each pass re-reads geo_filter from the config file
+	// (newGeoFilterSource), so a filter saved through the server applies
+	// without a restart.
+	pruneGeoFilter := newGeoFilterSource(*configPath, cfg.GeoFilter)
+	store.RunPendingPruneRequests(pruneGeoFilter.Current())
 	pruneQueueTicker := time.NewTicker(15 * time.Second)
 	go func() {
 		for range pruneQueueTicker.C {
-			store.RunPendingPruneRequests()
+			store.RunPendingPruneRequests(pruneGeoFilter.Current())
 		}
 	}()
 

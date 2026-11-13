@@ -26,8 +26,10 @@ import (
 const postgresMaintenanceNote = "[db] maintenance handled by PostgreSQL autovacuum (WAL checkpoint, incremental vacuum and planner statistics are SQLite-only and skipped)"
 
 // OpenPostgresStore opens the measurement database on PostgreSQL, creating or
-// upgrading its schema (pgschema.Apply) and granting the server's control
-// role its privileges on the control tables (pgschema.EnsureControlGrants).
+// upgrading its schema (pgschema.Apply), refusing to start when another
+// CoreScope install shares the database (pgschema.CheckSingleInstall), and
+// granting the server's control role its privileges on the control tables
+// (pgschema.EnsureControlGrants).
 // queuePath is the configured dbPath: on Postgres it is only the place the
 // empty-target guard looks for a SQLite database that has not been copied
 // over yet. Nothing is exchanged with the server through files: geo-prune
@@ -57,6 +59,14 @@ func OpenPostgresStore(dsn, queuePath string, sampleIntervalSec int) (*Store, er
 	return s, nil
 }
 
+// allowSharedDatabaseForTests skips the single-install check
+// (pgschema.CheckSingleInstall). Only the test binary sets it: the tests run
+// many throwaway CoreScope schemas side by side in one database, which a
+// production ingestor must refuse — the control tables live in one fixed
+// schema, so two installs would consume each other's prune requests and
+// snapshots.
+var allowSharedDatabaseForTests bool
+
 // openPostgresStoreDB is OpenPostgresStore on an already opened handle (tests
 // pass one scoped to a throwaway schema). It owns db from here on, but leaves
 // closing it on error to the caller.
@@ -75,6 +85,11 @@ func openPostgresStoreDB(db *sql.DB, queuePath string, sampleIntervalSec int) (*
 	}
 	if err := pgschema.Apply(context.Background(), db, log.Printf); err != nil {
 		return nil, fmt.Errorf("applying postgres schema: %w", err)
+	}
+	if !allowSharedDatabaseForTests {
+		if err := pgschema.CheckSingleInstall(context.Background(), db); err != nil {
+			return nil, fmt.Errorf("refusing to start: %w", err)
+		}
 	}
 	if err := ensureControlGrants(db); err != nil {
 		return nil, err
