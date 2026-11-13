@@ -710,7 +710,7 @@ role and schema and `prod` gets `DB_DSN_ACCOUNTS`; the ingestor does not. Withou
 an empty value, which the entrypoint drops. In the single-container layout and in Kubernetes
 (see [Kubernetes and high availability](#kubernetes-and-high-availability)) pass the variable to
 the server container only. The Docker image's server user gets it through its environment
-allow-list.
+allow-list. The Docker image refuses `DB_DSN_ACCOUNTS` in a container that also runs the ingestor; outside Docker, do not put a password-bearing `userManagement.dsn` in a `config.json` the ingestor also reads, and use the `DB_DSN_ACCOUNTS` environment variable for the server only.
 
 You still need `userManagement.enabled` and the rest of the block (`publicBaseUrl`, mail
 settings) in `config.json`, as in the [accounts guide](user-guide/accounts.md).

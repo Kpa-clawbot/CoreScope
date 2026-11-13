@@ -375,6 +375,18 @@ case "${DISABLE_INGESTOR:-false}" in
   *) echo "[entrypoint] DISABLE_INGESTOR must be true or false, got \"$DISABLE_INGESTOR\"" >&2; exit 1 ;;
 esac
 
+# The accounts DSN (a PostgreSQL credential) is for the server only. Every
+# supervisord child inherits supervisord's environment, so in a container that
+# also runs the ingestor, which parses untrusted MQTT input, it would reach the
+# ingestor too. Refuse that layout; never print the value.
+if [ -n "${DB_DSN_ACCOUNTS:-}" ] && [ "$WITH_INGESTOR" = true ]; then
+  echo "[entrypoint] DB_DSN_ACCOUNTS is set in a container that also runs the ingestor; refusing to start." >&2
+  echo "[entrypoint] The accounts DSN must only reach a server-only container: set DISABLE_INGESTOR=true here" >&2
+  echo "[entrypoint] and run the ingestor in its own container, as docker-compose.postgres.yml does." >&2
+  echo "[entrypoint] See docs/postgresql.md (User accounts in PostgreSQL)." >&2
+  exit 1
+fi
+
 if [ "$DB_MODE" = postgres ]; then
   if config_has_dsn; then
     pg_log "config.json sets db.dsn, which the server can read; pass DB_DSN_SERVER (and the ingestor's DSN to its own container) in the environment instead"
