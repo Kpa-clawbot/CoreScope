@@ -313,7 +313,9 @@ assert.deepEqual(builds.map(command => command.slice(1, 5)), [
   ['linux', 'arm64', '1', 'zig cc -target aarch64-linux-musl'],
 ]);
 for (const command of builds) {
-  assert.ok(command.includes("-ldflags=-s -w -extldflags '-static -Wl,-s' -X main.version=v9.8.7"), 'binary version must come from tag, and the artifact must stay static');
+  // -Wl,-z,stack-size=8388608 gives musl threads 8 MiB stacks: without it deep
+  // SQLite queries overflow musl's 128 KiB default and SIGSEGV.
+  assert.ok(command.includes("-ldflags=-s -w -extldflags '-static -Wl,-s -Wl,-z,stack-size=8388608' -X main.version=v9.8.7"), 'binary version must come from tag, the artifact must stay static, and musl threads must get 8 MiB stacks');
   assert.ok(command.includes('-tags'), 'netgo/osusergo/sqlite_omit_load_extension must survive');
 }
 const upload = steps(release).filter(step => step.includes('uses: softprops/action-gh-release@v2'));

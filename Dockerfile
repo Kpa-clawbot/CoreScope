@@ -18,6 +18,13 @@ FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 ARG APP_VERSION=unknown
 ARG GIT_COMMIT=unknown
+# musl gives every non-main thread a 128 KiB stack (glibc: 8 MiB), taken from
+# the ELF PT_GNU_STACK size. cgo calls into SQLite run on the calling thread's
+# stack, and a deep query (multiSelect recursing ~850 B per UNION ALL term)
+# overflows 128 KiB and SIGSEGVs the server. Raising the linker's stack size
+# makes musl threads default to 8 MiB (reserved address space, not resident).
+# Go rejects this flag in #cgo LDFLAGS, so it must go in -extldflags.
+ARG STACK_LDFLAG="-Wl,-z,stack-size=8388608"
 ARG BUILD_TIME=unknown
 # Provided by buildx for multi-arch builds
 ARG TARGETOS
@@ -81,7 +88,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/tmp/zig-cache \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
-    -ldflags "-s -w -extldflags '-static -Wl,-s' -X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}' -X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" \
     -o /corescope-server .
 
 # Build ingestor
@@ -106,7 +113,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/tmp/zig-cache \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
-    -ldflags "-s -w -extldflags '-static -Wl,-s'" \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}'" \
     -o /corescope-ingestor .
 
 # Build decrypt CLI
@@ -123,7 +130,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/tmp/zig-cache \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
-    -ldflags "-s -w -extldflags '-static -Wl,-s' -X main.version=${APP_VERSION}" \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}' -X main.version=${APP_VERSION}" \
     -o /corescope-decrypt .
 
 # Runtime image
