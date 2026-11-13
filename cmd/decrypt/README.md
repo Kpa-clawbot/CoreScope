@@ -1,6 +1,6 @@
 # corescope-decrypt
 
-Standalone CLI tool to decrypt and export MeshCore hashtag channel messages from a CoreScope SQLite database.
+Standalone CLI tool to decrypt and export MeshCore hashtag channel messages from a CoreScope database (SQLite file or PostgreSQL).
 
 ## Why
 
@@ -45,8 +45,17 @@ The binary is statically linked — no dependencies, runs on any Linux.
 ## Usage
 
 ```
-corescope-decrypt --channel NAME --db PATH [--format FORMAT] [--output FILE]
+corescope-decrypt --channel NAME --db PATH|URL [--format FORMAT] [--output FILE]
 ```
+
+`--db` is either a SQLite file path or a PostgreSQL URL (`postgres://` or `postgresql://`):
+
+```bash
+corescope-decrypt --channel "#wardriving" --db meshcore.db
+corescope-decrypt --channel "#wardriving" --db "postgres://corescope:PASSWORD@db.example:5432/corescope?sslmode=require"
+```
+
+PostgreSQL connections are opened with `default_transaction_read_only=on`, and the URL's password is never printed in errors. Observer names in the output come from the `observers` table (an earlier version joined on the wrong column and always left them empty; fixed).
 
 Run `corescope-decrypt --help` for full flag documentation.
 
@@ -138,5 +147,5 @@ go test -v ./...
 
 - **Hashtag channels only.** Only channels where the key is derived from `SHA-256("#name")` are supported. Custom PSK channels require the raw key (not implemented).
 - **No DM decryption.** Direct messages (`TXT_MSG`) use per-peer asymmetric encryption and cannot be decrypted by this tool.
-- **Read-only.** The tool opens the database in read-only mode and never modifies it.
+- **Read-only.** The tool opens the database in read-only mode (SQLite `mode=ro`, PostgreSQL `default_transaction_read_only=on`) and never modifies it.
 - **Timestamps are UTC.** The sender's embedded timestamp is used when available, displayed in UTC.
