@@ -17,6 +17,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -66,7 +67,9 @@ FLAGS
   --channel NAME   Channel name to decrypt (e.g. "#wardriving", "wardriving")
                    The "#" prefix is added automatically if missing.
   --db PATH|URL    Path to a CoreScope SQLite database file, or a PostgreSQL
-                   URL (postgres://user:pass@host:5432/dbname). Read-only access.
+                   URL (postgres://user@host:5432/dbname). Read-only access.
+                   Do not put a password in the URL (it shows in ps); set
+                   PGPASSWORD or use ~/.pgpass.
   --format FORMAT  Output format (default: json):
                      json  — Machine-readable JSON array with full metadata
                      html  — Self-contained HTML viewer with search and sorting
@@ -199,16 +202,33 @@ func openDB(arg string) (*sql.DB, error) {
 	return db, nil
 }
 
-// redactErr returns an error whose text has u's password and userinfo removed.
+// passwordKV matches a password=value pair (URL query or key=value DSN text).
+var passwordKV = regexp.MustCompile(`(?i)(password=)[^\s&]*`)
+
+// redactErr returns an error whose text has every password in u removed: the
+// userinfo password and any ?password= query parameter.
 func redactErr(err error, u *url.URL) error {
 	msg := err.Error()
+	var secrets []string
 	if u.User != nil {
-		if pw, ok := u.User.Password(); ok && pw != "" {
-			for _, v := range []string{pw, url.QueryEscape(pw), url.PathEscape(pw)} {
-				msg = strings.ReplaceAll(msg, v, "xxxxx")
-			}
+		if pw, ok := u.User.Password(); ok {
+			secrets = append(secrets, pw)
 		}
 	}
+	for k, vs := range u.Query() {
+		if strings.EqualFold(k, "password") {
+			secrets = append(secrets, vs...)
+		}
+	}
+	for _, pw := range secrets {
+		if pw == "" {
+			continue
+		}
+		for _, v := range []string{pw, url.QueryEscape(pw), url.PathEscape(pw)} {
+			msg = strings.ReplaceAll(msg, v, "xxxxx")
+		}
+	}
+	msg = passwordKV.ReplaceAllString(msg, "${1}xxxxx")
 	return fmt.Errorf("%s", msg)
 }
 

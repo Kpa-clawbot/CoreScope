@@ -52,7 +52,13 @@ corescope-decrypt --channel NAME --db PATH|URL [--format FORMAT] [--output FILE]
 
 ```bash
 corescope-decrypt --channel "#wardriving" --db meshcore.db
-corescope-decrypt --channel "#wardriving" --db "postgres://corescope:PASSWORD@db.example:5432/corescope?sslmode=require"
+corescope-decrypt --channel "#wardriving" --db "postgres://corescope@db.example:5432/corescope?sslmode=require"
+```
+
+Do not put the password in the URL: command-line arguments are visible in `ps`. Supply it with `PGPASSWORD` or `~/.pgpass` instead:
+
+```bash
+PGPASSWORD=... corescope-decrypt --channel "#wardriving" --db "postgres://corescope@db.example/corescope?sslmode=require"
 ```
 
 PostgreSQL connections are opened with `default_transaction_read_only=on`, and the URL's password is never printed in errors. Observer names in the output come from the `observers` table (an earlier version joined on the wrong column and always left them empty; fixed).

@@ -9,6 +9,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,8 +166,9 @@ func TestOpenDBPostgresIsReadOnly(t *testing.T) {
 func TestOpenDBRedactsPassword(t *testing.T) {
 	const pw = "s3cr3tPassw0rd"
 	for _, u := range []string{
-		"postgres://user:" + pw + "@127.0.0.1:1/db?sslmode=disable&connect_timeout=2", // unreachable
-		"postgresql://user:" + pw + "@127.0.0.1:notaport/db",                          // unparseable
+		"postgres://user:" + pw + "@127.0.0.1:1/db?sslmode=disable&connect_timeout=2",     // unreachable
+		"postgresql://user:" + pw + "@127.0.0.1:notaport/db",                              // unparseable
+		"postgres://user@127.0.0.1:1/db?sslmode=disable&connect_timeout=2&password=" + pw, // query password
 	} {
 		_, err := openDB(u)
 		if err == nil {
@@ -173,6 +176,20 @@ func TestOpenDBRedactsPassword(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), pw) {
 			t.Fatalf("error leaks password: %v", err)
+		}
+	}
+}
+
+func TestRedactErrQueryPassword(t *testing.T) {
+	const pw = "q-s3cret"
+	u, err := url.Parse("postgres://user@h/db?password=" + pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []string{"dial failed for " + pw, "conninfo host=h password=" + pw + " user=u"} {
+		got := redactErr(errors.New(in), u).Error()
+		if strings.Contains(got, pw) {
+			t.Fatalf("leaks password: %q", got)
 		}
 	}
 }
