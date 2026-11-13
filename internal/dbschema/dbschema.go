@@ -120,6 +120,11 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureObserverNeighborReports(rw); err != nil {
 		return fmt.Errorf("ensure observer neighbor reports: %w", err)
 	}
+	// Must run LAST: the ensureObserver*Column steps above bring a legacy
+	// observers table up to the canonical columns the rebuild copies.
+	if err := ensureObserversIdx(rw, logf); err != nil {
+		return fmt.Errorf("ensure observers.idx: %w", err)
+	}
 	// Advert evidence is intentionally not required by AssertReady: a legacy
 	// read-only server reports unknown until this table/backfill is available,
 	// and re-probes absence instead of caching the startup race permanently.
@@ -202,6 +207,9 @@ func AssertReady(ro *sql.DB) error {
 	// an explicit value; can_relay_seen=0 means leave the UI badge
 	// unset (unknown state).
 	mustCol("observers", "can_relay_seen")
+	// observations.observer_idx references observers.idx, an explicit
+	// INTEGER PRIMARY KEY (== rowid) that survives dump-and-reload.
+	mustCol("observers", "idx")
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",

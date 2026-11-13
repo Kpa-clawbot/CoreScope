@@ -22,9 +22,9 @@ func setupScopeRegionServer(t *testing.T) (*Server, *mux.Router) {
 	t.Helper()
 	srv, router := setupScopeAuditServer(t)
 	for _, ddl := range []string{
-		`CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)`,
+		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT)`,
 		`ALTER TABLE observations ADD COLUMN observer_idx INTEGER`,
-		`INSERT INTO observers (rowid, id, name, iata) VALUES (1, 'obs-sfo', 'San Francisco', 'SFO'), (2, 'obs-bru', 'Brussels', 'BRU')`,
+		`INSERT INTO observers (idx, id, name, iata) VALUES (1, 'obs-sfo', 'San Francisco', 'SFO'), (2, 'obs-bru', 'Brussels', 'BRU')`,
 	} {
 		if _, err := srv.db.conn.Exec(ddl); err != nil {
 			t.Fatal(err)
@@ -154,7 +154,7 @@ func TestScopeAudit_RegionWithNoObserversMatchesNothing(t *testing.T) {
 func TestScopeTransport_RegionOnV2Schema(t *testing.T) {
 	srv, router := setupScopeAuditServer(t)
 	for _, ddl := range []string{
-		`CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)`,
+		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT)`,
 		`ALTER TABLE observations ADD COLUMN observer_id TEXT`,
 		`INSERT INTO observers (id, name, iata) VALUES ('obs-sfo', 'San Francisco', 'SFO'), ('obs-bru', 'Brussels', 'BRU')`,
 	} {

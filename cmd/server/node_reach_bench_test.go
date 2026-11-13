@@ -30,7 +30,7 @@ func benchReachDB(b *testing.B, nObs, matchEvery int, lowerHops bool) *DB {
 	}
 	schema := []string{
 		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, hash TEXT, first_seen TEXT, payload_type INTEGER, from_pubkey TEXT)`,
-		`CREATE TABLE observers (id TEXT PRIMARY KEY, name TEXT, inactive INTEGER)`,
+		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, inactive INTEGER)`,
 		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, snr REAL, path_json TEXT, timestamp INTEGER)`,
 		`CREATE INDEX idx_obs_ts ON observations(timestamp)`,
 	}
@@ -160,7 +160,7 @@ func TestScanReachRows_ErrorReturn(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	// PREFLIGHT: async=true reason="test-only in-memory scratch schema, immediately closed"
-	if _, err := conn.Exec(`CREATE TABLE observations (id INTEGER); CREATE TABLE transmissions (id INTEGER); CREATE TABLE observers (rowid INTEGER, id TEXT, inactive INTEGER)`); err != nil {
+	if _, err := conn.Exec(`CREATE TABLE observations (id INTEGER); CREATE TABLE transmissions (id INTEGER); CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, inactive INTEGER)`); err != nil {
 		t.Fatalf("schema: %v", err)
 	}
 	conn.Close() // force QueryContext to fail

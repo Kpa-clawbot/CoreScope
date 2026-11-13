@@ -6,7 +6,7 @@ import (
 )
 
 // staleObserver inserts an observer already soft-deleted (inactive = 1) with
-// last_seen ageDays in the past, and returns its rowid.
+// last_seen ageDays in the past, and returns its idx.
 func staleObserver(t *testing.T, s *Store, id string) int64 {
 	t.Helper()
 	if err := s.UpsertObserver(id, id, "LAX", nil); err != nil {
@@ -16,11 +16,11 @@ func staleObserver(t *testing.T, s *Store, id string) int64 {
 	if _, err := s.db.Exec(`UPDATE observers SET last_seen = ?, inactive = 1 WHERE id = ?`, old, id); err != nil {
 		t.Fatal(err)
 	}
-	var rowid int64
-	if err := s.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, id).Scan(&rowid); err != nil {
+	var idx int64
+	if err := s.db.QueryRow(`SELECT idx FROM observers WHERE id = ?`, id).Scan(&idx); err != nil {
 		t.Fatal(err)
 	}
-	return rowid
+	return idx
 }
 
 func observerExists(t *testing.T, s *Store, id string) bool {
@@ -48,12 +48,12 @@ func TestPurgeStaleObserversDeletesUnreferencedRow(t *testing.T) {
 	}
 }
 
-// Regression: an observer whose rowid is still referenced by observations must
+// Regression: an observer whose idx is still referenced by observations must
 // survive the purge — deleting it orphans observations.observer_idx, which
 // breaks the packets_v join and mis-attributes historical packets.
 func TestPurgeStaleObserversKeepsObserverWithObservations(t *testing.T) {
 	store := newTestStore(t)
-	rowid := staleObserver(t, store, "obs-referenced")
+	idx := staleObserver(t, store, "obs-referenced")
 
 	if _, err := store.db.Exec(
 		`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (1, 'AA', 'h1', ?)`,
@@ -62,7 +62,7 @@ func TestPurgeStaleObserversKeepsObserverWithObservations(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(
-		`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (1, ?, 0)`, rowid,
+		`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (1, ?, 0)`, idx,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestPurgeStaleObserversKeepsObserverWithObservations(t *testing.T) {
 	var orphans int
 	if err := store.db.QueryRow(
 		`SELECT COUNT(*) FROM observations WHERE observer_idx IS NOT NULL
-		 AND observer_idx NOT IN (SELECT rowid FROM observers)`,
+		 AND observer_idx NOT IN (SELECT idx FROM observers)`,
 	).Scan(&orphans); err != nil {
 		t.Fatal(err)
 	}

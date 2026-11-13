@@ -421,7 +421,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 					o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
 				FROM (SELECT * FROM transmissions t2 ` + whereClause + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
 				LEFT JOIN observations o ON o.transmission_id = t.id
-				LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+				LEFT JOIN observers obs ON obs.idx = o.observer_idx
 				ORDER BY t.id ASC, o.timestamp DESC`
 		} else {
 			chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,

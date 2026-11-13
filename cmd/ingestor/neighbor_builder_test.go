@@ -44,7 +44,7 @@ func TestNeighborEdgesBuilderUpsertsFromObservations(t *testing.T) {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT idx FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,7 +118,7 @@ func TestNeighborEdgesBuilderUpsertsFromAnonReqEphemeralPubKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT idx FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +190,7 @@ func TestNeighborEdgesBuilderExcludesOtherNonAdvertTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT idx FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 
@@ -250,7 +250,7 @@ func seedTrustFixture(t *testing.T, store *Store, hop string) {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT idx FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 	res, err := store.db.Exec(
@@ -354,7 +354,7 @@ func TestNeighborEdgesBuilderSkipsOwnTransmissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT idx FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 	res, err := store.db.Exec(

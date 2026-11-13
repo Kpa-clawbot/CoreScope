@@ -42,7 +42,7 @@ func setupTestDB(t testing.TB) *DB {
 		);
 
 		CREATE TABLE observers (
-			id TEXT PRIMARY KEY,
+			idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
 			name TEXT,
 			iata TEXT,
 			last_seen TEXT,
@@ -1248,7 +1248,7 @@ func setupTestDBV2(t *testing.T) *DB {
 		);
 
 		CREATE TABLE observers (
-			id TEXT PRIMARY KEY,
+			idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
 			name TEXT,
 			iata TEXT,
 			last_seen TEXT,
@@ -2219,8 +2219,8 @@ func TestPerObservationRawHexEnrich(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observers (id, name) VALUES ('obs-b', 'Observer B')`)
 
 	var rowA, rowB int64
-	db.conn.QueryRow(`SELECT rowid FROM observers WHERE id='obs-a'`).Scan(&rowA)
-	db.conn.QueryRow(`SELECT rowid FROM observers WHERE id='obs-b'`).Scan(&rowB)
+	db.conn.QueryRow(`SELECT idx FROM observers WHERE id='obs-a'`).Scan(&rowA)
+	db.conn.QueryRow(`SELECT idx FROM observers WHERE id='obs-b'`).Scan(&rowB)
 
 	// Insert transmission with raw_hex
 	txHex := "deadbeef"

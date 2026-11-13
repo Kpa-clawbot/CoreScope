@@ -49,7 +49,7 @@ func TestNeighborEdgesBuilderDeltaScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT idx FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 

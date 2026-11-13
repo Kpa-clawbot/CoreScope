@@ -31,7 +31,8 @@ CREATE TABLE nodes (
 );
 
 CREATE TABLE observers (
-    id TEXT PRIMARY KEY,
+    idx INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
     name TEXT,
     iata TEXT,
     last_seen TEXT,
@@ -96,7 +97,7 @@ data = json.load(sys.stdin)
 observers = data.get('observers', data) if isinstance(data, dict) else data
 db = sqlite3.connect('$DB_PATH')
 for o in observers:
-    db.execute('INSERT OR IGNORE INTO observers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    db.execute('INSERT OR IGNORE INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (o.get('id',''), o.get('name',''), o.get('iata',''),
          o.get('last_seen',''), o.get('first_seen',''),
          o.get('packet_count',0), o.get('model',''), o.get('firmware',''),
@@ -114,12 +115,12 @@ import json, sys, sqlite3
 data = json.load(sys.stdin)
 packets = data.get('packets', data) if isinstance(data, dict) else data
 db = sqlite3.connect('$DB_PATH')
-# Build observer_id (text hash) -> rowid map. The v3 join in cmd/server uses
-# 'observers.rowid = observations.observer_idx', so we MUST store the integer
-# rowid here — NOT the text observer hash. Storing the hash silently breaks
+# Build observer_id (text hash) -> idx map. The v3 join in cmd/server uses
+# 'observers.idx = observations.observer_idx', so we MUST store the integer
+# idx here — NOT the text observer hash. Storing the hash silently breaks
 # the join (returns NULL observer_name / observer_iata) and was the root
 # cause of issue #1249 (E2E IATA badge never rendered on the fixture).
-obs_rowid = {row[0]: row[1] for row in db.execute('SELECT id, rowid FROM observers')}
+obs_idx = {row[0]: row[1] for row in db.execute('SELECT id, idx FROM observers')}
 unmapped = 0
 for p in packets:
     try:
@@ -130,7 +131,7 @@ for p in packets:
         tid = cur.lastrowid
         oid = p.get('observer_id')
         if tid and oid:
-            rid = obs_rowid.get(oid)
+            rid = obs_idx.get(oid)
             if rid is None:
                 unmapped += 1
                 continue  # observer not in fixture — skip rather than poison join
