@@ -14,13 +14,15 @@ package main
 //
 // The pool runs as the same role as the main pool, so it can do no more than
 // that role may: verifyPostgresNoWritePrivilege refuses any write privilege on
-// the measurement schema, and on the control schema everything except what
-// the group role corescope_control_client holds. The pool is opened only when
+// the measurement schema, and on the control schema everything beyond the
+// column INSERT the group role corescope_control_client holds. The pool is opened only when
 // the role inherits that group and the group holds exactly the control grants
-// (pgschema.ControlGrantsOK): INSERT on prune_requests and mbcap_snapshots,
-// SELECT on those and prune_results. Otherwise the server starts without it,
-// logs one warning, and the control features are off: the prune endpoints
-// answer 503 and the multibyte snapshot is not published.
+// (pgschema.CheckControlGrants): column INSERT (id, payload) on prune_requests
+// and mbcap_snapshots, SELECT on those and prune_results. If the role is not
+// in the group or the group lacks a grant, the server starts without it, logs
+// one warning, and the control features are off: the prune endpoints answer
+// 503 and the multibyte snapshot is not published. A group holding MORE than
+// those grants refuses startup.
 
 import (
 	"context"
@@ -62,7 +64,10 @@ func pgControlParams(statementTimeoutSec int) []pgParam {
 
 // pgControlAvailability reports whether the session's role can use the
 // control tables: it inherits pgControlRole and that role holds exactly the
-// control grants. reason says why not, for the startup warning.
+// control grants. reason says why not, for the startup warning. A control
+// role holding more than those grants is an error (pgschema.ControlExcess):
+// the server must not run with a group role that can do more than the
+// control writes, whether or not this session's role is in it yet.
 func pgControlAvailability(ctx context.Context, conn *sql.DB) (ok bool, reason string, err error) {
 	var exists, member bool
 	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ?)`, pgControlRole).Scan(&exists); err != nil {
@@ -79,20 +84,27 @@ func pgControlAvailability(ctx context.Context, conn *sql.DB) (ok bool, reason s
 	if !member {
 		return false, "the role does not inherit " + pgControlRole + " (GRANT " + pgControlRole + " TO <reader>, or run scripts/postgres-roles.sh)", nil
 	}
-	grantsOK, err := pgschema.ControlGrantsOK(ctx, conn)
+	state, detail, err := pgschema.CheckControlGrants(ctx, conn)
 	if err != nil {
 		return false, "", err
 	}
-	if !grantsOK {
-		return false, pgControlRole + " does not hold exactly the control grants (start the ingestor, which repairs them, or run scripts/postgres-roles.sh)", nil
+	switch state {
+	case pgschema.ControlExact:
+		return true, "", nil
+	case pgschema.ControlExcess:
+		var role string
+		_ = conn.QueryRowContext(ctx, `SELECT current_user`).Scan(&role)
+		return false, "", fmt.Errorf("postgres role %q is a member of %s, which holds more than the control grants: %s (revoke them, or start the ingestor, which repairs the grants)", role, pgControlRole, detail)
+	default: // ControlAbsent, ControlIncomplete
+		return false, pgControlRole + " does not hold all the control grants: " + detail + " (start the ingestor, which repairs them, or run scripts/postgres-roles.sh)", nil
 	}
-	return true, "", nil
 }
 
 // openPostgresControl opens the control pool and the Postgres queues on it
 // when the role may use the control tables (see the file comment). When it
 // may not, it logs one warning and leaves them nil; that is not an error.
-// An error means the checks or the pool themselves failed: startup stops.
+// An error means the checks or the pool themselves failed, or the control
+// role holds excess grants: startup stops.
 // Called once by OpenPostgresDBWithStatementTimeout, after the main pool's
 // privilege checks passed.
 func (d *DB) openPostgresControl(ctx context.Context, dsn string, statementTimeoutSec int) error {

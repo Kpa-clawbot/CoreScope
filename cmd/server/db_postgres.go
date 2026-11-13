@@ -70,12 +70,13 @@ func OpenPostgresDB(dsn string) (*DB, error) {
 // statement_timeout bounds what one request to the unauthenticated public API
 // can cost the database.
 //
-// The one exception is the control schema (control_pg.go): what the group
-// role corescope_control_client holds there is allowed, and when the role
-// inherits that group with exactly the control grants a second, small pool
-// with read-only transactions forced off is opened for the control tables
-// alone. Without it the server still starts, with geo-prune and multibyte
-// capability publishing disabled.
+// The one exception is the control schema (control_pg.go): the column-level
+// INSERT the group role corescope_control_client holds there is allowed, and
+// when the role inherits that group with exactly the control grants a second,
+// small pool with read-only transactions forced off is opened for the control
+// tables alone. Without it (role absent, not inherited, or missing a grant)
+// the server still starts, with geo-prune and multibyte capability publishing
+// disabled; a control role holding more than its exact grants refuses startup.
 //
 // After those checks it follows OpenDB: schema detection on one pinned
 // connection, then the prepared statements, then the control pool.
@@ -185,6 +186,14 @@ const pgReachableRoles = `
 		SELECT m.roleid FROM pg_auth_members m JOIN reach r ON m.member = r.oid
 	)`
 
+// pgControlInsertTables and pgControlInsertColumns are the SQL lists of the
+// one write the control role may hold in the control schema: column-level
+// INSERT on these columns of these tables (pgschema.EnsureControlGrants).
+const (
+	pgControlInsertTables  = `'prune_requests', 'mbcap_snapshots'`
+	pgControlInsertColumns = `'id', 'payload'`
+)
+
 // pgWritePowerChecks are the ways a reachable role could write, each a query
 // on pgReachableRoles returning one finding per row. Placeholders: the write
 // privilege list (pgWritePrivileges).
@@ -247,30 +256,46 @@ var pgWritePowerChecks = []struct {
 		args: true,
 	},
 	{
+		// A sequence is writable state: UPDATE allows setval, USAGE allows
+		// nextval (an identity or serial column's counter, which the ingestor
+		// owns). SELECT alone only reads the counter.
+		what: "sequence privileges",
+		query: pgReachableRoles + `
+		SELECT CASE WHEN pg_get_userbyid(r.oid) = current_user THEN c.relname
+			ELSE format('%s (via role %I)', c.relname, pg_get_userbyid(r.oid)) END
+		FROM reach r
+		CROSS JOIN pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema()
+		  AND c.relkind = 'S'
+		  AND has_sequence_privilege(r.oid, c.oid, 'UPDATE, USAGE')
+		ORDER BY 1`,
+	},
+	{
 		// The control schema is written through membership in pgControlRole
-		// only (control_pg.go), whose grants there are its own business
-		// (pgschema.EnsureControlGrants keeps them exact; the control pool
-		// is only opened when ControlGrantsOK). Any other reachable role, or
-		// PUBLIC, holding write power there — a table or column grant,
-		// ownership of a table or of the schema, CREATE on it — refuses
-		// startup like a write grant on the measurement schema would.
-		// pgControlRole's own grants on the measurement schema are caught by
-		// the table check above, which runs for every reachable role.
+		// only (control_pg.go), and only as far as the exact grants
+		// pgschema.EnsureControlGrants gives it: column-level INSERT on
+		// (id, payload) of the two request tables (pgControlInsertColumns).
+		// Nothing else counts as allowed, for any reachable role, the
+		// control role included, or PUBLIC: a table or column grant,
+		// USAGE on a sequence, ownership of a table or of the schema,
+		// CREATE on it refuses startup like a write grant on the
+		// measurement schema would.
 		what: "control schema privileges",
 		query: pgReachableRoles + `,
-		others(oid) AS (
+		holders(oid) AS (
 			SELECT oid FROM reach
-			WHERE oid IS DISTINCT FROM (SELECT oid FROM pg_roles WHERE rolname = '` + pgControlRole + `')
 			UNION SELECT 0::oid
 		),
-		privs(p) AS (SELECT unnest(string_to_array(replace(?, ' ', ''), ',')))
+		privs(p) AS (SELECT unnest(string_to_array(replace(?, ' ', ''), ',') || ARRAY['USAGE'])),
+		ctlrole(oid) AS (SELECT oid FROM pg_roles WHERE rolname = '` + pgControlRole + `')
 		SELECT format('%s %s on %I.%I', CASE WHEN a.grantee = 0 THEN 'PUBLIC has' ELSE format('role %I has', pg_get_userbyid(a.grantee)) END,
 			a.privilege_type, n.nspname, c.relname)
 		FROM pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		CROSS JOIN LATERAL aclexplode(c.relacl) a
 		WHERE n.nspname = '` + pgControlSchema + `'
-		  AND a.grantee IN (SELECT oid FROM others)
+		  AND a.grantee IN (SELECT oid FROM holders)
 		  AND a.privilege_type IN (SELECT p FROM privs)
 		UNION ALL
 		SELECT format('%s %s on column %I.%I.%I', CASE WHEN a.grantee = 0 THEN 'PUBLIC has' ELSE format('role %I has', pg_get_userbyid(a.grantee)) END,
@@ -280,25 +305,29 @@ var pgWritePowerChecks = []struct {
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		CROSS JOIN LATERAL aclexplode(t.attacl) a
 		WHERE n.nspname = '` + pgControlSchema + `'
-		  AND a.grantee IN (SELECT oid FROM others)
+		  AND a.grantee IN (SELECT oid FROM holders)
 		  AND a.privilege_type IN ('INSERT', 'UPDATE')
+		  AND NOT (a.privilege_type = 'INSERT'
+		       AND a.grantee IN (SELECT oid FROM ctlrole)
+		       AND c.relname IN (` + pgControlInsertTables + `)
+		       AND t.attname IN (` + pgControlInsertColumns + `))
 		UNION ALL
 		SELECT format('role %I owns %I.%I', pg_get_userbyid(c.relowner), n.nspname, c.relname)
 		FROM pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE n.nspname = '` + pgControlSchema + `'
-		  AND c.relowner IN (SELECT oid FROM others)
+		  AND c.relowner IN (SELECT oid FROM holders)
 		UNION ALL
 		SELECT format('role %I owns schema %I', pg_get_userbyid(n.nspowner), n.nspname)
 		FROM pg_namespace n
 		WHERE n.nspname = '` + pgControlSchema + `'
-		  AND n.nspowner IN (SELECT oid FROM others)
+		  AND n.nspowner IN (SELECT oid FROM holders)
 		UNION ALL
 		SELECT format('%s CREATE on schema %I', CASE WHEN a.grantee = 0 THEN 'PUBLIC has' ELSE format('role %I has', pg_get_userbyid(a.grantee)) END, n.nspname)
 		FROM pg_namespace n
 		CROSS JOIN LATERAL aclexplode(n.nspacl) a
 		WHERE n.nspname = '` + pgControlSchema + `'
-		  AND a.grantee IN (SELECT oid FROM others)
+		  AND a.grantee IN (SELECT oid FROM holders)
 		  AND a.privilege_type = 'CREATE'
 		ORDER BY 1`,
 		args: true,
@@ -309,7 +338,8 @@ var pgWritePowerChecks = []struct {
 // power over the CoreScope database, as any role it can act as (see
 // pgReachableRoles): a write privilege on a relation in its schema, a
 // dangerous role attribute, ownership of / CREATE on a schema it searches, or
-// write power on the control schema other than through pgControlRole.
+// write power on the control schema beyond the control role's exact column
+// INSERT, or UPDATE/USAGE on a sequence.
 //
 // Reachable roles are each checked exactly, rather than refusing every
 // membership outside an allowlist of predefined roles: a deployment that
@@ -335,8 +365,13 @@ func verifyPostgresNoWritePrivilege(ctx context.Context, conn *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("check %s: %w", chk.what, err)
 		}
-		if chk.what == "table privileges" && len(got) > 0 {
-			got = []string{"can write " + strings.Join(pgFirstN(got, 5), ", ")}
+		if len(got) > 0 {
+			switch chk.what {
+			case "table privileges":
+				got = []string{"can write " + strings.Join(pgFirstN(got, 5), ", ")}
+			case "sequence privileges":
+				got = []string{"can advance or set sequence " + strings.Join(pgFirstN(got, 5), ", ")}
+			}
 		}
 		findings = append(findings, got...)
 	}

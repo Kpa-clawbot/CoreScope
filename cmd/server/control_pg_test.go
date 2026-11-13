@@ -23,7 +23,7 @@ const pgControlTestLock = 0x43534354 // "CSCT"
 
 // pgControlRoleForTest makes pgControlRole exist with exactly the control
 // grants for the test's duration. The role name is cluster-wide and fixed
-// (pgschema.ControlGrantsOK checks that name), so the test holds an advisory
+// (pgschema.CheckControlGrants checks that name), so the test holds an advisory
 // lock for its whole run, and drops the role in Cleanup only if it created
 // it. Register it before any role that becomes a member, so that role's
 // Cleanup (which drops it) runs first.
@@ -61,8 +61,8 @@ func pgControlRoleForTest(t *testing.T, seed *sql.DB) {
 	if err := pgschema.EnsureControlGrants(ctx, seed); err != nil {
 		t.Fatalf("EnsureControlGrants: %v", err)
 	}
-	if ok, err := pgschema.ControlGrantsOK(ctx, seed); err != nil || !ok {
-		t.Fatalf("ControlGrantsOK after EnsureControlGrants: %v %v", ok, err)
+	if state, detail, err := pgschema.CheckControlGrants(ctx, seed); err != nil || state != pgschema.ControlExact {
+		t.Fatalf("CheckControlGrants after EnsureControlGrants: %v %q %v", state, detail, err)
 	}
 }
 
@@ -136,7 +136,7 @@ func TestOpenPostgresDBControlMembership(t *testing.T) {
 		_, _ = seed.Exec(`DELETE FROM corescope_control.prune_requests WHERE id = ?`, id)
 	})
 	insertNode := `INSERT INTO nodes (public_key, name) VALUES ('x', 'y')`
-	insertReq := `INSERT INTO corescope_control.prune_requests (id, created_at, payload) VALUES ('` + id + `', 'now', '{}')`
+	insertReq := `INSERT INTO corescope_control.prune_requests (id, payload) VALUES ('` + id + `', '{}')`
 
 	// Main pool: every write fails on the read-only default, control
 	// tables included.
@@ -207,6 +207,29 @@ func TestOpenPostgresDBControlMembershipStillRefusesWrites(t *testing.T) {
 			`GRANT INSERT ON corescope_control.prune_results TO {role}`, "", "INSERT on corescope_control.prune_results"},
 		{"reader with direct UPDATE on a control request table",
 			`GRANT UPDATE ON corescope_control.prune_requests TO {role}`, "", "UPDATE on corescope_control.prune_requests"},
+		{"reader with USAGE on an identity sequence",
+			`GRANT USAGE ON SEQUENCE {seq} TO {role}`, "", "sequence"},
+		{"reader with UPDATE on an identity sequence",
+			`GRANT UPDATE ON SEQUENCE {seq} TO {role}`, "", "sequence"},
+		{"control role with UPDATE on a control table",
+			`GRANT UPDATE ON corescope_control.prune_requests TO ` + pgControlRole,
+			`REVOKE UPDATE ON corescope_control.prune_requests FROM ` + pgControlRole,
+			"UPDATE on corescope_control.prune_requests"},
+		{"control role with table-level INSERT on a control table",
+			`GRANT INSERT ON corescope_control.prune_requests TO ` + pgControlRole,
+			`REVOKE INSERT ON corescope_control.prune_requests FROM ` + pgControlRole,
+			"INSERT on corescope_control.prune_requests"},
+		{"control role with an extra role attribute",
+			`ALTER ROLE ` + pgControlRole + ` CREATEDB`, `ALTER ROLE ` + pgControlRole + ` NOCREATEDB`,
+			"holds more than the control grants"},
+		{"control role with INSERT on an extra column",
+			`GRANT INSERT (created_at) ON corescope_control.prune_requests TO ` + pgControlRole,
+			`REVOKE INSERT (created_at) ON corescope_control.prune_requests FROM ` + pgControlRole,
+			"INSERT on column corescope_control.prune_requests.created_at"},
+		{"control role with INSERT on prune_results",
+			`GRANT INSERT (id, payload) ON corescope_control.prune_results TO ` + pgControlRole,
+			`REVOKE INSERT (id, payload) ON corescope_control.prune_results FROM ` + pgControlRole,
+			"prune_results"},
 		{"reader with CREATE on the control schema",
 			`GRANT CREATE ON SCHEMA corescope_control TO {role}`, "", "CREATE on schema corescope_control"},
 	}
@@ -221,7 +244,12 @@ func TestOpenPostgresDBControlMembershipStillRefusesWrites(t *testing.T) {
 					}
 				})
 			}
-			role, password, dsn := pgTestRole(t, seed, append(append([]string{}, pgControlReaderGrants...), tc.grant)...)
+			var seq string
+			if err := seed.QueryRow(`SELECT pg_get_serial_sequence('transmissions', 'id')`).Scan(&seq); err != nil || seq == "" {
+				t.Fatalf("identity sequence of transmissions.id: %q %v", seq, err)
+			}
+			grant := strings.ReplaceAll(tc.grant, "{seq}", seq)
+			role, password, dsn := pgTestRole(t, seed, append(append([]string{}, pgControlReaderGrants...), grant)...)
 			d, err := OpenPostgresDB(dsn)
 			if err == nil {
 				d.Close()
@@ -287,11 +315,10 @@ func TestOpenPostgresDBWithoutControlDisablesPrune(t *testing.T) {
 			// inherit option is fixed when it is granted.
 			return append(append([]string{}, pgReadOnlyGrants...), `ALTER ROLE {role} NOINHERIT`, `GRANT `+pgControlRole+` TO {role}`)
 		}, "does not inherit " + pgControlRole},
-		{"control grants not exact", func(t *testing.T, seed *sql.DB) []string {
+		{"control grants incomplete", func(t *testing.T, seed *sql.DB) []string {
 			pgControlRoleForTest(t, seed)
-			// The extra grant is on a control table, so it does not refuse
-			// startup; it does make ControlGrantsOK false.
-			if _, err := seed.Exec(`GRANT UPDATE ON corescope_control.prune_requests TO ` + pgControlRole); err != nil {
+			// A missing grant only disables the feature.
+			if _, err := seed.Exec(`REVOKE SELECT ON corescope_control.prune_results FROM ` + pgControlRole); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() {
@@ -300,7 +327,7 @@ func TestOpenPostgresDBWithoutControlDisablesPrune(t *testing.T) {
 				}
 			})
 			return pgControlReaderGrants
-		}, "exactly the control grants"},
+		}, "control grants"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

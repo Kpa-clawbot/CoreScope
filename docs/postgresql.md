@@ -322,7 +322,7 @@ database. The write side cannot. Plan the cluster around that asymmetry.
 | Component | Replicas | Why |
 |---|---|---|
 | Ingestor | **exactly 1** | The only writer. Servers follow new rows by "id greater than the last one seen", which is complete only when ids commit in order — one writer, one connection. |
-| Server | 2 or more | Read-only and independent: each loads its own in-memory store from PostgreSQL and polls for new rows. No sticky sessions are needed; each pushes its own live feed over WebSocket. Verified with five replicas. |
+| Server | 2 or more | Read-only on measurement data (its only writes are control requests for the ingestor, see [How it works](#how-it-works)) and independent: each loads its own in-memory store from PostgreSQL and polls for new rows. No sticky sessions are needed; each pushes its own live feed over WebSocket. Verified with five replicas. |
 | PostgreSQL | your HA setup | CoreScope needs one stable read-write endpoint (see below). |
 
 > [!WARNING]

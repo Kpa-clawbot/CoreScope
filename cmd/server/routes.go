@@ -4121,8 +4121,10 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 
 	// Confirmed enqueue — require pubkeys from the preview to prevent TOCTOU:
 	// only nodes that were shown in preview AND are still outside the filter
-	// at this exact moment are scheduled for deletion. (The ingestor honors
-	// the list verbatim; it does NOT re-evaluate geo_filter membership.)
+	// at this exact moment are scheduled for deletion. The ingestor does not
+	// trust the list: it re-checks every pubkey against its own geo_filter and
+	// deletes only nodes it also considers outside it (with a position),
+	// skipping the rest (reported as skipped / skipReasons in the result).
 	var body struct {
 		Pubkeys []string `json:"pubkeys"`
 	}
@@ -4205,14 +4207,20 @@ func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Reque
 		if res.Error != "" {
 			status = "error"
 		}
-		writeJSON(w, map[string]interface{}{
+		out := map[string]interface{}{
 			"requestId":   res.ID,
 			"status":      status,
 			"deleted":     res.Deleted,
 			"requestedAt": res.RequestedAt,
 			"completedAt": res.CompletedAt,
 			"error":       res.Error,
-		})
+		}
+		// Pubkeys the ingestor re-checked and kept (see the confirm handler).
+		if res.Skipped > 0 {
+			out["skipped"] = res.Skipped
+			out["skipReasons"] = res.SkipReasons
+		}
+		writeJSON(w, out)
 		return
 	}
 
