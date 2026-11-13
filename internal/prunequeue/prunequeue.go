@@ -30,7 +30,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,9 +84,11 @@ func QueueDir(dbPath string) string {
 // EnsureDir creates the queue directory if missing.
 func EnsureDir(dbPath string) (string, error) {
 	dir := QueueDir(dbPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	root, err := openQueueRoot(dir, true)
+	if err != nil {
 		return "", err
 	}
+	_ = root.Close()
 	return dir, nil
 }
 
@@ -127,18 +128,16 @@ func WriteRequest(dbPath string, req Request) error {
 	if !validID(req.ID) {
 		return errors.New("invalid prune request id")
 	}
-	if _, err := EnsureDir(dbPath); err != nil {
-		return err
-	}
-	p, _ := RequestPath(dbPath, req.ID)
 	b, err := json.MarshalIndent(req, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(p, b); err != nil {
+	root, err := openQueueRoot(QueueDir(dbPath), true)
+	if err != nil {
 		return err
 	}
-	return nil
+	defer root.Close()
+	return writeFileAtomic(root, "request-"+req.ID+".json", b)
 }
 
 // WriteResult atomically writes a result file (temp file + rename),
@@ -148,30 +147,37 @@ func WriteResult(dbPath string, res Result) error {
 	if !validID(res.ID) {
 		return errors.New("invalid prune request id")
 	}
-	if _, err := EnsureDir(dbPath); err != nil {
-		return err
-	}
-	p, _ := ResultPath(dbPath, res.ID)
 	b, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(p, b); err != nil {
+	root, err := openQueueRoot(QueueDir(dbPath), true)
+	if err != nil {
 		return err
 	}
-	reqPath, _ := RequestPath(dbPath, res.ID)
-	_ = os.Remove(reqPath)
+	defer root.Close()
+	if err := writeFileAtomic(root, "result-"+res.ID+".json", b); err != nil {
+		return err
+	}
+	_ = root.Remove("request-" + res.ID + ".json")
 	return nil
 }
 
 // ReadResult reads result-<id>.json. Returns (nil, nil) if the result
 // file does not yet exist (request still pending or unknown id).
 func ReadResult(dbPath, id string) (*Result, error) {
-	p, err := ResultPath(dbPath, id)
+	if !validID(id) {
+		return nil, errors.New("invalid prune request id")
+	}
+	root, err := openQueueRoot(QueueDir(dbPath), false)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	b, err := readRegularFile(p)
+	defer root.Close()
+	b, err := readRegularFile(root, "result-"+id+".json")
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -188,11 +194,18 @@ func ReadResult(dbPath, id string) (*Result, error) {
 // RequestExists returns true if request-<id>.json is still present
 // (i.e. the ingestor has not processed it yet).
 func RequestExists(dbPath, id string) (bool, error) {
-	p, err := RequestPath(dbPath, id)
+	if !validID(id) {
+		return false, errors.New("invalid prune request id")
+	}
+	root, err := openQueueRoot(QueueDir(dbPath), false)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
 		return false, err
 	}
-	fi, err := os.Lstat(p)
+	defer root.Close()
+	fi, err := root.Lstat("request-" + id + ".json")
 	if err == nil {
 		// A symlink or other non-regular entry is not a real request.
 		return fi.Mode().IsRegular(), nil
@@ -207,11 +220,21 @@ func RequestExists(dbPath, id string) (bool, error) {
 // lexicographic order. Used by the ingestor's maintenance loop.
 func ListPending(dbPath string) ([]string, error) {
 	dir := QueueDir(dbPath)
-	entries, err := os.ReadDir(dir)
+	root, err := openQueueRoot(dir, false)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+		return nil, err
+	}
+	defer root.Close()
+	d, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	entries, err := d.ReadDir(-1)
+	if err != nil {
 		return nil, err
 	}
 	var out []string
@@ -228,9 +251,15 @@ func ListPending(dbPath string) ([]string, error) {
 	return out, nil
 }
 
-// ReadRequest reads and parses a request file by full path.
+// ReadRequest reads and parses a request file by full path. Only the file's
+// own name is resolved inside its (non-symlink) parent directory.
 func ReadRequest(path string) (*Request, error) {
-	b, err := readRegularFile(path)
+	root, err := openQueueRoot(filepath.Dir(path), false)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	b, err := readRegularFile(root, filepath.Base(path))
 	if err != nil {
 		return nil, err
 	}
@@ -239,79 +268,4 @@ func ReadRequest(path string) (*Request, error) {
 		return nil, err
 	}
 	return &r, nil
-}
-
-// maxFileBytes caps how much of a queue file is read. The documents are
-// small JSON (a request lists pubkeys at ~70 bytes each, so even 100k nodes
-// is ~7 MiB); 16 MiB leaves headroom while stopping a hostile peer sharing
-// the directory from making the reader allocate unbounded memory.
-const maxFileBytes = 16 << 20
-
-// writeFileAtomic writes b to path via a randomly named temp file in the
-// same directory (os.CreateTemp is O_EXCL, so a symlink pre-planted at any
-// guessable name is never followed), fsyncs, then renames over path. Rename
-// replaces a symlink at path itself rather than writing through it. The
-// result is mode 0644 so the other process (a different user) can read it.
-func writeFileAtomic(path string, b []byte) (err error) {
-	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer func() {
-		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmp)
-		}
-	}()
-	if err = f.Chmod(0o644); err != nil {
-		return err
-	}
-	if _, err = f.Write(b); err != nil {
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// readRegularFile reads path only if it is a regular file (not a symlink,
-// directory, device or FIFO) no larger than maxFileBytes. A missing file
-// yields an error satisfying os.IsNotExist. The opened handle is re-checked
-// against the Lstat result so a swap between the two calls is detected.
-func readRegularFile(path string) ([]byte, error) {
-	li, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !li.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: not a regular file", filepath.Base(path))
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !fi.Mode().IsRegular() || !os.SameFile(li, fi) {
-		return nil, fmt.Errorf("%s: changed while opening", filepath.Base(path))
-	}
-	if fi.Size() > maxFileBytes {
-		return nil, fmt.Errorf("%s: exceeds %d bytes", filepath.Base(path), maxFileBytes)
-	}
-	b, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(b) > maxFileBytes {
-		return nil, fmt.Errorf("%s: exceeds %d bytes", filepath.Base(path), maxFileBytes)
-	}
-	return b, nil
 }
