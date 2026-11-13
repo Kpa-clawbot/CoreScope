@@ -94,7 +94,7 @@ type Store struct {
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
 	stmtUpsertObserver         *sql.Stmt
-	stmtGetObserverRowid       *sql.Stmt
+	stmtGetObserverIdx         *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
 	stmtTouchNodeLastSeen      *sql.Stmt
@@ -289,7 +289,8 @@ func applySchema(db *sql.DB) error {
 		);
 
 		CREATE TABLE IF NOT EXISTS observers (
-			id TEXT PRIMARY KEY,
+			idx INTEGER PRIMARY KEY AUTOINCREMENT,
+			id TEXT NOT NULL UNIQUE,
 			name TEXT,
 			iata TEXT,
 			last_seen TEXT,
@@ -548,23 +549,12 @@ func applySchema(db *sql.DB) error {
 		}
 	}
 
-	// Create/rebuild packets_v view (v3 schema: observer_idx → observers.rowid)
+	// Create/rebuild packets_v view (v3 schema: observer_idx → observers.idx).
 	// The Go server reads this view; without it fresh installs get "no such table: packets_v".
-	db.Exec(`DROP VIEW IF EXISTS packets_v`)
-	_, vErr := db.Exec(`
-		CREATE VIEW packets_v AS
-			SELECT o.id, COALESCE(o.raw_hex, t.raw_hex) AS raw_hex,
-				   datetime(o.timestamp, 'unixepoch') AS timestamp,
-				   obs.id AS observer_id, obs.name AS observer_name,
-				   o.direction, o.snr, o.rssi, o.score, t.hash, t.route_type,
-				   t.payload_type, t.payload_version, o.path_json, t.decoded_json,
-				   t.created_at
-			FROM observations o
-			JOIN transmissions t ON t.id = o.transmission_id
-			LEFT JOIN observers obs ON obs.rowid = o.observer_idx AND (obs.inactive IS NULL OR obs.inactive = 0)
-	`)
-	if vErr != nil {
-		return fmt.Errorf("packets_v view: %w", vErr)
+	// On a legacy observers table (implicit rowid only) the view is rebuilt again
+	// by dbschema.Apply's observers rebuild once idx exists.
+	if err := dbschema.EnsurePacketsView(db); err != nil {
+		return fmt.Errorf("packets_v view: %w", err)
 	}
 
 	// One-time migration: recalculate advert_count to count unique transmissions only
@@ -830,6 +820,10 @@ func applySchema(db *sql.DB) error {
 		// Backfill: set last_packet_at = last_seen only for observers that actually have
 		// observation rows (packet_count alone is unreliable — UpsertObserver sets it to 1
 		// on INSERT even for status-only observers).
+		// Deliberately rowid, not idx: this runs in applySchema, before
+		// dbschema.Apply rebuilds a legacy observers table with an explicit idx.
+		// Within one DB the two are the same value (idx is the INTEGER PRIMARY
+		// KEY, i.e. the rowid alias), and only rowid exists on a legacy table.
 		res, err := db.Exec(`UPDATE observers SET last_packet_at = last_seen
 			WHERE last_packet_at IS NULL
 			AND rowid IN (SELECT DISTINCT observer_idx FROM observations WHERE observer_idx IS NOT NULL)`)
@@ -1081,19 +1075,19 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtGetObserverRowid, err = s.db.Prepare("SELECT rowid FROM observers WHERE id = ?")
+	s.stmtGetObserverIdx, err = s.db.Prepare("SELECT idx FROM observers WHERE id = ?")
 	if err != nil {
 		return err
 	}
 
-	// Args: ingestNow, rxTime, ingestNow, rxTime, rowid
+	// Args: ingestNow, rxTime, ingestNow, rxTime, idx
 	// MIN(existing, ingestNow) clamps any future value already in the DB before
 	// taking MAX with rxTime, so the guard never locks in a past bug's stale future.
 	s.stmtUpdateObserverLastSeen, err = s.db.Prepare(`
 		UPDATE observers SET
 			last_seen      = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
 			last_packet_at = MAX(MIN(COALESCE(last_packet_at, ''), ?), ?)
-		WHERE rowid = ?`)
+		WHERE idx = ?`)
 	if err != nil {
 		return err
 	}
@@ -1201,15 +1195,15 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	// Resolve observer_idx and update last_seen
 	var observerIdx *int64
 	if data.ObserverID != "" {
-		var rowid int64
-		err := s.stmtGetObserverRowid.QueryRow(data.ObserverID).Scan(&rowid)
+		var idx int64
+		err := s.stmtGetObserverIdx.QueryRow(data.ObserverID).Scan(&idx)
 		if err == nil {
-			observerIdx = &rowid
+			observerIdx = &idx
 			// observer.last_seen and last_packet_at answer "when did the analyzer
 			// last hear from this observer" — both are ingest-time questions.
 			// Per-packet rxTime is stored separately on observations/transmissions
 			// using envelope time (see InsertTransmission above). See #1465.
-			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, ingestNow, ingestNow, ingestNow, rowid)
+			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, ingestNow, ingestNow, ingestNow, idx)
 		}
 	}
 
@@ -2249,7 +2243,7 @@ func (s *Store) RemoveStaleObservers(observerDays int) (int64, error) {
 // the second stage of observer retention: the soft-delete hides the observer,
 // this reclaims the row after its packets have aged out via packetDays.
 //
-// observations.observer_idx is a bare rowid with no foreign key, so deleting a
+// observations.observer_idx is a bare observers.idx with no foreign key, so deleting a
 // still-referenced observer silently orphans history — packets_v stops resolving
 // the observer and the packets are mis-attributed. The three NOT EXISTS guards
 // are what make the delete safe; they are correctness, not defensive padding.
@@ -2267,7 +2261,7 @@ func (s *Store) PurgeStaleObservers(purgeDays int) (int64, error) {
 		DELETE FROM observers
 		WHERE inactive = 1
 		  AND last_seen < ?
-		  AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.observer_idx = observers.rowid)
+		  AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.observer_idx = observers.idx)
 		  AND NOT EXISTS (SELECT 1 FROM observer_metrics m WHERE m.observer_id = observers.id)
 		  AND NOT EXISTS (SELECT 1 FROM dropped_packets d WHERE d.observer_id = observers.id)`, cutoff)
 	if err != nil {

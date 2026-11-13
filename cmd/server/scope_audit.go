@@ -405,7 +405,7 @@ func (db *DB) observerRegionClause(q interface {
 	}
 	col, obsCol := "o.observer_id", "id"
 	if db.isV3 {
-		col, obsCol = "o.observer_idx", "rowid"
+		col, obsCol = "o.observer_idx", "idx"
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(codes)), ",")
 	args := make([]interface{}, len(codes))
