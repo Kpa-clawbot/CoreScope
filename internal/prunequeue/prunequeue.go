@@ -44,9 +44,10 @@ import (
 // request/result marker files.
 const QueueDirName = "prune-requests"
 
-// Request is the payload the server writes to request-<id>.json. The
-// ingestor honors the pubkeys list verbatim — the server is responsible
-// for the TOCTOU snapshot (only nodes that were in the preview).
+// Request is the payload the server writes to request-<id>.json. Pubkeys
+// are only candidates (the server sends the nodes of its preview that are
+// still outside the filter): the ingestor re-checks each against its own
+// geo_filter and deletes only the nodes that fall outside it.
 type Request struct {
 	ID          string    `json:"id"`
 	RequestedAt time.Time `json:"requestedAt"`
@@ -56,13 +57,17 @@ type Request struct {
 
 // Result is what the ingestor writes to result-<id>.json after running
 // the DELETE. Errors are captured as plain strings — the file is the
-// only channel back to the server.
+// only channel back to the server. Skipped counts the distinct requested
+// pubkeys the ingestor did not delete, and SkipReasons breaks that count
+// down by reason (e.g. "inside the ingestor's geo_filter").
 type Result struct {
-	ID          string    `json:"id"`
-	RequestedAt time.Time `json:"requestedAt"`
-	CompletedAt time.Time `json:"completedAt"`
-	Deleted     int64     `json:"deleted"`
-	Error       string    `json:"error,omitempty"`
+	ID          string           `json:"id"`
+	RequestedAt time.Time        `json:"requestedAt"`
+	CompletedAt time.Time        `json:"completedAt"`
+	Deleted     int64            `json:"deleted"`
+	Skipped     int64            `json:"skipped,omitempty"`
+	SkipReasons map[string]int64 `json:"skipReasons,omitempty"`
+	Error       string           `json:"error,omitempty"`
 }
 
 // NewID returns a 16-hex-char random id suitable for filenames. Random
@@ -136,6 +141,9 @@ func WriteRequest(dbPath string, req Request) error {
 	if err != nil {
 		return err
 	}
+	if err := checkSize(len(b)); err != nil {
+		return err
+	}
 	root, err := openQueueRoot(QueueDir(dbPath), true)
 	if err != nil {
 		return err
@@ -153,6 +161,9 @@ func WriteResult(dbPath string, res Result) error {
 	}
 	b, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
+		return err
+	}
+	if err := checkSize(len(b)); err != nil {
 		return err
 	}
 	root, err := openQueueRoot(QueueDir(dbPath), true)

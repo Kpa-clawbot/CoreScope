@@ -100,11 +100,20 @@ func (q fsQueue) ListPending() ([]string, error) {
 		}
 		return ents[i].id < ents[j].id
 	})
+	if len(ents) > MaxPendingList {
+		ents = ents[:MaxPendingList]
+	}
 	ids := make([]string, len(ents))
 	for i, e := range ents {
 		ids[i] = e.id
 	}
 	return ids, nil
+}
+
+// PendingCount counts the request files, however many ListPending returns.
+func (q fsQueue) PendingCount() (int, error) {
+	ents, err := q.listMarkers("request-")
+	return len(ents), err
 }
 
 // PruneResults removes result files last written more than olderThan ago.

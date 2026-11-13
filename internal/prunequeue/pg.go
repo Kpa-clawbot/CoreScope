@@ -21,13 +21,12 @@ var pgIDPattern = regexp.MustCompile(`^[0-9a-f]{16,64}$`)
 // it can be spliced into SQL (quoted) without any escaping concerns.
 var pgSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
-// pgNow renders the database clock as UTC RFC3339 text with a fixed nine-digit
-// fraction. The database clock (not each process's) orders rows written by
-// different hosts, and the fixed width makes text order (COLLATE "C") equal
-// time order; time.Parse(time.RFC3339Nano, ...) reads it back.
-var pgNow = pgUTCText(`clock_timestamp()`)
-
-// pgUTCText renders the timestamptz SQL expression ts in the created_at format.
+// pgUTCText renders the timestamptz SQL expression ts in the created_at
+// format: UTC RFC3339 text with a fixed nine-digit fraction. created_at is
+// assigned by the column DEFAULT (the database clock, same format) and never
+// by a client, so the server role cannot choose it; the fixed width makes text
+// order (COLLATE "C") equal time order, and time.Parse(time.RFC3339Nano, ...)
+// reads it back.
 func pgUTCText(ts string) string {
 	return `to_char((` + ts + `) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"000Z"')`
 }
@@ -72,8 +71,8 @@ func marshalPayload(v any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(b) > maxFileBytes {
-		return "", fmt.Errorf("prune queue payload is %d bytes, exceeds %d", len(b), maxFileBytes)
+	if err := checkSize(len(b)); err != nil {
+		return "", err
 	}
 	return string(b), nil
 }
@@ -95,7 +94,7 @@ func (q *pgQueue) WriteRequest(req Request) error {
 	}
 	// A plain INSERT: the server role has no UPDATE, and ids are random, so a
 	// duplicate is an error rather than something to overwrite.
-	_, err = q.db.Exec(`INSERT INTO `+q.requests+` (id, created_at, payload) VALUES ($1, `+pgNow+`, $2)`,
+	_, err = q.db.Exec(`INSERT INTO `+q.requests+` (id, payload) VALUES ($1, $2)`,
 		req.ID, payload)
 	return err
 }
@@ -131,8 +130,14 @@ func (q *pgQueue) ReadResult(id string) (*Result, error) {
 	return &r, nil
 }
 
+func (q *pgQueue) PendingCount() (int, error) {
+	var n int
+	err := q.db.QueryRow(`SELECT count(*) FROM ` + q.requests).Scan(&n)
+	return n, err
+}
+
 func (q *pgQueue) ListPending() ([]string, error) {
-	rows, err := q.db.Query(`SELECT id FROM ` + q.requests + ` ORDER BY created_at COLLATE "C", id COLLATE "C"`)
+	rows, err := q.db.Query(`SELECT id FROM `+q.requests+` ORDER BY created_at COLLATE "C", id COLLATE "C" LIMIT $1`, MaxPendingList)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +191,7 @@ func (q *pgQueue) Complete(res Result) (err error) {
 			_ = tx.Rollback()
 		}
 	}()
-	if _, err = tx.Exec(`INSERT INTO `+q.results+` (id, created_at, payload) VALUES ($1, `+pgNow+`, $2)
+	if _, err = tx.Exec(`INSERT INTO `+q.results+` (id, payload) VALUES ($1, $2)
 		ON CONFLICT (id) DO UPDATE SET created_at = EXCLUDED.created_at, payload = EXCLUDED.payload`,
 		res.ID, payload); err != nil {
 		return err

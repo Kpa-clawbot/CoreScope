@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,6 +74,22 @@ func TestConformanceSnapshots(t *testing.T) {
 		}
 		if srv.Location() == "" {
 			t.Fatal("empty Location")
+		}
+	})
+}
+
+func TestConformanceOversizeRejected(t *testing.T) {
+	forEachImpl(t, func(t *testing.T, p storePair) {
+		ents := make([]Entry, 40_000) // ~4.5 MiB of JSON
+		for i := range ents {
+			ents[i] = Entry{PublicKey: strings.Repeat("a", 64), Status: "confirmed", Evidence: "x"}
+		}
+		err := p.server.WriteSnapshot(Snapshot{Entries: ents})
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("want size error, got %v", err)
+		}
+		if _, err := p.ingestor.ReadSnapshot(); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("snapshot stored despite size error: %v", err)
 		}
 	})
 }

@@ -15,15 +15,22 @@ import (
 // pgControlDDL is the control-table contract (internal/dbschema owns the real
 // migration); %s is the quoted schema.
 const pgControlDDL = `
-CREATE TABLE %[1]s.prune_requests (id TEXT PRIMARY KEY CHECK (id ~ '^[0-9a-f]{16,64}$'), created_at TEXT NOT NULL, payload TEXT NOT NULL CHECK (octet_length(payload) <= 16777216));
-CREATE TABLE %[1]s.prune_results (id TEXT PRIMARY KEY CHECK (id ~ '^[0-9a-f]{16,64}$'), created_at TEXT NOT NULL, payload TEXT NOT NULL CHECK (octet_length(payload) <= 16777216));
-CREATE TABLE %[1]s.mbcap_snapshots (id TEXT PRIMARY KEY CHECK (id ~ '^[0-9a-f]{16,64}$'), created_at TEXT NOT NULL, payload TEXT NOT NULL CHECK (octet_length(payload) <= 16777216));`
+CREATE TABLE %[1]s.prune_requests (id TEXT PRIMARY KEY CHECK (id ~ '^[0-9a-f]{16,64}$'),
+  created_at TEXT NOT NULL DEFAULT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"000Z"'),
+  payload TEXT NOT NULL CHECK (octet_length(payload) <= 1048576));
+CREATE TABLE %[1]s.prune_results (id TEXT PRIMARY KEY CHECK (id ~ '^[0-9a-f]{16,64}$'),
+  created_at TEXT NOT NULL DEFAULT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"000Z"'),
+  payload TEXT NOT NULL CHECK (octet_length(payload) <= 1048576));
+CREATE TABLE %[1]s.mbcap_snapshots (id TEXT PRIMARY KEY CHECK (id ~ '^[0-9a-f]{16,64}$'),
+  created_at TEXT NOT NULL DEFAULT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"000Z"'),
+  payload TEXT NOT NULL CHECK (octet_length(payload) <= 4194304));`
 
-// serverGrants are exactly the server role's privileges on the control tables.
+// serverGrants are exactly the server role's privileges on the control tables:
+// column-level INSERT, so it cannot choose created_at.
 const serverGrants = `
 GRANT USAGE ON SCHEMA %[1]s TO %[2]s;
-GRANT INSERT, SELECT ON %[1]s.prune_requests, %[1]s.mbcap_snapshots TO %[2]s;
-GRANT SELECT ON %[1]s.prune_results TO %[2]s;`
+GRANT INSERT (id, payload) ON %[1]s.prune_requests, %[1]s.mbcap_snapshots TO %[2]s;
+GRANT SELECT ON %[1]s.prune_requests, %[1]s.mbcap_snapshots, %[1]s.prune_results TO %[2]s;`
 
 // pgEnv is a Postgres test environment: owner is the ingestor's (owner)
 // connection, server a single-connection pool that has SET ROLE to a role

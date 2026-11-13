@@ -9,11 +9,22 @@ import (
 	"path/filepath"
 )
 
-// maxFileBytes caps how much of a queue file is read. The documents are
-// small JSON (a request lists pubkeys at ~70 bytes each, so even 100k nodes
-// is ~7 MiB); 16 MiB leaves headroom while stopping a hostile peer sharing
-// the directory from making the reader allocate unbounded memory.
-const maxFileBytes = 16 << 20
+// maxFileBytes caps a queue document, on write and on read. It equals the
+// payload CHECK on the Postgres control tables (1 MiB), so both queues refuse
+// the same documents; a hostile peer cannot make the reader allocate more.
+const maxFileBytes = 1 << 20
+
+// MaxPendingList bounds how many ids ListPending returns; PendingCount
+// reports the true total so a caller can tell more are waiting.
+const MaxPendingList = 100
+
+// checkSize refuses an encoded document over the cap before it is stored.
+func checkSize(n int) error {
+	if n > maxFileBytes {
+		return fmt.Errorf("prune queue payload is %d bytes, exceeds %d", n, maxFileBytes)
+	}
+	return nil
+}
 
 // openQueueRoot opens dir as an os.Root so every later operation is confined
 // to it: no name resolved through the Root can leave dir, even through a

@@ -2,6 +2,7 @@ package prunequeue
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -154,6 +155,61 @@ func TestConformanceRejectsBadIDs(t *testing.T) {
 			_, err = p.ingestor.ReadRequest(bad)
 			isInvalid("ReadRequest", err)
 			isInvalid("Complete", p.ingestor.Complete(Result{ID: bad}))
+		}
+	})
+}
+
+func TestConformanceListPendingBounded(t *testing.T) {
+	forEachImpl(t, func(t *testing.T, p queuePair) {
+		const total = MaxPendingList + 7
+		want := make([]string, 0, total)
+		for i := 0; i < total; i++ {
+			id := fmt.Sprintf("%016x", total-i) // id order is the reverse of write order
+			want = append(want, id)
+			if err := p.server.WriteRequest(Request{ID: id}); err != nil {
+				t.Fatal(err)
+			}
+			// Distinct write times on both clocks (file mtime and database).
+			time.Sleep(2 * time.Millisecond)
+		}
+		ids, err := p.ingestor.ListPending()
+		if err != nil || !reflect.DeepEqual(ids, want[:MaxPendingList]) {
+			t.Fatalf("ListPending: %d ids, err %v (want the oldest %d)", len(ids), err, MaxPendingList)
+		}
+		if n, err := p.ingestor.PendingCount(); err != nil || n != total {
+			t.Fatalf("PendingCount = %d, %v; want %d", n, err, total)
+		}
+		for _, id := range ids {
+			if err := p.ingestor.Complete(Result{ID: id}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rest, err := p.ingestor.ListPending()
+		if err != nil || !reflect.DeepEqual(rest, want[MaxPendingList:]) {
+			t.Fatalf("ListPending after draining: %v %v", rest, err)
+		}
+		if n, _ := p.ingestor.PendingCount(); n != total-MaxPendingList {
+			t.Fatalf("PendingCount after draining = %d", n)
+		}
+	})
+}
+
+func TestConformanceOversizeRejected(t *testing.T) {
+	forEachImpl(t, func(t *testing.T, p queuePair) {
+		keys := make([]string, 20_000) // ~1.4 MiB of indented JSON
+		for i := range keys {
+			keys[i] = strings.Repeat("a", 64)
+		}
+		err := p.server.WriteRequest(Request{ID: NewID(), Pubkeys: keys})
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("WriteRequest: want size error, got %v", err)
+		}
+		err = p.ingestor.Complete(Result{ID: NewID(), Error: strings.Repeat("x", maxFileBytes)})
+		if err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("Complete: want size error, got %v", err)
+		}
+		if n, err := p.ingestor.PendingCount(); err != nil || n != 0 {
+			t.Fatalf("PendingCount after rejected writes: %d %v", n, err)
 		}
 	})
 }

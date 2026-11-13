@@ -23,8 +23,12 @@ type Queue interface {
 
 	// ingestor side
 
-	// ListPending returns the ids of pending requests, oldest first.
+	// ListPending returns the ids of the oldest pending requests, oldest
+	// first, at most MaxPendingList of them.
 	ListPending() ([]string, error)
+	// PendingCount returns how many requests are pending in all, so a caller
+	// can tell when ListPending left some waiting.
+	PendingCount() (int, error)
 	// ReadRequest returns the pending request id. A request that does not
 	// exist yields an error satisfying errors.Is(err, os.ErrNotExist).
 	ReadRequest(id string) (*Request, error)

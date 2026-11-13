@@ -18,11 +18,10 @@ const DefaultPGSchema = "corescope_control"
 // it can be spliced into SQL (quoted) without any escaping concerns.
 var pgSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
-// pgNow renders the database clock as UTC RFC3339 text with a fixed nine-digit
-// fraction. The database clock (not each process's) orders rows written by
-// different hosts, and the fixed width makes text order (COLLATE "C") equal
-// time order; time.Parse(time.RFC3339Nano, ...) reads it back.
-const pgNow = `to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"000Z"')`
+// created_at is assigned by the column DEFAULT (the database clock, UTC
+// RFC3339 text with a fixed nine-digit fraction) and never by a client, so the
+// server role cannot choose it. The fixed width makes text order (COLLATE "C")
+// equal time order.
 
 // pgNewestFirst orders snapshots newest first; the random id breaks ties.
 const pgNewestFirst = `ORDER BY created_at COLLATE "C" DESC, id COLLATE "C" DESC`
@@ -60,14 +59,14 @@ func (s *pgStore) WriteSnapshot(snap Snapshot) error {
 	if err != nil {
 		return err
 	}
-	if len(b) > maxFileBytes {
-		return fmt.Errorf("write: snapshot is %d bytes, exceeds %d", len(b), maxFileBytes)
+	if err := checkSize(len(b)); err != nil {
+		return fmt.Errorf("write: %w", err)
 	}
 	var r [16]byte
 	if _, err := rand.Read(r[:]); err != nil {
 		return fmt.Errorf("write: id: %w", err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO `+s.table+` (id, created_at, payload) VALUES ($1, `+pgNow+`, $2)`,
+	if _, err := s.db.Exec(`INSERT INTO `+s.table+` (id, payload) VALUES ($1, $2)`,
 		hex.EncodeToString(r[:]), string(b)); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}

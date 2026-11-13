@@ -89,6 +89,9 @@ func WriteSnapshot(dbPath string, snap Snapshot) error {
 	if err != nil {
 		return err
 	}
+	if err := checkSize(len(b)); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
 	root, err := openQueueRoot(QueueDir(dbPath), true)
 	if err != nil {
 		return fmt.Errorf("ensure dir: %w", err)

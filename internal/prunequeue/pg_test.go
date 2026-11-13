@@ -34,8 +34,8 @@ func TestPGServerRoleIsRestricted(t *testing.T) {
 func TestPGOversizePayloadRejectedBeforeSend(t *testing.T) {
 	env := newPGEnv(t)
 	q := NewPG(env.server, env.schema)
-	// ~70 bytes of indented JSON per pubkey pushes this past 16 MiB.
-	keys := make([]string, 300_000)
+	// ~70 bytes of indented JSON per pubkey pushes this past 1 MiB.
+	keys := make([]string, 20_000)
 	for i := range keys {
 		keys[i] = strings.Repeat("a", 64)
 	}
@@ -81,5 +81,40 @@ func TestPGSchemaDefaultAndValidation(t *testing.T) {
 			}()
 			NewPG(nil, bad)
 		}()
+	}
+}
+
+func TestPGServerCannotChooseCreatedAt(t *testing.T) {
+	env := newPGEnv(t)
+	_, err := env.server.Exec(`INSERT INTO "`+env.schema+`".prune_requests (id, created_at, payload) VALUES ($1, '1999-01-01T00:00:00.000000000Z', '{}')`, NewID())
+	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("explicit created_at from the server role: want permission denied, got %v", err)
+	}
+	// The default fills it in for the permitted column list.
+	if err := NewPG(env.server, env.schema).WriteRequest(Request{ID: NewID()}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPGOrderIsByDatabaseCreatedAt(t *testing.T) {
+	env := newPGEnv(t)
+	srv, ing := NewPG(env.server, env.schema), NewPG(env.owner, env.schema)
+	// Written first, but with the larger id: only created_at can order it first.
+	first, second := "ffffffffffffffff", "0000000000000001"
+	for _, id := range []string{first, second} {
+		if err := srv.WriteRequest(Request{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if ids, err := ing.ListPending(); err != nil || len(ids) != 2 || ids[0] != first || ids[1] != second {
+		t.Fatalf("ListPending: %v %v", ids, err)
+	}
+	// Moving the first row's database-assigned time later flips the order.
+	if _, err := env.owner.Exec(`UPDATE "`+env.schema+`".prune_requests SET created_at = '2999-01-01T00:00:00.000000000Z' WHERE id = $1`, first); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := ing.ListPending(); err != nil || len(ids) != 2 || ids[0] != second || ids[1] != first {
+		t.Fatalf("ListPending after reorder: %v %v", ids, err)
 	}
 }

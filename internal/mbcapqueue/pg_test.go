@@ -49,7 +49,7 @@ func TestPGPruneKeepsNewestN(t *testing.T) {
 
 func TestPGOversizeSnapshotRejectedBeforeSend(t *testing.T) {
 	env := newPGEnv(t)
-	ents := make([]Entry, 200_000)
+	ents := make([]Entry, 40_000)
 	for i := range ents {
 		ents[i] = Entry{PublicKey: strings.Repeat("a", 64), Status: "confirmed", Evidence: "x"}
 	}
@@ -86,5 +86,38 @@ func TestPGSchemaDefaultAndValidation(t *testing.T) {
 			}()
 			NewPG(nil, bad)
 		}()
+	}
+}
+
+func TestPGServerCannotChooseCreatedAt(t *testing.T) {
+	env := newPGEnv(t)
+	_, err := env.server.Exec(`INSERT INTO "` + env.schema + `".mbcap_snapshots (id, created_at, payload) VALUES ('00000000000000000000000000000001', '2999-01-01T00:00:00.000000000Z', '{}')`)
+	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("explicit created_at from the server role: want permission denied, got %v", err)
+	}
+	if err := NewPG(env.server, env.schema).WriteSnapshot(Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPGNewestIsByDatabaseCreatedAt(t *testing.T) {
+	env := newPGEnv(t)
+	srv, ing := NewPG(env.server, env.schema), NewPG(env.owner, env.schema)
+	for _, k := range []string{"k1", "k2"} {
+		if err := srv.WriteSnapshot(Snapshot{Entries: []Entry{{PublicKey: k, Status: "confirmed"}}}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if snap, err := ing.ReadSnapshot(); err != nil || snap.Entries[0].PublicKey != "k2" {
+		t.Fatalf("newest: %+v %v", snap, err)
+	}
+	// A far-future row (only the owner could write one) is then the newest,
+	// proving the order follows created_at and not the random id.
+	if _, err := env.owner.Exec(`UPDATE "` + env.schema + `".mbcap_snapshots SET created_at = '2999-01-01T00:00:00.000000000Z' WHERE payload LIKE '%k1%'`); err != nil {
+		t.Fatal(err)
+	}
+	if snap, err := ing.ReadSnapshot(); err != nil || snap.Entries[0].PublicKey != "k1" {
+		t.Fatalf("newest after reorder: %+v %v", snap, err)
 	}
 }
