@@ -68,8 +68,40 @@ function detectPerfAnomalies(history, current, opts) {
   }
   return out;
 }
+
+// perfDbEngine — "sqlite" or "postgres". A missing engine (older server) is sqlite.
+function perfDbEngine(stats) {
+  return stats && stats.engine === 'postgres' ? 'postgres' : 'sqlite';
+}
+
+// perfDbRows — pure, testable. Decides what the database panel shows for the
+// backend the server reports. Returns { engine, title, rows } where each row
+// is { label, text, color? } (text pre-formatted, color a CSS var or absent).
+// Postgres has no WAL/freelist/page counters (the server reports 0) and its
+// row counts are planner estimates, so those rows are dropped/relabelled.
+function perfDbRows(stats) {
+  const engine = perfDbEngine(stats);
+  const sq = stats || {};
+  const r = sq.rows || {};
+  const pg = engine === 'postgres';
+  const est = pg ? ' (≈ rows, estimate)' : '';
+  const rows = [{ label: 'DB Size', text: sq.dbSizeMB + 'MB' }];
+  if (!pg) {
+    rows.push({ label: 'WAL Size', text: sq.walSizeMB + 'MB',
+      color: sq.walSizeMB > 50 ? 'var(--status-red)' : sq.walSizeMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)' });
+    rows.push({ label: 'Freelist', text: sq.freelistMB + 'MB',
+      color: sq.freelistMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)' });
+  }
+  rows.push({ label: 'Transmissions' + est, text: (r.transmissions || 0).toLocaleString() });
+  rows.push({ label: 'Observations' + est, text: (r.observations || 0).toLocaleString() });
+  rows.push({ label: 'Nodes' + est, text: String(r.nodes || 0) });
+  rows.push({ label: 'Observers' + est, text: String(r.observers || 0) });
+  if (!pg && sq.walPages) rows.push({ label: 'WAL Busy Pages', text: String(sq.walPages.busy) });
+  return { engine: engine, title: pg ? 'Database (PostgreSQL)' : 'Database (SQLite)', rows: rows };
+}
 if (typeof window !== 'undefined') {
   window.detectPerfAnomalies = detectPerfAnomalies;
+  window.perfDbRows = perfDbRows;
 }
 
 // resetPerfStats: the "Reset Stats" button's server call. Resolves true
@@ -117,11 +149,15 @@ function renderVersionCard(health) {
     try {
       // #1258: /api/health was awaited AFTER Promise.all, adding a full RTT
       // (~50-200ms) on every 5s refresh. Issue it in parallel with the rest.
+      // The /api/perf/sqlite fetch is chained on the /api/perf answer so a
+      // Postgres server is never asked for SQLite internals; a 404 means none.
+      const serverP = fetch('/api/perf').then(r => r.json());
       const [server, client, ioStats, sqliteStats, writeSources, health] = await Promise.all([
-        fetch('/api/perf').then(r => r.json()),
+        serverP,
         Promise.resolve(window.apiPerf ? window.apiPerf() : null),
         fetch('/api/perf/io').then(r => r.json()).catch(() => null),
-        fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
+        serverP.then(sv => perfDbEngine(sv && sv.sqlite) === 'postgres' ? null
+          : fetch('/api/perf/sqlite').then(r => r.status === 404 ? null : r.json())).catch(() => null),
         fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null),
         fetch('/api/health').then(r => r.json()).catch(() => null)
       ]);
@@ -247,7 +283,7 @@ function renderVersionCard(health) {
       }
 
       // SQLite perf (separate from existing SQLite block — focused on WAL + cache hit) (#1120)
-      if (sqliteStats) {
+      if (sqliteStats && !sqliteStats.error && perfDbEngine(server.sqlite) !== 'postgres') {
         const walMB = sqliteStats.walSizeMB || 0;
         const walFlag = walMB > 100 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
         const hitRate = (sqliteStats.cacheHitRate || 0) * 100;
@@ -301,20 +337,12 @@ function renderVersionCard(health) {
 
       // SQLite stats
       if (server.sqlite && !server.sqlite.error) {
-        const sq = server.sqlite;
-        const walColor = sq.walSizeMB > 50 ? 'var(--status-red)' : sq.walSizeMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)';
-        const freelistColor = sq.freelistMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)';
-        html += `<h3>SQLite</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-          <div class="perf-card"><div class="perf-num">${sq.dbSizeMB}MB</div><div class="perf-label">DB Size</div></div>
-          <div class="perf-card"><div class="perf-num" style="color:${walColor}">${sq.walSizeMB}MB</div><div class="perf-label">WAL Size</div></div>
-          <div class="perf-card"><div class="perf-num" style="color:${freelistColor}">${sq.freelistMB}MB</div><div class="perf-label">Freelist</div></div>
-          <div class="perf-card"><div class="perf-num">${(sq.rows.transmissions || 0).toLocaleString()}</div><div class="perf-label">Transmissions</div></div>
-          <div class="perf-card"><div class="perf-num">${(sq.rows.observations || 0).toLocaleString()}</div><div class="perf-label">Observations</div></div>
-          <div class="perf-card"><div class="perf-num">${sq.rows.nodes || 0}</div><div class="perf-label">Nodes</div></div>
-          <div class="perf-card"><div class="perf-num">${sq.rows.observers || 0}</div><div class="perf-label">Observers</div></div>`;
-        if (sq.walPages) {
-          html += `<div class="perf-card"><div class="perf-num">${sq.walPages.busy}</div><div class="perf-label">WAL Busy Pages</div></div>`;
-        }
+        const db = perfDbRows(server.sqlite);
+        html += `<h3>${db.title}</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">`;
+        db.rows.forEach(function (row) {
+          const style = row.color ? ` style="color:${row.color}"` : '';
+          html += `<div class="perf-card"><div class="perf-num"${style}>${row.text}</div><div class="perf-label">${row.label}</div></div>`;
+        });
         html += `</div>`;
       }
 
