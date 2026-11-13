@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -92,7 +92,12 @@ func snapshotSide(ctx context.Context, ref dbRef, db *sql.DB, check func(*sql.Tx
 // migrated: the schema must pass AssertReady and no async migration may be
 // unfinished (their backfills rewrite rows, so a copy taken midway would
 // carry half-migrated data).
-func openSource(ctx context.Context, ref dbRef) (side, func(), error) {
+//
+// allowPending relaxes the async-migration rule for a SQLite source (the
+// legacy `-db` migration never creates _async_migrations): a missing table or
+// unfinished rows are logged as a WARNING instead. Postgres sources stay
+// strict.
+func openSource(ctx context.Context, ref dbRef, allowPending bool, lg *log.Logger) (side, func(), error) {
 	db, err := openReadOnly(ctx, ref)
 	if err != nil {
 		return side{}, nil, err
@@ -107,13 +112,30 @@ func openSource(ctx context.Context, ref dbRef) (side, func(), error) {
 		db.Close()
 		return side{}, nil, fmt.Errorf("source %s is not ready: %v; %s", ref.display, err, hint)
 	}
+	allow := allowPending && ref.kind == sqliteBackend
+	refuse := func(problem string) error {
+		if ref.kind == sqliteBackend {
+			return fmt.Errorf("source %s %s; %s, or pass -allow-pending-migrations to copy it as it is", ref.display, problem, hint)
+		}
+		return fmt.Errorf("source %s %s; %s", ref.display, problem, hint)
+	}
+	warn := func(problem string) {
+		lg.Printf("WARNING: -allow-pending-migrations: source %s %s. The copy carries the data exactly as the source has it; "+
+			"a Postgres target will NOT run those backfills (its schema records them as done), and unfinished "+
+			"_async_migrations rows are not copied", ref.display, problem)
+	}
 	return snapshotSide(ctx, ref, db, func(tx *sql.Tx) error {
 		ok, err := dbschema.TableExists(tx, "_async_migrations")
 		if err != nil {
 			return fmt.Errorf("probe _async_migrations on %s: %w", ref.display, err)
 		}
 		if !ok {
-			return fmt.Errorf("source %s has no _async_migrations table; %s", ref.display, hint)
+			const problem = "has no _async_migrations table, so its async migrations never ran"
+			if allow {
+				warn(problem)
+				return nil
+			}
+			return refuse(problem)
 		}
 		rows, err := tx.QueryContext(ctx, `SELECT name, status FROM _async_migrations WHERE status <> 'done' ORDER BY name`)
 		if err != nil {
@@ -132,8 +154,12 @@ func openSource(ctx context.Context, ref dbRef) (side, func(), error) {
 			return err
 		}
 		if len(pending) > 0 {
-			return errors.New("source " + ref.display + " has unfinished async migrations: " +
-				strings.Join(pending, ", ") + "; " + hint)
+			problem := "has unfinished async migrations: " + strings.Join(pending, ", ")
+			if allow {
+				warn(problem)
+				return nil
+			}
+			return refuse(problem)
 		}
 		return nil
 	})

@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,15 +34,26 @@ type copyJob struct {
 	src   side
 	batch int
 	rows  int64 // total rows written
+
+	// allowPending is -allow-pending-migrations on a SQLite source: tables
+	// and nullable columns the source never got (their migrations did not
+	// run) are read as empty / NULL instead of failing the copy.
+	allowPending bool
+	absent       map[string]bool            // target tables the source lacks
+	absentCols   map[string]map[string]bool // per table: target columns the source lacks
 }
 
 // runCopy implements `corescope-migrate copy -from <db> -to <db> [-batch N]`.
 func runCopy(ctx context.Context, args []string, lg *log.Logger, sw *scrubWriter) error {
 	fs := flag.NewFlagSet("copy", flag.ContinueOnError)
 	fs.SetOutput(lg.Writer())
-	fromArg := fs.String("from", "", "source database (sqlite:<path> or postgres://…); must be fully migrated")
-	toArg := fs.String("to", "", "target database (sqlite:<path> or postgres://…); must be empty")
+	fromArg := fs.String("from", "", "source database (sqlite:<path> or postgres://user@host/db); must be fully migrated")
+	toArg := fs.String("to", "", "target database (sqlite:<path> or postgres://user@host/db); must be empty")
 	batch := fs.Int("batch", 5000, "rows per COPY call (Postgres target) or per transaction (SQLite target)")
+	allowPending := fs.Bool("allow-pending-migrations", false,
+		"accept a SQLite source whose _async_migrations table is missing or unfinished (e.g. one prepared by `-db`); its data is copied as it is")
+	fs.Usage = usageFor(fs, "copy -from <db> -to <db> [-batch 5000] [-allow-pending-migrations]",
+		"corescope-migrate copy -from sqlite:/var/lib/corescope/meshcore.db -to postgres://corescope@db.example/corescope")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -62,13 +74,14 @@ func runCopy(ctx context.Context, args []string, lg *log.Logger, sw *scrubWriter
 	lg.Printf("copy %s -> %s (batch %d)", from.display, to.display, *batch)
 	lg.Printf("WARNING: stop every writer (the ingestor) on the source first: the copy reads one snapshot, and rows written after it are not copied")
 
-	src, closeSrc, err := openSource(ctx, from)
+	src, closeSrc, err := openSource(ctx, from, *allowPending, lg)
 	if err != nil {
 		return err
 	}
 	defer closeSrc()
 
-	job := &copyJob{lg: lg, src: src, batch: *batch}
+	job := &copyJob{lg: lg, src: src, batch: *batch, allowPending: *allowPending && from.kind == sqliteBackend,
+		absent: map[string]bool{}, absentCols: map[string]map[string]bool{}}
 	start := time.Now()
 	if to.kind == postgresBackend {
 		err = job.intoPostgres(ctx, to)
@@ -93,16 +106,37 @@ func (j *copyJob) plan(ctx context.Context, tgt *schema) ([]*table, error) {
 		}
 		tt := tgt.tables[name]
 		st := j.src.schema.tables[name]
-		if st == nil {
-			return nil, fmt.Errorf("source has no table %s that the target schema has; is the source fully migrated?", name)
-		}
 		if len(tt.pk) == 0 {
 			return nil, fmt.Errorf("target table %s has no primary key", name)
 		}
-		for _, c := range tt.cols {
-			if st.colIndex(c.name) < 0 {
-				return nil, fmt.Errorf("source table %s lacks column %s that the target has; is the source fully migrated?", name, c.name)
+		if st == nil {
+			if !j.allowPending {
+				return nil, fmt.Errorf("source has no table %s that the target schema has; is the source fully migrated?%s", name, j.flagHint())
 			}
+			if bookkeepingTables[name] {
+				j.lg.Printf("source has no %s; the target keeps its own rows", name)
+			} else {
+				j.lg.Printf("WARNING: -allow-pending-migrations: source has no table %s (the migration creating it never ran); the target table stays empty", name)
+			}
+			j.absent[name] = true
+			names = append(names, name)
+			continue
+		}
+		for _, c := range tt.cols {
+			if st.colIndex(c.name) >= 0 {
+				continue
+			}
+			if !j.allowPending {
+				return nil, fmt.Errorf("source table %s lacks column %s that the target has; is the source fully migrated?%s", name, c.name, j.flagHint())
+			}
+			if c.notNull {
+				return nil, fmt.Errorf("source table %s lacks column %s, which is NOT NULL in the target; start the ingestor once on the source so its migrations add it", name, c.name)
+			}
+			j.lg.Printf("WARNING: -allow-pending-migrations: source table %s has no column %s (the migration adding it never ran); it is copied as NULL", name, c.name)
+			if j.absentCols[name] == nil {
+				j.absentCols[name] = map[string]bool{}
+			}
+			j.absentCols[name][c.name] = true
 		}
 		for _, c := range st.cols {
 			if tt.colIndex(c.name) < 0 {
@@ -147,6 +181,14 @@ func (j *copyJob) plan(ctx context.Context, tgt *schema) ([]*table, error) {
 	return out, nil
 }
 
+// flagHint points a SQLite-source refusal at -allow-pending-migrations.
+func (j *copyJob) flagHint() string {
+	if j.src.kind != sqliteBackend {
+		return ""
+	}
+	return " Start the ingestor once on the source, or pass -allow-pending-migrations to copy it as it is"
+}
+
 func skipReason(name string) string {
 	if r, ok := skipTables[name]; ok {
 		return r
@@ -177,8 +219,8 @@ func checkEmpty(ctx context.Context, q queryer, ref dbRef, plan []*table) error 
 }
 
 // normalizeRow normalises raw (in t.cols order) into dst, failing with the
-// table, primary key and column named.
-func normalizeRow(t *table, raw, dst []any, strict bool) error {
+// table, primary key and column named. pgTarget: see normalize.
+func normalizeRow(t *table, raw, dst []any, pgTarget bool) error {
 	isPK := func(i int) bool {
 		for _, p := range t.pk {
 			if p == i {
@@ -188,7 +230,7 @@ func normalizeRow(t *table, raw, dst []any, strict bool) error {
 		return false
 	}
 	for i, c := range t.cols {
-		v, err := normalize(c.class, raw[i], strict)
+		v, err := normalize(c.class, raw[i], pgTarget)
 		if err == nil && v == nil && isPK(i) {
 			err = errors.New("NULL in a primary-key column")
 		}
@@ -267,6 +309,16 @@ func insertStmt(t *table) string {
 	return "INSERT INTO " + quoteIdent(t.name) + " (" + strings.Join(quoted, ", ") + ") VALUES (" + strings.Join(q, ", ") + ")"
 }
 
+// unfinishedAsync reports whether raw is an _async_migrations row whose
+// status is not 'done'.
+func unfinishedAsync(t *table, raw []any) bool {
+	if t.name != "_async_migrations" {
+		return false
+	}
+	i := t.colIndex("status")
+	return i >= 0 && raw[i] != "done"
+}
+
 func containsInt(xs []int, x int) bool {
 	for _, v := range xs {
 		if v == x {
@@ -287,7 +339,7 @@ func (j *copyJob) upsertTable(ctx context.Context, ex execer, kind backend, t *t
 	if kind == postgresBackend {
 		q = dbx.Rebind(q)
 	}
-	s, err := openStream(ctx, j.src.q, j.src.kind, t, t.colNames(), true)
+	s, err := openStream(ctx, j.src.q, j.src.kind, t, t.colNames(), j.absentCols[t.name], true)
 	if err != nil {
 		return err
 	}
@@ -300,6 +352,12 @@ func (j *copyJob) upsertTable(ctx context.Context, ex execer, kind backend, t *t
 		}
 		if !ok {
 			break
+		}
+		if unfinishedAsync(t, s.vals) {
+			// Only present with -allow-pending-migrations. Copying it would
+			// overwrite a Postgres target's seeded 'done' and make its
+			// ingestor run a backfill meant for SQLite.
+			continue
 		}
 		if err := normalizeRow(t, s.vals, row, kind == postgresBackend); err != nil {
 			return err
@@ -332,6 +390,9 @@ func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
 	defer admin.Close()
 	if err := admin.PingContext(ctx); err != nil {
 		return fmt.Errorf("connect to %s: %w", to.display, err)
+	}
+	if err := refuseForeignSchema(ctx, admin, to); err != nil {
+		return err
 	}
 	if err := pgschema.Apply(ctx, admin, j.lg.Printf); err != nil {
 		return fmt.Errorf("create schema on %s: %w", to.display, err)
@@ -371,6 +432,9 @@ func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
 	}()
 
 	for _, t := range plan {
+		if j.absent[t.name] {
+			continue
+		}
 		if bookkeepingTables[t.name] {
 			err = j.upsertTable(ctx, tx, postgresBackend, t)
 		} else {
@@ -394,6 +458,28 @@ func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
 		return fmt.Errorf("commit on %s: %w", to.display, err)
 	}
 	committed = true
+	return nil
+}
+
+// refuseForeignSchema refuses a target schema that already holds tables but
+// no schema_version: someone else's database, which pgschema.Apply would
+// otherwise fill with CoreScope tables. It runs before Apply, so nothing is
+// created.
+func refuseForeignSchema(ctx context.Context, q queryer, to dbRef) error {
+	var schemaName sql.NullString
+	var tables int
+	var hasVersion bool
+	err := q.QueryRowContext(ctx, `SELECT current_schema(),
+		(SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema()),
+		EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'schema_version')`).
+		Scan(&schemaName, &tables, &hasVersion)
+	if err != nil {
+		return fmt.Errorf("inspect target schema on %s: %w", to.display, err)
+	}
+	if tables > 0 && !hasVersion {
+		return fmt.Errorf("target schema %q on %s holds %d tables or views but no CoreScope schema_version: it is not a CoreScope database. Refusing to create anything in it; use an empty database or schema",
+			schemaName.String, to.display, tables)
+	}
 	return nil
 }
 
@@ -440,7 +526,7 @@ func (j *copyJob) copyToPostgres(ctx context.Context, conn *sql.Conn, t *table) 
 	p := newProgress(j.lg, t.name)
 	// SQLite reads in rowid/primary-key order for free; Postgres heap order
 	// is already insertion order, and ORDER BY there would cost a sort.
-	s, err := openStream(ctx, j.src.q, j.src.kind, t, t.colNames(), j.src.kind == sqliteBackend)
+	s, err := openStream(ctx, j.src.q, j.src.kind, t, t.colNames(), j.absentCols[t.name], j.src.kind == sqliteBackend)
 	if err != nil {
 		return err
 	}
@@ -499,62 +585,91 @@ func resetIdentities(ctx context.Context, tx *sql.Tx, plan []*table) error {
 
 // ── SQLite target ────────────────────────────────────────────────────────
 
-// intoSQLite builds the copy in <path>.partial and renames it to <path> only
-// after it is verified, so <path> exists only as a complete, verified copy.
-// A failure leaves the .partial file, which is never mistaken for a
+// intoSQLite builds the copy in <path>.partial and publishes it as <path>
+// only after it is verified, so <path> exists only as a complete, verified
+// copy. A failure leaves the .partial file, which is never mistaken for a
 // database: the next run refuses until it is deleted, and says how.
+//
+// File handling is race-free against an existing or appearing <path>: every
+// check uses Lstat (a symlink counts as existing, dangling or not), the work
+// file is created with O_EXCL|O_NOFOLLOW before SQLite opens it, and the
+// copy is published with link(2), which fails rather than replace <path>.
 func (j *copyJob) intoSQLite(ctx context.Context, to dbRef) (err error) {
 	path := to.path
-	if st, err := os.Stat(path); err == nil {
-		if st.IsDir() || st.Size() > 0 {
-			return fmt.Errorf("target SQLite file %s already exists; refusing to overwrite. Give a path that does not exist yet", path)
-		}
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("target SQLite file %s already exists; refusing to overwrite. Give a path that does not exist yet", path)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat %s: %w", path, err)
 	}
 	for _, sfx := range []string{"-wal", "-shm", "-journal"} {
-		if _, err := os.Stat(path + sfx); err == nil {
+		if _, err := os.Lstat(path + sfx); err == nil {
 			return fmt.Errorf("%s%s exists (left over from an earlier database at this path); refusing to create a new database next to it. Remove it or choose another path", path, sfx)
 		}
 	}
 	partial := path + ".partial"
-	cleanup := fmt.Sprintf("rm -f '%s' '%s-wal' '%s-shm' '%s-journal'", partial, partial, partial, partial)
-	for _, f := range []string{partial, partial + "-wal", partial + "-shm", partial + "-journal"} {
-		if _, err := os.Stat(f); err == nil {
+	sidecars := []string{partial, partial + "-wal", partial + "-shm", partial + "-journal"}
+	quoted := make([]string, len(sidecars))
+	for i, f := range sidecars {
+		quoted[i] = shellQuote(f)
+	}
+	cleanup := "rm -f " + strings.Join(quoted, " ")
+	for _, f := range sidecars {
+		if _, err := os.Lstat(f); err == nil {
 			return fmt.Errorf("%s exists: an earlier copy into %s did not finish. It is not a usable database; delete it and rerun: %s", f, path, cleanup)
 		}
 	}
 
-	db, err := sql.Open("sqlite3", dbschema.WriterDSN(partial))
+	// Plan against the end-state schema in memory first, so a source the
+	// plan refuses leaves no work file behind to block the rerun.
+	tgt, err := sqliteEndStateSchema(ctx)
+	if err != nil {
+		return err
+	}
+	plan, err := j.plan(ctx, tgt)
+	if err != nil {
+		return err
+	}
+
+	// Create the work file ourselves: O_EXCL fails on anything already at
+	// the name, a symlink included, so SQLite never writes through one.
+	f, err := os.OpenFile(partial, os.O_RDWR|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", partial, err)
 	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("create %s: %w", partial, err)
+	}
+
+	db, err := sql.Open("sqlite3", dbschema.WriterDSN(partial))
+	if err != nil {
+		return fmt.Errorf("open %s: %w", partial, err)
+	}
 	db.SetMaxOpenConns(1)
-	closed := false
+	closed, verified := false, false
 	defer func() {
 		if !closed {
 			db.Close()
 		}
-		if err != nil {
+		switch {
+		case err == nil:
+		case verified:
+			j.lg.Printf("the copy is complete and verified in %s but was NOT published as %s. Move it into place yourself without overwriting anything (mv -n %s %s), or delete it: %s",
+				partial, path, shellQuote(partial), shellQuote(path), cleanup)
+		default:
 			j.lg.Printf("the copy did not finish; %s was NOT created. The incomplete output is %s, which is not a usable database. Delete it before rerunning: %s", path, partial, cleanup)
 		}
 	}()
 	if _, err := db.ExecContext(ctx, dbschema.SQLiteEndState); err != nil {
 		return fmt.Errorf("create schema in %s: %w", partial, err)
 	}
-	tgt, err := loadSchema(ctx, db, sqliteBackend)
-	if err != nil {
-		return fmt.Errorf("read schema of %s: %w", partial, err)
-	}
-	plan, err := j.plan(ctx, tgt)
-	if err != nil {
-		return err
-	}
 	if err := checkEmpty(ctx, db, to, plan); err != nil {
 		return err
 	}
 
 	for _, t := range plan {
+		if j.absent[t.name] {
+			continue
+		}
 		if bookkeepingTables[t.name] {
 			err = j.inSQLiteTx(ctx, db, func(tx *sql.Tx) error { return j.upsertTable(ctx, tx, sqliteBackend, t) })
 		} else {
@@ -576,22 +691,57 @@ func (j *copyJob) intoSQLite(ctx context.Context, to dbRef) (err error) {
 	}
 
 	// Closing the last connection checkpoints the WAL into the file and
-	// deletes it; a -wal still present would be lost by the rename.
+	// deletes it; a -wal still present would not travel with the link.
 	closed = true
 	if err := db.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", partial, err)
 	}
-	if _, err := os.Stat(partial + "-wal"); err == nil {
-		return fmt.Errorf("%s-wal still exists after close; not renaming", partial)
+	if _, err := os.Lstat(partial + "-wal"); err == nil {
+		return fmt.Errorf("%s-wal still exists after close; not publishing", partial)
 	}
-	if st, err := os.Stat(path); err == nil && st.Size() > 0 {
-		return fmt.Errorf("target SQLite file %s appeared during the copy; refusing to overwrite it", path)
+	verified = true
+	if beforePublish != nil {
+		beforePublish()
 	}
-	if err := os.Rename(partial, path); err != nil {
-		return fmt.Errorf("rename %s to %s: %w", partial, path, err)
+	if err := os.Link(partial, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%s appeared during the copy; it was not touched", path)
+		}
+		return fmt.Errorf("publish %s as %s with a hard link (needed so an existing file is never replaced): %w", partial, path, err)
+	}
+	if err := os.Remove(partial); err != nil {
+		j.lg.Printf("WARNING: published %s, but could not remove the work file %s: %v", path, partial, err)
 	}
 	os.Remove(partial + "-shm") // only if a crashed reader left one
 	return nil
+}
+
+// beforePublish, when set (tests only), runs between verify and publishing
+// the SQLite copy.
+var beforePublish func()
+
+// shellQuote quotes s for a POSIX shell.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// sqliteEndStateSchema is the schema dbschema.SQLiteEndState creates, read
+// from a throwaway in-memory database.
+func sqliteEndStateSchema(ctx context.Context) (*schema, error) {
+	mem, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		return nil, err
+	}
+	defer mem.Close()
+	mem.SetMaxOpenConns(1) // each :memory: connection is its own database
+	if _, err := mem.ExecContext(ctx, dbschema.SQLiteEndState); err != nil {
+		return nil, fmt.Errorf("SQLite end-state schema: %w", err)
+	}
+	s, err := loadSchema(ctx, mem, sqliteBackend)
+	if err != nil {
+		return nil, fmt.Errorf("SQLite end-state schema: %w", err)
+	}
+	return s, nil
 }
 
 func (j *copyJob) inSQLiteTx(ctx context.Context, db *sql.DB, f func(*sql.Tx) error) error {
@@ -610,7 +760,7 @@ func (j *copyJob) inSQLiteTx(ctx context.Context, db *sql.DB, f func(*sql.Tx) er
 // committing every batch rows.
 func (j *copyJob) insertIntoSQLite(ctx context.Context, db *sql.DB, t *table) error {
 	p := newProgress(j.lg, t.name)
-	s, err := openStream(ctx, j.src.q, j.src.kind, t, t.colNames(), j.src.kind == sqliteBackend)
+	s, err := openStream(ctx, j.src.q, j.src.kind, t, t.colNames(), j.absentCols[t.name], j.src.kind == sqliteBackend)
 	if err != nil {
 		return err
 	}

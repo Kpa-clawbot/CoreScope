@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -97,6 +98,14 @@ func newSource(t testing.TB, path string, migrations []string) {
 		var score any = i
 		if i%7 == 0 {
 			path, score = nil, nil
+		}
+		// The ingestor writes float64 scores into the INTEGER-declared
+		// column: 0.75 stays REAL, 3.0 is stored as integer 3.
+		switch i {
+		case 1:
+			score = 0.75 // id 13
+		case 2:
+			score = 3.0 // id 16
 		}
 		mustExec(t, db, `INSERT INTO observations (id, transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp, resolved_path, raw_hex)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
@@ -265,6 +274,7 @@ func TestCopySQLiteToSQLite(t *testing.T) {
 
 	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", "sqlite:"+dst)
 	wantOK(t, code, out)
+	assertScores(t, dst)
 }
 
 func TestVerifyReportsFirstDifference(t *testing.T) {
@@ -391,6 +401,8 @@ func TestNormalize(t *testing.T) {
 		{clsInt, int64(bigID), bigID},
 		{clsInt, nil, nil},
 		{clsInt, float64(3), int64(3)},
+		{clsFloat, int64(3), 3.0},
+		{clsFloat, 0.75, 0.75},
 		{clsFloat, 0.1, 0.1},
 		{clsFloat, int64(5), 5.0},
 		{clsText, "Zürich", "Zürich"},
@@ -422,9 +434,13 @@ func TestNormalize(t *testing.T) {
 			t.Errorf("normalize(%s, %#v) = %#v, want error", c.cls, c.in, got)
 		}
 	}
-	// Non-strict text (SQLite target) keeps bytes Postgres would reject.
+	// A SQLite target follows affinity: TEXT keeps bytes Postgres would
+	// reject, and INTEGER keeps a fraction as REAL.
 	if _, err := normalize(clsText, "\xff", false); err != nil {
-		t.Errorf("non-strict text rejected invalid UTF-8: %v", err)
+		t.Errorf("SQLite target rejected invalid UTF-8: %v", err)
+	}
+	if got, err := normalize(clsInt, 0.75, false); err != nil || got != 0.75 {
+		t.Errorf("SQLite target: normalize(integer, 0.75) = %v, %v; want 0.75", got, err)
 	}
 	if string(appendValue(nil, math.Copysign(0, -1))) != string(appendValue(nil, 0.0)) {
 		t.Errorf("-0 and 0 encode differently")
@@ -489,6 +505,14 @@ func TestCopyRoundTripThroughPostgres(t *testing.T) {
 		t.Errorf("dropped_at = %q", droppedAt)
 	}
 
+	var s13, s16 float64
+	if err := pg.QueryRow(`SELECT score FROM observations WHERE id = 13`).Scan(&s13); err != nil || s13 != 0.75 {
+		t.Errorf("observations.score id=13 in Postgres = %v, %v; want 0.75", s13, err)
+	}
+	if err := pg.QueryRow(`SELECT score FROM observations WHERE id = 16`).Scan(&s16); err != nil || s16 != 3 {
+		t.Errorf("observations.score id=16 in Postgres = %v, %v; want 3", s16, err)
+	}
+
 	// Identity sequences continue after the copied ids.
 	var newID int64
 	if err := pg.QueryRow(`INSERT INTO transmissions (raw_hex, hash, first_seen) VALUES ('00', 'new', 'now') RETURNING id`).Scan(&newID); err != nil {
@@ -527,6 +551,26 @@ func TestCopyRoundTripThroughPostgres(t *testing.T) {
 	code, _ = run(t, "verify", "-a", "sqlite:"+back, "-b", "sqlite:"+src)
 	if code != 0 {
 		t.Errorf("reverse verify failed")
+	}
+	assertScores(t, back)
+}
+
+// assertScores checks the two score values seeded by newSource came back
+// with their SQLite storage classes intact.
+func assertScores(t *testing.T, path string) {
+	t.Helper()
+	db := openWriter(t, path)
+	for _, c := range []struct {
+		id         int
+		typ, value string
+	}{{13, "real", "0.75"}, {16, "integer", "3"}} {
+		var typ, v string
+		if err := db.QueryRow(`SELECT typeof(score), CAST(score AS TEXT) FROM observations WHERE id = ?`, c.id).Scan(&typ, &v); err != nil {
+			t.Fatal(err)
+		}
+		if typ != c.typ || v != c.value {
+			t.Errorf("observations.score id=%d is %s %s, want %s %s", c.id, typ, v, c.typ, c.value)
+		}
 	}
 }
 
@@ -605,5 +649,266 @@ func TestPostgresSeededBookkeepingTolerated(t *testing.T) {
 	wantOK(t, code, out)
 	if !strings.Contains(out, "b also holds 1 schema-seeded bookkeeping row(s) a lacks; tolerated") {
 		t.Errorf("tolerated seed row not reported")
+	}
+}
+
+// ── -allow-pending-migrations ────────────────────────────────────────────
+
+const allowWarning = "WARNING: -allow-pending-migrations"
+
+func TestMissingAsyncTableNeedsFlag(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "src.db"), filepath.Join(dir, "dst.db")
+	newSource(t, src, srcMigrations())
+	db := openWriter(t, src)
+	mustExec(t, db, `DROP TABLE _async_migrations`)
+	db.Close()
+
+	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+	wantFail(t, code, out, "has no _async_migrations table", "start the ingestor once on the source",
+		"or pass -allow-pending-migrations")
+	if _, err := os.Stat(dst + ".partial"); !os.IsNotExist(err) {
+		t.Errorf("work file created for a refused source")
+	}
+
+	code, out = run(t, "copy", "-allow-pending-migrations", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+	wantOK(t, code, out)
+	for _, s := range []string{allowWarning, "has no _async_migrations table", "will NOT run those backfills",
+		"source has no _async_migrations; the target keeps its own rows"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("output lacks %q", s)
+		}
+	}
+	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", "sqlite:"+dst)
+	wantOK(t, code, out)
+}
+
+// A data table and a nullable column the source never got are read as empty
+// and NULL with the flag; a missing NOT NULL column still fails.
+func TestAbsentTableAndColumnNeedFlag(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "src.db"), filepath.Join(dir, "dst.db")
+	newSource(t, src, srcMigrations())
+	db := openWriter(t, src)
+	mustExec(t, db, `DROP TABLE scope_match_totals`)
+	mustExec(t, db, `ALTER TABLE transmissions DROP COLUMN code2`)
+	db.Close()
+
+	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+	wantFail(t, code, out, "source has no table scope_match_totals", "pass -allow-pending-migrations")
+	if _, err := os.Stat(dst + ".partial"); !os.IsNotExist(err) {
+		t.Fatalf("a refused copy left %s.partial behind", dst)
+	}
+
+	code, out = run(t, "copy", "-allow-pending-migrations", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+	wantOK(t, code, out)
+	for _, s := range []string{
+		"source has no table scope_match_totals (the migration creating it never ran); the target table stays empty",
+		"source table transmissions has no column code2 (the migration adding it never ran); it is copied as NULL",
+		"verify transmissions: side a has no column code2; compared as NULL",
+		"table is missing on side a; b's table is empty, so they agree",
+	} {
+		if !strings.Contains(out, s) {
+			t.Errorf("output lacks %q", s)
+		}
+	}
+	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", "sqlite:"+dst)
+	wantOK(t, code, out)
+
+	// A value b holds where a has no column is a real difference.
+	db = openWriter(t, dst)
+	mustExec(t, db, `UPDATE transmissions SET code2 = 'x' WHERE id = 2`)
+	mustExec(t, db, `INSERT INTO scope_match_totals VALUES (1, 1, 1, 1, 1, 1, 1)`)
+	db.Close()
+	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", "sqlite:"+dst)
+	wantFail(t, code, out, "first difference at id=2: column code2 is NULL on side a", "✗ rows a=0 b=1 — table is missing on side a")
+
+	src2, dst2 := filepath.Join(dir, "src2.db"), filepath.Join(dir, "dst2.db")
+	newSource(t, src2, srcMigrations())
+	db = openWriter(t, src2)
+	mustExec(t, db, `ALTER TABLE client_rx_observations DROP COLUMN hop_count`)
+	db.Close()
+	code, out = run(t, "copy", "-allow-pending-migrations", "-from", "sqlite:"+src2, "-to", "sqlite:"+dst2)
+	wantFail(t, code, out, "source table client_rx_observations lacks column hop_count, which is NOT NULL in the target")
+}
+
+func TestPendingAsyncRowNeedsFlag(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "src.db"), filepath.Join(dir, "dst.db")
+	newSource(t, src, srcMigrations())
+	db := openWriter(t, src)
+	mustExec(t, db, `UPDATE _async_migrations SET status = 'pending_async' WHERE name = 'tx_last_seen_backfill_v1'`)
+	db.Close()
+
+	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+	wantFail(t, code, out, "unfinished async migrations: tx_last_seen_backfill_v1 (pending_async)", "or pass -allow-pending-migrations")
+
+	code, out = run(t, "copy", "-allow-pending-migrations", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+	wantOK(t, code, out)
+	for _, s := range []string{allowWarning, "tx_last_seen_backfill_v1 (pending_async)",
+		"a has 1 unfinished async migration row(s) that copy does not carry over; tolerated"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("output lacks %q", s)
+		}
+	}
+	// The pending row is not copied: the SQLite copy's ingestor runs it.
+	db = openWriter(t, dst)
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM _async_migrations WHERE name = 'tx_last_seen_backfill_v1'`).Scan(&n)
+	if n != 0 {
+		t.Errorf("pending row copied to the target")
+	}
+}
+
+func TestPendingAsyncRowKeepsPostgresSeed(t *testing.T) {
+	pg, pgURL := pgTarget(t)
+	src := filepath.Join(t.TempDir(), "src.db")
+	newSource(t, src, srcMigrations())
+	db := openWriter(t, src)
+	mustExec(t, db, `UPDATE _async_migrations SET status = 'pending_async' WHERE name = 'tx_last_seen_backfill_v1'`)
+	db.Close()
+
+	code, out := run(t, "copy", "-allow-pending-migrations", "-from", "sqlite:"+src, "-to", pgURL)
+	wantOK(t, code, out)
+	var status string
+	pg.QueryRow(`SELECT status FROM _async_migrations WHERE name = 'tx_last_seen_backfill_v1'`).Scan(&status)
+	if status != "done" {
+		t.Errorf("Postgres seed overwritten: status = %q, want done", status)
+	}
+	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", pgURL)
+	wantOK(t, code, out)
+}
+
+// prepareE2EFixture is CI's path: a temp copy of the committed E2E fixture
+// migrated with the legacy `-db` mode.
+func prepareE2EFixture(t *testing.T) string {
+	src := filepath.Join(t.TempDir(), "e2e.db")
+	copyFile(t, locateFixture(t), src)
+	if err := legacyMigrate(src, t.Logf); err != nil {
+		t.Fatalf("legacy -db migration: %v", err)
+	}
+	return src
+}
+
+func TestCopyE2EFixtureToPostgres(t *testing.T) {
+	_, pgURL := pgTarget(t)
+	src := prepareE2EFixture(t)
+	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", pgURL)
+	wantFail(t, code, out, "or pass -allow-pending-migrations")
+
+	code, out = run(t, "copy", "-allow-pending-migrations", "-from", "sqlite:"+src, "-to", pgURL)
+	wantOK(t, code, out)
+	if !strings.Contains(out, allowWarning) {
+		t.Errorf("no warning for the fixture's missing async migrations")
+	}
+	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", pgURL)
+	wantOK(t, code, out)
+}
+
+func TestCopyE2EFixtureToSQLite(t *testing.T) {
+	src := prepareE2EFixture(t)
+	dst := filepath.Join(t.TempDir(), "copy.db")
+	code, out := run(t, "copy", "-allow-pending-migrations", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+	wantOK(t, code, out)
+	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", "sqlite:"+dst)
+	wantOK(t, code, out)
+}
+
+// ── file and schema safety ───────────────────────────────────────────────
+
+func TestDanglingSymlinkRefused(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "src.db"), filepath.Join(dir, "dst.db")
+	newSource(t, src, srcMigrations())
+	elsewhere := filepath.Join(dir, "elsewhere.db")
+
+	for _, link := range []string{dst + ".partial", dst + ".partial-wal", dst} {
+		if err := os.Symlink(elsewhere, link); err != nil {
+			t.Fatal(err)
+		}
+		code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+		wantFail(t, code, out)
+		if _, err := os.Lstat(elsewhere); !os.IsNotExist(err) {
+			t.Fatalf("copy wrote through the dangling symlink %s", link)
+		}
+		if err := os.Remove(link); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestTargetAppearingBeforePublishIsKept(t *testing.T) {
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "src.db"), filepath.Join(dir, "dst.db")
+	newSource(t, src, srcMigrations())
+	beforePublish = func() {
+		if err := os.WriteFile(dst, []byte("theirs"), 0o644); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforePublish = nil })
+
+	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+	wantFail(t, code, out, "appeared during the copy; it was not touched",
+		"complete and verified in "+dst+".partial but was NOT published", "mv -n")
+	if b, _ := os.ReadFile(dst); string(b) != "theirs" {
+		t.Errorf("existing target overwritten")
+	}
+	// The verified work file is intact and usable.
+	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", "sqlite:"+dst+".partial")
+	wantOK(t, code, out)
+}
+
+func TestCleanupCommandIsShellQuoted(t *testing.T) {
+	if got := shellQuote("/tmp/it's here"); got != `'/tmp/it'\''s here'` {
+		t.Errorf("shellQuote = %s", got)
+	}
+	dir := filepath.Join(t.TempDir(), "it's")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src, dst := filepath.Join(dir, "src.db"), filepath.Join(dir, "dst.db")
+	newSource(t, src, srcMigrations())
+	if err := os.WriteFile(dst+".partial", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", "sqlite:"+dst)
+	wantFail(t, code, out, "rm -f "+shellQuote(dst+".partial")+" ")
+	if !strings.Contains(out, `it'\''s`) {
+		t.Errorf("embedded quote not escaped")
+	}
+}
+
+func TestUsageHasNoPasswordURLs(t *testing.T) {
+	for _, cmd := range []string{"copy", "verify"} {
+		code, out := run(t, cmd)
+		if code != 2 {
+			t.Errorf("%s with no flags: exit %d, want 2", cmd, code)
+		}
+		for _, s := range []string{"PGPASSWORD", ".pgpass", "postgres://corescope@db.example/corescope"} {
+			if !strings.Contains(out, s) {
+				t.Errorf("%s usage lacks %q", cmd, s)
+			}
+		}
+		if m := regexp.MustCompile(`postgres(ql)?://[^\s/@]*:[^\s/@]*@`).FindString(out); m != "" {
+			t.Errorf("%s usage shows a URL with a password: %s", cmd, m)
+		}
+	}
+}
+
+func TestPostgresForeignSchemaRefused(t *testing.T) {
+	pg, pgURL := pgTarget(t)
+	mustExec(t, pg, `CREATE TABLE someone_elses (id BIGINT PRIMARY KEY)`)
+	src := filepath.Join(t.TempDir(), "src.db")
+	newSource(t, src, srcMigrations())
+
+	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", pgURL)
+	wantFail(t, code, out, "holds 1 tables or views but no CoreScope schema_version", "Refusing to create anything")
+	for _, tbl := range []string{"schema_version", "transmissions"} {
+		var n int
+		pg.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?`, tbl).Scan(&n)
+		if n != 0 {
+			t.Errorf("%s was created in a foreign schema", tbl)
+		}
 	}
 }

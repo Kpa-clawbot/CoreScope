@@ -22,15 +22,16 @@ type side struct {
 }
 
 type tableResult struct {
-	name           string
-	rowsA, rowsB   int64
-	digestA        string
-	digestB        string
-	extraB         int64 // seeded bookkeeping rows only b has (tolerated)
-	firstDiff      string
-	ok             bool
-	notCompared    []string // columns only a has
-	missingInSideA bool
+	name         string
+	rowsA, rowsB int64
+	digestA      string
+	digestB      string
+	extraB       int64 // seeded bookkeeping rows only b has (tolerated)
+	unfinishedA  int64 // unfinished _async_migrations rows on a, never copied (tolerated)
+	firstDiff    string
+	ok           bool
+	notCompared  []string // columns only a has
+	nullOnA      []string // columns only b has, read as NULL on a
 }
 
 // compareTables compares every table in b's schema (less skipTables) against
@@ -48,23 +49,50 @@ func compareTables(ctx context.Context, a, b side) ([]tableResult, error) {
 		bt := b.schema.tables[name]
 		res := tableResult{name: name}
 		at := a.schema.tables[name]
+		if at == nil && bookkeepingTables[name] {
+			// A source prepared by `-db` has no _async_migrations; copy
+			// (with -allow-pending-migrations) leaves the target's own rows.
+			if err := b.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+quoteIdent(name)).Scan(&res.rowsB); err != nil {
+				return nil, fmt.Errorf("side b: count %s: %w", name, err)
+			}
+			res.extraB = res.rowsB
+			res.ok = true
+			res.firstDiff = "table is missing on side a; tolerated for bookkeeping"
+			out = append(out, res)
+			continue
+		}
 		if at == nil {
-			res.missingInSideA = true
+			// A table that does not exist holds no rows: equal exactly when
+			// b's table is empty (copy -allow-pending-migrations leaves it so).
+			if err := b.q.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+quoteIdent(name)).Scan(&res.rowsB); err != nil {
+				return nil, fmt.Errorf("side b: count %s: %w", name, err)
+			}
+			res.ok = res.rowsB == 0
 			res.firstDiff = "table is missing on side a"
+			if res.ok {
+				res.firstDiff += "; b's table is empty, so they agree"
+			}
 			out = append(out, res)
 			continue
 		}
 		if len(bt.pk) == 0 {
 			return nil, fmt.Errorf("table %s has no primary key; cannot compare it in order", name)
 		}
-		var missing []string
-		for _, c := range bt.cols {
-			if at.colIndex(c.name) < 0 {
-				missing = append(missing, c.name)
+		// A column a lacks is read as NULL there: equal only where b holds
+		// NULL too. Primary-key columns must exist to order the rows.
+		absent := map[string]bool{}
+		for i, c := range bt.cols {
+			if at.colIndex(c.name) >= 0 {
+				continue
 			}
+			if containsInt(bt.pk, i) {
+				res.firstDiff = "primary-key column missing on side a: " + c.name
+				break
+			}
+			absent[c.name] = true
+			res.nullOnA = append(res.nullOnA, c.name)
 		}
-		if len(missing) > 0 {
-			res.firstDiff = "columns missing on side a: " + strings.Join(missing, ", ")
+		if res.firstDiff != "" {
 			out = append(out, res)
 			continue
 		}
@@ -73,7 +101,7 @@ func compareTables(ctx context.Context, a, b side) ([]tableResult, error) {
 				res.notCompared = append(res.notCompared, c.name)
 			}
 		}
-		if err := compareTable(ctx, a, b, bt, &res); err != nil {
+		if err := compareTable(ctx, a, b, bt, absent, &res); err != nil {
 			return nil, err
 		}
 		out = append(out, res)
@@ -94,14 +122,14 @@ func normRow(t *table, raw, dst []any) {
 	}
 }
 
-func compareTable(ctx context.Context, a, b side, t *table, res *tableResult) error {
+func compareTable(ctx context.Context, a, b side, t *table, absentOnA map[string]bool, res *tableResult) error {
 	cols := t.colNames()
-	sa, err := openStream(ctx, a.q, a.kind, t, cols, true)
+	sa, err := openStream(ctx, a.q, a.kind, t, cols, absentOnA, true)
 	if err != nil {
 		return fmt.Errorf("side a: %w", err)
 	}
 	defer sa.close()
-	sb, err := openStream(ctx, b.q, b.kind, t, cols, true)
+	sb, err := openStream(ctx, b.q, b.kind, t, cols, nil, true)
 	if err != nil {
 		return fmt.Errorf("side b: %w", err)
 	}
@@ -161,8 +189,12 @@ func compareTable(ctx context.Context, a, b side, t *table, res *tableResult) er
 		case c < 0: // row only in a
 			res.rowsA++
 			hashRow(ha, na)
-			diffs++
-			note(fmt.Sprintf("first difference at %s: row exists on side a only", describePK(t, na)))
+			if unfinishedAsync(t, na) {
+				res.unfinishedA++
+			} else {
+				diffs++
+				note(fmt.Sprintf("first difference at %s: row exists on side a only", describePK(t, na)))
+			}
 			if okA, err = advance(sa, na, "a"); err != nil {
 				return err
 			}
@@ -183,7 +215,9 @@ func compareTable(ctx context.Context, a, b side, t *table, res *tableResult) er
 			res.rowsB++
 			ea := string(hashRow(ha, na))
 			eb := hashRow(hb, nb)
-			if ea != string(eb) {
+			if ea != string(eb) && unfinishedAsync(t, na) {
+				res.unfinishedA++
+			} else if ea != string(eb) {
 				diffs++
 				for i := range cols {
 					if string(appendValue(nil, na[i])) != string(appendValue(nil, nb[i])) {
@@ -228,10 +262,16 @@ func reportResults(lg *log.Logger, results []tableResult) error {
 		if r.extraB > 0 {
 			line += fmt.Sprintf(" (b also holds %d schema-seeded bookkeeping row(s) a lacks; tolerated)", r.extraB)
 		}
+		if r.unfinishedA > 0 {
+			line += fmt.Sprintf(" (a has %d unfinished async migration row(s) that copy does not carry over; tolerated)", r.unfinishedA)
+		}
 		if r.firstDiff != "" {
 			line += " — " + r.firstDiff
 		}
 		lg.Print(line)
+		if len(r.nullOnA) > 0 {
+			lg.Printf("verify %s: side a has no column %s; compared as NULL", r.name, strings.Join(r.nullOnA, ", "))
+		}
 		if len(r.notCompared) > 0 {
 			lg.Printf("verify %s: side a has columns b lacks, not compared: %s", r.name, strings.Join(r.notCompared, ", "))
 		}
@@ -247,8 +287,10 @@ func reportResults(lg *log.Logger, results []tableResult) error {
 func runVerify(ctx context.Context, args []string, lg *log.Logger, sw *scrubWriter) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.SetOutput(lg.Writer())
-	aArg := fs.String("a", "", "first database (sqlite:<path> or postgres://…)")
+	aArg := fs.String("a", "", "first database (sqlite:<path> or postgres://user@host/db)")
 	bArg := fs.String("b", "", "second database; its schema is the reference (normally the copy)")
+	fs.Usage = usageFor(fs, "verify -a <db> -b <db>",
+		"corescope-migrate verify -a sqlite:/var/lib/corescope/meshcore.db -b postgres://corescope@db.example/corescope")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}

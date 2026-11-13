@@ -18,7 +18,9 @@
 //	migrate copy   -from <db> -to <db> [-batch 5000]
 //	migrate verify -a <db> -b <db>
 //
-// where <db> is sqlite:<path> or a postgres:// / postgresql:// URL.
+// where <db> is sqlite:<path> or a postgres:// / postgresql:// URL. Keep the
+// password out of the URL (argv is visible in ps): use PGPASSWORD or
+// ~/.pgpass, which pgx reads like libpq.
 package main
 
 import (
@@ -26,6 +28,7 @@ import (
 	"database/sql"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -79,26 +82,34 @@ func legacyMain() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[migrate] ")
 
+	if err := legacyMigrate(*dbPath, log.Printf); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("OK: %s is migrated and ready", *dbPath)
+}
+
+// legacyMigrate is the body of `migrate -db <path>`, separate so tests run
+// exactly what CI runs.
+func legacyMigrate(dbPath string, logf dbschema.Logger) error {
 	// Same DSN as the ingestor. A bare path here would mean synchronous=NORMAL
 	// under mattn, quietly weakening durability for a process that writes — and
 	// this one runs dbschema.Apply, which now also deletes duplicate rows.
-	db, err := sql.Open("sqlite3", dbschema.WriterDSN(*dbPath))
+	db, err := sql.Open("sqlite3", dbschema.WriterDSN(dbPath))
 	if err != nil {
-		log.Fatalf("open %s: %v", *dbPath, err)
+		return fmt.Errorf("open %s: %v", dbPath, err)
 	}
 	defer db.Close()
 
 	if err := db.Ping(); err != nil {
-		log.Fatalf("ping %s: %v", *dbPath, err)
+		return fmt.Errorf("ping %s: %v", dbPath, err)
 	}
 
-	if err := dbschema.Apply(db, log.Printf); err != nil {
-		log.Fatalf("dbschema.Apply: %v", err)
+	if err := dbschema.Apply(db, logf); err != nil {
+		return fmt.Errorf("dbschema.Apply: %v", err)
 	}
 
 	if err := dbschema.AssertReady(db); err != nil {
-		log.Fatalf("dbschema.AssertReady after Apply: %v (this is a bug — Apply did not produce a ready schema)", err)
+		return fmt.Errorf("dbschema.AssertReady after Apply: %v (this is a bug — Apply did not produce a ready schema)", err)
 	}
-
-	log.Printf("OK: %s is migrated and ready", *dbPath)
+	return nil
 }

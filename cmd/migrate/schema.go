@@ -43,8 +43,9 @@ func (c colClass) String() string {
 }
 
 type column struct {
-	name  string
-	class colClass
+	name    string
+	class   colClass
+	notNull bool
 }
 
 type table struct {
@@ -153,14 +154,14 @@ func loadSQLiteSchema(ctx context.Context, q queryer) (*schema, error) {
 		}
 		type pkcol struct{ pos, idx int }
 		var pks []pkcol
-		cr, err := q.QueryContext(ctx, `SELECT name, type, pk FROM pragma_table_info(?) ORDER BY cid`, d.name)
+		cr, err := q.QueryContext(ctx, `SELECT name, type, "notnull", pk FROM pragma_table_info(?) ORDER BY cid`, d.name)
 		if err != nil {
 			return nil, fmt.Errorf("columns of %s: %w", d.name, err)
 		}
 		for cr.Next() {
 			var name, decl string
-			var pk int
-			if err := cr.Scan(&name, &decl, &pk); err != nil {
+			var notNull, pk int
+			if err := cr.Scan(&name, &decl, &notNull, &pk); err != nil {
 				cr.Close()
 				return nil, err
 			}
@@ -172,7 +173,7 @@ func loadSQLiteSchema(ctx context.Context, q queryer) (*schema, error) {
 			if pk > 0 {
 				pks = append(pks, pkcol{pk, len(t.cols)})
 			}
-			t.cols = append(t.cols, column{name: name, class: cls})
+			t.cols = append(t.cols, column{name: name, class: cls, notNull: notNull != 0 || pk > 0})
 		}
 		cr.Close()
 		if err := cr.Err(); err != nil {
@@ -261,15 +262,15 @@ func loadPostgresSchema(ctx context.Context, q queryer) (*schema, error) {
 		return nil, err
 	}
 
-	cr, err := q.QueryContext(ctx, `SELECT table_name, column_name, data_type, is_identity
+	cr, err := q.QueryContext(ctx, `SELECT table_name, column_name, data_type, is_identity, is_nullable
 		FROM information_schema.columns WHERE table_schema = current_schema()
 		ORDER BY table_name, ordinal_position`)
 	if err != nil {
 		return nil, fmt.Errorf("list columns: %w", err)
 	}
 	for cr.Next() {
-		var tn, cn, dt, ident string
-		if err := cr.Scan(&tn, &cn, &dt, &ident); err != nil {
+		var tn, cn, dt, ident, nullable string
+		if err := cr.Scan(&tn, &cn, &dt, &ident, &nullable); err != nil {
 			cr.Close()
 			return nil, err
 		}
@@ -285,7 +286,7 @@ func loadPostgresSchema(ctx context.Context, q queryer) (*schema, error) {
 		if ident == "YES" {
 			t.serial = cn
 		}
-		t.cols = append(t.cols, column{name: cn, class: cls})
+		t.cols = append(t.cols, column{name: cn, class: cls, notNull: nullable == "NO"})
 	}
 	cr.Close()
 	if err := cr.Err(); err != nil {

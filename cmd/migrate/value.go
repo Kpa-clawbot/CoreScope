@@ -16,9 +16,13 @@ import (
 // only ever nil, int64, float64, string or []byte. Every conversion is
 // lossless; anything else is an error the caller reports with its location.
 //
-// strictText additionally rejects text Postgres cannot store (invalid UTF-8,
-// NUL bytes): SQLite stores such bytes as TEXT without complaint.
-func normalize(cls colClass, v any, strictText bool) (any, error) {
+// pgTarget says the value is bound for Postgres, whose types are strict:
+// text must be valid UTF-8 without NUL bytes, and an integer column cannot
+// hold a fraction. Otherwise (a SQLite target, or verify) SQLite's affinity
+// rules apply: TEXT stores any bytes, and an INTEGER column keeps a
+// non-integral REAL as REAL (the ingestor writes 0.75 into
+// observations.score, declared INTEGER).
+func normalize(cls colClass, v any, pgTarget bool) (any, error) {
 	switch x := v.(type) {
 	case nil:
 		return nil, nil
@@ -37,11 +41,14 @@ func normalize(cls colClass, v any, strictText bool) (any, error) {
 		case int64:
 			return x, nil
 		case float64:
-			// INTEGER affinity already turned every integral, in-range real
-			// into an integer, so this is only reached by values that cannot
-			// be one; the check keeps the rule exact all the same.
+			// An integral, in-range real (3.0 from a Postgres DOUBLE
+			// PRECISION column) becomes the integer SQLite's INTEGER
+			// affinity would have stored.
 			if x == math.Trunc(x) && x >= -(1<<63) && x < (1<<63) {
 				return int64(x), nil
+			}
+			if !pgTarget {
+				return x, nil
 			}
 			return nil, fmt.Errorf("real %s cannot be stored in an integer column", strconv.FormatFloat(x, 'g', -1, 64))
 		}
@@ -58,7 +65,7 @@ func normalize(cls colClass, v any, strictText bool) (any, error) {
 	case clsText:
 		switch x := v.(type) {
 		case string:
-			if strictText {
+			if pgTarget {
 				if !utf8.ValidString(x) {
 					return nil, fmt.Errorf("text is not valid UTF-8 (Postgres rejects it): %s", preview(x))
 				}
@@ -221,16 +228,21 @@ type rowStream struct {
 	ptrs []any
 }
 
-// openStream selects cols of t (by name) from q. On SQLite each column is
+// openStream selects cols of t (by name) from q; a column in absent is
+// selected as NULL (it does not exist on that side). On SQLite each column is
 // read as +"col": the unary plus is a no-op on the value but drops the
 // declared type, which otherwise makes mattn/go-sqlite3 turn DATETIME text
 // into time.Time and BOOLEAN integers into bool.
-func openStream(ctx context.Context, q queryer, kind backend, t *table, cols []string, ordered bool) (*rowStream, error) {
+func openStream(ctx context.Context, q queryer, kind backend, t *table, cols []string, absent map[string]bool, ordered bool) (*rowStream, error) {
 	var sb strings.Builder
 	sb.WriteString("SELECT ")
 	for i, c := range cols {
 		if i > 0 {
 			sb.WriteString(", ")
+		}
+		if absent[c] {
+			sb.WriteString("NULL")
+			continue
 		}
 		if kind == sqliteBackend {
 			sb.WriteByte('+')
