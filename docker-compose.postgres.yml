@@ -42,7 +42,16 @@
 #   CORESCOPE_READER_PASSWORD   the server's role
 # Optional: CORESCOPE_DB (corescope), CORESCOPE_WRITER (corescope_writer),
 # CORESCOPE_READER (corescope_reader), SERVER_RUN_AS_UID (1001),
+# CORESCOPE_ACCOUNTS (corescope_accounts), CORESCOPE_ACCOUNTS_PASSWORD (unset),
 # INGESTOR_UID / INGESTOR_GID (1000), CORESCOPE_SHARE_GID (61001).
+#
+# User accounts in PostgreSQL (userManagement.enabled): set
+# CORESCOPE_ACCOUNTS_PASSWORD too. postgres-init then sets up the accounts role
+# and its schema corescope_users, and prod gets DB_DSN_ACCOUNTS,
+#   postgres://corescope_accounts@postgres:5432/corescope?sslmode=disable
+# with that password; the ingestor never gets it (it reads the two tables it
+# needs as the writer, through the group role corescope_users_reader). Unset,
+# prod gets an empty DB_DSN_ACCOUNTS, which the entrypoint drops.
 #
 # Postgres is reachable only on the compose network. To reach it from the host
 # (psql, backups), add to the postgres service:  ports: ["127.0.0.1:5432:5432"]
@@ -59,6 +68,7 @@ x-corescope-db: &corescope-db
   CORESCOPE_DB: ${CORESCOPE_DB:-corescope}
   CORESCOPE_WRITER: ${CORESCOPE_WRITER:-corescope_writer}
   CORESCOPE_READER: ${CORESCOPE_READER:-corescope_reader}
+  CORESCOPE_ACCOUNTS: ${CORESCOPE_ACCOUNTS:-corescope_accounts}
 
 services:
   postgres:
@@ -97,6 +107,8 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       CORESCOPE_WRITER_PASSWORD: ${CORESCOPE_WRITER_PASSWORD:?set CORESCOPE_WRITER_PASSWORD in .env}
       CORESCOPE_READER_PASSWORD: ${CORESCOPE_READER_PASSWORD:?set CORESCOPE_READER_PASSWORD in .env}
+      # Optional: empty skips the accounts role and schema.
+      CORESCOPE_ACCOUNTS_PASSWORD: ${CORESCOPE_ACCOUNTS_PASSWORD:-}
 
   prod:
     depends_on:
@@ -108,6 +120,9 @@ services:
       - SERVER_RUN_AS_UID=${SERVER_RUN_AS_UID:-1001}
       - CORESCOPE_SHARE_GID=${CORESCOPE_SHARE_GID:-61001}
       - DB_DSN_SERVER=postgres://${CORESCOPE_READER:-corescope_reader}:${CORESCOPE_READER_PASSWORD:?set CORESCOPE_READER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
+      # The accounts store's DSN, only with CORESCOPE_ACCOUNTS_PASSWORD (else
+      # empty); used only when userManagement.enabled. Never the ingestor's.
+      - DB_DSN_ACCOUNTS=${CORESCOPE_ACCOUNTS_PASSWORD:+postgres://${CORESCOPE_ACCOUNTS:-corescope_accounts}:${CORESCOPE_ACCOUNTS_PASSWORD}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable}
 
   ingestor:
     image: corescope:latest

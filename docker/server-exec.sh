@@ -8,7 +8,8 @@
 # a broker password — reaches it. The list is what cmd/server reads (grep
 # os.Getenv / LookupEnv / envOrValue there) plus the Go runtime, TLS and proxy
 # variables. DB_DSN is the server's own: supervisord sets it from
-# DB_DSN_SERVER. A variable the server starts reading must be added here.
+# DB_DSN_SERVER. DB_DSN_ACCOUNTS is the accounts store's, passed as it is.
+# A variable the server starts reading must be added here.
 #
 # On SQLite the environment is passed on as before, less DB_DSN_INGESTOR.
 
@@ -24,7 +25,7 @@ for _name in \
   GOMEMLIMIT GOGC GODEBUG GOMAXPROCS GOTRACEBACK \
   SSL_CERT_FILE SSL_CERT_DIR \
   HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy \
-  DB_DRIVER DB_DSN \
+  DB_DRIVER DB_DSN DB_DSN_ACCOUNTS \
   CORS_ALLOWED_ORIGINS ENABLE_PPROF PPROF_PORT \
   CORESCOPE_VERSION CORESCOPE_INGESTOR_STATS \
   CORESCOPE_OBSERVER_HOOK_SECRET CORESCOPE_OBSERVER_KEY \

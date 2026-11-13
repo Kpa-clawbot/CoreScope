@@ -96,17 +96,21 @@ prepare_service_user || exit 1
 # ---------------------------------------------------------------------------
 _nl='
 '
-for _v in "${DB_DSN:-}" "${DB_DSN_INGESTOR:-}" "${DB_DSN_SERVER:-}" "${DB_PATH:-}"; do
+for _v in "${DB_DSN:-}" "${DB_DSN_INGESTOR:-}" "${DB_DSN_SERVER:-}" "${DB_DSN_ACCOUNTS:-}" "${DB_PATH:-}"; do
   case "$_v" in
     *'"'* | *\\* | *"$_nl"*)
       # Never print the value: a DSN carries a password.
-      echo "[entrypoint] DB_DSN / DB_DSN_INGESTOR / DB_DSN_SERVER / DB_PATH must not contain a double quote, backslash or newline;" >&2
+      echo "[entrypoint] DB_DSN / DB_DSN_INGESTOR / DB_DSN_SERVER / DB_DSN_ACCOUNTS / DB_PATH must not contain a double quote, backslash or newline;" >&2
       echo "[entrypoint] use a postgres:// URL and percent-encode the password." >&2
       exit 1
       ;;
   esac
 done
 unset _v _nl
+# DB_DSN_ACCOUNTS, the server's user accounts store (userManagement), selects
+# nothing here: it is passed to the server only (docker/server-exec.sh). An
+# empty one (docker-compose.postgres.yml without accounts) is dropped.
+[ -n "${DB_DSN_ACCOUNTS:-}" ] || unset DB_DSN_ACCOUNTS
 
 SERVER_ACCOUNT=corescope-server
 SHARE_GROUP=corescope-share
