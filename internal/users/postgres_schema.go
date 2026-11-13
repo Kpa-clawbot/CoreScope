@@ -161,4 +161,13 @@ var pgBaseline = []string{
 // pgMigrations[i] upgrades the Postgres schema from version
 // pgBaselineVersion+i to pgBaselineVersion+i+1, the same step as
 // migrations[pgBaselineVersion+i] on SQLite. Forward-only, like migrations.
-var pgMigrations = [][]string{}
+var pgMigrations = [][]string{
+	{ // v9: rate_limits
+		`CREATE TABLE rate_limits (
+			key TEXT COLLATE "C" NOT NULL,
+			window_start BIGINT NOT NULL,
+			hits BIGINT NOT NULL,
+			PRIMARY KEY (key, window_start)
+		)`,
+	},
+}

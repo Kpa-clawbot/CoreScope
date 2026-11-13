@@ -120,7 +120,7 @@ func TestOpenPostgresFreshSchemaThenNoOp(t *testing.T) {
 	if !st.IsPostgres() {
 		t.Fatal("IsPostgres = false")
 	}
-	if v, err := st.SchemaVersion(); err != nil || v != pgBaselineVersion || v != len(migrations) {
+	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
 		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
 	}
 	u := mustCreate(t, st, "keep@example.org", "Keep")
@@ -173,15 +173,15 @@ func TestOpenPostgresUsesCorescopeUsersSchema(t *testing.T) {
 	dsn := pgTestDSN(t)
 	admin := dbxtest.OpenPostgres(t)
 	var exists bool
-	if err := admin.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = ?)`, pgSchema).Scan(&exists); err != nil {
+	if err := admin.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = ?)`, PostgresSchema).Scan(&exists); err != nil {
 		t.Fatal(err)
 	}
 	if exists {
-		t.Skipf("schema %s already exists in the test database; not touching it", pgSchema)
+		t.Skipf("schema %s already exists in the test database; not touching it", PostgresSchema)
 	}
 	t.Cleanup(func() {
-		if _, err := admin.Exec(`DROP SCHEMA IF EXISTS "` + pgSchema + `" CASCADE`); err != nil {
-			t.Errorf("drop %s: %v", pgSchema, err)
+		if _, err := admin.Exec(`DROP SCHEMA IF EXISTS "` + PostgresSchema + `" CASCADE`); err != nil {
+			t.Errorf("drop %s: %v", PostgresSchema, err)
 		}
 	})
 	st, err := OpenPostgres(dsn)
@@ -190,7 +190,7 @@ func TestOpenPostgresUsesCorescopeUsersSchema(t *testing.T) {
 	}
 	defer st.Close()
 	var cur string
-	if err := st.db.QueryRow(`SELECT current_schema()`).Scan(&cur); err != nil || cur != pgSchema {
+	if err := st.db.QueryRow(`SELECT current_schema()`).Scan(&cur); err != nil || cur != PostgresSchema {
 		t.Fatalf("current_schema = %q, %v", cur, err)
 	}
 	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {

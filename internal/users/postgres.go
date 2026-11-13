@@ -13,9 +13,23 @@ import (
 	"github.com/meshcore-analyzer/dbx"
 )
 
+// PostgresSchema is the schema the Postgres store lives in.
+const PostgresSchema = "corescope_users"
+
+// UsersReaderRole is the role the ingestor connects as (or is a member of)
+// to read the approved channel proposals and the companion links. When it
+// exists, OpenPostgres grants it USAGE on the schema and SELECT on those two
+// tables, nothing else; when it does not, OpenPostgres grants nothing.
+const UsersReaderRole = "corescope_users_reader"
+
+// pgReaderTables are the tables UsersReaderRole may read.
+var pgReaderTables = []string{"proposals", "companion_links"}
+
+// pgUndefinedObject is Postgres' SQLSTATE undefined_object (here: the role
+// was dropped between the existence check and the GRANT).
+const pgUndefinedObject = "42704"
+
 const (
-	// pgSchema is the schema the Postgres store lives in.
-	pgSchema = "corescope_users"
 	// pgMigrateLockKey is the pg_advisory_lock key held while the schema is
 	// created and migrated ("CoreUsrs"; pgschema uses "CoreScop"), so
 	// replicas starting together migrate one at a time.
@@ -34,7 +48,7 @@ const (
 // The schema must be owned by the connecting role. Errors never contain the
 // DSN.
 func OpenPostgres(dsn string) (*Store, error) {
-	return openPostgres(dsn, pgSchema)
+	return openPostgres(dsn, PostgresSchema)
 }
 
 // openPostgres is OpenPostgres in a named schema (tests use their own).
@@ -101,8 +115,10 @@ func validSchemaName(s string) bool {
 	return true
 }
 
-// migratePostgres creates schema if needed and brings it to the current
-// version, on one connection that holds pgMigrateLockKey throughout.
+// migratePostgres creates schema if needed, brings it to the current
+// version and grants UsersReaderRole its reads, on one connection that holds
+// pgMigrateLockKey throughout (concurrent GRANTs on one object can fail with
+// "tuple concurrently updated").
 func (s *Store) migratePostgres(ctx context.Context, schema string) error {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -113,6 +129,9 @@ func (s *Store) migratePostgres(ctx context.Context, schema string) error {
 		return fmt.Errorf("users: migration lock: %w", err)
 	}
 	if err := pgMigrateLocked(ctx, conn, schema); err != nil {
+		return err
+	}
+	if err := pgGrantReader(ctx, conn, schema); err != nil {
 		return err
 	}
 	var unlocked bool
@@ -171,6 +190,41 @@ func pgMigrateLocked(ctx context.Context, conn *sql.Conn, schema string) error {
 		if err := pgApply(ctx, conn, pgMigrations[i-pgBaselineVersion], `UPDATE schema_version SET version = ?`, i+1); err != nil {
 			return fmt.Errorf("users: migration %d: %w", i+1, err)
 		}
+	}
+	return nil
+}
+
+// pgGrantReader grants UsersReaderRole USAGE on schema and SELECT on
+// pgReaderTables if the role exists. GRANT is idempotent; the connecting
+// role owns the schema and its tables (pgMigrateLocked checked the schema).
+func pgGrantReader(ctx context.Context, conn *sql.Conn, schema string) error {
+	var exists bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ?)`, UsersReaderRole).Scan(&exists); err != nil {
+		return fmt.Errorf("users: look up role %s: %w", UsersReaderRole, err)
+	}
+	if !exists {
+		return nil
+	}
+	stmts := []string{`GRANT USAGE ON SCHEMA "` + schema + `" TO ` + UsersReaderRole}
+	for _, t := range pgReaderTables {
+		stmts = append(stmts, `GRANT SELECT ON "`+schema+`".`+t+` TO `+UsersReaderRole)
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("users: grant %s: %w", UsersReaderRole, err)
+	}
+	defer tx.Rollback()
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			var pe interface{ SQLState() string }
+			if errors.As(err, &pe) && pe.SQLState() == pgUndefinedObject {
+				return nil // dropped since the check: nothing to grant to
+			}
+			return fmt.Errorf("users: grant %s: %w", UsersReaderRole, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("users: grant %s: %w", UsersReaderRole, err)
 	}
 	return nil
 }

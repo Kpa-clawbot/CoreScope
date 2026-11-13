@@ -175,6 +175,16 @@ var migrations = [][]string{
 		`ALTER TABLE observer_bindings ADD COLUMN confirmed_at INTEGER`,
 		`UPDATE observer_bindings SET confirmed_at = bound_at WHERE bound_by = 'auto'`,
 	},
+	// v9: rate-limit counters shared by server replicas (RateLimitHit), one
+	// row per key and fixed window (window_start in Unix seconds).
+	{
+		`CREATE TABLE rate_limits (
+			key TEXT NOT NULL,
+			window_start INTEGER NOT NULL,
+			hits INTEGER NOT NULL,
+			PRIMARY KEY (key, window_start)
+		)`,
+	},
 }
 
 func (s *Store) migrate() error {

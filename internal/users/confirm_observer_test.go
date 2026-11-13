@@ -50,8 +50,8 @@ func TestMigrationV8ConfirmsAutoBindings(t *testing.T) {
 		t.Fatalf("Open v7 db: %v", err)
 	}
 	defer st.Close()
-	if v, err := st.SchemaVersion(); err != nil || v != 8 || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want 8", v, err)
+	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
 	}
 	auto, admin := mustBinding(t, st, "AUTOKEY"), mustBinding(t, st, "ADMINKEY")
 	if auto.ConfirmedAt == nil || !auto.ConfirmedAt.Equal(auto.BoundAt) {
