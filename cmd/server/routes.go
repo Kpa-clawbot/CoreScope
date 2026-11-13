@@ -10,6 +10,7 @@ import (
 	"maps"
 	"math"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
@@ -4269,7 +4270,9 @@ func (s *Server) handlePutConfigGeoFilter(w http.ResponseWriter, r *http.Request
 
 	s.saveMu.Lock()
 	if s.configDir != "" {
-		if err := SaveGeoFilter(s.configDir, gf); err != nil {
+		// A non-atomic fallback save backs config.json up into the directory
+		// of the shared file queues, which the server can always write.
+		if err := SaveGeoFilterBackup(s.configDir, filepath.Dir(s.db.queueAnchor()), gf); err != nil {
 			s.saveMu.Unlock()
 			log.Printf("[geofilter] save failed: %v", err)
 			writeError(w, http.StatusInternalServerError, "failed to save config")
