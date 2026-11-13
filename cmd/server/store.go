@@ -6539,9 +6539,13 @@ func (s *PacketStore) computeAnalyticsChannels(region, area string, window TimeW
 			encrypted = true
 		}
 
-		// Bug #978 fix: always group by hash byte alone — same physical channel,
-		// regardless of which observer decrypted it.
+		// One hash byte is not one channel: 256 values, so private channels
+		// collide with named ones. Packets nobody could decrypt share one bucket
+		// per byte; a decrypted packet goes to the bucket of its own name.
 		chKey := hash
+		if !encrypted {
+			chKey = hash + "\x00" + name
+		}
 
 		ch := channelMap[chKey]
 		if ch == nil {
