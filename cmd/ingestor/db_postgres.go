@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -119,15 +118,16 @@ func refuseEmptyPostgresOverSQLite(db *sql.DB, sqlitePath string) error {
 // operator's existing SQLite data is still at /app/data/meshcore.db.
 const sqliteGuardEnv = "CORESCOPE_SQLITE_GUARD_PATH"
 
-// sqliteGuardPaths returns the SQLite files the guard must check: queuePath
-// (the configured dbPath) and, when set and different, $CORESCOPE_SQLITE_GUARD_PATH.
+// sqliteGuardPaths returns the SQLite files the guard must check. When
+// $CORESCOPE_SQLITE_GUARD_PATH is set it names the operator's real SQLite
+// file and is the only one checked: queuePath then only anchors the file
+// queues (in the image it sits in a directory shared with the API server).
+// Otherwise it is queuePath, the configured dbPath.
 func sqliteGuardPaths(queuePath string) []string {
-	paths := []string{queuePath}
-	if extra := strings.TrimSpace(os.Getenv(sqliteGuardEnv)); extra != "" &&
-		filepath.Clean(extra) != filepath.Clean(queuePath) {
-		paths = append(paths, extra)
+	if extra := strings.TrimSpace(os.Getenv(sqliteGuardEnv)); extra != "" {
+		return []string{extra}
 	}
-	return paths
+	return []string{queuePath}
 }
 
 // emptyPostgresTargetError is the empty-target guard's refusal.
@@ -146,7 +146,23 @@ func sqliteTransmissionCount(path string) (int64, error) {
 	if path == "" {
 		return 0, nil
 	}
-	f, err := os.Open(path)
+	// Lstat before opening: a FIFO or device at the path must never be
+	// opened (it could block the ingestor's startup, or be read from), and
+	// SQLite is only ever handed a regular file.
+	st, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if st.IsDir() {
+		return 0, nil
+	}
+	if !st.Mode().IsRegular() {
+		return 0, fmt.Errorf("%s is not a regular file (%s)", path, st.Mode().Type())
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow|oNonBlock, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
@@ -172,7 +188,11 @@ func sqliteTransmissionCount(path string) (int64, error) {
 
 	// The same read-only open the users.db readers use: mode=ro never
 	// creates or writes the database file.
-	lite, err := sql.Open("sqlite3", usersDBReadOnlyDSN(path))
+	dsn, err := usersDBReadOnlyDSN(path)
+	if err != nil {
+		return 0, err
+	}
+	lite, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return 0, err
 	}

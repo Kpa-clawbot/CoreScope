@@ -1864,7 +1864,11 @@ func loadChannelKeys(cfg *Config, configPath string) map[string]string {
 	}
 
 	rainbowCount := 0
-	if data, err := os.ReadFile(keysPath); err == nil {
+	data, readErr := readRegularFile(keysPath, maxChannelKeysFileBytes)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		log.Printf("Warning: not loading channel keys file %s: %v", keysPath, readErr)
+	}
+	if readErr == nil {
 		var fileKeys map[string]string
 		if err := json.Unmarshal(data, &fileKeys); err == nil {
 			for k, v := range fileKeys {

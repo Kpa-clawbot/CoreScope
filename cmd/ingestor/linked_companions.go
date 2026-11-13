@@ -140,7 +140,11 @@ func (s *linkedCompanionSet) query() ([]string, error) {
 			}
 			return nil, err
 		}
-		db, err := sql.Open("sqlite3", usersDBReadOnlyDSN(s.path))
+		dsn, err := usersDBReadOnlyDSN(s.path)
+		if err != nil {
+			return nil, err
+		}
+		db, err := sql.Open("sqlite3", dsn)
 		if err != nil {
 			return nil, err
 		}

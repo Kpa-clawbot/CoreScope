@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -88,7 +89,11 @@ func (s *channelKeySet) readApproved() ([]string, error) {
 			}
 			return nil, err
 		}
-		db, err := sql.Open("sqlite3", usersDBReadOnlyDSN(s.path))
+		dsn, err := usersDBReadOnlyDSN(s.path)
+		if err != nil {
+			return nil, err
+		}
+		db, err := sql.Open("sqlite3", dsn)
 		if err != nil {
 			return nil, err
 		}
@@ -112,9 +117,33 @@ func (s *channelKeySet) readApproved() ([]string, error) {
 }
 
 // usersDBReadOnlyDSN opens users.db read-only: this process must never
-// take a write lock on the server's file.
-func usersDBReadOnlyDSN(path string) string {
-	return "file:" + path + "?mode=ro&_busy_timeout=5000"
+// take a write lock on the server's file. The path comes from configuration
+// and is written into a SQLite URI, where "?" and "#" end the path and start
+// parameters, so a path holding either (or a NUL) is refused rather than
+// allowed to append its own mode=rwc. Everything else is percent-encoded as
+// SQLite's URI rules decode it ("%" most of all), so odd but legal paths
+// round-trip. mode=ro is always the one effective mode.
+func usersDBReadOnlyDSN(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("users.db path is empty")
+	}
+	if strings.ContainsAny(path, "?#\x00") {
+		return "", errors.New("users.db path must not contain '?', '#' or NUL characters")
+	}
+	// "file://x" would read x as a URI authority; collapse a leading "//".
+	if strings.HasPrefix(path, "//") {
+		path = filepath.Clean(path)
+	}
+	var b strings.Builder
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+		if c == '%' || c <= ' ' || c == 0x7f {
+			fmt.Fprintf(&b, "%%%02X", c)
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return "file:" + b.String() + "?mode=ro&_busy_timeout=5000", nil
 }
 
 // mergeApprovedKeys returns a new map: the configured keys plus a derived key

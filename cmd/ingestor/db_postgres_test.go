@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -216,15 +217,34 @@ func TestEmptyPostgresGuardChecksExtraPath(t *testing.T) {
 
 func TestSQLiteGuardPaths(t *testing.T) {
 	t.Setenv(sqliteGuardEnv, "")
-	if got := sqliteGuardPaths("data/meshcore.db"); len(got) != 1 {
+	if got := sqliteGuardPaths("data/meshcore.db"); len(got) != 1 || got[0] != "data/meshcore.db" {
 		t.Fatalf("unset env: %v", got)
 	}
-	t.Setenv(sqliteGuardEnv, "./data/meshcore.db")
-	if got := sqliteGuardPaths("data/meshcore.db"); len(got) != 1 {
-		t.Fatalf("same path after Clean must not be checked twice: %v", got)
-	}
+	// The guard path names the real file; queuePath only anchors queues.
 	t.Setenv(sqliteGuardEnv, "/app/data/meshcore.db")
-	if got := sqliteGuardPaths("/app/data/shared/meshcore.db"); len(got) != 2 || got[1] != "/app/data/meshcore.db" {
-		t.Fatalf("extra path: %v", got)
+	if got := sqliteGuardPaths("/app/data/shared/meshcore.db"); len(got) != 1 || got[0] != "/app/data/meshcore.db" {
+		t.Fatalf("guard path must be the only one checked: %v", got)
+	}
+}
+
+// A FIFO or device at a guard path must be refused, and opening it must
+// never block the ingestor's startup.
+func TestSQLiteTransmissionCountRefusesNonRegular(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "meshcore.db")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := sqliteTransmissionCount(fifo); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("FIFO: err = %v; want a not-a-regular-file refusal", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("sqliteTransmissionCount blocked on a FIFO")
+	}
+	if n, err := sqliteTransmissionCount(filepath.Join(t.TempDir(), "absent.db")); n != 0 || err != nil {
+		t.Fatalf("absent: %d, %v", n, err)
 	}
 }
