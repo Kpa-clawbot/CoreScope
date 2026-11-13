@@ -510,11 +510,17 @@ database and verifies the result. It never deletes or overwrites anything.
 1. **Provision PostgreSQL** with the roles script (or the Compose override's `postgres` and
    `postgres-init` services started on their own).
 
-2. **Stop every writer.** The copy reads one snapshot; rows written after it are not copied.
-   The tool prints a warning about this. Stop the ingestor, and the server too for a clean
-   cut-over. With the Compose override that is `docker compose -f docker-compose.yml -f
-   docker-compose.postgres.yml stop ingestor prod` (leave `postgres` running). On a first move
-   they have not been started yet; bring up only the database with `up -d postgres
+2. **Stop the ingestor.** The copy reads one snapshot; rows written after it are not copied,
+   and the tool prints a warning about this. Only ingest pauses: the servers are read-only and
+   can keep serving the existing data from SQLite until you restart them on PostgreSQL in
+   step 6, so the dashboard stays up. Packets heard while the ingestor is stopped are not
+   recorded (it subscribes at MQTT QoS 0 with a clean session, so the broker does not queue
+   them), so the gap in the data is as long as the copy (about 9 minutes per 20 million
+   observations at the measured rate). In the single-container Docker layout the server and
+   the ingestor share a container, so stop the container (`prod`) and accept a short read
+   outage too. With the Compose override that is `docker compose -f docker-compose.yml -f
+   docker-compose.postgres.yml stop ingestor` (leave `postgres` and `prod` running). On a first
+   move it has not been started yet; bring up only the database with `up -d postgres
    postgres-init`.
 
 3. **Copy**, connecting as the writer role:
@@ -593,7 +599,8 @@ database and verifies the result. It never deletes or overwrites anything.
 5. **Switch the configuration** to PostgreSQL as in [Set up with Docker Compose](#set-up-with-docker-compose)
    or [Set up without Compose](#set-up-without-compose).
 
-6. **Start the ingestor, then the server.** With the Compose override, `up -d` starts both.
+6. **Start the ingestor, then restart the server(s)** on the new configuration (in Kubernetes, a
+   rolling restart of the server Deployment, so reads never stop). With the Compose override, `up -d` starts both.
 
 Keep the old `meshcore.db` file until you are satisfied. The ingestor has a guard for the case
 where you forget the copy: on PostgreSQL it refuses to start on an **empty** PostgreSQL database
@@ -615,7 +622,9 @@ the current schema and is used by CI.
 
 Copy PostgreSQL into a new SQLite file the same way, then set the driver back.
 
-1. Stop the ingestor (and the server).
+1. Stop the ingestor. The servers can keep serving reads from PostgreSQL while the copy runs;
+   packets heard meanwhile are not recorded (see step 2 of
+   [Moving an existing SQLite install](#moving-an-existing-sqlite-install)).
 2. Copy to a path that does not exist yet:
 
    ```bash
@@ -634,7 +643,7 @@ Copy PostgreSQL into a new SQLite file the same way, then set the driver back.
    In the Docker image, run it the same way as in
    [Moving an existing SQLite install](#moving-an-existing-sqlite-install) (`run --rm --no-deps
    --entrypoint /app/corescope-migrate prod copy -from ... -to sqlite:/app/data/meshcore.db`)
-   while the PostgreSQL service is up and `ingestor` and `prod` are stopped.
+   while the PostgreSQL service is up and `ingestor` is stopped.
 
 3. Remove `db.driver`, `db.dsn`, `DB_DRIVER`, `DB_DSN`, `DB_DSN_INGESTOR` and `DB_DSN_SERVER`
    (or set the driver to `sqlite`), and drop `docker-compose.postgres.yml` from the `-f` list.
