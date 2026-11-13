@@ -436,11 +436,20 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 
 		// Acquire before opening the cursor: a feed waiting for the same
 		// connection must never hold this gate while we hold its cursor.
+		// Held from the query to the end of the merge, it also keeps the
+		// poller from losing an observation committed after this chunk's
+		// snapshot: the poller reads its observation cursor bound before
+		// refreshAdvertEvidence, which waits here, so such an observation is
+		// either read after its transmission is merged or lies above the
+		// bound (see Poller.Start).
 		s.advertEvidenceMu.Lock()
 		rows, err := s.db.conn.Query(chunkSQL)
 		if err != nil {
 			s.advertEvidenceMu.Unlock()
 			return fmt.Errorf("chunk %d: query: %w", chunkIdx, err)
+		}
+		if s.chunkQueriedHook != nil {
+			s.chunkQueriedHook(chunkIdx + 1)
 		}
 
 		chunkTxCount, lastID, err := s.scanAndMergeChunk(rows, relayPM, &coldLoadAmbiguousHopsSkipped)

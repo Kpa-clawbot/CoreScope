@@ -250,6 +250,14 @@ type PacketStore struct {
 	txRewriteMu     sync.Mutex
 	txRewriteCursor int64
 
+	// Poller start cursors: MAX(id) of transmissions / observations, read in
+	// NewPacketStore before any load query. A row above a mark may have been
+	// committed after the load's snapshot, so the poller re-reads from there.
+	// Written once before the store is shared; read-only afterwards.
+	startupTxMark  int
+	startupObsMark int
+	startupMarksOK bool // false: no conn, or a MAX query failed
+
 	mu             sync.RWMutex
 	db             *DB
 	packets        []*StoreTx                  // sorted by first_seen ASC (oldest first; newest at tail)
@@ -643,7 +651,21 @@ type PacketStore struct {
 	// ordering tests to capture the bg-loader entry timestamp/signal
 	// without polling. See runstartup_load_test.go.
 	bgLoaderEntryHook func()
+	// Test-only hooks for the poller/load interleaving tests. Nil in
+	// production. chunkQueriedHook fires in LoadChunked after a chunk's
+	// query returns, before its rows are merged (chunk counts from 1).
+	// obsPollHook fires in ingestNewObservations after the feeds are
+	// polled and again when it returns.
+	chunkQueriedHook func(chunk int)
+	obsPollHook      func(stage obsPollStage)
 }
+
+type obsPollStage int
+
+const (
+	obsPollAfterFeeds obsPollStage = iota
+	obsPollDone
+)
 
 // Precomputed distance records for fast analytics aggregation.
 type distHopRecord struct {
@@ -851,6 +873,11 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 			ps.invCooldown = v
 		}
 	}
+	// Capture BEFORE loading any packets: the load reads each chunk in its own
+	// snapshot, so a row committed while it runs is only safe if the poller
+	// starts at or below it. One writer commits ids in order, so everything
+	// the load can miss lies above these marks (see Poller.startCursors).
+	ps.startupTxMark, ps.startupObsMark, ps.startupMarksOK = db.highWaterMarks()
 	// Capture BEFORE loading any packets. Evidence arriving during startup
 	// remains above this watermark; each loaded tx also reads its full mask.
 	if db.advertEvidencePresent() {
@@ -3001,9 +3028,23 @@ func (s *PacketStore) queryMultiNodePacketsLocked(resolved []string, limit, offs
 	return &PacketResult{Packets: packets, Total: total}, jobs
 }
 
+// wsPacketMaps is a batch of broadcast-ready packet maps from the ingest paths.
+type wsPacketMaps []map[string]interface{}
+
 // IngestNewFromDB loads new transmissions from SQLite into memory and returns
 // broadcast-ready maps plus the new max transmission ID.
-func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interface{}, int) {
+func (s *PacketStore) IngestNewFromDB(sinceID, limit int) (wsPacketMaps, int) {
+	out, newMax, err := s.ingestNewFromDB(sinceID, limit)
+	if err != nil {
+		log.Printf("[store] %v", err)
+	}
+	return out, newMax
+}
+
+// ingestNewFromDB is IngestNewFromDB reporting a failed read. On error the
+// returned max is sinceID, so the caller's cursor stays put and the poll is
+// retried.
+func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -3045,8 +3086,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 
 	rows, err := s.db.conn.Query(querySQL, sinceID)
 	if err != nil {
-		log.Printf("[store] ingest query error: %v", err)
-		return nil, sinceID
+		return nil, sinceID, fmt.Errorf("ingest query error: %w", err)
 	}
 	defer rows.Close()
 
@@ -3127,11 +3167,11 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		tempRows = append(tempRows, tr)
 	}
 
-	if len(tempRows) == 0 {
-		return nil, sinceID
-	}
 	if err := rows.Err(); err != nil {
-		return nil, sinceID
+		return nil, sinceID, fmt.Errorf("ingest read error: %w", err)
+	}
+	if len(tempRows) == 0 {
+		return nil, sinceID, nil
 	}
 	rows.Close()
 	s.advertEvidenceMu.Lock()
@@ -3144,8 +3184,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	}
 	masks, err := s.db.advertEvidenceForIDs(ids)
 	if err != nil {
-		log.Printf("[store] load advert evidence: %v", err)
-		return nil, sinceID
+		return nil, sinceID, fmt.Errorf("load advert evidence: %w", err)
 	}
 
 	// Now lock and merge into store
@@ -3408,16 +3447,31 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	if evidenceChanged {
 		s.invalidateAdvertEvidence()
 	}
-	return result, newMaxID
+	return result, newMaxID, nil
 }
 
 // IngestNewObservations loads new observations for transmissions already in the
 // store. This catches observations that arrive after IngestNewFromDB has already
 // advanced past the transmission's ID (fixes #174).
-func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]interface{} {
+func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) wsPacketMaps {
+	out, err := s.ingestNewObservations(sinceObsID, limit)
+	if err != nil {
+		log.Printf("[store] %v", err)
+	}
+	return out
+}
+
+// ingestNewObservations is IngestNewObservations reporting a failed read, so
+// the poller can keep its cursor and retry instead of passing rows it never
+// saw. A row that fails to scan is still skipped.
+func (s *PacketStore) ingestNewObservations(sinceObsID, limit int) (wsPacketMaps, error) {
 	// Must run even when observation IDs/timestamps have not changed.
 	s.refreshAdvertEvidence()
 	s.refreshTxRewrites() // #2107: rewrites never move IDs, so poll them here too
+	if s.obsPollHook != nil {
+		s.obsPollHook(obsPollAfterFeeds)
+		defer s.obsPollHook(obsPollDone)
+	}
 	if limit <= 0 {
 		limit = 500
 	}
@@ -3447,8 +3501,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 
 	rows, err := s.db.conn.Query(querySQL, sinceObsID, limit)
 	if err != nil {
-		log.Printf("[store] ingest observations query error: %v", err)
-		return nil
+		return nil, fmt.Errorf("ingest observations query error: %w", err)
 	}
 	defer rows.Close()
 
@@ -3499,8 +3552,11 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ingest observations read error: %w", err)
+	}
 	if len(obsRows) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	s.mu.Lock()
@@ -3703,7 +3759,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	_ = pm
 	_ = graphRef
 
-	return broadcastMaps
+	return broadcastMaps, nil
 }
 
 // MaxTransmissionID returns the highest transmission ID in the store.
@@ -3711,6 +3767,12 @@ func (s *PacketStore) MaxTransmissionID() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.maxTxID
+}
+
+// StartupMarks returns the transmission and observation high-water marks taken
+// before the startup load, and whether both queries succeeded.
+func (s *PacketStore) StartupMarks() (txMark, obsMark int, ok bool) {
+	return s.startupTxMark, s.startupObsMark, s.startupMarksOK
 }
 
 // MaxObservationID returns the highest observation ID in the store.

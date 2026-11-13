@@ -2647,6 +2647,24 @@ func (db *DB) GetMaxTransmissionID() int {
 	return maxID
 }
 
+// highWaterMarks reads MAX(id) of transmissions and observations. Unlike
+// GetMaxTransmissionID it reports failure: a 0 from a failed query would
+// otherwise replay the whole table. ok is false without a connection.
+func (db *DB) highWaterMarks() (txMax, obsMax int, ok bool) {
+	if db == nil || db.conn == nil {
+		return 0, 0, false
+	}
+	if err := db.conn.QueryRow("SELECT COALESCE(MAX(id), 0) FROM transmissions").Scan(&txMax); err != nil {
+		log.Printf("[store] startup high-water mark (transmissions): %v", err)
+		return 0, 0, false
+	}
+	if err := db.conn.QueryRow("SELECT COALESCE(MAX(id), 0) FROM observations").Scan(&obsMax); err != nil {
+		log.Printf("[store] startup high-water mark (observations): %v", err)
+		return 0, 0, false
+	}
+	return txMax, obsMax, true
+}
+
 // GetMaxObservationID returns the current max observation ID for polling.
 func (db *DB) GetMaxObservationID() int {
 	var maxID int
