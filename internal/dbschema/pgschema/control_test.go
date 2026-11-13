@@ -50,11 +50,19 @@ func mustExec(t *testing.T, db *sql.DB, q string, args ...any) {
 
 func controlOK(t *testing.T, db *sql.DB, role string) bool {
 	t.Helper()
-	ok, err := controlGrantsOK(context.Background(), db, role)
+	return controlState(t, db, role) == ControlExact
+}
+
+func controlState(t *testing.T, db *sql.DB, role string) ControlGrantState {
+	t.Helper()
+	state, detail, err := checkControlGrants(context.Background(), db, role)
 	if err != nil {
-		t.Fatalf("controlGrantsOK: %v", err)
+		t.Fatalf("checkControlGrants: %v", err)
 	}
-	return ok
+	if (state == ControlExact) != (detail == "") {
+		t.Errorf("checkControlGrants = %v with detail %q", state, detail)
+	}
+	return state
 }
 
 func controlTableExists(t *testing.T, db *sql.DB, table string) bool {
@@ -89,13 +97,13 @@ func TestControlMigrationFreshAndFromV1(t *testing.T) {
 	if err := Apply(ctx, v1, rec.logf); err != nil {
 		t.Fatalf("Apply on a v1 schema: %v", err)
 	}
-	if n, m := rec.count("applied migration"), rec.count("0002_control.sql"); n != 1 || m != 1 {
-		t.Errorf("upgrade from v1 logged %d applications (%d of 0002), want only 0002: %v", n, m, rec.lines)
+	if n, m, h := rec.count("applied migration"), rec.count("0002_control.sql"), rec.count("0003_control_hardening.sql"); n != 2 || m != 1 || h != 1 {
+		t.Errorf("upgrade from v1 logged %d applications (%d of 0002, %d of 0003), want 0002 and 0003: %v", n, m, h, rec.lines)
 	}
 
 	for name, db := range map[string]*sql.DB{"fresh": fresh, "from v1": v1} {
-		if got := versionRows(t, db); len(got) != 2 || got[1] != 2 {
-			t.Errorf("%s: schema_version = %v, want [1 2]", name, got)
+		if got := versionRows(t, db); len(got) != 3 || got[2] != 3 {
+			t.Errorf("%s: schema_version = %v, want [1 2 3]", name, got)
 		}
 		if !relationExists(t, db, "ingestor_stats") {
 			t.Errorf("%s: ingestor_stats missing", name)
@@ -156,10 +164,25 @@ func TestControlTableConstraints(t *testing.T) {
 				t.Errorf("%s: id %q accepted", tbl, bad)
 			}
 		}
+		limit := controlPayloadMax[tp.table]
+		atLimit := randHex(t, 16)
+		t.Cleanup(func() { db.Exec(`DELETE FROM `+tbl+` WHERE id = ?`, atLimit) })
+		if _, err := db.Exec(`INSERT INTO `+tbl+` (id, payload) VALUES (?, repeat('x', ?))`, atLimit, limit); err != nil {
+			t.Errorf("%s: payload of exactly %d bytes rejected: %v", tbl, limit, err)
+		}
 		big := randHex(t, 16)
-		if _, err := db.Exec(`INSERT INTO `+tbl+` (id, created_at, payload) VALUES (?, 'now', repeat('x', 16777217))`, big); err == nil {
-			db.Exec(`DELETE FROM `+tbl+` WHERE id = ?`, big)
-			t.Errorf("%s: payload of 16 MiB + 1 accepted", tbl)
+		// Multi-byte characters: the cap is in bytes, not characters.
+		for _, payload := range []string{`repeat('x', ?)`, `repeat('é', ?)`} {
+			n := limit + 1
+			if strings.Contains(payload, "é") {
+				n = limit/2 + 1
+			}
+			if _, err := db.Exec(`INSERT INTO `+tbl+` (id, payload) VALUES (?, `+payload+`)`, big, n); err == nil {
+				db.Exec(`DELETE FROM `+tbl+` WHERE id = ?`, big)
+				t.Errorf("%s: payload %s (n=%d) over %d bytes accepted", tbl, payload, n, limit)
+			} else if !strings.Contains(err.Error(), tp.table+"_payload_max") {
+				t.Errorf("%s: oversized payload: %v, want %s_payload_max violation", tbl, err, tp.table)
+			}
 		}
 		if _, err := db.Exec(`INSERT INTO `+tbl+` (id, created_at, payload) VALUES (?, 'now', NULL)`, big); err == nil {
 			db.Exec(`DELETE FROM `+tbl+` WHERE id = ?`, big)
@@ -172,6 +195,13 @@ func TestControlTableConstraints(t *testing.T) {
 	}
 }
 
+// controlPayloadMax is migration 0003's payload cap per control table, bytes.
+var controlPayloadMax = map[string]int{
+	"prune_requests":  1 << 20,
+	"prune_results":   1 << 20,
+	"mbcap_snapshots": 4 << 20,
+}
+
 func TestEnsureControlGrantsWithoutRole(t *testing.T) {
 	db := dbxtest.OpenPostgres(t)
 	ctx := context.Background()
@@ -182,8 +212,8 @@ func TestEnsureControlGrantsWithoutRole(t *testing.T) {
 	if err := ensureControlGrants(ctx, db, absent); err != nil {
 		t.Fatalf("ensureControlGrants without the role: %v", err)
 	}
-	if controlOK(t, db, absent) {
-		t.Error("controlGrantsOK true for a role that does not exist")
+	if s := controlState(t, db, absent); s != ControlAbsent {
+		t.Errorf("checkControlGrants for a role that does not exist = %v, want absent", s)
 	}
 	// The real role may or may not exist on the test server; either way
 	// EnsureControlGrants succeeds once the schema is applied.
@@ -199,8 +229,8 @@ func TestEnsureControlGrantsExactAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	group := tempRole(t, db, "cs_ctl")
-	if controlOK(t, db, group) {
-		t.Fatal("controlGrantsOK true before any grant")
+	if s := controlState(t, db, group); s != ControlIncomplete {
+		t.Fatalf("checkControlGrants before any grant = %v, want incomplete", s)
 	}
 
 	// Extra privileges a careless operator might have handed out: all of
@@ -226,6 +256,11 @@ func TestEnsureControlGrantsExactAndIdempotent(t *testing.T) {
 		`GRANT UPDATE ON TABLE ` + controlSchema + `.prune_requests TO ` + g,
 		`GRANT UPDATE (created_at) ON TABLE ` + controlSchema + `.mbcap_snapshots TO ` + g,
 		`REVOKE INSERT ON TABLE ` + controlSchema + `.mbcap_snapshots FROM ` + g,
+		`REVOKE INSERT (payload) ON TABLE ` + controlSchema + `.prune_requests FROM ` + g,
+		`GRANT INSERT ON TABLE ` + controlSchema + `.prune_requests TO ` + g,
+		`GRANT INSERT (created_at) ON TABLE ` + controlSchema + `.prune_requests TO ` + g,
+		`GRANT INSERT (id) ON TABLE ` + controlSchema + `.mbcap_snapshots TO ` + g + ` WITH GRANT OPTION`,
+		`GRANT SELECT ON TABLE ` + controlSchema + `.prune_results TO ` + g + ` WITH GRANT OPTION`,
 		`GRANT CREATE ON SCHEMA ` + controlSchema + ` TO ` + g,
 		`REVOKE USAGE ON SCHEMA ` + controlSchema + ` FROM ` + g,
 	}
@@ -348,13 +383,22 @@ func TestControlGroupMemberPrivileges(t *testing.T) {
 	for _, tp := range controlTablePrivs {
 		tbl := controlSchema + "." + tp.table
 		id := randHex(t, 16)
-		ins := `INSERT INTO ` + tbl + ` (id, created_at, payload) VALUES (?, 'now', '{}')`
-		if strings.Contains(strings.Join(tp.privs, ","), "INSERT") {
+		ins := `INSERT INTO ` + tbl + ` (id, payload) VALUES (?, '{}')`
+		if len(tp.insertCols) > 0 {
 			allowed(ins, id)
 			inserted = append(inserted, tbl+" "+id)
+			var createdAt string
+			if err := conn.QueryRowContext(ctx, `SELECT created_at FROM `+tbl+` WHERE id = ?`, id).Scan(&createdAt); err != nil {
+				t.Errorf("member: read back %s: %v", tbl, err)
+			} else if !createdAtPattern.MatchString(createdAt) {
+				t.Errorf("member: %s created_at = %q, want the database clock in pgNow format", tbl, createdAt)
+			}
 		} else {
-			denied(ins, id)
+			denied(ins, randHex(t, 16))
 		}
+		// The server never chooses the timestamp, not even through ON CONFLICT.
+		denied(`INSERT INTO `+tbl+` (id, created_at, payload) VALUES (?, '9999-12-31T23:59:59.999999000Z', '{}')`, randHex(t, 16))
+		denied(`INSERT INTO `+tbl+` (id, payload) VALUES (?, '{}') ON CONFLICT (id) DO UPDATE SET created_at = 'x'`, randHex(t, 16))
 		allowed(`SELECT count(*) FROM ` + tbl)
 		denied(`UPDATE ` + tbl + ` SET payload = payload WHERE false`)
 		denied(`DELETE FROM ` + tbl + ` WHERE false`)
