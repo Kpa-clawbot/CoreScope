@@ -8,21 +8,67 @@
 // job can migrate the e2e-fixture.db without booting the full ingestor
 // (which needs MQTT brokers).
 //
+// It also moves an installation between backends: copy streams every row of
+// a fully migrated source into an empty target (SQLite or Postgres, either
+// direction) and verifies the result; verify compares two databases.
+//
 // Usage:
 //
 //	migrate -db path/to/file.db
+//	migrate copy   -from <db> -to <db> [-batch 5000]
+//	migrate verify -a <db> -b <db>
+//
+// where <db> is sqlite:<path> or a postgres:// / postgresql:// URL.
 package main
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"flag"
+	"io"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/dbschema"
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "copy" || os.Args[1] == "verify") {
+		os.Exit(runSubcommand(os.Args[1], os.Args[2:], os.Stderr))
+	}
+	legacyMain()
+}
+
+// runSubcommand runs copy or verify, writing all output to w through the
+// password scrubber, and returns the process exit code.
+func runSubcommand(cmd string, args []string, w io.Writer) int {
+	sw := newScrubWriter(w)
+	lg := log.New(sw, "[migrate] ", log.LstdFlags|log.Lmsgprefix)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var err error
+	if cmd == "copy" {
+		err = runCopy(ctx, args, lg, sw)
+	} else {
+		err = runVerify(ctx, args, lg, sw)
+	}
+	switch {
+	case errors.Is(err, errUsage):
+		return 2
+	case err != nil:
+		lg.Printf("FAILED: %v", err)
+		return 1
+	}
+	return 0
+}
+
+// legacyMain is `migrate -db <path>`: run dbschema.Apply on a SQLite file.
+func legacyMain() {
 	dbPath := flag.String("db", "", "path to SQLite database to migrate (required)")
 	flag.Parse()
 
