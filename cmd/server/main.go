@@ -185,7 +185,7 @@ func main() {
 	// Open database. The DSN is never logged: it may carry a password.
 	var database *DB
 	if driver == dbconfig.DriverPostgres {
-		database, err = OpenPostgresDB(cfg.DB.DSN)
+		database, err = OpenPostgresDBWithStatementTimeout(cfg.DB.DSN, cfg.DB.GetStatementTimeoutSec())
 		if err != nil {
 			log.Fatalf("[db] failed to open postgres: %v", err)
 		}

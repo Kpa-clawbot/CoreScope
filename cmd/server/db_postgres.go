@@ -8,36 +8,75 @@ import (
 	"log"
 	"math"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema/pgschema"
 	"github.com/meshcore-analyzer/dbx"
 )
 
-// pgReadOnlyParam is the Postgres run-time parameter OpenPostgresDB sends at
-// connection startup, so every pooled connection starts read-only.
-const pgReadOnlyParam = "default_transaction_read_only"
+// Run-time parameters the server forces on every Postgres connection, sent at
+// connection startup so they apply to each pooled connection.
+const (
+	pgReadOnlyParam    = "default_transaction_read_only"
+	pgStmtTimeoutParam = "statement_timeout"
+	pgIdleTxParam      = "idle_in_transaction_session_timeout"
+)
+
+// pgIdleInTxTimeout ends a session left idle inside a transaction, so a
+// stuck read snapshot cannot pin old row versions (and block vacuum) for long.
+const pgIdleInTxTimeout = 60 * time.Second
 
 // pgOpenTimeout bounds each startup check in OpenPostgresDB, so a stalled
 // server fails startup instead of hanging it.
 const pgOpenTimeout = 30 * time.Second
 
-// OpenPostgresDB opens the analyzer database on Postgres, read-only.
+// pgParam is one forced run-time parameter and its value.
+type pgParam struct{ name, value string }
+
+// pgServerParams returns the parameters the server forces: read-only
+// transactions, statement_timeout (0 disables it) and the idle-in-transaction
+// timeout. Times are in milliseconds, the unit pg_settings reports them in.
+func pgServerParams(statementTimeoutSec int) []pgParam {
+	return []pgParam{
+		{pgReadOnlyParam, "on"},
+		{pgStmtTimeoutParam, strconv.Itoa(statementTimeoutSec * 1000)},
+		{pgIdleTxParam, strconv.FormatInt(pgIdleInTxTimeout.Milliseconds(), 10)},
+	}
+}
+
+// OpenPostgresDB opens the analyzer database on Postgres, read-only, with the
+// default statement timeout (dbconfig.DefaultStatementTimeoutSec).
+func OpenPostgresDB(dsn string) (*DB, error) {
+	return OpenPostgresDBWithStatementTimeout(dsn, dbconfig.DefaultStatementTimeoutSec)
+}
+
+// OpenPostgresDBWithStatementTimeout opens the analyzer database on Postgres,
+// read-only, capping each statement at statementTimeoutSec (0: no cap).
 //
 // The read-only invariant (#1283) is held twice over. Every connection starts
 // with default_transaction_read_only=on, so a write the server's code sends
 // by mistake fails with "cannot execute ... in a read-only transaction". That
-// is only a session default — a session may override it — so the role must
-// also hold no INSERT/UPDATE/DELETE/TRUNCATE privilege on any table in its
-// schema; startup is refused if it does. Errors never carry the DSN or the
-// password: driver errors are scrubbed of the password before they surface.
+// is only a session default — a session may override it — so the role, and
+// every role it can reach through membership, must also hold no write
+// privilege on any relation in its schema; startup is refused otherwise.
+// Errors never carry the DSN or the password: driver errors are scrubbed of
+// the password before they surface.
+//
+// statement_timeout bounds what one request to the unauthenticated public API
+// can cost the database.
 //
 // After those checks it follows OpenDB: schema detection on one pinned
 // connection, then the prepared statements.
-func OpenPostgresDB(dsn string) (*DB, error) {
-	roDSN, password, err := pgDSNWithReadOnly(dsn)
+func OpenPostgresDBWithStatementTimeout(dsn string, statementTimeoutSec int) (*DB, error) {
+	if statementTimeoutSec < 0 {
+		return nil, fmt.Errorf("statement timeout is %ds; use 0 to disable it or a positive number of seconds", statementTimeoutSec)
+	}
+	params := pgServerParams(statementTimeoutSec)
+	roDSN, password, err := pgServerDSN(dsn, params)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +102,10 @@ func OpenPostgresDB(dsn string) (*DB, error) {
 	if err := pgschema.AssertReady(ctx, conn); err != nil {
 		return fail("%w", err)
 	}
-	if err := verifyPostgresReadOnly(ctx, conn); err != nil {
+	if err := verifyPostgresSessionParams(ctx, conn, params); err != nil {
+		return fail("%w", err)
+	}
+	if err := verifyPostgresNoWritePrivilege(ctx, conn); err != nil {
 		return fail("%w", err)
 	}
 
@@ -85,48 +127,89 @@ func OpenPostgresDB(dsn string) (*DB, error) {
 	return d, nil
 }
 
-// verifyPostgresReadOnly checks that the session defaults to read-only
-// transactions and that the connected role cannot write any table in its
-// current schema.
-func verifyPostgresReadOnly(ctx context.Context, conn *sql.DB) error {
-	var ro string
-	if err := conn.QueryRowContext(ctx, `SHOW default_transaction_read_only`).Scan(&ro); err != nil {
-		return fmt.Errorf("read default_transaction_read_only: %w", err)
+// verifyPostgresSessionParams checks that each forced parameter took effect.
+// pgServerDSN already refuses a DSN that overrides one, but a role or database
+// setting cannot, and PGOPTIONS in the environment is read by the driver
+// outside the DSN; this is the backstop for all of them.
+func verifyPostgresSessionParams(ctx context.Context, conn *sql.DB, params []pgParam) error {
+	for _, p := range params {
+		var got string
+		if err := conn.QueryRowContext(ctx, `SELECT setting FROM pg_settings WHERE name = ?`, p.name).Scan(&got); err != nil {
+			return fmt.Errorf("read %s: %w", p.name, err)
+		}
+		if got != p.value {
+			return fmt.Errorf("%s is %q after connecting, want %q; remove any override of it (PGOPTIONS, or ALTER ROLE/DATABASE ... SET)", p.name, got, p.value)
+		}
 	}
-	if ro != "on" {
-		return fmt.Errorf("default_transaction_read_only is %q after connecting, want \"on\"; remove any override of it from db.dsn and from the role or database settings", ro)
-	}
+	return nil
+}
 
+// pgWritePrivileges is the has_table_privilege list that counts as write
+// power for a server major version (server_version_num). MAINTAIN (VACUUM,
+// REINDEX, REFRESH MATERIALIZED VIEW, LOCK ...) exists from Postgres 17.
+func pgWritePrivileges(serverVersionNum int) string {
+	privs := "INSERT, UPDATE, DELETE, TRUNCATE"
+	if serverVersionNum >= 170000 {
+		privs += ", MAINTAIN"
+	}
+	return privs
+}
+
+// verifyPostgresNoWritePrivilege refuses a role that could write any relation
+// in its current schema, directly or through a role it belongs to.
+//
+// Membership is followed through pg_auth_members to every role reachable,
+// ignoring the INHERIT flags: a role that does not inherit a membership can
+// still SET ROLE to it and write. Each reachable role is then checked with
+// has_table_privilege / has_any_column_privilege evaluated AS that role, which
+// accounts for its own inherited grants, ownership, superuser and the
+// pg_write_all_data / pg_maintain predefined roles. This was chosen over
+// refusing every non-pg_* membership: it is exact, so a deployment that
+// grants SELECT through a group role (a common setup) still starts, and it
+// needs no allowlist of predefined roles to keep current across releases.
+//
+// Relations are tables, partitioned tables, views (packets_v is
+// auto-updatable, so INSERT on it writes transmissions), foreign tables and
+// materialized views; column-level INSERT/UPDATE grants count too.
+func verifyPostgresNoWritePrivilege(ctx context.Context, conn *sql.DB) error {
 	var role, schema string
-	if err := conn.QueryRowContext(ctx, `SELECT current_user, COALESCE(current_schema(), '')`).Scan(&role, &schema); err != nil {
+	var versionNum int
+	if err := conn.QueryRowContext(ctx, `SELECT current_user, COALESCE(current_schema(), ''), current_setting('server_version_num')::int`).Scan(&role, &schema, &versionNum); err != nil {
 		return fmt.Errorf("read current role and schema: %w", err)
 	}
 	if schema == "" {
 		return fmt.Errorf("postgres role %q has no current schema; set search_path in db.dsn to the CoreScope schema", role)
 	}
 
-	// has_table_privilege with a comma-separated list is true when any one is
-	// held, and it accounts for role membership, ownership and superuser —
-	// which information_schema grants alone would miss.
 	rows, err := conn.QueryContext(ctx, `
-		SELECT c.relname
-		FROM pg_class c
+		WITH RECURSIVE reach(oid) AS (
+			SELECT oid FROM pg_roles WHERE rolname = current_user
+			UNION
+			SELECT m.roleid FROM pg_auth_members m JOIN reach r ON m.member = r.oid
+		)
+		SELECT c.relname, pg_get_userbyid(r.oid)
+		FROM reach r
+		CROSS JOIN pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE n.nspname = current_schema()
-		  AND c.relkind IN ('r', 'p')
-		  AND has_table_privilege(c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE')
-		ORDER BY c.relname`)
+		  AND c.relkind IN ('r', 'p', 'v', 'f', 'm')
+		  AND (has_table_privilege(r.oid, c.oid, ?)
+		       OR has_any_column_privilege(r.oid, c.oid, 'INSERT, UPDATE'))
+		ORDER BY 1, 2`, pgWritePrivileges(versionNum))
 	if err != nil {
 		return fmt.Errorf("check table privileges: %w", err)
 	}
 	defer rows.Close()
 	var writable []string
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var rel, via string
+		if err := rows.Scan(&rel, &via); err != nil {
 			return fmt.Errorf("check table privileges: %w", err)
 		}
-		writable = append(writable, name)
+		if via != role {
+			rel += fmt.Sprintf(" (via role %q)", via)
+		}
+		writable = append(writable, rel)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("check table privileges: %w", err)
@@ -150,8 +233,8 @@ func verifyPostgresReadOnly(ctx context.Context, conn *sql.DB) error {
 		shown = append(append([]string{}, shown[:5]...), fmt.Sprintf("and %d more", len(writable)-5))
 	}
 	s := pgQuoteIdent(schema)
-	return fmt.Errorf("postgres role %q can write to tables in schema %q (%s); the server must connect as a read-only role. "+
-		"Create one and put it in db.dsn:\n"+
+	return fmt.Errorf("postgres role %q can write to relations in schema %q (%s); the server must connect as a read-only role "+
+		"that is not a member of any role with write privileges. Create one and put it in db.dsn:\n"+
 		"  CREATE ROLE corescope_reader LOGIN PASSWORD '...';\n"+
 		"  GRANT USAGE ON SCHEMA %s TO corescope_reader;\n"+
 		"  GRANT SELECT ON ALL TABLES IN SCHEMA %s TO corescope_reader;\n"+
@@ -164,12 +247,18 @@ func pgQuoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-// pgDSNWithReadOnly returns dsn with default_transaction_read_only=on set
-// (replacing any value already there), plus the DSN's password so callers can
-// scrub it from driver errors. It accepts both DSN forms libpq and pgx do: a
-// postgres:// or postgresql:// URL, and a keyword=value string. Errors never
-// quote the DSN.
-func pgDSNWithReadOnly(dsn string) (string, string, error) {
+// pgServerDSN returns dsn with params set (replacing any value already there,
+// matching keys case-insensitively as Postgres matches parameter names), plus
+// the DSN's password so callers can scrub it from driver errors. It accepts
+// both DSN forms libpq and pgx do: a postgres:// or postgresql:// URL, and a
+// keyword=value string. An options parameter that sets one of params is an
+// error rather than something to drop silently: it shows a configuration that
+// expects a different value. Errors never quote the DSN.
+func pgServerDSN(dsn string, params []pgParam) (string, string, error) {
+	forced := make(map[string]bool, len(params))
+	for _, p := range params {
+		forced[p.name] = true
+	}
 	trimmed := strings.TrimSpace(dsn)
 	if strings.HasPrefix(trimmed, "postgres://") || strings.HasPrefix(trimmed, "postgresql://") {
 		u, err := url.Parse(trimmed)
@@ -182,7 +271,23 @@ func pgDSNWithReadOnly(dsn string) (string, string, error) {
 			password, _ = u.User.Password()
 		}
 		q := u.Query()
-		q.Set(pgReadOnlyParam, "on")
+		for key, vals := range q {
+			lk := strings.ToLower(key)
+			if forced[lk] {
+				delete(q, key)
+				continue
+			}
+			if lk == "options" {
+				for _, v := range vals {
+					if err := checkPGOptions(v, params); err != nil {
+						return "", "", err
+					}
+				}
+			}
+		}
+		for _, p := range params {
+			q.Set(p.name, p.value)
+		}
 		u.RawQuery = q.Encode()
 		return u.String(), password, nil
 	}
@@ -194,16 +299,38 @@ func pgDSNWithReadOnly(dsn string) (string, string, error) {
 	var b strings.Builder
 	password := ""
 	for _, kv := range pairs {
-		switch kv[0] {
-		case pgReadOnlyParam:
+		lk := strings.ToLower(kv[0])
+		if forced[lk] {
 			continue
+		}
+		switch lk {
 		case "password":
 			password = kv[1]
+		case "options":
+			if err := checkPGOptions(kv[1], params); err != nil {
+				return "", "", err
+			}
 		}
 		writePGKeywordValue(&b, kv[0], kv[1])
 	}
-	writePGKeywordValue(&b, pgReadOnlyParam, "on")
+	for _, p := range params {
+		writePGKeywordValue(&b, p.name, p.value)
+	}
 	return b.String(), password, nil
+}
+
+// checkPGOptions refuses an options value (command-line switches sent to the
+// backend: -c name=value or --name=value) that mentions a forced parameter.
+// Postgres folds dashes in --name to underscores and names are case-insensitive,
+// so both are normalised before matching. The value is not quoted in the error.
+func checkPGOptions(options string, params []pgParam) error {
+	norm := strings.ReplaceAll(strings.ToLower(options), "-", "_")
+	for _, p := range params {
+		if strings.Contains(norm, p.name) {
+			return fmt.Errorf("db.dsn: the options parameter sets %s, which the server sets itself; remove it from options", p.name)
+		}
+	}
+	return nil
 }
 
 // writePGKeywordValue appends key='value', single-quoted and escaped the way
@@ -303,44 +430,113 @@ func scrubPGSecret(err error, password string) error {
 	return &pgSecretError{msg: strings.ReplaceAll(err.Error(), password, "********"), err: err}
 }
 
-// pgStatsTTL is how long /api/perf serves Postgres database stats before
-// querying the catalog again.
-const pgStatsTTL = 30 * time.Second
+const (
+	// pgStatsTTL is how long /api/perf serves Postgres database stats
+	// before querying the catalog again.
+	pgStatsTTL = 30 * time.Second
+	// pgStatsFailTTL is how long a failed refresh is remembered: during an
+	// outage /api/perf serves the last value instead of querying per request.
+	pgStatsFailTTL = 5 * time.Second
+	// pgStatsQueryTimeout bounds one refresh.
+	pgStatsQueryTimeout = 5 * time.Second
+)
 
-// pgStatsCache holds the last postgresDBStats result. One slot, keyed by the
-// *DB it was computed for: a process opens one analyzer database, so the slot
-// never thrashes in production, and a different *DB (tests) just recomputes.
+// pgStatsCache holds the last good postgresDBStats result. One slot, keyed by
+// the *DB it was computed for: a process opens one analyzer database, so the
+// slot never thrashes in production, and a different *DB (tests) starts over
+// (gen discards a refresh that finishes for the previous one).
+//
+// mu guards the fields only and is never held across a query: one caller
+// refreshes (refreshing) while the others get the last value, flagged stale.
 var pgStatsCache struct {
-	mu    sync.Mutex
-	db    *DB
-	at    time.Time
-	stats SqliteStats
+	mu         sync.Mutex
+	db         *DB
+	gen        uint64
+	have       bool
+	stats      SqliteStats
+	at         time.Time
+	failedAt   time.Time
+	refreshing bool
 }
+
+// pgStatsQueryHook, when set (tests only), runs at the start of each refresh.
+var pgStatsQueryHook func()
 
 // postgresDBStats returns the /api/perf database block on Postgres: the
 // database size and each main table's estimated live row count from
 // pg_stat_user_tables (never COUNT(*): the tables hold tens of millions of
 // rows). Postgres has no SQLite WAL file or freelist, so those stay zero.
-// Cached for pgStatsTTL; a failed query is logged and not cached.
+//
+// Fresh values are cached for pgStatsTTL. While a refresh is running, or for
+// pgStatsFailTTL after one failed, callers get the last good value with
+// Stale set (or an empty block with Stale set if there is none yet).
 func (db *DB) postgresDBStats() SqliteStats {
-	pgStatsCache.mu.Lock()
-	defer pgStatsCache.mu.Unlock()
-	if pgStatsCache.db == db && time.Since(pgStatsCache.at) < pgStatsTTL {
-		return pgStatsCache.stats
+	c := &pgStatsCache
+	c.mu.Lock()
+	if c.db != db {
+		c.db, c.have, c.refreshing = db, false, false
+		c.at, c.failedAt = time.Time{}, time.Time{}
+		c.gen++
 	}
+	now := time.Now()
+	if c.have && now.Sub(c.at) < pgStatsTTL {
+		s := c.stats
+		c.mu.Unlock()
+		return s
+	}
+	if c.refreshing || (!c.failedAt.IsZero() && now.Sub(c.failedAt) < pgStatsFailTTL) {
+		s := pgStatsStaleLocked()
+		c.mu.Unlock()
+		return s
+	}
+	c.refreshing = true
+	gen := c.gen
+	c.mu.Unlock()
 
+	s, err := db.queryPostgresDBStats()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen == gen {
+		c.refreshing = false
+		if err == nil {
+			c.have, c.stats, c.at, c.failedAt = true, s, time.Now(), time.Time{}
+		} else {
+			c.failedAt = time.Now()
+		}
+	}
+	if err != nil {
+		log.Printf("[perf] postgres database stats: %v", err)
+		return pgStatsStaleLocked()
+	}
+	return s
+}
+
+// pgStatsStaleLocked returns the last good stats flagged stale. c.mu held.
+func pgStatsStaleLocked() SqliteStats {
+	if pgStatsCache.have {
+		s := pgStatsCache.stats
+		s.Stale = true
+		return s
+	}
+	return SqliteStats{Engine: "postgres", WalPages: &WalPages{}, Rows: &SqliteRowCounts{}, Stale: true}
+}
+
+// queryPostgresDBStats reads the stats from the catalog. Any failure fails
+// the whole refresh, so a partial result is never cached.
+func (db *DB) queryPostgresDBStats() (SqliteStats, error) {
+	if pgStatsQueryHook != nil {
+		pgStatsQueryHook()
+	}
 	result := SqliteStats{Engine: "postgres", WalPages: &WalPages{}, Rows: &SqliteRowCounts{}}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pgStatsQueryTimeout)
 	defer cancel()
-	failed := false
 
 	var size int64
 	if err := db.conn.QueryRowContext(ctx, `SELECT pg_database_size(current_database())`).Scan(&size); err != nil {
-		log.Printf("[perf] postgres database size: %v", err)
-		failed = true
-	} else {
-		result.DbSizeMB = math.Round(float64(size)/1048576*10) / 10
+		return result, fmt.Errorf("database size: %w", err)
 	}
+	result.DbSizeMB = math.Round(float64(size)/1048576*10) / 10
 
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT relname, n_live_tup
@@ -348,38 +544,28 @@ func (db *DB) postgresDBStats() SqliteStats {
 		WHERE schemaname = current_schema()
 		  AND relname IN ('transmissions', 'observations', 'nodes', 'observers')`)
 	if err != nil {
-		log.Printf("[perf] postgres row estimates: %v", err)
-		failed = true
-	} else {
-		for rows.Next() {
-			var name string
-			var n int64
-			if err := rows.Scan(&name, &n); err != nil {
-				failed = true
-				break
-			}
-			switch name {
-			case "transmissions":
-				result.Rows.Transmissions = int(n)
-			case "observations":
-				result.Rows.Observations = int(n)
-			case "nodes":
-				result.Rows.Nodes = int(n)
-			case "observers":
-				result.Rows.Observers = int(n)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			log.Printf("[perf] postgres row estimates: %v", err)
-			failed = true
-		}
-		rows.Close()
+		return result, fmt.Errorf("row estimates: %w", err)
 	}
-
-	if !failed {
-		pgStatsCache.db = db
-		pgStatsCache.at = time.Now()
-		pgStatsCache.stats = result
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var n int64
+		if err := rows.Scan(&name, &n); err != nil {
+			return result, fmt.Errorf("row estimates: %w", err)
+		}
+		switch name {
+		case "transmissions":
+			result.Rows.Transmissions = int(n)
+		case "observations":
+			result.Rows.Observations = int(n)
+		case "nodes":
+			result.Rows.Nodes = int(n)
+		case "observers":
+			result.Rows.Observers = int(n)
+		}
 	}
-	return result
+	if err := rows.Err(); err != nil {
+		return result, fmt.Errorf("row estimates: %w", err)
+	}
+	return result, nil
 }

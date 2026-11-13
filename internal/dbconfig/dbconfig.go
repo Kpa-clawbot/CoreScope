@@ -22,6 +22,11 @@ type DBConfig struct {
 	Driver string `json:"driver,omitempty"` // "sqlite" (default) or "postgres"
 	DSN    string `json:"dsn,omitempty"`    // Postgres connection string; unused for sqlite
 
+	// StatementTimeoutSec caps each query the API server runs on Postgres
+	// (statement_timeout). Unset → DefaultStatementTimeoutSec; 0 disables;
+	// negative is a config error. Server only; unused for sqlite.
+	StatementTimeoutSec *int `json:"statementTimeoutSec,omitempty"`
+
 	// Load controls chunked startup loading (#1009).
 	Load *LoadConfig `json:"load,omitempty"`
 }
@@ -49,6 +54,21 @@ func (c *DBConfig) GetLoadChunkSize() int {
 	return 10000
 }
 
+// DefaultStatementTimeoutSec is the server's Postgres statement_timeout when
+// db.statementTimeoutSec is unset. The public API is unauthenticated, so a
+// query must not be able to run unbounded.
+const DefaultStatementTimeoutSec = 120
+
+// GetStatementTimeoutSec returns db.statementTimeoutSec, or
+// DefaultStatementTimeoutSec when unset. 0 means no timeout. A negative value
+// is returned as-is; Validate rejects it. Nil-safe.
+func (c *DBConfig) GetStatementTimeoutSec() int {
+	if c == nil || c.StatementTimeoutSec == nil {
+		return DefaultStatementTimeoutSec
+	}
+	return *c.StatementTimeoutSec
+}
+
 // GetDriver normalises Driver: "", "sqlite", "sqlite3" give DriverSQLite;
 // "postgres", "postgresql", "pg" give DriverPostgres (case- and
 // space-insensitive). Anything else is an error. Nil-safe.
@@ -66,11 +86,15 @@ func (c *DBConfig) GetDriver() (string, error) {
 }
 
 // Validate returns an error when the driver is invalid, or when it is
-// postgres and DSN is empty. The DSN is never included in the message. Nil-safe.
+// postgres and DSN is empty, or when statementTimeoutSec is negative. The DSN
+// is never included in the message. Nil-safe.
 func (c *DBConfig) Validate() error {
 	d, err := c.GetDriver()
 	if err != nil {
 		return err
+	}
+	if n := c.GetStatementTimeoutSec(); n < 0 {
+		return fmt.Errorf("db.statementTimeoutSec is %d; use 0 to disable the timeout or a positive number of seconds", n)
 	}
 	if d == DriverPostgres && strings.TrimSpace(c.DSN) == "" {
 		return fmt.Errorf("db.driver=postgres requires db.dsn (or DB_DSN)")

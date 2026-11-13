@@ -287,6 +287,9 @@ type SqliteStats struct {
 	FreelistMB float64          `json:"freelistMB"`
 	WalPages   *WalPages        `json:"walPages"`
 	Rows       *SqliteRowCounts `json:"rows"`
+	// Stale is set (Postgres only) when the figures are the last good ones
+	// because a refresh is running or recently failed.
+	Stale bool `json:"stale,omitempty"`
 }
 
 type PerfResponse struct {

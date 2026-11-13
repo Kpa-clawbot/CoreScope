@@ -7,6 +7,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,5 +233,44 @@ func TestPostgresOpenDBViaConnector(t *testing.T) {
 	var got int64
 	if err := db.QueryRow(`SELECT ?::bigint + ?::bigint`, int64(40), int64(2)).Scan(&got); err != nil || got != 42 {
 		t.Fatalf("got %d, %v; want 42", got, err)
+	}
+}
+
+// Rebind's literal lexing assumes standard_conforming_strings=on; a connection
+// that starts with it off is refused with an error that names the setting.
+func TestPostgresRefusesNonStandardStrings(t *testing.T) {
+	dsn := os.Getenv("CORESCOPE_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("CORESCOPE_TEST_PG_DSN not set; skipping Postgres test")
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	db, err := sql.Open(dbx.PostgresDriverName, dsn+sep+"standard_conforming_strings=off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	err = db.Ping()
+	if err == nil || !strings.Contains(err.Error(), "standard_conforming_strings") {
+		t.Fatalf("ping with standard_conforming_strings=off: err = %v, want a refusal naming the setting", err)
+	}
+}
+
+// A pooled connection whose user turned standard_conforming_strings off is
+// discarded before reuse, not handed to the next caller.
+func TestPostgresDiscardsConnAfterNonStandardStringsSet(t *testing.T) {
+	db := dbxtest.OpenPostgres(t)
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`SET standard_conforming_strings = off`); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := db.QueryRow(`SHOW standard_conforming_strings`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "on" {
+		t.Fatalf("reused connection has standard_conforming_strings=%q; it should have been discarded", got)
 	}
 }

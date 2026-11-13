@@ -13,18 +13,46 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/dbschema/pgschema"
+	"github.com/meshcore-analyzer/dbx"
 	"github.com/meshcore-analyzer/dbx/dbxtest"
 )
 
-func TestPGDSNWithReadOnlyURL(t *testing.T) {
+var testPGParams = pgServerParams(120)
+
+func TestPGServerParams(t *testing.T) {
+	got := map[string]string{}
+	for _, p := range pgServerParams(0) {
+		got[p.name] = p.value
+	}
+	want := map[string]string{pgReadOnlyParam: "on", pgStmtTimeoutParam: "0", pgIdleTxParam: "60000"}
+	if len(got) != len(want) {
+		t.Fatalf("params = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+	for _, p := range testPGParams {
+		if p.name == pgStmtTimeoutParam && p.value != "120000" {
+			t.Errorf("120s statement timeout = %q ms", p.value)
+		}
+	}
+}
+
+func TestPGServerDSNURL(t *testing.T) {
 	for _, in := range []string{
 		"postgres://u:s3cret@h:5432/db?sslmode=disable",
 		"postgresql://u:s3cret@h/db?default_transaction_read_only=off&sslmode=disable",
+		// Postgres matches parameter names case-insensitively, so must we.
+		"postgresql://u:s3cret@h/db?Default_Transaction_Read_Only=off&STATEMENT_TIMEOUT=0&sslmode=disable",
+		"postgres://u:s3cret@h/db?sslmode=disable&options=-c%20search_path%3Dcs",
 	} {
-		out, pw, err := pgDSNWithReadOnly(in)
+		out, pw, err := pgServerDSN(in, testPGParams)
 		if err != nil {
 			t.Fatalf("%q: %v", in, err)
 		}
@@ -36,8 +64,19 @@ func TestPGDSNWithReadOnlyURL(t *testing.T) {
 			t.Fatalf("result does not parse: %v", err)
 		}
 		q := u.Query()
-		if got := q[pgReadOnlyParam]; len(got) != 1 || got[0] != "on" {
-			t.Errorf("%q: %s = %v, want exactly [on]", in, pgReadOnlyParam, got)
+		for _, p := range testPGParams {
+			n := 0
+			for k, vs := range q {
+				if strings.EqualFold(k, p.name) {
+					n += len(vs)
+					if k != p.name || len(vs) != 1 || vs[0] != p.value {
+						t.Errorf("%q: %s = %v, want exactly [%s]", in, k, vs, p.value)
+					}
+				}
+			}
+			if n != 1 {
+				t.Errorf("%q: %d values for %s, want 1 (%s)", in, n, p.name, out)
+			}
 		}
 		if q.Get("sslmode") != "disable" || u.Host == "" || u.Path != "/db" {
 			t.Errorf("%q: other parts not preserved: %q", in, out)
@@ -45,9 +84,9 @@ func TestPGDSNWithReadOnlyURL(t *testing.T) {
 	}
 }
 
-func TestPGDSNWithReadOnlyKeywordValue(t *testing.T) {
-	in := `host=h  user = u password='p w\'x\\y' dbname=db default_transaction_read_only=off sslmode=disable`
-	out, pw, err := pgDSNWithReadOnly(in)
+func TestPGServerDSNKeywordValue(t *testing.T) {
+	in := `host=h  user = u password='p w\'x\\y' dbname=db DEFAULT_TRANSACTION_READ_ONLY=off statement_timeout=0 sslmode=disable options='-c search_path=cs'`
+	out, pw, err := pgServerDSN(in, testPGParams)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,9 +99,10 @@ func TestPGDSNWithReadOnlyKeywordValue(t *testing.T) {
 	}
 	got := map[string][]string{}
 	for _, kv := range pairs {
-		got[kv[0]] = append(got[kv[0]], kv[1])
+		got[strings.ToLower(kv[0])] = append(got[strings.ToLower(kv[0])], kv[1])
 	}
-	want := map[string]string{"host": "h", "user": "u", "password": `p w'x\y`, "dbname": "db", "sslmode": "disable", pgReadOnlyParam: "on"}
+	want := map[string]string{"host": "h", "user": "u", "password": `p w'x\y`, "dbname": "db", "sslmode": "disable",
+		"options": "-c search_path=cs", pgReadOnlyParam: "on", pgStmtTimeoutParam: "120000", pgIdleTxParam: "60000"}
 	for k, v := range want {
 		if len(got[k]) != 1 || got[k][0] != v {
 			t.Errorf("%s = %q, want [%q]", k, got[k], v)
@@ -73,13 +113,34 @@ func TestPGDSNWithReadOnlyKeywordValue(t *testing.T) {
 	}
 }
 
-func TestPGDSNWithReadOnlyErrorsOmitInput(t *testing.T) {
+// An options parameter that sets a forced parameter is refused, not dropped:
+// whoever wrote it expects a different value than the server will use.
+func TestPGServerDSNRejectsForcedParamInOptions(t *testing.T) {
+	for _, in := range []string{
+		`host=h password=s3cret options='-c default_transaction_read_only=off'`,
+		`host=h password=s3cret OPTIONS='-c Statement_Timeout=0'`,
+		`host=h password=s3cret options='--idle-in-transaction-session-timeout=0'`,
+		"postgres://u:s3cret@h/db?options=-c%20default_transaction_read_only%3Doff",
+		"postgres://u:s3cret@h/db?Options=--statement-timeout%3D0",
+	} {
+		_, _, err := pgServerDSN(in, testPGParams)
+		if err == nil || !strings.Contains(err.Error(), "options") {
+			t.Errorf("%q: err = %v, want a refusal naming options", in, err)
+			continue
+		}
+		if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("error quotes the DSN: %v", err)
+		}
+	}
+}
+
+func TestPGServerDSNErrorsOmitInput(t *testing.T) {
 	for _, in := range []string{
 		"host=h password='unterminated-s3cret",
 		"host=h s3cret-without-equals",
 		"postgres://u:s3cret@h:bad port/db",
 	} {
-		_, _, err := pgDSNWithReadOnly(in)
+		_, _, err := pgServerDSN(in, testPGParams)
 		if err == nil {
 			t.Errorf("%q: expected an error", in)
 			continue
@@ -307,18 +368,6 @@ func TestPostgresPerfAndAdminEndpoints(t *testing.T) {
 	}
 }
 
-// The Postgres stats are served from cache within pgStatsTTL.
-func TestPostgresDBStatsCached(t *testing.T) {
-	db, _ := newPostgresTestDB(t)
-	first := db.postgresDBStats()
-	pgStatsCache.mu.Lock()
-	pgStatsCache.stats.DbSizeMB = -1 // marker: only a cache hit returns it
-	pgStatsCache.mu.Unlock()
-	if got := db.postgresDBStats(); got.DbSizeMB != -1 {
-		t.Errorf("second call recomputed (dbSizeMB %v, first %v); want the cached value", got.DbSizeMB, first.DbSizeMB)
-	}
-}
-
 func TestSQLitePerfReportsEngine(t *testing.T) {
 	_, r := setupTestServer(t)
 	code, body := serveJSON(t, r, "/api/perf")
@@ -331,5 +380,280 @@ func TestSQLitePerfReportsEngine(t *testing.T) {
 	}
 	if st.Engine != "sqlite" {
 		t.Errorf("engine = %q, want sqlite", st.Engine)
+	}
+}
+
+// pgGroupRole creates a NOLOGIN role with a random name, dropped in Cleanup.
+func pgGroupRole(t *testing.T, seed *sql.DB) string {
+	t.Helper()
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		t.Fatal(err)
+	}
+	name := "cs_group_" + hex.EncodeToString(b[:])
+	if _, err := seed.Exec(`CREATE ROLE ` + name + ` NOLOGIN`); err != nil {
+		t.Fatalf("create group role: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DROP OWNED BY ` + name, `DROP ROLE ` + name} {
+			if _, err := seed.Exec(q); err != nil {
+				t.Errorf("%s: %v", q, err)
+			}
+		}
+	})
+	return name
+}
+
+func pgServerVersionNum(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var v int
+	if err := db.QueryRow(`SELECT current_setting('server_version_num')::int`).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// Each way a role can hold write power that a table-only, direct-grant check
+// would miss must refuse startup.
+func TestOpenPostgresDBRefusesIndirectWritePower(t *testing.T) {
+	cases := []struct {
+		name  string
+		min   int                                       // server_version_num needed; 0 = any
+		setup func(seed *sql.DB, group string) []string // extra statements; {role} is the login role
+		inErr string
+	}{
+		{"insert on auto-updatable view", 0, func(*sql.DB, string) []string {
+			return []string{`GRANT INSERT ON packets_v TO {role}`}
+		}, "packets_v"},
+		{"column-level update grant", 0, func(*sql.DB, string) []string {
+			return []string{`GRANT UPDATE (name) ON nodes TO {role}`}
+		}, "nodes"},
+		{"maintain on table", 170000, func(*sql.DB, string) []string {
+			return []string{`GRANT MAINTAIN ON nodes TO {role}`}
+		}, "nodes"},
+		{"maintain on materialized view", 170000, func(seed *sql.DB, _ string) []string {
+			return []string{`CREATE MATERIALIZED VIEW cs_test_mv AS SELECT 1 AS x`, `GRANT MAINTAIN ON cs_test_mv TO {role}`}
+		}, "cs_test_mv"},
+		{"non-inherited membership in a writing role", 0, func(_ *sql.DB, group string) []string {
+			return []string{`GRANT INSERT ON nodes TO ` + group, `ALTER ROLE {role} NOINHERIT`, `GRANT ` + group + ` TO {role}`}
+		}, "via role"},
+		{"membership in pg_write_all_data", 140000, func(*sql.DB, string) []string {
+			return []string{`GRANT pg_write_all_data TO {role}`}
+		}, "pg_write_all_data"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			seed := pgSchemaSeed(t)
+			if v := pgServerVersionNum(t, seed); v < tc.min {
+				t.Skipf("needs server_version_num >= %d, have %d", tc.min, v)
+			}
+			group := pgGroupRole(t, seed)
+			grants := append(append([]string{}, pgReadOnlyGrants...), tc.setup(seed, group)...)
+			role, password, dsn := pgTestRole(t, seed, grants...)
+			d, err := OpenPostgresDB(dsn)
+			if err == nil {
+				d.Close()
+				t.Fatal("OpenPostgresDB accepted a role with write power")
+			}
+			msg := err.Error()
+			for _, want := range []string{role, tc.inErr, "GRANT SELECT ON ALL TABLES IN SCHEMA"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("error lacks %q:\n%s", want, msg)
+				}
+			}
+			if strings.Contains(msg, password) {
+				t.Errorf("error leaks the password:\n%s", msg)
+			}
+		})
+	}
+}
+
+// SELECT granted through a group role is the common setup and must start.
+func TestOpenPostgresDBAcceptsReadOnlyGroupMembership(t *testing.T) {
+	seed := pgSchemaSeed(t)
+	group := pgGroupRole(t, seed)
+	_, _, dsn := pgTestRole(t, seed,
+		`GRANT USAGE ON SCHEMA {schema} TO `+group,
+		`GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO `+group,
+		`GRANT `+group+` TO {role}`,
+		`GRANT pg_read_all_stats TO {role}`)
+	d, err := OpenPostgresDB(dsn)
+	if err != nil {
+		t.Fatalf("read-only group membership refused: %v", err)
+	}
+	d.Close()
+}
+
+func TestOpenPostgresDBStatementTimeout(t *testing.T) {
+	seed := pgSchemaSeed(t)
+	_, _, dsn := pgTestRole(t, seed, pgReadOnlyGrants...)
+
+	if _, err := OpenPostgresDBWithStatementTimeout(dsn, -1); err == nil {
+		t.Error("negative statement timeout accepted")
+	}
+
+	d, err := OpenPostgresDBWithStatementTimeout(dsn, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	for name, want := range map[string]string{pgStmtTimeoutParam: "1000", pgIdleTxParam: "60000", pgReadOnlyParam: "on"} {
+		var got string
+		if err := d.conn.QueryRow(`SELECT setting FROM pg_settings WHERE name = ?`, name).Scan(&got); err != nil || got != want {
+			t.Errorf("%s = %q (%v), want %q", name, got, err, want)
+		}
+	}
+	_, err = d.conn.Exec(`SELECT pg_sleep(3)`)
+	if err == nil || !strings.Contains(err.Error(), "SQLSTATE 57014") {
+		t.Errorf("3s query under a 1s statement_timeout: err = %v, want query_canceled (57014)", err)
+	}
+
+	d0, err := OpenPostgresDBWithStatementTimeout(dsn, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d0.Close()
+	var got string
+	if err := d0.conn.QueryRow(`SELECT setting FROM pg_settings WHERE name = 'statement_timeout'`).Scan(&got); err != nil || got != "0" {
+		t.Errorf("timeout 0: statement_timeout = %q (%v), want 0 (disabled)", got, err)
+	}
+}
+
+// Overrides that never pass through the DSN — a role-level setting and
+// PGOPTIONS in the environment — cannot defeat the forced parameters: startup
+// parameters take precedence over both, and the open verifies the effective
+// values in pg_settings.
+func TestOpenPostgresDBForcedParamsBeatOutsideOverrides(t *testing.T) {
+	seed := pgSchemaSeed(t)
+	_, _, dsn := pgTestRole(t, seed, append(append([]string{}, pgReadOnlyGrants...),
+		`ALTER ROLE {role} SET idle_in_transaction_session_timeout = 0`,
+		`ALTER ROLE {role} SET default_transaction_read_only = off`)...)
+	t.Setenv("PGOPTIONS", "-c statement_timeout=0 -c default_transaction_read_only=off")
+	d, err := OpenPostgresDB(dsn)
+	if err != nil {
+		t.Fatalf("OpenPostgresDB: %v", err)
+	}
+	defer d.Close()
+	for name, want := range map[string]string{pgStmtTimeoutParam: "120000", pgIdleTxParam: "60000", pgReadOnlyParam: "on"} {
+		var got string
+		if err := d.conn.QueryRow(`SELECT setting FROM pg_settings WHERE name = ?`, name).Scan(&got); err != nil || got != want {
+			t.Errorf("%s = %q (%v), want %q", name, got, err, want)
+		}
+	}
+}
+
+// resetPGStatsCache gives a test a clean stats slot and hook.
+func resetPGStatsCache(t *testing.T) *int {
+	t.Helper()
+	calls := 0
+	pgStatsCache.mu.Lock()
+	pgStatsCache.db = nil
+	pgStatsCache.mu.Unlock()
+	pgStatsQueryHook = func() { calls++ }
+	t.Cleanup(func() { pgStatsQueryHook = nil })
+	return &calls
+}
+
+// Within pgStatsTTL the stats are served from cache without a query.
+func TestPostgresDBStatsCached(t *testing.T) {
+	db, _ := newPostgresTestDB(t)
+	calls := resetPGStatsCache(t)
+	first := db.postgresDBStats()
+	second := db.postgresDBStats()
+	if *calls != 1 {
+		t.Errorf("queries = %d, want 1", *calls)
+	}
+	if first.Stale || second.Stale || first.DbSizeMB != second.DbSizeMB {
+		t.Errorf("first %+v second %+v", first, second)
+	}
+}
+
+// While one caller refreshes, others get the last value flagged stale at
+// once instead of waiting on the lock behind the query.
+func TestPostgresDBStatsServesStaleDuringRefresh(t *testing.T) {
+	db, _ := newPostgresTestDB(t)
+	resetPGStatsCache(t)
+	good := db.postgresDBStats()
+
+	pgStatsCache.mu.Lock()
+	pgStatsCache.at = time.Now().Add(-2 * pgStatsTTL)
+	pgStatsCache.mu.Unlock()
+	entered, release := make(chan struct{}), make(chan struct{})
+	pgStatsQueryHook = func() { close(entered); <-release }
+	done := make(chan SqliteStats)
+	go func() { done <- db.postgresDBStats() }()
+	<-entered
+
+	start := time.Now()
+	got := db.postgresDBStats()
+	if time.Since(start) > time.Second {
+		t.Errorf("concurrent caller waited %v for the refresh", time.Since(start))
+	}
+	if !got.Stale || got.DbSizeMB != good.DbSizeMB {
+		t.Errorf("during refresh: %+v, want the last value (dbSizeMB %v) flagged stale", got, good.DbSizeMB)
+	}
+	close(release)
+	if r := <-done; r.Stale {
+		t.Errorf("refresher's own result is stale: %+v", r)
+	}
+}
+
+// During an outage the last good value is served stale, and the failure is
+// cached for pgStatsFailTTL so the dead database is not queried per request.
+func TestPostgresDBStatsClosedDB(t *testing.T) {
+	dsn := os.Getenv("CORESCOPE_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("CORESCOPE_TEST_PG_DSN not set; skipping Postgres test")
+	}
+	conn, err := sql.Open(dbx.PostgresDriverName, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := &DB{conn: conn, pg: true}
+	calls := resetPGStatsCache(t)
+	good := db.postgresDBStats()
+	if good.Stale || good.DbSizeMB <= 0 {
+		t.Fatalf("first read: %+v", good)
+	}
+
+	conn.Close()
+	pgStatsCache.mu.Lock()
+	pgStatsCache.at = time.Now().Add(-2 * pgStatsTTL)
+	pgStatsCache.mu.Unlock()
+	for i := 0; i < 3; i++ {
+		got := db.postgresDBStats()
+		if !got.Stale || got.DbSizeMB != good.DbSizeMB {
+			t.Errorf("call %d after close: %+v, want the last value flagged stale", i, got)
+		}
+	}
+	if *calls != 2 {
+		t.Errorf("queries = %d, want 2 (one good, one failed; the failure cached)", *calls)
+	}
+
+	pgStatsCache.mu.Lock()
+	pgStatsCache.failedAt = time.Now().Add(-2 * pgStatsFailTTL)
+	pgStatsCache.mu.Unlock()
+	db.postgresDBStats()
+	if *calls != 3 {
+		t.Errorf("queries = %d after the failure TTL, want 3", *calls)
+	}
+}
+
+// With no good value yet, a failed read is an empty block flagged stale.
+func TestPostgresDBStatsNoValueYet(t *testing.T) {
+	conn, err := sql.Open(dbx.PostgresDriverName, "postgres://unused.invalid/db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	db := &DB{conn: conn, pg: true}
+	calls := resetPGStatsCache(t)
+	got := db.postgresDBStats()
+	if !got.Stale || got.Engine != "postgres" || got.Rows == nil || got.WalPages == nil {
+		t.Errorf("got %+v", got)
+	}
+	db.postgresDBStats()
+	if *calls != 1 {
+		t.Errorf("queries = %d, want 1 (failure cached)", *calls)
 	}
 }

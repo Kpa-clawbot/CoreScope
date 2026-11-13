@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/stdlib"
@@ -69,7 +70,31 @@ func wrapConn(c driver.Conn) (driver.Conn, error) {
 		c.Close()
 		return nil, fmt.Errorf("dbx: unexpected pgx connection type %T", c)
 	}
+	if err := checkStandardStrings(pc); err != nil {
+		pc.Close()
+		return nil, err
+	}
 	return &conn{inner: pc}, nil
+}
+
+// errNonStandardStrings is returned for a connection whose
+// standard_conforming_strings is not on.
+var errNonStandardStrings = errors.New("dbx: the server reports standard_conforming_strings != on; " +
+	"? placeholder rewriting assumes backslashes in '...' literals are not escapes. " +
+	"Remove the setting (ALTER ROLE/DATABASE ... RESET standard_conforming_strings, or from postgresql.conf or the DSN)")
+
+// checkStandardStrings verifies standard_conforming_strings=on, which Rebind's
+// lexing of '...' literals depends on (with it off, \' would not end a string
+// and a ? after it would be misread). It reads the value the server reports in
+// a ParameterStatus message — at startup and again after any SET, since the
+// parameter is GUC_REPORT — so the check costs no round trip. That is lighter
+// than forcing it as a startup parameter, which would mean rewriting the DSN
+// here in both its forms and would still not catch a later SET.
+func checkStandardStrings(pc *stdlib.Conn) error {
+	if pc.Conn().PgConn().ParameterStatus("standard_conforming_strings") != "on" {
+		return errNonStandardStrings
+	}
+	return nil
 }
 
 // conn is a pgx stdlib connection whose query text is passed through Rebind.
@@ -119,7 +144,15 @@ func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 
 func (c *conn) Ping(ctx context.Context) error { return c.inner.Ping(ctx) }
 
-func (c *conn) ResetSession(ctx context.Context) error { return c.inner.ResetSession(ctx) }
+// ResetSession runs before a pooled connection is reused. A connection whose
+// previous user turned standard_conforming_strings off is discarded
+// (ErrBadConn) rather than handed out, so Rebind's assumption holds per use.
+func (c *conn) ResetSession(ctx context.Context) error {
+	if checkStandardStrings(c.inner) != nil {
+		return driver.ErrBadConn
+	}
+	return c.inner.ResetSession(ctx)
+}
 
 // CheckNamedValue must be forwarded: pgx accepts every argument as-is
 // (slices, pgtype values, Valuers), whereas database/sql's default

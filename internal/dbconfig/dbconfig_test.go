@@ -1,6 +1,7 @@
 package dbconfig
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -74,5 +75,42 @@ func TestValidate(t *testing.T) {
 	err := (&DBConfig{Driver: "postgres", DSN: ""}).Validate()
 	if err == nil || !strings.Contains(err.Error(), "dsn") {
 		t.Errorf("postgres without dsn: %v", err)
+	}
+}
+
+func TestGetStatementTimeoutSec(t *testing.T) {
+	var nilCfg *DBConfig
+	if got := nilCfg.GetStatementTimeoutSec(); got != DefaultStatementTimeoutSec {
+		t.Errorf("nil: %d", got)
+	}
+	if got := (&DBConfig{}).GetStatementTimeoutSec(); got != 120 {
+		t.Errorf("unset: %d, want 120", got)
+	}
+	for _, n := range []int{0, 5, 900} {
+		v := n
+		if got := (&DBConfig{StatementTimeoutSec: &v}).GetStatementTimeoutSec(); got != n {
+			t.Errorf("%d: got %d", n, got)
+		}
+	}
+}
+
+func TestValidateStatementTimeout(t *testing.T) {
+	zero, neg := 0, -1
+	if err := (&DBConfig{Driver: "postgres", DSN: "x", StatementTimeoutSec: &zero}).Validate(); err != nil {
+		t.Errorf("0 (disabled) rejected: %v", err)
+	}
+	err := (&DBConfig{Driver: "postgres", DSN: "x", StatementTimeoutSec: &neg}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "statementTimeoutSec") {
+		t.Errorf("negative: %v", err)
+	}
+}
+
+func TestStatementTimeoutJSON(t *testing.T) {
+	var c DBConfig
+	if err := json.Unmarshal([]byte(`{"statementTimeoutSec":0}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.GetStatementTimeoutSec() != 0 {
+		t.Errorf("explicit 0 must disable, got %d", c.GetStatementTimeoutSec())
 	}
 }

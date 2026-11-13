@@ -534,7 +534,7 @@ func read(db *DB) {
 
 // TestPostgresOpenIsOnlyInOpenPostgresDB pins the Postgres side of the
 // read-only invariant: the analyzer database is opened on Postgres in exactly
-// one place, OpenPostgresDB, from the DSN pgDSNWithReadOnly produced — so every
+// one place, OpenPostgresDBWithStatementTimeout, from the DSN pgServerDSN produced — so every
 // connection starts with default_transaction_read_only=on and the role's
 // write privileges are checked before the handle is used.
 func TestPostgresOpenIsOnlyInOpenPostgresDB(t *testing.T) {
@@ -560,8 +560,8 @@ func TestPostgresOpenIsOnlyInOpenPostgresDB(t *testing.T) {
 		}
 		if name == "db_postgres.go" {
 			good += len(want.FindAll(src, -1))
-			if !strings.Contains(string(src), "roDSN, password, err := pgDSNWithReadOnly(dsn)") {
-				t.Error("db_postgres.go no longer derives roDSN from pgDSNWithReadOnly")
+			if !strings.Contains(string(src), "roDSN, password, err := pgServerDSN(dsn, params)") {
+				t.Error("db_postgres.go no longer derives roDSN from pgServerDSN")
 			}
 		}
 	}
