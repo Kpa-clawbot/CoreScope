@@ -82,8 +82,11 @@ func (l indexedLogin) denied() bool { return l.revoked || l.disabled }
 // pubkeys each user owns in owners. confirmed holds the owned pubkeys whose
 // owner's login has published under them; shared is the broker's own shared
 // login names, denied on a confirmed pubkey. shared is fixed after load.
+// gen counts the changes made in place, so a reload never replaces a
+// change made while it read the store (reload).
 type observerLoginIndex struct {
 	mu         sync.RWMutex
+	gen        uint64
 	byUsername map[string]indexedLogin
 	byUser     map[int64]string
 	owners     map[string]*int64
@@ -141,6 +144,7 @@ func (ix *observerLoginIndex) setLogin(l users.MQTTLogin) {
 	hex.Decode(h[:], []byte(l.PasswordHash))
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
+	ix.gen++
 	disabled := false
 	if old, ok := ix.byUser[l.UserID]; ok {
 		disabled = ix.byUsername[old].disabled
@@ -154,6 +158,7 @@ func (ix *observerLoginIndex) setLogin(l users.MQTTLogin) {
 func (ix *observerLoginIndex) setDisabled(userID int64, disabled bool) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
+	ix.gen++
 	name, ok := ix.byUser[userID]
 	if !ok {
 		return
@@ -168,6 +173,7 @@ func (ix *observerLoginIndex) setDisabled(userID int64, disabled bool) {
 func (ix *observerLoginIndex) removeUser(userID int64) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
+	ix.gen++
 	if name, ok := ix.byUser[userID]; ok {
 		delete(ix.byUsername, name)
 		delete(ix.byUser, userID)
@@ -182,6 +188,7 @@ func (ix *observerLoginIndex) removeUser(userID int64) {
 func (ix *observerLoginIndex) revoke(userID int64) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
+	ix.gen++
 	name, ok := ix.byUser[userID]
 	if !ok {
 		return
@@ -201,6 +208,7 @@ func (ix *observerLoginIndex) setOwner(pk string, uid *int64) {
 // setOwnerLocked moves pk to uid and keeps owned and confirmed in step: the
 // confirmation survives only when the owner stays the same. Caller holds mu.
 func (ix *observerLoginIndex) setOwnerLocked(pk string, uid *int64) {
+	ix.gen++
 	old, ok := ix.owners[pk]
 	if ok && old != nil {
 		if ix.owned[*old]--; ix.owned[*old] <= 0 {
@@ -220,6 +228,7 @@ func (ix *observerLoginIndex) setOwnerLocked(pk string, uid *int64) {
 func (ix *observerLoginIndex) confirm(pk string, uid int64) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
+	ix.gen++
 	if o := ix.owners[pk]; o != nil && *o == uid {
 		ix.confirmed[pk] = true
 	}
@@ -351,6 +360,7 @@ func (ix *observerLoginIndex) authorizePublish(username, topic string, bind func
 			return hookDeny, pk, false
 		}
 		ix.mu.Lock()
+		ix.gen++
 		if _, raced := ix.owners[pk]; !raced {
 			ix.setOwnerLocked(pk, owner)
 		}
@@ -390,6 +400,7 @@ func (ix *observerLoginIndex) ownerOf(pk string) *int64 {
 func (ix *observerLoginIndex) unbind(pk string) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
+	ix.gen++
 	if _, ok := ix.owners[pk]; ok {
 		ix.setOwnerLocked(pk, nil)
 		delete(ix.owners, pk)
@@ -408,4 +419,33 @@ func (ix *observerLoginIndex) ownersSnapshot() map[string]int64 {
 		}
 	}
 	return out
+}
+
+// reload replaces the index with a fresh load from st (a PostgreSQL store
+// that other replicas also change). A change made in place while the load
+// ran is newer than what was read, so then the index is left as it is and
+// the next reload tries again.
+func (ix *observerLoginIndex) reload(st *users.Store) error {
+	_, err := ix.reloadFrom(func() (*observerLoginIndex, error) { return newObserverLoginIndex(st, ix.shared) })
+	return err
+}
+
+// reloadFrom is reload with the load injected (tests change the index while
+// it runs); replaced reports whether the index was swapped.
+func (ix *observerLoginIndex) reloadFrom(load func() (*observerLoginIndex, error)) (replaced bool, err error) {
+	ix.mu.RLock()
+	start := ix.gen
+	ix.mu.RUnlock()
+	fresh, err := load()
+	if err != nil {
+		return false, err
+	}
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.gen != start {
+		return false, nil
+	}
+	ix.byUsername, ix.byUser, ix.owners, ix.owned, ix.confirmed =
+		fresh.byUsername, fresh.byUser, fresh.owners, fresh.owned, fresh.confirmed
+	return true, nil
 }

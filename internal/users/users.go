@@ -69,16 +69,13 @@ func scanUser(row rowScanner) (*User, error) {
 
 // CreatePending inserts a new pending user. email must already be normalized.
 func (s *Store) CreatePending(email, displayName, passwordHash string) (*User, error) {
-	res, err := s.db.Exec(`INSERT INTO users (email, display_name, password_hash, role, status, created_at)
-		VALUES (?, ?, ?, 'user', 'pending', ?)`, email, displayName, passwordHash, unix(s.now()))
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO users (email, display_name, password_hash, role, status, created_at)
+		VALUES (?, ?, ?, 'user', 'pending', ?) RETURNING id`, email, displayName, passwordHash, unix(s.now())).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrEmailTaken
 		}
-		return nil, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
 		return nil, err
 	}
 	return s.GetByID(id)
@@ -150,7 +147,9 @@ func (s *Store) TouchLogin(id int64) error {
 }
 
 // Delete removes a user; sessions and tokens cascade. Mail-log rows survive
-// for delivery forensics, with the address replaced by HashedEmail.
+// for delivery forensics, with the address replaced by HashedEmail. On
+// Postgres the user row is locked first, so no mail_log row of the user can
+// be added (its foreign key check waits) between the hashing and the delete.
 func (s *Store) Delete(id int64) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -158,7 +157,7 @@ func (s *Store) Delete(id int64) error {
 	}
 	defer tx.Rollback()
 	var exists int
-	if err := tx.QueryRow(`SELECT 1 FROM users WHERE id = ?`, id).Scan(&exists); err != nil {
+	if err := tx.QueryRow(`SELECT 1 FROM users WHERE id = ?`+s.forUpdate(), id).Scan(&exists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -181,8 +180,10 @@ type ListFilter struct {
 	Bouncing bool   // only addresses whose mail bounces
 }
 
-// List returns at most 1000 users, newest first. SQLite lower()/LIKE fold
-// ASCII only, so a non-ASCII search is case-sensitive.
+// List returns at most 1000 users, newest first. The query is lower-cased
+// here and compared with LOWER(column): SQLite's lower() and Postgres'
+// lower() under COLLATE "C" fold ASCII only, so a non-ASCII search is
+// case-sensitive on both.
 func (s *Store) List(f ListFilter) ([]User, error) {
 	q := `SELECT ` + userCols + ` FROM users WHERE 1=1`
 	var args []any
@@ -199,7 +200,7 @@ func (s *Store) List(f ListFilter) ([]User, error) {
 	}
 	if t := strings.TrimSpace(f.Query); t != "" {
 		like := "%" + escapeLike(strings.ToLower(t)) + "%"
-		q += ` AND (email LIKE ? ESCAPE '\' OR lower(display_name) LIKE ? ESCAPE '\')`
+		q += ` AND (LOWER(email) LIKE ? ESCAPE '\' OR LOWER(display_name) LIKE ? ESCAPE '\')`
 		args = append(args, like, like)
 	}
 	q += ` ORDER BY created_at DESC, id DESC LIMIT 1000`
@@ -258,7 +259,9 @@ func (s *Store) UsersByID(ids []int64) (map[int64]User, error) {
 }
 
 // PruneStalePending deletes pending accounts older than maxAge that have no
-// unused, unexpired activation token left.
+// unused, unexpired activation token left. On Postgres the selected users
+// are locked, and rechecked after any wait, so an activation or a new token
+// that commits first saves the account.
 func (s *Store) PruneStalePending(maxAge time.Duration) (int64, error) {
 	now := unix(s.now())
 	tx, err := s.db.Begin()
@@ -268,7 +271,7 @@ func (s *Store) PruneStalePending(maxAge time.Duration) (int64, error) {
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT id FROM users WHERE status = 'pending' AND created_at < ?
 		AND NOT EXISTS (SELECT 1 FROM tokens t WHERE t.user_id = users.id AND t.purpose = 'activate'
-			AND t.used_at IS NULL AND t.expires_at > ?)`, now-int64(maxAge/time.Second), now)
+			AND t.used_at IS NULL AND t.expires_at > ?)`+s.forUpdate(), now-int64(maxAge/time.Second), now)
 	if err != nil {
 		return 0, err
 	}
@@ -299,7 +302,7 @@ func (s *Store) PruneStalePending(maxAge time.Duration) (int64, error) {
 // hashMailLogTx replaces the plaintext address of every mail_log row of the
 // user with HashedEmail of that row's own address (rows may predate an email
 // change). Rows already hashed are skipped. The cursor is closed before any
-// UPDATE because the store uses a single connection.
+// UPDATE because the SQLite store uses a single connection.
 func hashMailLogTx(tx *sql.Tx, userID int64) error {
 	rows, err := tx.Query(`SELECT id, to_email FROM mail_log WHERE user_id = ? AND to_email NOT LIKE 'sha256:%'`, userID)
 	if err != nil {

@@ -210,7 +210,7 @@ func (s *Server) companionsJSON(links []users.CompanionLink) []companionJSON {
 // coverage never enabled) or a failed query give an empty map.
 func (s *Server) companionLastSeen(pks []string) map[string]string {
 	out := map[string]string{}
-	if len(pks) == 0 || s.db == nil || s.db.conn == nil {
+	if len(pks) == 0 || s.db == nil || s.db.conn == nil || !s.db.tablePresent("client_receptions") {
 		return out
 	}
 	args := make([]interface{}, len(pks))
@@ -220,9 +220,7 @@ func (s *Server) companionLastSeen(pks []string) map[string]string {
 	rows, err := s.db.conn.Query(`SELECT rx_pubkey, MAX(rx_at) FROM client_receptions WHERE rx_pubkey IN (`+
 		sqlPlaceholders(len(pks))+`) GROUP BY rx_pubkey`, args...)
 	if err != nil {
-		if !strings.Contains(err.Error(), "no such table") {
-			log.Printf("[users] companion last seen: %v", err)
-		}
+		log.Printf("[users] companion last seen: %v", err)
 		return out
 	}
 	defer rows.Close()

@@ -9,7 +9,7 @@ import (
 )
 
 func TestSnapshotCopiesRows(t *testing.T) {
-	st, _ := newTestStore(t)
+	st, _ := newSQLiteTestStore(t)
 	u := mustCreate(t, st, "a@example.org", "Aaa")
 	uid := u.ID
 	if err := st.Audit(&uid, "user.register", &uid, nil); err != nil {
@@ -40,7 +40,7 @@ func TestSnapshotFileMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix file modes")
 	}
-	st, _ := newTestStore(t)
+	st, _ := newSQLiteTestStore(t)
 	path := filepath.Join(t.TempDir(), "snap.db")
 	if err := st.Snapshot(path); err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestSnapshotFileMode(t *testing.T) {
 }
 
 func TestSnapshotRefusesExistingTarget(t *testing.T) {
-	st, _ := newTestStore(t)
+	st, _ := newSQLiteTestStore(t)
 	path := filepath.Join(t.TempDir(), "snap.db")
 	// An empty file: VACUUM INTO alone would accept and fill it.
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
@@ -71,7 +71,7 @@ func TestSnapshotRefusesExistingTarget(t *testing.T) {
 }
 
 func TestSnapshotFailureLeavesNoFile(t *testing.T) {
-	st, _ := newTestStore(t)
+	st, _ := newSQLiteTestStore(t)
 	st.Close()
 	path := filepath.Join(t.TempDir(), "snap.db")
 	if err := st.Snapshot(path); err == nil {

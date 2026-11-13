@@ -50,8 +50,8 @@ func TestMigrationV8ConfirmsAutoBindings(t *testing.T) {
 		t.Fatalf("Open v7 db: %v", err)
 	}
 	defer st.Close()
-	if v, err := st.SchemaVersion(); err != nil || v != 8 || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want 8", v, err)
+	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
 	}
 	auto, admin := mustBinding(t, st, "AUTOKEY"), mustBinding(t, st, "ADMINKEY")
 	if auto.ConfirmedAt == nil || !auto.ConfirmedAt.Equal(auto.BoundAt) {
@@ -63,95 +63,103 @@ func TestMigrationV8ConfirmsAutoBindings(t *testing.T) {
 }
 
 func TestBindObserverAutoConfirms(t *testing.T) {
-	st, clk := newTestStore(t)
-	a := mustCreate(t, st, "a@example.org", "A")
-	if _, _, err := st.BindObserver(pkConfirm, a.ID, "auto"); err != nil {
-		t.Fatal(err)
-	}
-	b := mustBinding(t, st, pkConfirm)
-	if b.ConfirmedAt == nil || !b.ConfirmedAt.Equal(clk.Now()) {
-		t.Fatalf("binding = %+v", b)
-	}
+	forEachBackend(t, func(t *testing.T, newTestStore storeFactory) {
+		st, clk := newTestStore(t)
+		a := mustCreate(t, st, "a@example.org", "A")
+		if _, _, err := st.BindObserver(pkConfirm, a.ID, "auto"); err != nil {
+			t.Fatal(err)
+		}
+		b := mustBinding(t, st, pkConfirm)
+		if b.ConfirmedAt == nil || !b.ConfirmedAt.Equal(clk.Now()) {
+			t.Fatalf("binding = %+v", b)
+		}
 
-	pk2 := strings.Repeat("B2", 32)
-	if _, _, err := st.BindObserver(pk2, a.ID, "admin"); err != nil {
-		t.Fatal(err)
-	}
-	if b := mustBinding(t, st, pk2); b.ConfirmedAt != nil {
-		t.Fatalf("admin bind confirmed: %+v", b)
-	}
+		pk2 := strings.Repeat("B2", 32)
+		if _, _, err := st.BindObserver(pk2, a.ID, "admin"); err != nil {
+			t.Fatal(err)
+		}
+		if b := mustBinding(t, st, pk2); b.ConfirmedAt != nil {
+			t.Fatalf("admin bind confirmed: %+v", b)
+		}
+	})
 }
 
 func TestConfirmObserverAdminAssignment(t *testing.T) {
-	st, clk := newTestStore(t)
-	a := mustCreate(t, st, "a@example.org", "A")
-	b := mustCreate(t, st, "b@example.org", "B")
-	if err := st.SetObserverOwner(pkConfirm, &a.ID); err != nil {
-		t.Fatal(err)
-	}
-	if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt != nil {
-		t.Fatalf("admin assignment confirmed: %+v", got)
-	}
-	if ok, err := st.ConfirmObserver(pkConfirm, b.ID); err != nil || ok {
-		t.Fatalf("confirm by non-owner = %v, %v; want false", ok, err)
-	}
-	if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt != nil {
-		t.Fatalf("non-owner confirmed: %+v", got)
-	}
-	if ok, err := st.ConfirmObserver(strings.ToLower(pkConfirm), a.ID); err != nil || !ok {
-		t.Fatalf("confirm by owner = %v, %v; want true", ok, err)
-	}
-	got := mustBinding(t, st, pkConfirm)
-	if got.ConfirmedAt == nil || !got.ConfirmedAt.Equal(clk.Now()) {
-		t.Fatalf("binding = %+v", got)
-	}
-	if ok, err := st.ConfirmObserver(pkConfirm, a.ID); err != nil || ok {
-		t.Fatalf("second confirm = %v, %v; want false", ok, err)
-	}
+	forEachBackend(t, func(t *testing.T, newTestStore storeFactory) {
+		st, clk := newTestStore(t)
+		a := mustCreate(t, st, "a@example.org", "A")
+		b := mustCreate(t, st, "b@example.org", "B")
+		if err := st.SetObserverOwner(pkConfirm, &a.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt != nil {
+			t.Fatalf("admin assignment confirmed: %+v", got)
+		}
+		if ok, err := st.ConfirmObserver(pkConfirm, b.ID); err != nil || ok {
+			t.Fatalf("confirm by non-owner = %v, %v; want false", ok, err)
+		}
+		if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt != nil {
+			t.Fatalf("non-owner confirmed: %+v", got)
+		}
+		if ok, err := st.ConfirmObserver(strings.ToLower(pkConfirm), a.ID); err != nil || !ok {
+			t.Fatalf("confirm by owner = %v, %v; want true", ok, err)
+		}
+		got := mustBinding(t, st, pkConfirm)
+		if got.ConfirmedAt == nil || !got.ConfirmedAt.Equal(clk.Now()) {
+			t.Fatalf("binding = %+v", got)
+		}
+		if ok, err := st.ConfirmObserver(pkConfirm, a.ID); err != nil || ok {
+			t.Fatalf("second confirm = %v, %v; want false", ok, err)
+		}
+	})
 }
 
 func TestSetObserverOwnerClearsConfirmOnNewOwner(t *testing.T) {
-	st, _ := newTestStore(t)
-	a := mustCreate(t, st, "a@example.org", "A")
-	b := mustCreate(t, st, "b@example.org", "B")
-	if _, _, err := st.BindObserver(pkConfirm, a.ID, "auto"); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetObserverOwner(pkConfirm, &a.ID); err != nil {
-		t.Fatal(err)
-	}
-	if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt == nil {
-		t.Fatalf("same owner cleared confirm: %+v", got)
-	}
-	if err := st.SetObserverOwner(pkConfirm, &b.ID); err != nil {
-		t.Fatal(err)
-	}
-	if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt != nil || *got.UserID != b.ID {
-		t.Fatalf("new owner kept confirm: %+v", got)
-	}
-	if err := st.SetObserverOwner(pkConfirm, nil); err != nil {
-		t.Fatal(err)
-	}
-	all, _ := st.ObserverBindings()
-	if len(all) != 0 {
-		t.Fatalf("row not deleted: %+v", all)
-	}
+	forEachBackend(t, func(t *testing.T, newTestStore storeFactory) {
+		st, _ := newTestStore(t)
+		a := mustCreate(t, st, "a@example.org", "A")
+		b := mustCreate(t, st, "b@example.org", "B")
+		if _, _, err := st.BindObserver(pkConfirm, a.ID, "auto"); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SetObserverOwner(pkConfirm, &a.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt == nil {
+			t.Fatalf("same owner cleared confirm: %+v", got)
+		}
+		if err := st.SetObserverOwner(pkConfirm, &b.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt != nil || *got.UserID != b.ID {
+			t.Fatalf("new owner kept confirm: %+v", got)
+		}
+		if err := st.SetObserverOwner(pkConfirm, nil); err != nil {
+			t.Fatal(err)
+		}
+		all, _ := st.ObserverBindings()
+		if len(all) != 0 {
+			t.Fatalf("row not deleted: %+v", all)
+		}
+	})
 }
 
 func TestSetObserverOwnerOrphanGetsNullConfirm(t *testing.T) {
-	st, _ := newTestStore(t)
-	a := mustCreate(t, st, "a@example.org", "A")
-	b := mustCreate(t, st, "b@example.org", "B")
-	if _, _, err := st.BindObserver(pkConfirm, a.ID, "auto"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.db.Exec(`UPDATE observer_bindings SET user_id = NULL WHERE pubkey = ?`, pkConfirm); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetObserverOwner(pkConfirm, &b.ID); err != nil {
-		t.Fatal(err)
-	}
-	if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt != nil {
-		t.Fatalf("orphan reassigned kept confirm: %+v", got)
-	}
+	forEachBackend(t, func(t *testing.T, newTestStore storeFactory) {
+		st, _ := newTestStore(t)
+		a := mustCreate(t, st, "a@example.org", "A")
+		b := mustCreate(t, st, "b@example.org", "B")
+		if _, _, err := st.BindObserver(pkConfirm, a.ID, "auto"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.db.Exec(`UPDATE observer_bindings SET user_id = NULL WHERE pubkey = ?`, pkConfirm); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SetObserverOwner(pkConfirm, &b.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got := mustBinding(t, st, pkConfirm); got.ConfirmedAt != nil {
+			t.Fatalf("orphan reassigned kept confirm: %+v", got)
+		}
+	})
 }

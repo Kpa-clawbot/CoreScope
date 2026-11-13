@@ -39,6 +39,18 @@ GO_BUILD_TAGS     ?= netgo,osusergo,sqlite_omit_load_extension
 GO_BUILD_FLAGS    ?= -trimpath
 GO_LDFLAGS_OPTIMS ?= -s -w
 
+# musl gives every non-main thread a 128 KiB stack (glibc: 8 MiB), taken from
+# the ELF PT_GNU_STACK size. cgo calls into SQLite run on the calling thread's
+# stack, and a deep query (multiSelect recursing ~850 B per UNION ALL term)
+# overflows 128 KiB and SIGSEGVs the server. Raising the linker's stack size
+# makes musl threads default to 8 MiB (reserved address space, not resident).
+# Go rejects this flag in #cgo LDFLAGS, so it must go in -extldflags. Harmless
+# on glibc; GNU ld/lld only, so the host build applies it on Linux only.
+STACK_LDFLAG      ?= -Wl,-z,stack-size=8388608
+ifeq ($(GOOS),linux)
+HOST_EXTLDFLAGS   := -extldflags '$(STACK_LDFLAG)'
+endif
+
 CMDS              := server ingestor decrypt migrate
 DIST              := dist
 
@@ -75,7 +87,7 @@ build-%:
 	@mkdir -p $(DIST)
 	cd cmd/$* && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build \
 		-tags $(GO_BUILD_TAGS) $(GO_BUILD_FLAGS) \
-		-ldflags "$(GO_LDFLAGS_OPTIMS) $(LDFLAGS_$*)" \
+		-ldflags "$(GO_LDFLAGS_OPTIMS) $(HOST_EXTLDFLAGS) $(LDFLAGS_$*)" \
 		-o ../../$(DIST)/corescope-$* .
 
 # -- cross builds --------------------------------------------------------------
@@ -92,7 +104,7 @@ crossbuild-$(2)-$(3)-$(4):
 	@command -v zig >/dev/null || { echo "zig not found: needed to cross-compile cgo. See https://ziglang.org/download/"; exit 1; }
 	cd cmd/$(2) && CGO_ENABLED=1 GOOS=$(3) GOARCH=$(4) CC="zig cc -target $(1)" \
 		$$(GO) build -tags $$(GO_BUILD_TAGS) $$(GO_BUILD_FLAGS) \
-			-ldflags '$$(GO_LDFLAGS_OPTIMS) -extldflags "-static -Wl,-s" $$(LDFLAGS_$(2))' \
+			-ldflags '$$(GO_LDFLAGS_OPTIMS) -extldflags "-static -Wl,-s $$(STACK_LDFLAG)" $$(LDFLAGS_$(2))' \
 			-o ../../$$(DIST)/corescope-$(2)-$(3)-$(4) .
 endef
 
@@ -103,7 +115,7 @@ $(foreach c,$(CMDS),\
 # -- checks --------------------------------------------------------------------
 
 test:
-	bash scripts/allmod.sh test ./...
+	bash scripts/allmod.sh test -ldflags=-extldflags=$(STACK_LDFLAG) ./...
 
 vet:
 	bash scripts/allmod.sh vet ./...

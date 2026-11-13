@@ -35,7 +35,7 @@ func TestRunPendingPruneRequests(t *testing.T) {
 		t.Fatalf("WriteRequest: %v", err)
 	}
 
-	store.RunPendingPruneRequests()
+	store.RunPendingPruneRequests(testPruneFilter)
 
 	// Request file gone, result file present.
 	if exists, _ := prunequeue.RequestExists(dbPath, id); exists {
@@ -73,5 +73,5 @@ func TestRunPendingPruneRequests_EmptyQueueIsNoop(t *testing.T) {
 	}
 	defer store.Close()
 	// Must not panic / error on empty queue.
-	store.RunPendingPruneRequests()
+	store.RunPendingPruneRequests(testPruneFilter)
 }

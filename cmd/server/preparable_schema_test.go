@@ -22,7 +22,7 @@ var preparableTables = []string{
 	`CREATE TABLE IF NOT EXISTS transmissions (id INTEGER PRIMARY KEY, hash TEXT)`,
 	`CREATE TABLE IF NOT EXISTS observations (id INTEGER PRIMARY KEY, timestamp TEXT)`,
 	`CREATE TABLE IF NOT EXISTS nodes (public_key TEXT PRIMARY KEY)`,
-	`CREATE TABLE IF NOT EXISTS observers (id TEXT)`,
+	`CREATE TABLE IF NOT EXISTS observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE)`,
 }
 
 // preparableColumns are added when absent. A fixture that already declared the

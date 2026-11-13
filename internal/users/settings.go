@@ -75,36 +75,39 @@ func (s *Store) SettingsRecordFor(userID int64) (*SettingsRecord, error) {
 // document base.Revision must be 0, and the write starts a new generation.
 // With one, base must equal the stored version; the new revision is
 // base.Revision+1 in the same generation. Otherwise it returns the stored
-// version and ErrSettingsConflict.
+// version and ErrSettingsConflict. The version test is part of the write
+// (an insert that does nothing when a document exists, or an update of the
+// base version only), so of concurrent writers on one base exactly one wins.
 func (s *Store) PutSettings(userID int64, base SettingsVersion, doc string) (SettingsVersion, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return SettingsVersion{}, err
-	}
-	defer tx.Rollback()
-	var cur SettingsVersion
-	err = tx.QueryRow(`SELECT revision, generation FROM user_settings WHERE user_id = ?`, userID).Scan(&cur.Revision, &cur.Generation)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return SettingsVersion{}, err
-	}
-	next := cur
-	if cur.Revision == 0 {
-		if base.Revision != 0 {
-			return cur, ErrSettingsConflict
-		}
+	var res sql.Result
+	var err error
+	next := SettingsVersion{Revision: base.Revision + 1, Generation: base.Generation}
+	if base.Revision == 0 {
 		if next.Generation, err = newGeneration(); err != nil {
 			return SettingsVersion{}, err
 		}
-	} else if base != cur {
-		return cur, ErrSettingsConflict
+		res, err = s.db.Exec(`INSERT INTO user_settings (user_id, doc, revision, generation, updated_at) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (user_id) DO NOTHING`, userID, doc, next.Revision, next.Generation, unix(s.now()))
+	} else {
+		res, err = s.db.Exec(`UPDATE user_settings SET doc = ?, revision = ?, updated_at = ?
+			WHERE user_id = ? AND revision = ? AND generation = ?`,
+			doc, next.Revision, unix(s.now()), userID, base.Revision, base.Generation)
 	}
-	next.Revision = cur.Revision + 1
-	if _, err := tx.Exec(`INSERT INTO user_settings (user_id, doc, revision, generation, updated_at) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(user_id) DO UPDATE SET doc = excluded.doc, revision = excluded.revision, generation = excluded.generation, updated_at = excluded.updated_at`,
-		userID, doc, next.Revision, next.Generation, unix(s.now())); err != nil {
+	if err != nil {
 		return SettingsVersion{}, err
 	}
-	return next, tx.Commit()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return SettingsVersion{}, err
+	}
+	if n == 0 {
+		_, cur, err := s.GetSettings(userID)
+		if err != nil {
+			return SettingsVersion{}, err
+		}
+		return cur, ErrSettingsConflict
+	}
+	return next, nil
 }
 
 // DeleteSettings removes the user's synced settings; the next write starts

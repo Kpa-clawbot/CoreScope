@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema"
 )
 
@@ -160,7 +160,11 @@ func main() {
 
 	// Resolve DB path
 	resolvedDB := cfg.ResolveDBPath(configDir)
-	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, resolvedDB, publicDir)
+	dbDesc := resolvedDB
+	if d, _ := cfg.DB.GetDriver(); d == dbconfig.DriverPostgres {
+		dbDesc = "postgres" // never the DSN: it may carry a password
+	}
+	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, dbDesc, publicDir)
 	if len(cfg.NodeBlacklist) > 0 {
 		log.Printf("[config] nodeBlacklist: %d node(s) will be hidden from API", len(cfg.NodeBlacklist))
 		for _, pk := range cfg.NodeBlacklist {
@@ -170,10 +174,32 @@ func main() {
 		}
 	}
 
-	// Open database
-	database, err := OpenDB(resolvedDB)
+	if err := cfg.DB.Validate(); err != nil {
+		log.Fatalf("[db] %v", err)
+	}
+	driver, err := cfg.DB.GetDriver()
 	if err != nil {
-		log.Fatalf("[db] failed to open %s: %v", resolvedDB, err)
+		log.Fatalf("[db] %v", err)
+	}
+
+	// Open database. The DSN is never logged: it may carry a password.
+	var database *DB
+	if driver == dbconfig.DriverPostgres {
+		database, err = OpenPostgresDBWithStatementTimeout(cfg.DB.DSN, cfg.DB.GetStatementTimeoutSec())
+		if err != nil {
+			log.Fatalf("[db] failed to open postgres: %v", err)
+		}
+		log.Printf("[db] opened postgres (read-only role verified)")
+		// On Postgres the geo-prune requests and the multibyte snapshot go
+		// through the control tables (control_pg.go), not files; there is no
+		// database file, so local files kept beside it (the geo-filter
+		// backup) are anchored at the configured dbPath.
+		database.queuePath = resolvedDB
+	} else {
+		database, err = OpenDB(resolvedDB)
+		if err != nil {
+			log.Fatalf("[db] failed to open %s: %v", resolvedDB, err)
+		}
 	}
 	var dbCloseOnce sync.Once
 	dbClose := func() error {
@@ -184,9 +210,9 @@ func main() {
 	defer dbClose()
 
 	// Verify DB has expected tables
-	var tableName string
-	err = database.conn.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='transmissions'").Scan(&tableName)
-	if err == sql.ErrNoRows {
+	if ok, err := dbschema.TableExists(database.conn, "transmissions"); err != nil {
+		log.Fatalf("[db] probe for table 'transmissions': %v", err)
+	} else if !ok {
 		log.Fatalf("[db] table 'transmissions' not found — is this a CoreScope database?")
 	}
 
@@ -593,9 +619,6 @@ func main() {
 	// #1287 — they are write operations and belong on the writer
 	// process. The server reads the results via the periodic
 	// recompNeighborGraph / fetchResolvedPathForObs paths.
-
-	// Migrate old content hashes in background (one-time, idempotent).
-	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)
 
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("[server] %v", err)

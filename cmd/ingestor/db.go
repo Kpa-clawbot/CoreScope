@@ -16,7 +16,10 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/dbschema"
+	"github.com/meshcore-analyzer/dbx"
+	"github.com/meshcore-analyzer/mbcapqueue"
 	"github.com/meshcore-analyzer/packetpath"
+	"github.com/meshcore-analyzer/prunequeue"
 )
 
 // DBStats tracks operational metrics for the ingestor database.
@@ -70,9 +73,22 @@ func (s *DBStats) SnapshotBackfills() map[string]int64 {
 
 // Store wraps the SQLite database for packet ingestion.
 type Store struct {
-	db    *sql.DB
-	path  string // filesystem path to the SQLite DB (used to resolve queue dirs)
-	Stats DBStats
+	db *sql.DB
+	// pg is true when db is the Postgres driver (dbx). Statements whose
+	// portable form costs SQLite on the ingest hot path are chosen per
+	// backend once, in prepareStatements; see portable_sql.go.
+	pg bool
+	// path is the configured dbPath. On SQLite it is the database file and
+	// the anchor of the file queues shared with the server; on Postgres it is
+	// only what the empty-target guard checks and is never opened.
+	path string
+	// pruneQ and mbcap are the server -> ingestor channels (geo-prune
+	// requests, multi-byte capability snapshots), chosen once in newStore:
+	// marker files next to the SQLite database, or the corescope_control
+	// tables on Postgres, so the two processes share no filesystem there.
+	pruneQ prunequeue.Queue
+	mbcap  mbcapqueue.Store
+	Stats  DBStats
 	// plannerStatsAt is when RefreshPlannerStats last succeeded in this
 	// process, in Unix nanoseconds (0: not yet).
 	plannerStatsAt atomic.Int64
@@ -88,13 +104,16 @@ type Store struct {
 	stmtInsertObservation      *sql.Stmt
 	stmtInsertObservationRadio *sql.Stmt // #1869, sparse rx_radio_id
 	stmtInsertAdvertEvidence   *sql.Stmt
+	// insertTransmission runs stmtInsertTransmission and returns the new id,
+	// the way the backend does it cheapest (insertTransmissionFunc).
+	insertTransmission         func(args ...any) (int64, error)
 	hopBackfillCancel          context.CancelFunc // stops the observation_hops backfill on Close
 	hopIndexDays               int                // retention.hopIndexDays; 0 = no hop index (see ConfigureObservationHops)
 	hopMaintMu                 sync.Mutex         // serializes the hop index backfill and trim
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
 	stmtUpsertObserver         *sql.Stmt
-	stmtGetObserverRowid       *sql.Stmt
+	stmtGetObserverIdx         *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
 	stmtTouchNodeLastSeen      *sql.Stmt
@@ -173,7 +192,31 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("dbschema.Apply: %w", err)
 	}
 
-	s := &Store{db: db, path: dbPath, sampleIntervalSec: sampleIntervalSec}
+	s, err := newStore(db, dbPath, sampleIntervalSec)
+	if err != nil {
+		return nil, err
+	}
+	s.scheduleSQLiteAsyncMigrations()
+	s.loadAdvertEvidenceStatus()
+	// The observation_hops backfill is deliberately NOT scheduled here; see
+	// ScheduleObservationHopsBackfill (called from main once ingest is live).
+
+	return s, nil
+}
+
+// newStore is the setup shared by both backends once the schema is in place:
+// the Store itself, its prepared statements and the restored scope-match
+// tally. Backend-specific work (SQLite's legacy async migrations, Postgres's
+// empty-target guard) stays with the openers.
+func newStore(db *sql.DB, path string, sampleIntervalSec int) (*Store, error) {
+	s := &Store{db: db, pg: dbx.IsPostgres(db), path: path, sampleIntervalSec: sampleIntervalSec}
+	if s.pg {
+		s.pruneQ = prunequeue.NewPG(db, "")
+		s.mbcap = mbcapqueue.NewPG(db, "")
+	} else {
+		s.pruneQ = prunequeue.NewFS(path)
+		s.mbcap = mbcapqueue.NewFS(path)
+	}
 	if err := s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}
@@ -184,9 +227,24 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 	if err := s.LoadScopeMatchTotals(); err != nil {
 		log.Printf("[regions] restoring scope-match tally: %v", err)
 	}
+	return s, nil
+}
 
-	// Schedule async migrations. These must NOT block boot. See
-	// async_migration.go for the convention.
+// loadAdvertEvidenceStatus restores whether the advert route evidence
+// backfill has completed. A missing/failed completion lookup leaves
+// preservation enabled. This lifecycle state is restored on restart,
+// independently of main's startup.
+func (s *Store) loadAdvertEvidenceStatus() {
+	var evidenceStatus string
+	_ = s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name='advert_route_evidence_v1'`).Scan(&evidenceStatus)
+	s.advertEvidenceComplete.Store(evidenceStatus == "done")
+}
+
+// scheduleSQLiteAsyncMigrations schedules the legacy SQLite data migrations.
+// These must NOT block boot. See async_migration.go for the convention. A
+// Postgres database is created at the end state (pgschema seeds every one of
+// them as done), so they never run there.
+func (s *Store) scheduleSQLiteAsyncMigrations() {
 	// PREFLIGHT: async=true reason="composite index build on observations (1.9M+ rows in prod) — converted from sync after v3.8.3"
 	var idxDone int
 	if s.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'obs_observer_ts_idx_v1'").Scan(&idxDone) != nil {
@@ -196,7 +254,7 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 				if _, err := d.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_observations_observer_idx_timestamp ON observations(observer_idx, timestamp)`); err != nil {
 					return err
 				}
-				if _, err := d.ExecContext(ctx, `INSERT OR IGNORE INTO _migrations (name) VALUES ('obs_observer_ts_idx_v1')`); err != nil {
+				if _, err := d.ExecContext(ctx, `INSERT INTO _migrations (name) VALUES ('obs_observer_ts_idx_v1') ON CONFLICT DO NOTHING`); err != nil {
 					return err
 				}
 				log.Println("[migration/async] observations(observer_idx, timestamp) index created")
@@ -232,15 +290,21 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		log.Printf("[migration/async] scheduling tx_last_seen_backfill_v1 failed: %v", err)
 	}
 
-	// A missing/failed completion lookup leaves preservation enabled. This
-	// lifecycle state is restored on restart, independently of main's startup.
-	var evidenceStatus string
-	_ = db.QueryRow(`SELECT status FROM _async_migrations WHERE name='advert_route_evidence_v1'`).Scan(&evidenceStatus)
-	s.advertEvidenceComplete.Store(evidenceStatus == "done")
-	// The observation_hops backfill is deliberately NOT scheduled here; see
-	// ScheduleObservationHopsBackfill (called from main once ingest is live).
-
-	return s, nil
+	// #1856: rewrite content hashes written before #787 (full header byte)
+	// to the payload-type-bits formula, merging rows that then collide. Only
+	// rows present at boot can be stale — this process writes current hashes
+	// — so the range is fixed here, before ingest starts.
+	// PREFLIGHT: async=true reason="id-cursor scan of transmissions (86k+ rows in prod) in 5000-row batches, writer lock released between batches; only pre-#787 rows are written"
+	var hashMigrateMaxID int64
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM transmissions`).Scan(&hashMigrateMaxID); err != nil {
+		log.Printf("[migration/async] %s not scheduled (retried next boot): read max id: %v", contentHashMigrationName, err)
+	} else if err := s.RunAsyncMigration(context.Background(), contentHashMigrationName,
+		func(ctx context.Context, _ *sql.DB) error {
+			_, _, err := s.migrateContentHashes(ctx, contentHashMigrationBatch, hashMigrateMaxID)
+			return err
+		}); err != nil {
+		log.Printf("[migration/async] scheduling %s failed: %v", contentHashMigrationName, err)
+	}
 }
 
 func applySchema(db *sql.DB) error {
@@ -273,7 +337,8 @@ func applySchema(db *sql.DB) error {
 		);
 
 		CREATE TABLE IF NOT EXISTS observers (
-			id TEXT PRIMARY KEY,
+			idx INTEGER PRIMARY KEY AUTOINCREMENT,
+			id TEXT NOT NULL UNIQUE,
 			name TEXT,
 			iata TEXT,
 			last_seen TEXT,
@@ -496,6 +561,15 @@ func applySchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_cnn_target ON client_node_names(target, observed_at);
 		CREATE INDEX IF NOT EXISTS idx_cnn_prune  ON client_node_names(observed_at);
+
+		-- The ingestor's latest stats document (JSON), one row, for the
+		-- server to read: through the database rather than a file so the
+		-- two need no shared filesystem on Postgres (pgschema 0002).
+		CREATE TABLE IF NOT EXISTS ingestor_stats (
+			id         INTEGER PRIMARY KEY CHECK (id = 1),
+			updated_at TEXT NOT NULL,
+			payload    TEXT NOT NULL
+		);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)
@@ -532,23 +606,12 @@ func applySchema(db *sql.DB) error {
 		}
 	}
 
-	// Create/rebuild packets_v view (v3 schema: observer_idx → observers.rowid)
+	// Create/rebuild packets_v view (v3 schema: observer_idx → observers.idx).
 	// The Go server reads this view; without it fresh installs get "no such table: packets_v".
-	db.Exec(`DROP VIEW IF EXISTS packets_v`)
-	_, vErr := db.Exec(`
-		CREATE VIEW packets_v AS
-			SELECT o.id, COALESCE(o.raw_hex, t.raw_hex) AS raw_hex,
-				   datetime(o.timestamp, 'unixepoch') AS timestamp,
-				   obs.id AS observer_id, obs.name AS observer_name,
-				   o.direction, o.snr, o.rssi, o.score, t.hash, t.route_type,
-				   t.payload_type, t.payload_version, o.path_json, t.decoded_json,
-				   t.created_at
-			FROM observations o
-			JOIN transmissions t ON t.id = o.transmission_id
-			LEFT JOIN observers obs ON obs.rowid = o.observer_idx AND (obs.inactive IS NULL OR obs.inactive = 0)
-	`)
-	if vErr != nil {
-		return fmt.Errorf("packets_v view: %w", vErr)
+	// On a legacy observers table (implicit rowid only) the view is rebuilt again
+	// by dbschema.Apply's observers rebuild once idx exists.
+	if err := dbschema.EnsurePacketsView(db); err != nil {
+		return fmt.Errorf("packets_v view: %w", err)
 	}
 
 	// One-time migration: recalculate advert_count to count unique transmissions only
@@ -814,6 +877,10 @@ func applySchema(db *sql.DB) error {
 		// Backfill: set last_packet_at = last_seen only for observers that actually have
 		// observation rows (packet_count alone is unreliable — UpsertObserver sets it to 1
 		// on INSERT even for status-only observers).
+		// Deliberately rowid, not idx: this runs in applySchema, before
+		// dbschema.Apply rebuilds a legacy observers table with an explicit idx.
+		// Within one DB the two are the same value (idx is the INTEGER PRIMARY
+		// KEY, i.e. the rowid alias), and only rowid exists on a legacy table.
 		res, err := db.Exec(`UPDATE observers SET last_packet_at = last_seen
 			WHERE last_packet_at IS NULL
 			AND rowid IN (SELECT DISTINCT observer_idx FROM observations WHERE observer_idx IS NOT NULL)`)
@@ -968,13 +1035,11 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtInsertTransmission, err = s.db.Prepare(`
-		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, scope_name, from_pubkey, last_seen, code1, code2)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
+	s.stmtInsertTransmission, err = s.db.Prepare(insertTransmissionSQL(s.pg))
 	if err != nil {
 		return err
 	}
+	s.insertTransmission = insertTransmissionFunc(s.pg, s.stmtInsertTransmission)
 
 	s.stmtUpdateTxFirstSeen, err = s.db.Prepare("UPDATE transmissions SET first_seen = ? WHERE id = ?")
 	if err != nil {
@@ -1004,12 +1069,12 @@ func (s *Store) prepareStatements() error {
 	s.stmtInsertObservation, err = s.db.Prepare(`
 		INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp, raw_hex, resolved_path)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(transmission_id, observer_idx, COALESCE(path_json, '')) DO UPDATE SET
-			snr           = COALESCE(excluded.snr,           snr),
-			rssi          = COALESCE(excluded.rssi,          rssi),
-			score         = COALESCE(excluded.score,         score),
-			raw_hex       = COALESCE(excluded.raw_hex,       raw_hex),
-			resolved_path = COALESCE(excluded.resolved_path, resolved_path)
+		ON CONFLICT(transmission_id, observer_idx, (COALESCE(path_json, ''))) DO UPDATE SET
+			snr           = COALESCE(excluded.snr,           observations.snr),
+			rssi          = COALESCE(excluded.rssi,          observations.rssi),
+			score         = COALESCE(excluded.score,         observations.score),
+			raw_hex       = COALESCE(excluded.raw_hex,       observations.raw_hex),
+			resolved_path = COALESCE(excluded.resolved_path, observations.resolved_path)
 		RETURNING id
 	`)
 	if err != nil {
@@ -1017,7 +1082,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtInsertObservationRadio, err = s.db.Prepare(`
-		INSERT OR REPLACE INTO observation_radios (observation_id, radio_id) VALUES (?, ?)`)
+		INSERT INTO observation_radios (observation_id, radio_id) VALUES (?, ?)
+		ON CONFLICT (observation_id) DO UPDATE SET radio_id = excluded.radio_id`)
 	if err != nil {
 		return err
 	}
@@ -1026,12 +1092,11 @@ func (s *Store) prepareStatements() error {
 		INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(public_key) DO UPDATE SET
-			name = COALESCE(?, name),
-			role = COALESCE(?, role),
-			lat = COALESCE(?, lat),
-			lon = COALESCE(?, lon),
-			last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?)
-	`)
+			name = COALESCE(?, nodes.name),
+			role = COALESCE(?, nodes.role),
+			lat = COALESCE(?, nodes.lat),
+			lon = COALESCE(?, nodes.lon),
+			last_seen = ` + lastSeenClampSQL(s.pg, "nodes", "last_seen"))
 	if err != nil {
 		return err
 	}
@@ -1045,39 +1110,39 @@ func (s *Store) prepareStatements() error {
 
 	s.stmtUpsertObserver, err = s.db.Prepare(`
 		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, can_relay, can_relay_seen)
-		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), CASE WHEN ? IS NULL THEN 0 ELSE 1 END)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), CASE WHEN CAST(? AS BIGINT) IS NULL THEN 0 ELSE 1 END)
 		ON CONFLICT(id) DO UPDATE SET
-			name = COALESCE(?, name),
-			iata = COALESCE(?, iata),
-			last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
-			packet_count = packet_count + 1,
-			model = COALESCE(?, model),
-			firmware = COALESCE(?, firmware),
-			client_version = COALESCE(?, client_version),
-			radio = COALESCE(?, radio),
-			battery_mv = COALESCE(?, battery_mv),
-			uptime_secs = COALESCE(?, uptime_secs),
-			noise_floor = COALESCE(?, noise_floor),
-			can_relay = COALESCE(?, can_relay),
-			can_relay_seen = CASE WHEN ? IS NULL THEN can_relay_seen ELSE 1 END
+			name = COALESCE(?, observers.name),
+			iata = COALESCE(?, observers.iata),
+			last_seen = ` + lastSeenClampSQL(s.pg, "observers", "last_seen") + `,
+			packet_count = observers.packet_count + 1,
+			model = COALESCE(?, observers.model),
+			firmware = COALESCE(?, observers.firmware),
+			client_version = COALESCE(?, observers.client_version),
+			radio = COALESCE(?, observers.radio),
+			battery_mv = COALESCE(?, observers.battery_mv),
+			uptime_secs = COALESCE(?, observers.uptime_secs),
+			noise_floor = COALESCE(?, observers.noise_floor),
+			can_relay = COALESCE(?, observers.can_relay),
+			can_relay_seen = CASE WHEN CAST(? AS BIGINT) IS NULL THEN observers.can_relay_seen ELSE 1 END
 	`)
 	if err != nil {
 		return err
 	}
 
-	s.stmtGetObserverRowid, err = s.db.Prepare("SELECT rowid FROM observers WHERE id = ?")
+	s.stmtGetObserverIdx, err = s.db.Prepare("SELECT idx FROM observers WHERE id = ?")
 	if err != nil {
 		return err
 	}
 
-	// Args: ingestNow, rxTime, ingestNow, rxTime, rowid
+	// Args: ingestNow, rxTime, ingestNow, rxTime, idx
 	// MIN(existing, ingestNow) clamps any future value already in the DB before
 	// taking MAX with rxTime, so the guard never locks in a past bug's stale future.
 	s.stmtUpdateObserverLastSeen, err = s.db.Prepare(`
 		UPDATE observers SET
-			last_seen      = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
-			last_packet_at = MAX(MIN(COALESCE(last_packet_at, ''), ?), ?)
-		WHERE rowid = ?`)
+			last_seen      = ` + lastSeenClampSQL(s.pg, "observers", "last_seen") + `,
+			last_packet_at = ` + lastSeenClampSQL(s.pg, "observers", "last_packet_at") + `
+		WHERE idx = ?`)
 	if err != nil {
 		return err
 	}
@@ -1093,8 +1158,16 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertMetrics, err = s.db.Prepare(`
-		INSERT OR REPLACE INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv)
+		INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (observer_id, timestamp) DO UPDATE SET
+			noise_floor  = excluded.noise_floor,
+			tx_air_secs  = excluded.tx_air_secs,
+			rx_air_secs  = excluded.rx_air_secs,
+			recv_errors  = excluded.recv_errors,
+			battery_mv   = excluded.battery_mv,
+			packets_sent = excluded.packets_sent,
+			packets_recv = excluded.packets_recv
 	`)
 	if err != nil {
 		return err
@@ -1148,7 +1221,8 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	} else {
 		// New transmission
 		isNew = true
-		result, err := s.stmtInsertTransmission.Exec(
+		var err error
+		txID, err = s.insertTransmission(
 			data.RawHex, hash, rxTime,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
 			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
@@ -1162,7 +1236,6 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			s.Stats.WriteErrors.Add(1)
 			return false, fmt.Errorf("insert transmission: %w", err)
 		}
-		txID, _ = result.LastInsertId()
 		s.Stats.TransmissionsInserted.Add(1)
 	}
 
@@ -1185,15 +1258,15 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	// Resolve observer_idx and update last_seen
 	var observerIdx *int64
 	if data.ObserverID != "" {
-		var rowid int64
-		err := s.stmtGetObserverRowid.QueryRow(data.ObserverID).Scan(&rowid)
+		var idx int64
+		err := s.stmtGetObserverIdx.QueryRow(data.ObserverID).Scan(&idx)
 		if err == nil {
-			observerIdx = &rowid
+			observerIdx = &idx
 			// observer.last_seen and last_packet_at answer "when did the analyzer
 			// last hear from this observer" — both are ingest-time questions.
 			// Per-packet rxTime is stored separately on observations/transmissions
 			// using envelope time (see InsertTransmission above). See #1465.
-			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, ingestNow, ingestNow, ingestNow, rowid)
+			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, ingestNow, ingestNow, ingestNow, idx)
 		}
 	}
 
@@ -1411,7 +1484,7 @@ func (s *Store) UpsertObserverRetained(id, name, iata string, meta *ObserverMeta
 			uptime_secs = COALESCE(?, uptime_secs),
 			noise_floor = COALESCE(?, noise_floor),
 			can_relay = COALESCE(?, can_relay),
-			can_relay_seen = CASE WHEN ? IS NULL THEN can_relay_seen ELSE 1 END
+			can_relay_seen = CASE WHEN CAST(? AS BIGINT) IS NULL THEN can_relay_seen ELSE 1 END
 		WHERE id = ?`,
 		name, normalizedIATA, model, firmware, clientVersion, radio,
 		batteryMv, uptimeSecs, noiseFloor, canRelay, canRelay, id,
@@ -1553,6 +1626,9 @@ func (s *Store) PruneOldMetrics(retentionDays int) (int64, error) {
 // CheckAutoVacuum inspects the current auto_vacuum mode and logs a warning
 // if not INCREMENTAL. Performs opt-in full VACUUM if db.vacuumOnStartup is set (#919).
 func (s *Store) CheckAutoVacuum(cfg *Config) {
+	if s.pg {
+		return // SQLite-only; see postgresMaintenanceNote
+	}
 	var autoVacuum int
 	if err := s.db.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err != nil {
 		log.Printf("[db] warning: could not read auto_vacuum: %v", err)
@@ -1597,6 +1673,9 @@ func (s *Store) CheckAutoVacuum(cfg *Config) {
 // RunIncrementalVacuum returns free pages to the OS (#919).
 // Safe to call on auto_vacuum=NONE databases (noop).
 func (s *Store) RunIncrementalVacuum(pages int) {
+	if s.pg {
+		return // SQLite-only; see postgresMaintenanceNote
+	}
 	// Tagged for /api/perf writer-lock visibility (#1340).
 	if _, err := s.instrumentedExec("vacuum", fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
 		log.Printf("[vacuum] incremental_vacuum error: %v", err)
@@ -1646,7 +1725,7 @@ func (s *Store) RunIncrementalVacuum(pages int) {
 // Returns whether the statistics were refreshed. This function owns its
 // logging; callers need add nothing.
 func (s *Store) RefreshPlannerStats(analysisLimit int) bool {
-	if analysisLimit < 0 {
+	if analysisLimit < 0 || s.pg {
 		return false
 	}
 	first := !s.hasPlannerStats()
@@ -1700,7 +1779,7 @@ func (s *Store) RefreshPlannerStats(analysisLimit int) bool {
 // already sized for. It also records the refresh time, so the daily refresh
 // then waits 24 hours (#2146).
 func (s *Store) EnsurePlannerStats(analysisLimit int) bool {
-	if s.hasPlannerStats() {
+	if s.pg || s.hasPlannerStats() {
 		return false
 	}
 	log.Printf("[analyze] this database has no planner statistics; building them now. " +
@@ -1798,6 +1877,9 @@ func (s *Store) hasPlannerStats() bool {
 // TRUNCATE resets the WAL file to zero bytes when all frames are checkpointed;
 // if active readers hold frames, it checkpoints what it can and leaves the rest.
 func (s *Store) Checkpoint() int {
+	if s.pg {
+		return 0 // no WAL file to truncate; see postgresMaintenanceNote
+	}
 	var busy, walFrames, checkpointed int
 	if err := s.db.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &walFrames, &checkpointed); err != nil {
 		log.Printf("[db] WAL checkpoint error: %v", err)
@@ -1815,6 +1897,9 @@ func (s *Store) Checkpoint() int {
 // because new observations get path_json at write time; this only touches NULL rows.
 // Idempotent: skips if migration already recorded.
 func (s *Store) BackfillPathJSONAsync() {
+	if s.pg {
+		return // legacy SQLite rows only; Postgres starts at the end state
+	}
 	s.backfillWg.Add(1)
 	go func() {
 		defer s.backfillWg.Done()
@@ -2186,7 +2271,7 @@ func (s *Store) MoveStaleNodes(nodeDays int) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(`INSERT OR REPLACE INTO inactive_nodes SELECT * FROM nodes WHERE last_seen < ?`, cutoff)
+	_, err = tx.Exec(moveStaleNodesSQL, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("insert inactive: %w", err)
 	}
@@ -2233,7 +2318,7 @@ func (s *Store) RemoveStaleObservers(observerDays int) (int64, error) {
 // the second stage of observer retention: the soft-delete hides the observer,
 // this reclaims the row after its packets have aged out via packetDays.
 //
-// observations.observer_idx is a bare rowid with no foreign key, so deleting a
+// observations.observer_idx is a bare observers.idx with no foreign key, so deleting a
 // still-referenced observer silently orphans history — packets_v stops resolving
 // the observer and the packets are mis-attributed. The three NOT EXISTS guards
 // are what make the delete safe; they are correctness, not defensive padding.
@@ -2251,7 +2336,7 @@ func (s *Store) PurgeStaleObservers(purgeDays int) (int64, error) {
 		DELETE FROM observers
 		WHERE inactive = 1
 		  AND last_seen < ?
-		  AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.observer_idx = observers.rowid)
+		  AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.observer_idx = observers.idx)
 		  AND NOT EXISTS (SELECT 1 FROM observer_metrics m WHERE m.observer_id = observers.id)
 		  AND NOT EXISTS (SELECT 1 FROM dropped_packets d WHERE d.observer_id = observers.id)`, cutoff)
 	if err != nil {
@@ -2534,9 +2619,9 @@ func (s *Store) RecordNaiveSkew(observerID string, deltaSec int64, now time.Time
 			clock_skew_seconds = excluded.clock_skew_seconds,
 			clock_last_naive_at = excluded.clock_last_naive_at,
 			clock_skew_count_24h = CASE
-				WHEN clock_last_naive_at IS NULL OR clock_last_naive_at < ?
+				WHEN observers.clock_last_naive_at IS NULL OR observers.clock_last_naive_at < ?
 					THEN 1
-				ELSE COALESCE(clock_skew_count_24h, 0) + 1
+				ELSE COALESCE(observers.clock_skew_count_24h, 0) + 1
 			END
 	`, observerID, deltaSec, nowStr, cutoff)
 	return err

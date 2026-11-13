@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -46,10 +47,17 @@ type authService struct {
 	sealbox *users.SecretBox
 	now     func() time.Time
 
+	// janitorJob is the janitor's cluster-wide lock (single-instance jobs);
+	// only the janitor goroutine touches it.
+	janitorJob exclusiveJob
+	// tryExclusive is st.TryExclusive; tests replace it to make two
+	// replicas' jobs overlap (a lock freed by a dropped connection).
+	tryExclusive func(ctx context.Context, name string) (func(), bool, error)
+
 	warnIndistinct sync.Once
 	stop           chan struct{}
 	stopOnce       sync.Once
-	wg             sync.WaitGroup // the janitor and the notifier
+	wg             sync.WaitGroup // the janitor, the notifier and the cache reload
 	auditWG        sync.WaitGroup // in-flight auditAsync writes
 }
 
@@ -64,6 +72,16 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 		companion:   newRateLimiter(60, time.Hour),
 		stop:        make(chan struct{}),
 		now:         time.Now,
+		janitorJob:  exclusiveJob{name: janitorJobName},
+	}
+	a.tryExclusive = st.TryExclusive
+	if st.IsPostgres() {
+		// Several replicas may share the store: count the hits there.
+		a.login.share(st, "login")
+		a.signup.share(st, "signup")
+		a.hook.share(st, "hook")
+		a.settingsPut.share(st, "settings")
+		a.companion.share(st, "companion")
 	}
 	a.refreshApproved()
 	if set.observerLogins.enabled {
@@ -86,6 +104,9 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 // initUserManagement builds s.auth when the feature is on. Call it after
 // NewServer and before RegisterRoutes. measurementDBPath is passed to
 // users.Open as a forbidden path, so users.db can never be the analyzer DB.
+// With userManagement.dsn (or DB_DSN_ACCOUNTS) the accounts are in
+// PostgreSQL instead, after checkAccountsPG has verified that their role can
+// write nothing but its own schema.
 func (s *Server) initUserManagement(measurementDBPath string) error {
 	if !s.cfg.UserManagementEnabled() {
 		if s.cfg.ClientRxRequireLinkedCompanionSet() {
@@ -97,7 +118,7 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 	if err != nil {
 		return err
 	}
-	st, err := users.Open(set.dbPath, measurementDBPath)
+	st, err := openAccountStore(s, set, measurementDBPath)
 	if err != nil {
 		return err
 	}
@@ -117,6 +138,13 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 		defer s.auth.wg.Done()
 		s.auth.janitor(time.Hour)
 	}()
+	if st.IsPostgres() {
+		s.auth.wg.Add(1)
+		go func() {
+			defer s.auth.wg.Done()
+			s.auth.reloadCachesLoop(pgCacheReloadInterval)
+		}()
+	}
 	if set.notify.enabled {
 		s.auth.notify = newNotifier(s.auth, serverNotifySource{s: s}, time.Now)
 		s.auth.wg.Add(1)
@@ -145,9 +173,30 @@ func (s *Server) closeUserManagement() {
 	})
 }
 
+// openAccountStore opens the account store: PostgreSQL when set.dsn is
+// non-empty (after checkAccountsPG), users.db otherwise. These two calls are
+// the server's only writable stores besides the control pool
+// (TestUsersOpenIsTheOnlyServerWritePath).
+func openAccountStore(s *Server, set *userMgmtSettings, measurementDBPath string) (*users.Store, error) {
+	if set.dsn == "" {
+		return users.Open(set.dbPath, measurementDBPath)
+	}
+	if err := s.checkAccountsPG(set.dsn); err != nil {
+		return nil, err
+	}
+	return users.OpenPostgres(set.dsn)
+}
+
 func (a *authService) logStartup() {
+	db := absForLog(a.set.dbPath)
+	if a.st.IsPostgres() {
+		db = "postgres (schema " + users.PostgresSchema + ")" // never the DSN
+	}
 	log.Printf("[users] user management enabled: db=%s, %d config admin(s), webhook=%v",
-		absForLog(a.set.dbPath), len(a.set.adminEmails), a.set.webhookSecret != "")
+		db, len(a.set.adminEmails), a.set.webhookSecret != "")
+	if a.st.IsPostgres() && a.set.backup.enabled {
+		log.Printf("[users] accounts are stored in PostgreSQL: no scheduled users backup is written; back them up with pg_dump (schema %s)", users.PostgresSchema)
+	}
 	admins, err := a.st.List(users.ListFilter{Role: users.RoleAdmin})
 	if err != nil {
 		log.Printf("[users] list admins: %v", err)
@@ -160,12 +209,14 @@ func (a *authService) logStartup() {
 	}
 }
 
+// janitorJobName is the janitor's single-instance lock (users.TryExclusive).
+const janitorJobName = "users-janitor"
+
 func (a *authService) janitor(every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
-		a.prune()
-		a.maybeBackup(time.Now())
+		a.janitorTick()
 		select {
 		case <-a.stop:
 			return
@@ -174,6 +225,24 @@ func (a *authService) janitor(every time.Duration) {
 	}
 }
 
+// janitorTick drops this process's refilled rate-limit buckets, then, on
+// the one replica holding the janitor lock, prunes the store and takes the
+// scheduled backup. Each step is safe to repeat, so a rare overlap (the lock
+// lost with its connection) costs only duplicate deletes.
+func (a *authService) janitorTick() {
+	a.gcLimiters()
+	ctx, cancel := context.WithTimeout(context.Background(), exclusiveLockTimeout)
+	release, ok := a.janitorJob.acquire(ctx, a.tryExclusive)
+	cancel()
+	if !ok {
+		return
+	}
+	defer release()
+	a.prune()
+	a.maybeBackup(time.Now())
+}
+
+// prune deletes expired rows from the store (the janitor, under its lock).
 func (a *authService) prune() {
 	if _, err := a.st.PruneStalePending(48 * time.Hour); err != nil {
 		log.Printf("[users] prune pending: %v", err)
@@ -197,6 +266,31 @@ func (a *authService) prune() {
 	if _, err := a.st.PruneProposals(proposalRetention); err != nil {
 		log.Printf("[users] prune proposals: %v", err)
 	}
+	if a.st.IsPostgres() {
+		ctx, cancel := context.WithTimeout(context.Background(), exclusiveLockTimeout)
+		_, err := a.st.PruneRateLimits(ctx, a.now().Add(-a.longestSharedWindow()))
+		cancel()
+		if err != nil {
+			log.Printf("[users] prune rate limits: %v", err)
+		}
+	}
+}
+
+// longestSharedWindow is the longest window stored in rate_limits: the
+// shared limiters' periods and the notification claims'. A row whose window
+// started longer ago than this before now has ended.
+func (a *authService) longestSharedWindow() time.Duration {
+	w := notifyClaimWindow
+	for _, l := range []*rateLimiter{a.login, a.signup, a.hook, a.settingsPut, a.companion} {
+		if l.per > w {
+			w = l.per
+		}
+	}
+	return w
+}
+
+// gcLimiters drops this process's fully refilled in-memory buckets.
+func (a *authService) gcLimiters() {
 	a.login.gc()
 	a.signup.gc()
 	a.hook.gc()

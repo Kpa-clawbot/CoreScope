@@ -3,10 +3,15 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -251,8 +256,11 @@ func TestOpenDBRefusesMissingDatabase(t *testing.T) {
 
 // TestUsersOpenIsTheOnlyServerWritePath pins the single exception to the
 // read-only invariant (user management, opt-in): cmd/server may open a
-// writable store only via users.Open, exactly once, and always passing the
-// measurement DB path as forbidden.
+// writable account store only via users.Open, exactly once, always passing
+// the measurement DB path as forbidden, or via users.OpenPostgres, exactly
+// once, on the accounts DSN and only after checkAccountsPG (the accounts
+// role can write nothing but its own schema). The control pool is pinned
+// separately (TestPostgresOpenIsOnlyInOpenPostgresDB, controlPGFile).
 func TestUsersOpenIsTheOnlyServerWritePath(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -260,7 +268,11 @@ func TestUsersOpenIsTheOnlyServerWritePath(t *testing.T) {
 	}
 	call := regexp.MustCompile(`users\.Open\(`)
 	want := regexp.MustCompile(`users\.Open\(set\.dbPath, measurementDBPath\)`)
-	calls, good := 0, 0
+	pgCall := regexp.MustCompile(`users\.OpenPostgres\(`)
+	pgWant := regexp.MustCompile(`users\.OpenPostgres\(set\.dsn\)`)
+	// Any other exported opener the users package may grow.
+	other := regexp.MustCompile(`users\.Open[A-Za-z0-9_]*\(`)
+	calls, good, pgCalls, pgGood := 0, 0, 0, 0
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -272,8 +284,556 @@ func TestUsersOpenIsTheOnlyServerWritePath(t *testing.T) {
 		}
 		calls += len(call.FindAll(src, -1))
 		good += len(want.FindAll(src, -1))
+		pgCalls += len(pgCall.FindAll(src, -1))
+		pgGood += len(pgWant.FindAll(src, -1))
+		for _, m := range other.FindAll(src, -1) {
+			if string(m) != "users.Open(" && string(m) != "users.OpenPostgres(" {
+				t.Errorf("%s: %s: an account store opener other than users.Open / users.OpenPostgres", name, m)
+			}
+		}
+		if i := pgWant.FindIndex(src); i != nil {
+			// The role check must come first, in the same function.
+			body := src[:i[0]]
+			fn := strings.LastIndex(string(body), "\nfunc ")
+			if fn < 0 || !strings.Contains(string(body[fn:]), "s.checkAccountsPG(set.dsn)") {
+				t.Errorf("%s: users.OpenPostgres(set.dsn) is not preceded by s.checkAccountsPG(set.dsn) in its function", name)
+			}
+		}
 	}
 	if calls != 1 || good != 1 {
 		t.Fatalf("users.Open calls in cmd/server: %d total, %d with the measurement DB forbidden; want exactly 1 and 1", calls, good)
+	}
+	if pgCalls != 1 || pgGood != 1 {
+		t.Fatalf("users.OpenPostgres calls in cmd/server: %d total, %d on set.dsn; want exactly 1 and 1", pgCalls, pgGood)
+	}
+}
+
+// analyzerReadTxAllowed lists the functions allowed to open a transaction on
+// the analyzer connection, as "file:func". Each is a read snapshot: several
+// SELECTs that must see one consistent state. A transaction is never needed
+// to read one statement, and the server has no business holding one to write.
+// An entry that no longer begins a transaction fails the test, so the list
+// cannot go stale and silently cover a later write.
+var analyzerReadTxAllowed = map[string]bool{
+	"scope_audit.go:ScopeAuditForwardingHeardIn": true,
+}
+
+// analyzerSQLCallArgs maps database/sql methods that take SQL to the index of
+// the SQL argument.
+var analyzerSQLCallArgs = map[string]int{
+	"Exec": 0, "ExecContext": 1,
+	"Query": 0, "QueryContext": 1,
+	"QueryRow": 0, "QueryRowContext": 1,
+	"Prepare": 0, "PrepareContext": 1,
+}
+
+var analyzerWriteSQL = regexp.MustCompile(`(?i)^(INSERT|UPDATE|DELETE|REPLACE)\b`)
+
+// controlPGFile is the one file allowed to open, hold or use the Postgres
+// control pool, the server's only writable connections (control_pg.go). It
+// holds no write SQL either: the control INSERTs live in internal/prunequeue
+// and internal/mbcapqueue, so no SQL write statement appears in cmd/server.
+const controlPGFile = "control_pg.go"
+
+// analyzerWriteViolations parses Go sources and reports, as "file:line: what",
+// every place that
+//
+//   - calls Begin / BeginTx on the analyzer connection (the conn field of *DB,
+//     or a *sql.DB passed around as conn) outside analyzerReadTxAllowed, or
+//   - passes SQL starting with INSERT, UPDATE, DELETE or REPLACE to Exec,
+//     Query*, or Prepare* on any receiver. In cmd/server every such receiver
+//     is the analyzer handle or a Tx/Stmt made from it (users.db is written
+//     only inside internal/users), so the receiver is not narrowed. There
+//     is no exception, controlPGFile included.
+//
+// The SQL is resolved from a string literal, a package-level string constant
+// or variable, or the leading operand of a + concatenation, after leading
+// whitespace and -- comments. Residual gap: SQL built at runtime
+// (fmt.Sprintf, strings.Builder) cannot be resolved; TestServerDBConnIsReadOnly
+// is the structural backstop for that.
+func analyzerWriteViolations(t *testing.T, fset *token.FileSet, files map[string]*ast.File) []string {
+	t.Helper()
+	consts := map[string]string{}
+	var resolve func(e ast.Expr) (string, bool)
+	resolve = func(e ast.Expr) (string, bool) {
+		switch v := e.(type) {
+		case *ast.BasicLit:
+			if v.Kind != token.STRING {
+				return "", false
+			}
+			s, err := strconv.Unquote(v.Value)
+			return s, err == nil
+		case *ast.Ident:
+			s, ok := consts[v.Name]
+			return s, ok
+		case *ast.ParenExpr:
+			return resolve(v.X)
+		case *ast.BinaryExpr:
+			if v.Op == token.ADD {
+				return resolve(v.X)
+			}
+		}
+		return "", false
+	}
+	// Package-level string constants and variables, in two passes so a
+	// value built from another (const a = b + "...") resolves either way.
+	for pass := 0; pass < 2; pass++ {
+		for _, f := range files {
+			for _, d := range f.Decls {
+				gd, ok := d.(*ast.GenDecl)
+				if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs := spec.(*ast.ValueSpec)
+					if len(vs.Values) != len(vs.Names) {
+						continue
+					}
+					for i, n := range vs.Names {
+						if s, ok := resolve(vs.Values[i]); ok {
+							consts[n.Name] = s
+						}
+					}
+				}
+			}
+		}
+	}
+
+	isAnalyzerConn := func(e ast.Expr) bool {
+		switch v := e.(type) {
+		case *ast.Ident:
+			return v.Name == "conn"
+		case *ast.SelectorExpr:
+			return v.Sel.Name == "conn"
+		}
+		return false
+	}
+	leadingSQL := func(s string) string {
+		for {
+			s = strings.TrimSpace(s)
+			if !strings.HasPrefix(s, "--") {
+				return s
+			}
+			nl := strings.IndexByte(s, '\n')
+			if nl < 0 {
+				return ""
+			}
+			s = s[nl+1:]
+		}
+	}
+
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []string
+	seenAllowed := map[string]bool{}
+	for _, name := range names {
+		for _, d := range files[name].Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			fn := name + ":" + fd.Name.Name
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pos := fset.Position(call.Pos())
+				where := fmt.Sprintf("%s:%d", name, pos.Line)
+				method := sel.Sel.Name
+				if (method == "Begin" || method == "BeginTx") && isAnalyzerConn(sel.X) {
+					if analyzerReadTxAllowed[fn] {
+						seenAllowed[fn] = true
+					} else {
+						out = append(out, where+": "+method+" on the analyzer connection in "+fd.Name.Name)
+					}
+				}
+				if idx, ok := analyzerSQLCallArgs[method]; ok && idx < len(call.Args) {
+					if q, ok := resolve(call.Args[idx]); ok {
+						if m := analyzerWriteSQL.FindString(leadingSQL(q)); m != "" {
+							out = append(out, where+": "+strings.ToUpper(m)+" passed to "+method+" in "+fd.Name.Name)
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	return append(out, analyzerAllowlistStale(files, seenAllowed)...)
+}
+
+// analyzerAllowlistStale reports allowlisted read snapshots that no longer
+// open a transaction, but only for files present in this parse (the self-test
+// below parses fixtures, not the package).
+func analyzerAllowlistStale(files map[string]*ast.File, seen map[string]bool) []string {
+	var out []string
+	for fn := range analyzerReadTxAllowed {
+		file := fn[:strings.IndexByte(fn, ':')]
+		if _, ok := files[file]; ok && !seen[fn] {
+			out = append(out, fn+": allowlisted read transaction no longer found; remove it from analyzerReadTxAllowed")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func parseServerSources(t *testing.T) (*token.FileSet, map[string]*ast.File) {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	files := map[string]*ast.File{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		files[name] = f
+	}
+	return fset, files
+}
+
+// TestServerSourceHasNoAnalyzerWrites enforces #1856: cmd/server never opens a
+// write transaction on, or sends write SQL to, the analyzer DB. The server's
+// content-hash migration did both on the mode=ro handle (#1283), so it could
+// never commit; it now lives in cmd/ingestor/hash_migrate.go.
+func TestServerSourceHasNoAnalyzerWrites(t *testing.T) {
+	fset, files := parseServerSources(t)
+	if v := analyzerWriteViolations(t, fset, files); len(v) > 0 {
+		t.Errorf("cmd/server writes the analyzer DB (#1856); writes belong in cmd/ingestor:\n  %s",
+			strings.Join(v, "\n  "))
+	}
+}
+
+// TestAnalyzerWriteViolationsDetects proves the checker bites on the shapes
+// the removed server hash migration used, and leaves reads alone.
+func TestAnalyzerWriteViolationsDetects(t *testing.T) {
+	const src = `package main
+
+const updateHash = "UPDATE transmissions SET hash = ? WHERE id = ?"
+const pruneSQL = ` + "`" + `
+	-- leading comment
+	DELETE FROM observations WHERE id IN (` + "`" + ` + sel + ` + "`" + `)` + "`" + `
+
+func migrate(store *PacketStore) {
+	dbTx, _ := store.db.conn.Begin()
+	stmt, _ := dbTx.Prepare(updateHash)
+	dbTx.Exec("UPDATE observations SET transmission_id = ? WHERE transmission_id = ?", 1, 2)
+	dbTx.ExecContext(ctx, "delete from transmissions where id = ?", 1)
+	dbTx.Exec(pruneSQL)
+	conn.BeginTx(ctx, nil)
+	_ = stmt
+}
+
+func read(db *DB) {
+	db.conn.Query("SELECT hash FROM transmissions WHERE note = 'UPDATE'")
+	db.conn.QueryRow(` + "`" + `
+		SELECT status FROM _async_migrations` + "`" + `)
+	ws.conn.Close()
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "fixture.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctlSrc := `package main
+
+func enqueue(ctl *sql.DB) {
+	ctl.Exec("INSERT INTO corescope_control.prune_requests (id) VALUES (?)", 1)
+	ctl.Exec("DELETE FROM corescope_control.prune_requests WHERE id = ?", 1)
+}
+`
+	cf, err := parser.ParseFile(fset, controlPGFile, ctlSrc, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := analyzerWriteViolations(t, fset, map[string]*ast.File{"fixture.go": f, controlPGFile: cf})
+	want := []string{
+		"fixture.go:9: Begin on the analyzer connection in migrate",
+		"fixture.go:10: UPDATE passed to Prepare in migrate",
+		"fixture.go:11: UPDATE passed to Exec in migrate",
+		"fixture.go:12: DELETE passed to ExecContext in migrate",
+		"fixture.go:13: DELETE passed to Exec in migrate",
+		"fixture.go:14: BeginTx on the analyzer connection in migrate",
+	}
+	// control_pg.go gets no INSERT exemption; sorted before fixture.go.
+	want = append([]string{
+		controlPGFile + ":4: INSERT passed to Exec in enqueue",
+		controlPGFile + ":5: DELETE passed to Exec in enqueue",
+	}, want...)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("violations:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+// TestPostgresOpenIsOnlyInOpenPostgresDB pins the Postgres side of the
+// read-only invariant: the analyzer database is opened on Postgres in exactly
+// two places. OpenPostgresDBWithStatementTimeout opens the main pool from the
+// DSN pgServerDSN produced, so every connection starts with
+// default_transaction_read_only=on and the role's write privileges are
+// checked before the handle is used. openPostgresControl (control_pg.go)
+// opens the control pool, with read-only transactions forced off, only after
+// those checks, as the same role.
+func TestPostgresOpenIsOnlyInOpenPostgresDB(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	driverUse := regexp.MustCompile(`\bPostgresDriverName\b`)
+	want := map[string]*regexp.Regexp{
+		"db_postgres.go": regexp.MustCompile(`sql\.Open\(dbx\.PostgresDriverName, roDSN\)`),
+		controlPGFile:    regexp.MustCompile(`sql\.Open\(dbx\.PostgresDriverName, ctlDSN\)`),
+	}
+	derive := map[string]string{
+		"db_postgres.go": "roDSN, secrets, err := pgServerDSN(dsn, params)",
+		controlPGFile:    "ctlDSN, secrets, err := pgServerDSN(dsn, ctlParams)",
+	}
+	var uses []string
+	good := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range driverUse.FindAll(src, -1) {
+			uses = append(uses, name)
+		}
+		if re, ok := want[name]; ok {
+			good += len(re.FindAll(src, -1))
+			if !strings.Contains(string(src), derive[name]) {
+				t.Errorf("%s no longer derives its DSN with %q", name, derive[name])
+			}
+		}
+	}
+	sort.Strings(uses)
+	if strings.Join(uses, ",") != controlPGFile+",db_postgres.go" || good != 2 {
+		t.Fatalf("Postgres driver uses in cmd/server: %v (expected opens: %d); want exactly sql.Open(dbx.PostgresDriverName, roDSN) in db_postgres.go and sql.Open(dbx.PostgresDriverName, ctlDSN) in %s", uses, good, controlPGFile)
+	}
+}
+
+// readWriteSessionPattern matches source that turns read-only transactions
+// off: the forced parameter set to off (as a pgParam, in SQL or a DSN), or
+// an explicit read-write transaction.
+// "Off" is any spelling Postgres accepts as boolean false (off, no, false, f,
+// 0, case-insensitive, optionally quoted) after the parameter name or the
+// pgReadOnlyParam constant.
+var readWriteSessionPattern = regexp.MustCompile(`(?i)(pgReadOnlyParam|transaction_read_only)\W{1,6}(off|no|false|f|0)\b|\bREAD\s+WRITE\b|transaction_read_only\s*(=|TO)\s*'?(off|no|false|f|0)\b`)
+
+// controlPoolFuncs are the only functions in controlPGFile that may name the
+// control pool field (DB.ctl): the one that opens and stores it, and the one
+// that closes it. Everything else gets the queues, never the pool.
+var controlPoolFuncs = map[string]bool{"openPostgresControl": true, "closeControl": true}
+
+// controlWriteLiteral matches a string literal shaped like a SQL write
+// statement. controlPGFile holds none: the control INSERTs are in
+// internal/prunequeue and internal/mbcapqueue.
+var controlWriteLiteral = regexp.MustCompile(`(?i)\b(INSERT\s+INTO|UPDATE\s+[\w."]+\s+SET|DELETE\s+FROM|TRUNCATE\b|REPLACE\s+INTO|MERGE\s+INTO|COPY\s+[\w."]+\s+FROM)`)
+
+// controlPoolViolations reports, as "file:line: what", every use of the
+// control pool outside its place: any .ctl selector or ctl key in a file other
+// than controlPGFile, and in controlPGFile any ctl identifier outside
+// controlPoolFuncs, so an accessor method (func (d *DB) pool() *sql.DB {
+// return d.ctl }) cannot route around the pin. It also reports write-shaped
+// string literals in controlPGFile.
+func controlPoolViolations(fset *token.FileSet, files map[string]*ast.File) []string {
+	var bad []string
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	flag := func(name string, pos token.Pos, what string) {
+		bad = append(bad, fmt.Sprintf("%s:%d: %s", name, fset.Position(pos).Line, what))
+	}
+	for _, name := range names {
+		f := files[name]
+		if name != controlPGFile {
+			ast.Inspect(f, func(n ast.Node) bool {
+				var id *ast.Ident
+				switch v := n.(type) {
+				case *ast.SelectorExpr:
+					id = v.Sel
+				case *ast.KeyValueExpr:
+					id, _ = v.Key.(*ast.Ident)
+				}
+				if id != nil && id.Name == "ctl" {
+					flag(name, id.Pos(), "uses the control pool (.ctl)")
+				}
+				return true
+			})
+			continue
+		}
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && controlPoolFuncs[fd.Name.Name] {
+				continue
+			}
+			ast.Inspect(d, func(n ast.Node) bool {
+				switch v := n.(type) {
+				case *ast.Ident:
+					if v.Name == "ctl" {
+						flag(name, v.Pos(), "uses the control pool (ctl) outside openPostgresControl and closeControl")
+					}
+				case *ast.BasicLit:
+					if v.Kind == token.STRING && controlWriteLiteral.MatchString(v.Value) {
+						flag(name, v.Pos(), "SQL write statement in a string literal; control writes belong in internal/prunequeue and internal/mbcapqueue")
+					}
+				}
+				return true
+			})
+		}
+		// Write-shaped literals inside the allowed functions too.
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); !ok || !controlPoolFuncs[fd.Name.Name] {
+				continue
+			}
+			ast.Inspect(d, func(n ast.Node) bool {
+				if v, ok := n.(*ast.BasicLit); ok && v.Kind == token.STRING && controlWriteLiteral.MatchString(v.Value) {
+					flag(name, v.Pos(), "SQL write statement in a string literal; control writes belong in internal/prunequeue and internal/mbcapqueue")
+				}
+				return true
+			})
+		}
+	}
+	return bad
+}
+
+// TestControlPoolConfinedToControlPG pins the one writable Postgres pool to
+// control_pg.go: read-only transactions are turned off there and nowhere else
+// (pgControlParams), and the pool (DB.ctl) is opened, stored and closed only
+// inside openPostgresControl and closeControl. Every other file reaches the
+// control tables through pruneQueue / mbcapStore, which hand out the queues,
+// never the pool. control_pg.go itself holds no SQL write statement.
+func TestControlPoolConfinedToControlPG(t *testing.T) {
+	fset, files := parseServerSources(t)
+	var bad []string
+	ctlFound := 0
+	for name := range files {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if locs := readWriteSessionPattern.FindAllIndex(src, -1); len(locs) > 0 {
+			if name == controlPGFile {
+				ctlFound += len(locs)
+			} else {
+				for _, loc := range locs {
+					bad = append(bad, fmt.Sprintf("%s:%d: turns read-only transactions off", name, 1+strings.Count(string(src[:loc[0]]), "\n")))
+				}
+			}
+		}
+	}
+	bad = append(bad, controlPoolViolations(fset, files)...)
+	sort.Strings(bad)
+	if len(bad) > 0 {
+		t.Errorf("the control pool must stay in %s:\n  %s", controlPGFile, strings.Join(bad, "\n  "))
+	}
+	if ctlFound != 1 {
+		t.Errorf("%s turns read-only transactions off %d times; want exactly once (pgControlParams)", controlPGFile, ctlFound)
+	}
+}
+
+// TestControlPoolViolationsDetects proves the pin bites on an accessor in
+// control_pg.go itself, on one in another file, and on write SQL in
+// control_pg.go, and leaves the opener and the close path alone.
+func TestControlPoolViolationsDetects(t *testing.T) {
+	fset := token.NewFileSet()
+	mk := func(name, src string) *ast.File {
+		f, err := parser.ParseFile(fset, name, src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	ok := mk(controlPGFile, `package main
+
+func (d *DB) openPostgresControl() error {
+	ctl, _ := sql.Open("x", "y")
+	d.ctl = ctl
+	return nil
+}
+
+func (d *DB) closeControl() {
+	if d.ctl != nil {
+		d.ctl.Close()
+	}
+}
+`)
+	if v := controlPoolViolations(fset, map[string]*ast.File{controlPGFile: ok}); len(v) != 0 {
+		t.Errorf("clean control_pg.go flagged: %v", v)
+	}
+	bad := mk(controlPGFile, `package main
+
+func (d *DB) openPostgresControl() error { d.ctl = nil; return nil }
+
+func (d *DB) controlPool() *sql.DB { return d.ctl }
+
+func enqueue(q *sql.DB) { q.Exec("insert into corescope_control.prune_requests (id) values (1)") }
+`)
+	other := mk("routes.go", `package main
+
+func (s *Server) pool() *sql.DB { return s.db.ctl }
+`)
+	got := strings.Join(controlPoolViolations(fset, map[string]*ast.File{controlPGFile: bad, "routes.go": other}), "\n")
+	for _, want := range []string{
+		controlPGFile + ":5: uses the control pool (ctl) outside",
+		controlPGFile + ":7: SQL write statement",
+		"routes.go:3: uses the control pool (.ctl)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("violations lack %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestReadWriteSessionPattern proves the pattern bites on the spellings that
+// turn read-only transactions off, and not on the main pool's "on".
+func TestReadWriteSessionPattern(t *testing.T) {
+	for _, s := range []string{
+		`pgParam{pgReadOnlyParam, "off"}`,
+		`SET default_transaction_read_only = off`,
+		`dsn + " default_transaction_read_only=off"`,
+		`BEGIN TRANSACTION READ WRITE`,
+		`SET transaction_read_only TO false`,
+		`dsn + " default_transaction_read_only=no"`,
+		`dsn + " default_transaction_read_only='f'"`,
+		`dsn + " default_transaction_read_only=false"`,
+		`dsn + " default_transaction_read_only=0"`,
+		`dsn + " DEFAULT_TRANSACTION_READ_ONLY=OFF"`,
+		`SET default_transaction_read_only TO 'False'`,
+		`pgParam{pgReadOnlyParam, "No"}`,
+		`pgParam{pgReadOnlyParam, "0"}`,
+	} {
+		if !readWriteSessionPattern.MatchString(s) {
+			t.Errorf("not matched: %s", s)
+		}
+	}
+	for _, s := range []string{
+		`{pgReadOnlyParam, "on"}`,
+		`default_transaction_read_only=on`,
+		`default_transaction_read_only=true`,
+		`default_transaction_read_only='1'`,
+		`pgReadOnlyParam    = "default_transaction_read_only"`,
+	} {
+		if readWriteSessionPattern.MatchString(s) {
+			t.Errorf("matched: %s", s)
+		}
 	}
 }

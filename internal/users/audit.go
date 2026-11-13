@@ -64,8 +64,9 @@ func (s *Store) AuditAllFor(userID int64) ([]AuditEntry, error) {
 }
 
 func (s *Store) auditFor(userID int64, limit int) ([]AuditEntry, error) {
+	lim, largs := limitClause(limit)
 	rows, err := s.db.Query(`SELECT id, at, actor_user_id, action, target_user_id, detail FROM audit_log
-		WHERE target_user_id = ? OR actor_user_id = ? ORDER BY at DESC, id DESC LIMIT ?`, userID, userID, limit)
+		WHERE target_user_id = ? OR actor_user_id = ? ORDER BY at DESC, id DESC`+lim, append([]any{userID, userID}, largs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -80,8 +81,11 @@ func (s *Store) AuditList(f AuditFilter) ([]AuditEntry, error) {
 		var ors []string
 		for _, a := range f.Actions {
 			if group, ok := strings.CutSuffix(a, ".*"); ok {
-				ors = append(ors, `action = ? OR action LIKE ? ESCAPE '\'`)
-				args = append(args, group, escapeLike(group)+".%")
+				// The group prefix matches ASCII case-insensitively, as
+				// SQLite's LIKE does; written portably (Postgres' LIKE is
+				// case-sensitive, its lower() under COLLATE "C" ASCII-only).
+				ors = append(ors, `action = ? OR LOWER(action) LIKE ? ESCAPE '\'`)
+				args = append(args, group, asciiLower(escapeLike(group))+".%")
 			} else {
 				ors = append(ors, `action = ?`)
 				args = append(args, a)
@@ -138,6 +142,17 @@ func (s *Store) PruneAudit(actions []string, maxAge time.Duration) (int64, error
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// asciiLower folds A-Z only, like SQLite's lower() and LIKE.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
 func scanAudit(rows *sql.Rows) ([]AuditEntry, error) {

@@ -57,13 +57,23 @@ docker compose up -d
 ## Data
 
 All persistent data lives in `/app/data`:
-- `meshcore.db` — SQLite database (packets, nodes)
+- `meshcore.db` — SQLite database (packets, nodes). Used by default; with PostgreSQL
+  ([docs/postgresql.md](docs/postgresql.md)) it holds no data; the directory is still used for
+  `config.json` and, when accounts are enabled, `users.db`.
 - `config.json` — custom config (optional)
 - `theme.json` — custom theme (optional)
 
-**Backup:** Follow [Backup & Restore](docs/deployment.md#backup--restore) to
+**PostgreSQL:** the connection strings (the writer's, given to the separate `ingestor` container, and
+`DB_DSN_SERVER`, the reader's) contain passwords. Keep them in a `.env` or secret store with mode `600`, never in git, in
+`config.json` (which must not contain a `dsn` in the image), or in `/app/data`
+(`/app/data/.env` must be mode `600`). On PostgreSQL the image runs the server as a separate
+user and keeps what it writes (`users.db`, `backups/`) in `/app/data/shared`; see
+[docs/postgresql.md](docs/postgresql.md#in-the-docker-image).
+
+**Backup (SQLite):** Follow [Backup & Restore](docs/deployment.md#backup--restore) to
 download and verify a consistent snapshot. Do not copy `meshcore.db` while the
-server or ingestor is running; committed data may still be in its WAL file.
+server or ingestor is running; committed data may still be in its WAL file. For PostgreSQL,
+use `pg_dump`; see [docs/postgresql.md](docs/postgresql.md#backups-and-restore).
 
 ## TLS
 

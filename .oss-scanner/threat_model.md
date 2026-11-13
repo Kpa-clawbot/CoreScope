@@ -1,7 +1,7 @@
 # CoreScope threat model
 
 CoreScope collects MeshCore LoRa mesh packets from MQTT, decodes them, stores
-them in SQLite and serves a public web analyzer (REST API, WebSocket feed and a
+them in SQLite (default) or PostgreSQL and serves a public web analyzer (REST API, WebSocket feed and a
 vanilla-JS frontend). Operators run it as a public website for their regional
 mesh. Optional user accounts (`userManagement.enabled`) add registration,
 login, admin roles, companion-device linking and email notifications.
@@ -32,7 +32,7 @@ Treat all of these as attacker-controlled:
   linking challenges, channel proposals, notification unsubscribe tokens, and
   the mail provider webhooks (`internal/mailer`).
 
-Trusted: the operator, `config.json`, the host, the SQLite files on disk, and
+Trusted: the operator, `config.json` and the database DSN, the host, the SQLite files on disk, the PostgreSQL server and its roles, and
 the MQTT broker configuration itself. `cmd/decrypt` and `cmd/migrate` are
 operator CLI tools that read local files.
 
@@ -52,7 +52,14 @@ operator CLI tools that read local files.
 - Read/write separation: `cmd/server` opens the analyzer database read-only.
   Only `cmd/ingestor` writes it; `users.db` is the one database the server
   writes (see `AGENTS.md`). A path that lets HTTP input write to the analyzer
-  database is a finding.
+  database is a finding. On PostgreSQL the same rule is enforced by role: the
+  server connects with a read-only role, forces
+  `default_transaction_read_only=on` on every connection and refuses to start
+  if its role holds INSERT, UPDATE, DELETE or TRUNCATE on any table in its
+  schema. Only the ingestor holds the writer role, and in the Docker image the
+  server process never receives the writer DSN (`DB_DSN_INGESTOR`). `users.db`
+  stays SQLite on both backends. A way for the server to obtain write
+  privileges, or for a DSN to be logged or exposed, is a finding.
 - Unauthenticated endpoints must not expose secrets: `config.json` values such
   as `apiKey`, channel keys, mail credentials, or other users' email addresses.
 
@@ -66,7 +73,7 @@ make test            # go test ./... in every module (scripts/allmod.sh)
 sh test-all.sh       # frontend unit tests (node, no browser)
 ```
 
-Go tests use temporary SQLite databases, `httptest` servers and local fake MQTT
+Go tests use temporary SQLite databases (the PostgreSQL tests skip unless `CORESCOPE_TEST_PG_DSN` is set), `httptest` servers and local fake MQTT
 listeners; none need the internet. `cmd/server` has handler tests for most
 routes, which are the easiest place for a reproducer. Decoder tests live next
 to each `decoder.go`. Browser E2E tests in `tests/e2e/` need Playwright

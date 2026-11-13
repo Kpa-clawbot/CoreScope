@@ -229,8 +229,8 @@ func TestLinkedCompanionSetIsReadOnly(t *testing.T) {
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "readonly") {
 		t.Fatalf("write through the ingestor's users.db handle: err = %v; want a read-only refusal", err)
 	}
-	if !strings.Contains(usersDBReadOnlyDSN(path), "mode=ro") {
-		t.Fatal("DSN without mode=ro")
+	if dsn, err := usersDBReadOnlyDSN(path); err != nil || !strings.Contains(dsn, "mode=ro") {
+		t.Fatalf("DSN %q (err %v) without mode=ro", dsn, err)
 	}
 }
 

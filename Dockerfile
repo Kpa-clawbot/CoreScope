@@ -18,6 +18,13 @@ FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 ARG APP_VERSION=unknown
 ARG GIT_COMMIT=unknown
+# musl gives every non-main thread a 128 KiB stack (glibc: 8 MiB), taken from
+# the ELF PT_GNU_STACK size. cgo calls into SQLite run on the calling thread's
+# stack, and a deep query (multiSelect recursing ~850 B per UNION ALL term)
+# overflows 128 KiB and SIGSEGVs the server. Raising the linker's stack size
+# makes musl threads default to 8 MiB (reserved address space, not resident).
+# Go rejects this flag in #cgo LDFLAGS, so it must go in -extldflags.
+ARG STACK_LDFLAG="-Wl,-z,stack-size=8388608"
 ARG BUILD_TIME=unknown
 # Provided by buildx for multi-arch builds
 ARG TARGETOS
@@ -71,6 +78,7 @@ COPY internal/lora/ ../../internal/lora/
 COPY internal/users/ ../../internal/users/
 COPY internal/channel/ ../../internal/channel/
 COPY internal/mailer/ ../../internal/mailer/
+COPY internal/dbx/ ../../internal/dbx/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \
@@ -81,7 +89,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/tmp/zig-cache \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
-    -ldflags "-s -w -extldflags '-static -Wl,-s' -X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}' -X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" \
     -o /corescope-server .
 
 # Build ingestor
@@ -96,6 +104,7 @@ COPY internal/dbschema/ ../../internal/dbschema/
 COPY internal/prunequeue/ ../../internal/prunequeue/
 COPY internal/perfio/ ../../internal/perfio/
 COPY internal/mbcapqueue/ ../../internal/mbcapqueue/
+COPY internal/dbx/ ../../internal/dbx/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \
@@ -106,13 +115,15 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/tmp/zig-cache \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
-    -ldflags "-s -w -extldflags '-static -Wl,-s'" \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}'" \
     -o /corescope-ingestor .
 
 # Build decrypt CLI
 WORKDIR /build/decrypt
 COPY cmd/decrypt/go.mod cmd/decrypt/go.sum ./
 COPY internal/channel/ ../../internal/channel/
+COPY internal/dbschema/ ../../internal/dbschema/
+COPY internal/dbx/ ../../internal/dbx/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \
@@ -123,8 +134,27 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/tmp/zig-cache \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
-    -ldflags "-s -w -extldflags '-static -Wl,-s' -X main.version=${APP_VERSION}" \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}' -X main.version=${APP_VERSION}" \
     -o /corescope-decrypt .
+
+# Build migrate CLI (schema upgrade, and copy/verify between SQLite and Postgres)
+WORKDIR /build/migrate
+COPY cmd/migrate/go.mod cmd/migrate/go.sum ./
+COPY internal/dbschema/ ../../internal/dbschema/
+COPY internal/dbx/ ../../internal/dbx/
+COPY internal/users/ ../../internal/users/
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/tmp/zig-cache \
+    go mod download
+COPY cmd/migrate/ ./
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/tmp/zig-cache \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -tags ${GO_BUILD_TAGS} \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}'" \
+    -o /corescope-migrate .
 
 # Runtime image
 FROM alpine:3.24
@@ -151,7 +181,7 @@ ENV CORESCOPE_SERVICE_USER=root
 WORKDIR /app
 
 # Go binaries (statically linked; they do not use this image's libc)
-COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /app/
+COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /corescope-migrate /app/
 
 # Frontend assets + config
 COPY public/ ./public/
@@ -166,6 +196,12 @@ COPY docker/supervisord-go.conf /etc/supervisor/conf.d/supervisord.conf
 COPY docker/supervisord-go-no-mosquitto.conf /etc/supervisor/conf.d/supervisord-no-mosquitto.conf
 COPY docker/supervisord-go-no-caddy.conf /etc/supervisor/conf.d/supervisord-no-caddy.conf
 COPY docker/supervisord-go-no-mosquitto-no-caddy.conf /etc/supervisor/conf.d/supervisord-no-mosquitto-no-caddy.conf
+# DISABLE_INGESTOR=true: the same four without the ingestor (it runs in its
+# own container on PostgreSQL; see docker-compose.postgres.yml).
+COPY docker/supervisord-go-no-ingestor.conf /etc/supervisor/conf.d/supervisord-no-ingestor.conf
+COPY docker/supervisord-go-no-ingestor-no-mosquitto.conf /etc/supervisor/conf.d/supervisord-no-ingestor-no-mosquitto.conf
+COPY docker/supervisord-go-no-ingestor-no-caddy.conf /etc/supervisor/conf.d/supervisord-no-ingestor-no-caddy.conf
+COPY docker/supervisord-go-no-ingestor-no-mosquitto-no-caddy.conf /etc/supervisor/conf.d/supervisord-no-ingestor-no-mosquitto-no-caddy.conf
 COPY docker/mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY docker/Caddyfile /etc/caddy/Caddyfile
 
@@ -177,6 +213,8 @@ RUN mkdir -p /app/data /var/lib/mosquitto /data/caddy && \
 COPY docker/entrypoint-go.sh /entrypoint.sh
 # Sourced by the entrypoint, so deliberately not executable.
 COPY docker/select-service-user.sh /select-service-user.sh
+# supervisord's command for the server (environment whitelist on PostgreSQL).
+COPY docker/server-exec.sh /server-exec.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 80 443 1883

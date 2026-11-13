@@ -10,6 +10,7 @@ import (
 	"maps"
 	"math"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
@@ -963,7 +964,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 				Sensors:    counts["sensors"],
 			},
 			SignatureDrops:        s.db.GetSignatureDropCount(),
-			HashMigrationComplete: s.store != nil && s.store.hashMigrationComplete.Load(),
+			HashMigrationComplete: s.db.hashMigrationComplete(),
 
 			TrackedMB:     mem.StoreDataMB, // deprecated alias
 			StoreDataMB:   mem.StoreDataMB,
@@ -1076,10 +1077,14 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		breakdownNote = memBreakdownNote
 	}
 
-	// SQLite stats
+	// Database stats (reported under "sqlite" for compatibility; engine says which)
 	var sqliteStats *SqliteStats
-	if s.db != nil {
+	if s.db.isPostgres() {
+		ss := s.db.postgresDBStats()
+		sqliteStats = &ss
+	} else if s.db != nil {
 		ss := s.db.GetDBSizeStatsTyped()
+		ss.Engine = "sqlite"
 		sqliteStats = &ss
 	}
 
@@ -4060,15 +4065,21 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 // configured.
 //
 // Since #1283/#1289 the server opens SQLite read-only, so the actual DELETE is
-// performed by the ingestor. The server writes a request marker file (see
-// internal/prunequeue); the ingestor's maintenance loop consumes it and writes a
-// result marker. The confirm response is 202 Accepted with a request id;
+// performed by the ingestor. The server enqueues a request (internal/prunequeue:
+// a marker file on SQLite, a control-table row on Postgres); the ingestor's
+// maintenance loop consumes it and stores a result. On Postgres without the
+// control tables (control_pg.go) both prune endpoints answer 503. The confirm response is 202 Accepted with a request id;
 // clients poll GET /api/admin/prune-geo-filter/status?id=<id> for completion.
 //
 // Confirm requires the pubkeys from the preview in the request body to prevent
 // TOCTOU races: only nodes that were shown in preview AND are still outside the
 // filter are enqueued.
 func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
+	q := s.db.pruneQueue()
+	if q == nil {
+		writeError(w, http.StatusServiceUnavailable, msgControlUnavailable)
+		return
+	}
 	gf := s.getGeoFilter()
 	if gf == nil || len(gf.Polygon) < 3 {
 		writeError(w, http.StatusBadRequest, "no geo_filter configured")
@@ -4110,8 +4121,10 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 
 	// Confirmed enqueue — require pubkeys from the preview to prevent TOCTOU:
 	// only nodes that were shown in preview AND are still outside the filter
-	// at this exact moment are scheduled for deletion. (The ingestor honors
-	// the list verbatim; it does NOT re-evaluate geo_filter membership.)
+	// at this exact moment are scheduled for deletion. The ingestor does not
+	// trust the list: it re-checks every pubkey against its own geo_filter and
+	// deletes only nodes it also considers outside it (with a position),
+	// skipping the rest (reported as skipped / skipReasons in the result).
 	var body struct {
 		Pubkeys []string `json:"pubkeys"`
 	}
@@ -4143,13 +4156,13 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 		Reason:      "geo-prune",
 		Pubkeys:     pubkeys,
 	}
-	if err := prunequeue.WriteRequest(s.db.path, req); err != nil {
+	if err := q.WriteRequest(req); err != nil {
 		log.Printf("[geo-prune] failed to enqueue request %s: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue prune request")
 		return
 	}
-	log.Printf("[geo-prune] enqueued request %s for %d node(s) (queue dir=%s)",
-		id, len(pubkeys), prunequeue.QueueDir(s.db.path))
+	log.Printf("[geo-prune] enqueued request %s for %d node(s) (queue=%s)",
+		id, len(pubkeys), q.Location())
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -4169,13 +4182,18 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 // {"status":"done","deleted":N,"completedAt":...} (or "error" if the ingestor
 // failed). Returns 404 when neither marker nor result is found.
 func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Request) {
+	q := s.db.pruneQueue()
+	if q == nil {
+		writeError(w, http.StatusServiceUnavailable, msgControlUnavailable)
+		return
+	}
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing id")
 		return
 	}
 
-	res, err := prunequeue.ReadResult(s.db.path, id)
+	res, err := q.ReadResult(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid prune request id") {
 			writeError(w, http.StatusBadRequest, "invalid id")
@@ -4189,18 +4207,24 @@ func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Reque
 		if res.Error != "" {
 			status = "error"
 		}
-		writeJSON(w, map[string]interface{}{
+		out := map[string]interface{}{
 			"requestId":   res.ID,
 			"status":      status,
 			"deleted":     res.Deleted,
 			"requestedAt": res.RequestedAt,
 			"completedAt": res.CompletedAt,
 			"error":       res.Error,
-		})
+		}
+		// Pubkeys the ingestor re-checked and kept (see the confirm handler).
+		if res.Skipped > 0 {
+			out["skipped"] = res.Skipped
+			out["skipReasons"] = res.SkipReasons
+		}
+		writeJSON(w, out)
 		return
 	}
 
-	pending, err := prunequeue.RequestExists(s.db.path, id)
+	pending, err := q.RequestExists(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid prune request id") {
 			writeError(w, http.StatusBadRequest, "invalid id")
@@ -4265,7 +4289,9 @@ func (s *Server) handlePutConfigGeoFilter(w http.ResponseWriter, r *http.Request
 
 	s.saveMu.Lock()
 	if s.configDir != "" {
-		if err := SaveGeoFilter(s.configDir, gf); err != nil {
+		// A non-atomic fallback save backs config.json up into the directory
+		// of the shared file queues, which the server can always write.
+		if err := SaveGeoFilterBackup(s.configDir, filepath.Dir(s.db.queueAnchor()), gf); err != nil {
 			s.saveMu.Unlock()
 			log.Printf("[geofilter] save failed: %v", err)
 			writeError(w, http.StatusInternalServerError, "failed to save config")

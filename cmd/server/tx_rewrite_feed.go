@@ -26,8 +26,7 @@ func (db *DB) txRewriteFeedPresent() bool {
 	if db.txRewriteFeedTable.Load() {
 		return true
 	}
-	var exists int
-	if err := db.conn.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='tx_rewrite_feed'`).Scan(&exists); err != nil {
+	if !db.tablePresent("tx_rewrite_feed") {
 		return false
 	}
 	db.txRewriteFeedTable.Store(true)

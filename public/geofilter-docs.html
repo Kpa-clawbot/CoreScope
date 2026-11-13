@@ -120,7 +120,7 @@
 <p>Prefer the polygon format — it supports irregular shapes and the <code>bufferKm</code> margin.</p>
 
 <h2>Cleaning up historical nodes</h2>
-<p>The ingestor prevents new out-of-bounds nodes from being ingested, but does not retroactively remove nodes stored before the filter was configured. Use the prune script for that:</p>
+<p>The ingestor prevents new out-of-bounds nodes from being ingested, but does not retroactively remove nodes stored before the filter was configured. Use the prune script for that. The script opens the SQLite file directly, so it applies to SQLite installs only. On a PostgreSQL install, run the prune from the Customizer's GeoFilter tab or with <code>POST /api/admin/prune-geo-filter</code>; the server queues the request and the ingestor performs the deletion.</p>
 <pre><code># Dry run — shows what would be deleted without making any changes
 python3 scripts/prune-nodes-outside-geo-filter.py --dry-run
 

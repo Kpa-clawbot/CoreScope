@@ -41,7 +41,7 @@ func TestPacketsExcludeTx(t *testing.T) {
 				t.Helper()
 				if db.isV3 {
 					mustExec(`INSERT INTO observations (transmission_id, observer_idx, direction, path_json, timestamp)
-						VALUES (?, (SELECT rowid FROM observers WHERE id = ?), ?, ?, ?)`, tx, observer, direction, path, seen.Unix())
+						VALUES (?, (SELECT idx FROM observers WHERE id = ?), ?, ?, ?)`, tx, observer, direction, path, seen.Unix())
 				} else {
 					mustExec(`INSERT INTO observations (transmission_id, observer_id, direction, path_json, timestamp)
 						VALUES (?, ?, ?, ?, ?)`, tx, observer, direction, path, seen.Unix())

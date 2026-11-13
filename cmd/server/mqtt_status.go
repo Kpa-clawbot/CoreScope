@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 )
@@ -145,12 +144,12 @@ type ingestorMqttStatusEnvelope struct {
 }
 
 // handleMqttStatus serves GET /api/mqtt/status. Reads the ingestor stats
-// file, masks broker-URL passwords, and returns the per-source status
+// (the file, or on Postgres the ingestor_stats row), masks broker-URL passwords, and returns the per-source status
 // list. Returns an empty list (200 OK) when the stats file is missing
 // or unparseable — the UI panel renders a "no data yet" state.
 func (s *Server) handleMqttStatus(w http.ResponseWriter, r *http.Request) {
 	resp := MqttStatusResponse{Sources: []MqttSourceStatus{}, SampleAt: ""}
-	data, err := os.ReadFile(IngestorStatsPath())
+	data, err := s.db.readIngestorStats()
 	if err != nil {
 		writeJSON(w, resp)
 		return

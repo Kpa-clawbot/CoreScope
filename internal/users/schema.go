@@ -6,8 +6,13 @@ import (
 	"fmt"
 )
 
-// migrations[i] upgrades the schema from version i to i+1. Forward-only:
-// never edit a shipped entry, append a new one.
+// migrations[i] upgrades the SQLite schema from version i to i+1.
+// Forward-only: never edit a shipped entry, append a new one.
+//
+// Every new migration goes to BOTH backends: append the SQLite statements
+// here and the Postgres equivalent to pgMigrations (postgres_schema.go),
+// whose types follow AGENTS.md (TEXT COLLATE "C", BIGINT). The versions
+// stay equal: TestPostgresMigrationsMatchSQLite fails otherwise.
 var migrations = [][]string{
 	{ // v1: sub-project A
 		`CREATE TABLE users (
@@ -169,6 +174,16 @@ var migrations = [][]string{
 	{
 		`ALTER TABLE observer_bindings ADD COLUMN confirmed_at INTEGER`,
 		`UPDATE observer_bindings SET confirmed_at = bound_at WHERE bound_by = 'auto'`,
+	},
+	// v9: rate-limit counters shared by server replicas (RateLimitHit), one
+	// row per key and fixed window (window_start in Unix seconds).
+	{
+		`CREATE TABLE rate_limits (
+			key TEXT NOT NULL,
+			window_start INTEGER NOT NULL,
+			hits INTEGER NOT NULL,
+			PRIMARY KEY (key, window_start)
+		)`,
 	},
 }
 

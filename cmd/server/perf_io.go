@@ -2,7 +2,12 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -71,20 +76,19 @@ var readIngestorStatsParseCalls atomic.Int64
 // resetIngestorIOCache wipes the cached snapshot. Test-only helper.
 func resetIngestorIOCache() {
 	ingestorIOCache.Lock()
-	ingestorIOCache.mtimeUnixNano = 0
-	ingestorIOCache.size = 0
+	ingestorIOCache.version = ingestorStatsVersion{}
 	ingestorIOCache.sample = nil
 	ingestorIOCache.Unlock()
 }
 
 // ingestorIOCache is the byte-stable snapshot cache for readIngestorIOSample
-// (Carmack must-fix #2). Keyed by (file mtime nanoseconds, size); on hit we
-// return the previously decoded sample without re-opening the file.
+// (Carmack must-fix #2). Keyed by the document's version (file mtime
+// nanoseconds and size, or on Postgres the row's updated_at and size); on hit
+// we return the previously decoded sample without decoding it again.
 var ingestorIOCache struct {
 	sync.Mutex
-	mtimeUnixNano int64
-	size          int64
-	sample        *PerfIOSample
+	version ingestorStatsVersion
+	sample  *PerfIOSample
 }
 
 // readProcIO parses /proc/self/io. Returns a zero-time sample (at.IsZero())
@@ -148,7 +152,7 @@ func (s *Server) handlePerfIO(w http.ResponseWriter, r *http.Request) {
 	// Ingestor block: GREEN commit replaces stub readIngestorIOSample with
 	// real parsing of the ingestor stats file's procIO section (#1120
 	// follow-up — "Both ingestor and server").
-	if ing := readIngestorIOSample(); ing != nil {
+	if ing := readIngestorIOSampleFrom(s.db); ing != nil {
 		resp.Ingestor = ing
 	}
 	writeJSON(w, resp)
@@ -184,17 +188,21 @@ type ingestorIOPeek struct {
 // NOT cause N file-opens + N json.Unmarshal per second on identical bytes
 // (Carmack must-fix #2). The cache invalidates as soon as either mtime or
 // size differs from the cached entry.
-func readIngestorIOSample() *PerfIOSample {
-	path := IngestorStatsPath()
-	info, statErr := os.Stat(path)
+//
+// It reads the stats file; readIngestorIOSampleFrom reads db's source.
+func readIngestorIOSample() *PerfIOSample { return readIngestorIOSampleFrom(nil) }
+
+// readIngestorIOSampleFrom is readIngestorIOSample for the stats source of
+// db (see statIngestorStats): the file, or on Postgres the ingestor_stats
+// row, cached by its updated_at and size the same way.
+func readIngestorIOSampleFrom(db *DB) *PerfIOSample {
+	ver, data, statErr := db.statIngestorStats()
 	if statErr != nil {
 		return nil
 	}
-	mtimeNs := info.ModTime().UnixNano()
-	size := info.Size()
 
 	ingestorIOCache.Lock()
-	if ingestorIOCache.mtimeUnixNano == mtimeNs && ingestorIOCache.size == size && ingestorIOCache.sample != nil {
+	if ingestorIOCache.version == ver && ingestorIOCache.sample != nil {
 		s := ingestorIOCache.sample
 		ingestorIOCache.Unlock()
 		// Re-validate freshness on cache hit too: a stale-but-byte-stable
@@ -210,9 +218,11 @@ func readIngestorIOSample() *PerfIOSample {
 	}
 	ingestorIOCache.Unlock()
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
+	if data == nil {
+		var err error
+		if data, err = db.readIngestorStats(); err != nil {
+			return nil
+		}
 	}
 	readIngestorStatsParseCalls.Add(1)
 	var st ingestorIOPeek
@@ -238,8 +248,7 @@ func readIngestorIOSample() *PerfIOSample {
 	}
 
 	ingestorIOCache.Lock()
-	ingestorIOCache.mtimeUnixNano = mtimeNs
-	ingestorIOCache.size = size
+	ingestorIOCache.version = ver
 	ingestorIOCache.sample = st.ProcIO
 	ingestorIOCache.Unlock()
 
@@ -247,7 +256,12 @@ func readIngestorIOSample() *PerfIOSample {
 }
 
 // handlePerfSqlite returns SQLite WAL size + cache hit-rate stats.
+// Not available on Postgres, which has no SQLite pages or WAL file to report.
 func (s *Server) handlePerfSqlite(w http.ResponseWriter, r *http.Request) {
+	if s.db.isPostgres() {
+		writeError(w, http.StatusNotFound, "not available: the database is PostgreSQL")
+		return
+	}
 	resp := PerfSqliteResponse{}
 	if s.db != nil && s.db.conn != nil {
 		var pageCount, pageSize int64
@@ -336,11 +350,85 @@ type WriterStatsSnapshot struct {
 
 // IngestorStatsPath is the well-known location where the ingestor writes its
 // rolling stats snapshot. Overridable by env CORESCOPE_INGESTOR_STATS for tests.
+// On Postgres the snapshot is the ingestor_stats row instead (see
+// readIngestorStats), so the two processes need no shared filesystem.
 func IngestorStatsPath() string {
 	if p := os.Getenv("CORESCOPE_INGESTOR_STATS"); p != "" {
 		return p
 	}
 	return "/tmp/corescope-ingestor-stats.json"
+}
+
+// ingestorStatsVersion identifies one version of the ingestor's stats
+// document, for the caches that skip decoding an unchanged one: the file's
+// mtime and size, or on Postgres the row's updated_at and payload size.
+type ingestorStatsVersion struct {
+	mtimeUnixNano int64
+	size          int64
+	updatedAt     string
+}
+
+// pgIngestorStatsTimeout bounds one read of the ingestor_stats row: /healthz
+// reads it, and must answer even when the database is slow.
+const pgIngestorStatsTimeout = 2 * time.Second
+
+// pgIngestorStatsLogEvery rate-limits the log line for a failed read of the
+// ingestor_stats row; the readers are diagnostics polled every second.
+const pgIngestorStatsLogEvery = time.Minute
+
+var pgIngestorStatsLastLog atomic.Int64 // unix nanoseconds of the last such line
+
+// readIngestorStatsRow reads the ingestor_stats row through the main
+// (read-only) pool. No row yet is an error satisfying
+// errors.Is(err, os.ErrNotExist), like a missing stats file; other failures
+// are logged at most once per pgIngestorStatsLogEvery.
+func (db *DB) readIngestorStatsRow() (updatedAt string, payload []byte, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pgIngestorStatsTimeout)
+	defer cancel()
+	var p string
+	err = db.conn.QueryRowContext(ctx, `SELECT updated_at, payload FROM ingestor_stats WHERE id = 1`).Scan(&updatedAt, &p)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, fmt.Errorf("ingestor_stats has no row yet: %w", os.ErrNotExist)
+	}
+	if err != nil {
+		now := time.Now().UnixNano()
+		if last := pgIngestorStatsLastLog.Load(); now-last >= int64(pgIngestorStatsLogEvery) && pgIngestorStatsLastLog.CompareAndSwap(last, now) {
+			log.Printf("[perf] read ingestor_stats: %v", err)
+		}
+		return "", nil, err
+	}
+	return updatedAt, []byte(p), nil
+}
+
+// statIngestorStats returns the version of the ingestor's stats document: on
+// SQLite (or a nil db) the stats file's, on Postgres the ingestor_stats
+// row's. On Postgres the one query that answers it also returns the payload
+// (data non-nil), so a caller whose cache missed need not read again.
+func (db *DB) statIngestorStats() (ver ingestorStatsVersion, data []byte, err error) {
+	if db.isPostgres() {
+		updatedAt, payload, err := db.readIngestorStatsRow()
+		if err != nil {
+			return ver, nil, err
+		}
+		return ingestorStatsVersion{size: int64(len(payload)), updatedAt: updatedAt}, payload, nil
+	}
+	info, err := os.Stat(IngestorStatsPath())
+	if err != nil {
+		return ver, nil, err
+	}
+	return ingestorStatsVersion{mtimeUnixNano: info.ModTime().UnixNano(), size: info.Size()}, nil, nil
+}
+
+// readIngestorStats returns the ingestor's stats document (the JSON shape
+// IngestorStats decodes): the stats file on SQLite (or a nil db), the
+// ingestor_stats payload on Postgres. Nothing written yet is an error
+// satisfying errors.Is(err, os.ErrNotExist) on both.
+func (db *DB) readIngestorStats() ([]byte, error) {
+	if db.isPostgres() {
+		_, payload, err := db.readIngestorStatsRow()
+		return payload, err
+	}
+	return os.ReadFile(IngestorStatsPath())
 }
 
 // readIngestorSourceLiveness returns the per-source receipt/write-path
@@ -354,7 +442,23 @@ func IngestorStatsPath() string {
 // whenever the underlying file mtime changes (PR #1623 round-1
 // finding 4). The lock is held briefly; the costly Unmarshal happens
 // at most once per refresh window.
+//
+// It reads the stats file; readIngestorSourceLivenessFrom reads db's source.
 func readIngestorSourceLiveness() map[string]SourceLivenessSnapshot {
+	return readIngestorSourceLivenessFrom(nil)
+}
+
+// pgSourceLivenessKey is sourceLivenessCache.path for the ingestor_stats row.
+const pgSourceLivenessKey = "postgres:ingestor_stats"
+
+// readIngestorSourceLivenessFrom is readIngestorSourceLiveness for the stats
+// source of db. On Postgres there is no cheap mtime probe (asking the row
+// is the read), so a cached value is served for the whole TTL, and a refresh
+// whose row is unchanged (same updated_at and size) skips the decode.
+func readIngestorSourceLivenessFrom(db *DB) map[string]SourceLivenessSnapshot {
+	if db.isPostgres() {
+		return readIngestorSourceLivenessPG(db)
+	}
 	path := IngestorStatsPath()
 	now := time.Now()
 
@@ -416,6 +520,46 @@ func readIngestorSourceLiveness() map[string]SourceLivenessSnapshot {
 	return st.SourceLiveness
 }
 
+func readIngestorSourceLivenessPG(db *DB) map[string]SourceLivenessSnapshot {
+	c := &sourceLivenessCache
+	c.mu.RLock()
+	if c.path == pgSourceLivenessKey && time.Since(c.cachedAt) < sourceLivenessCacheTTL {
+		out := c.value
+		c.mu.RUnlock()
+		return out
+	}
+	c.mu.RUnlock()
+
+	// The row is read under the write lock, as the file is above: callers
+	// arriving during a refresh wait for its result instead of each
+	// querying (the read is bounded by pgIngestorStatsTimeout).
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.path == pgSourceLivenessKey && time.Since(c.cachedAt) < sourceLivenessCacheTTL {
+		return c.value
+	}
+	updatedAt, data, err := db.readIngestorStatsRow()
+	now := time.Now()
+	// updated_at is the ingestor's sampledAt (whole seconds), so the size
+	// joins it in the key, as it joins the mtime for the file.
+	version := fmt.Sprintf("%s/%d", updatedAt, len(data))
+	if err == nil && c.path == pgSourceLivenessKey && c.updatedAt != "" && version == c.updatedAt {
+		c.cachedAt = now
+		return c.value
+	}
+	var st IngestorStats
+	if err == nil {
+		err = json.Unmarshal(data, &st)
+	}
+	c.path, c.cachedAt, c.mtime = pgSourceLivenessKey, now, time.Time{}
+	if err != nil {
+		c.value, c.updatedAt = nil, ""
+		return nil
+	}
+	c.value, c.updatedAt = st.SourceLiveness, version
+	return st.SourceLiveness
+}
+
 // sourceLivenessReadFile is the file-reader used by
 // readIngestorSourceLiveness. Swappable for tests so call counts can
 // be asserted (PR #1623 round-1 finding 4 TTL cache test).
@@ -428,13 +572,16 @@ var sourceLivenessReadFile = os.ReadFile
 var sourceLivenessCacheTTL = time.Second
 
 // sourceLivenessCache memoizes the parsed liveness map keyed by file
-// path + mtime. See readIngestorSourceLiveness.
+// path + mtime (on Postgres pgSourceLivenessKey + the row's updated_at and
+// size, in updatedAt). See
+// readIngestorSourceLiveness.
 var sourceLivenessCache struct {
-	mu       sync.RWMutex
-	path     string
-	value    map[string]SourceLivenessSnapshot
-	cachedAt time.Time
-	mtime    time.Time
+	mu        sync.RWMutex
+	path      string
+	value     map[string]SourceLivenessSnapshot
+	cachedAt  time.Time
+	mtime     time.Time
+	updatedAt string
 }
 
 // resetSourceLivenessCache clears the memo. Test-only helper; callable
@@ -446,17 +593,19 @@ func resetSourceLivenessCache() {
 	sourceLivenessCache.value = nil
 	sourceLivenessCache.cachedAt = time.Time{}
 	sourceLivenessCache.mtime = time.Time{}
+	sourceLivenessCache.updatedAt = ""
 }
 
-// handlePerfWriteSources reads the ingestor's stats file and returns a flat
-// map of source-name -> counter, plus the sample timestamp.
+// handlePerfWriteSources reads the ingestor's stats (the file, or on Postgres
+// the ingestor_stats row) and returns a flat map of source-name -> counter,
+// plus the sample timestamp.
 func (s *Server) handlePerfWriteSources(w http.ResponseWriter, r *http.Request) {
 	out := map[string]interface{}{
 		"sources":  map[string]int64{},
 		"sampleAt": "",
 	}
 
-	data, err := os.ReadFile(IngestorStatsPath())
+	data, err := s.db.readIngestorStats()
 	if err != nil {
 		writeJSON(w, out)
 		return

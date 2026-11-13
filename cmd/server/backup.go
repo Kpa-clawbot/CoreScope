@@ -30,9 +30,16 @@ import (
 //
 // The temp file is removed after the response is fully written, regardless
 // of whether the client successfully consumed the stream.
+//
+// On Postgres there is no file to snapshot: the operator backs the database
+// up with pg_dump, and this answers 501 saying so.
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil || s.db.conn == nil {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	if s.db.isPostgres() {
+		writeError(w, http.StatusNotImplemented, "backups of a PostgreSQL database are taken with pg_dump; see docs/postgresql.md")
 		return
 	}
 

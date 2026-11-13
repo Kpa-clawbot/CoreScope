@@ -42,8 +42,12 @@ env:
 # push waits for all of them:
 #   changes ─┬─ go-test ─────────────────────────┐
 #            ├─ race-test (ingestor changes only) ─┤
-#            ├─ e2e-shard ×3 ── e2e-test (gate) ───┼─ build-and-publish → deploy, publish
+#            ├─ musl-test (Go tests on Alpine) ────┤
+#            ├─ e2e-shard ×3 ×2 ── e2e-test (gate) ┼─ build-and-publish → deploy, publish
 #            └─ image-check (two-arch build) ──────┘
+#   Every Go test job runs with a PostgreSQL service and CORESCOPE_TEST_PG_DSN
+#   set, so the Postgres tests run instead of skipping; the E2E shards run once
+#   per backend (sqlite, postgres).
 #   PRs stop after build-and-publish (no GHCR push). Master continues to deploy + badges.
 
 jobs:
@@ -120,6 +124,22 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     if: needs.changes.outputs.ingestor == 'true'
+    # The Postgres tests read CORESCOPE_TEST_PG_DSN (a superuser URL; each test
+    # makes and drops its own schema) and skip when it is unset.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: corescope
+          POSTGRES_PASSWORD: corescope
+          POSTGRES_DB: corescope_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U corescope -d corescope_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CORESCOPE_TEST_PG_DSN: postgres://corescope:corescope@localhost:5432/corescope_test?sslmode=disable
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -148,6 +168,22 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
+    # The Postgres tests read CORESCOPE_TEST_PG_DSN (a superuser URL; each test
+    # makes and drops its own schema) and skip when it is unset.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: corescope
+          POSTGRES_PASSWORD: corescope
+          POSTGRES_DB: corescope_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U corescope -d corescope_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CORESCOPE_TEST_PG_DSN: postgres://corescope:corescope@localhost:5432/corescope_test?sslmode=disable
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -333,6 +369,57 @@ jobs:
           include-hidden-files: true
 
   # ───────────────────────────────────────────────────────────────
+  # 1b. Go tests on musl (Alpine)
+  # ───────────────────────────────────────────────────────────────
+  # The released binaries are static musl, but the runners are glibc, so a
+  # crash that only musl produces never shows up in go-test. The usual one:
+  # musl gives every non-main thread a 128 KiB stack where glibc gives 8 MiB,
+  # and a deep cgo call into SQLite overflows it. The tests link with the same
+  # stack-size flag as the Dockerfile and the Makefile (STACK_LDFLAG).
+  #
+  # The toolchain runs in golang:1.27-alpine through `docker run` rather than
+  # as the job container: JavaScript actions (checkout) would then have to run
+  # inside Alpine too. --network host reaches the Postgres service's port.
+  musl-test:
+    name: "🏔️ Go tests on musl (Alpine)"
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    # The Postgres tests read CORESCOPE_TEST_PG_DSN (a superuser URL; each test
+    # makes and drops its own schema) and skip when it is unset.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: corescope
+          POSTGRES_PASSWORD: corescope
+          POSTGRES_DB: corescope_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U corescope -d corescope_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CORESCOPE_TEST_PG_DSN: postgres://corescope:corescope@localhost:5432/corescope_test?sslmode=disable
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: go test on musl
+        run: |
+          set -e -o pipefail
+          docker run --rm --network host \
+            -e CORESCOPE_TEST_PG_DSN -e CGO_ENABLED=1 -e GOFLAGS=-buildvcs=false \
+            -v "$PWD:/src" -w /src golang:1.27-alpine sh -euc '
+              apk add --no-cache gcc musl-dev >/dev/null
+              ldd --version 2>&1 | head -1
+              for mod in cmd/server cmd/ingestor cmd/migrate internal/dbschema internal/dbx; do
+                echo "== go test (musl) $mod =="
+                (cd "$mod" && go test -timeout 30m -ldflags=-extldflags=-Wl,-z,stack-size=8388608 ./...)
+              done
+            '
+
+  # ───────────────────────────────────────────────────────────────
   # 2. Playwright E2E Tests (against Go server with fixture DB)
   # ───────────────────────────────────────────────────────────────
   # Three shards on three runners, each with its own server and fixture copy,
@@ -343,8 +430,14 @@ jobs:
   # It needs only `changes`, not go-test: this job builds its own binaries and
   # uses nothing go-test produces. build-and-publish still needs both, so
   # nothing reaches GHCR unless every test job passed.
+  #
+  # Each shard runs once per measurement backend. Both start from the same
+  # prepared fixture: the postgres shards copy it, after every seeding step,
+  # into a database provisioned by scripts/postgres-roles.sh, and the port
+  # 13581 server reads it as the read-only role. The user-management server on
+  # 13582 stays on SQLite in both (users.db is always SQLite).
   e2e-shard:
-    name: "🎭 Playwright E2E shard ${{ matrix.shard }}/3"
+    name: "🎭 Playwright E2E shard ${{ matrix.shard }}/3 (${{ matrix.backend }})"
     needs: [changes]
     # Pinned: on ubuntu-26.04 runners the Playwright browser was missing
     # after the install step and every suite died at browserType.launch.
@@ -353,9 +446,25 @@ jobs:
     strategy:
       matrix:
         shard: [1, 2, 3]
+        backend: [sqlite, postgres]
+    # Started for the sqlite shards too: a service cannot depend on the matrix
+    # value, and it costs them only the container start.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: corescope
+          POSTGRES_PASSWORD: corescope
+          POSTGRES_DB: corescope_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U corescope -d corescope_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       SHARD: ${{ matrix.shard }}
       E2E_SHARDS: 3
+      E2E_BACKEND: ${{ matrix.backend }}
     defaults:
       run:
         shell: bash
@@ -499,11 +608,54 @@ jobs:
       - name: Seed deterministic Path Inspector routes (#2060)
         run: sqlite3 test-fixtures/e2e-fixture.db < test-fixtures/path-inspector.sql
 
+      # The last fixture step: everything above has prepared the SQLite file,
+      # so the postgres shards serve exactly what the sqlite shards do. Roles
+      # come from the same script as docker-compose.postgres.yml, run with the
+      # psql of the service's own image.
+      - name: Provision Postgres and copy the fixture into it
+        if: matrix.backend == 'postgres'
+        env:
+          # Passwords travel in the environment, never in a URL on a command
+          # line: the roles script refuses one in PG_ADMIN_URL.
+          PG_ADMIN_URL: postgres://corescope@localhost:5432/corescope_test?sslmode=disable
+          PGPASSWORD: corescope
+          CORESCOPE_DB: corescope_e2e
+          CORESCOPE_WRITER: corescope_writer
+          CORESCOPE_WRITER_PASSWORD: e2e-writer-pw
+          CORESCOPE_READER: corescope_reader
+          CORESCOPE_READER_PASSWORD: e2e-reader-pw
+        run: |
+          set -euo pipefail
+          docker run --rm --network host \
+            -e PG_ADMIN_URL -e PGPASSWORD -e CORESCOPE_DB \
+            -e CORESCOPE_WRITER -e CORESCOPE_WRITER_PASSWORD \
+            -e CORESCOPE_READER -e CORESCOPE_READER_PASSWORD \
+            -v "$PWD/scripts/postgres-roles.sh:/postgres-roles.sh:ro" \
+            postgres:17-alpine sh /postgres-roles.sh
+          # The fixture is prepared with the legacy `-db` migration, not by a
+          # running ingestor, so its async backfills never ran; opt in knowingly.
+          PGPASSWORD="$CORESCOPE_WRITER_PASSWORD" ./corescope-migrate copy -allow-pending-migrations \
+            -from sqlite:test-fixtures/e2e-fixture.db \
+            -to "postgres://${CORESCOPE_WRITER}@localhost:5432/${CORESCOPE_DB}?sslmode=disable"
+          rm -rf /tmp/cs-pg && mkdir -p /tmp/cs-pg
+          cat > /tmp/cs-pg/config.json <<JSON
+          {
+            "db": {
+              "driver": "postgres",
+              "dsn": "postgres://${CORESCOPE_READER}:${CORESCOPE_READER_PASSWORD}@localhost:5432/${CORESCOPE_DB}?sslmode=disable"
+            }
+          }
+          JSON
+
       - name: Start Go server with fixture DB
         run: |
           fuser -k 13581/tcp 2>/dev/null || true
           sleep 1
-          ./corescope-server -port 13581 -db test-fixtures/e2e-fixture.db -public public-instrumented &
+          if [ "$E2E_BACKEND" = postgres ]; then
+            ./corescope-server -port 13581 -config-dir /tmp/cs-pg -public public-instrumented &
+          else
+            ./corescope-server -port 13581 -db test-fixtures/e2e-fixture.db -public public-instrumented &
+          fi
           echo $! > .server.pid
           for i in $(seq 1 30); do
             if curl -sf http://localhost:13581/api/healthz > /dev/null 2>&1; then
@@ -770,7 +922,7 @@ jobs:
           if ls .nyc_output/*.json >/dev/null 2>&1; then
             npx nyc merge .nyc_output coverage-shard.json
           else
-            echo "::warning::no frontend coverage was recorded on shard ${{ matrix.shard }}"
+            echo "::warning::no frontend coverage was recorded on shard ${{ matrix.shard }} (${{ matrix.backend }})"
           fi
 
       - name: Stop test server
@@ -789,7 +941,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v6
         with:
-          name: e2e-shard-${{ matrix.shard }}
+          name: e2e-shard-${{ matrix.backend }}-${{ matrix.shard }}
           path: |
             e2e-output.txt
             coverage-shard.json
@@ -829,8 +981,15 @@ jobs:
         run: |
           set -e
           ls shards
-          [ "$(ls -d shards/e2e-shard-* | wc -l)" -eq 3 ] || { echo "::error::expected results from 3 shards"; exit 1; }
-          cat shards/e2e-shard-*/e2e-output.txt > e2e-output.txt
+          for backend in sqlite postgres; do
+            set -- shards/e2e-shard-"$backend"-*/
+            { [ -d "$1" ] && [ "$#" -eq 3 ]; } || { echo "::error::expected results from 3 $backend shards"; exit 1; }
+            n=$(cat shards/e2e-shard-"$backend"-*/e2e-output.txt | grep -c '^=== E2E SUITE' || true)
+            echo "E2E ($backend): $n suite runs" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          # The badge counts one backend's suites, as it did before the
+          # postgres shards existed; both backends gate through the shard result.
+          cat shards/e2e-shard-sqlite-*/e2e-output.txt > e2e-output.txt
           # Start empty: the checkout holds master's old .badges/ files,
           # which would otherwise go out in e2e-badges (#2136).
           rm -rf .badges && mkdir .badges
@@ -1013,7 +1172,7 @@ jobs:
   # Go file changed, so for it skipped is accepted; a master push always runs it.
   build-and-publish:
     name: "🏗️ Build & Publish Docker Image"
-    needs: [go-test, race-test, e2e-test, image-check, changes]
+    needs: [go-test, race-test, musl-test, e2e-test, image-check, changes]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
     steps:
@@ -1029,6 +1188,7 @@ jobs:
           }
           require go-test "${{ needs['go-test'].result }}" "success"
           require race-test "${{ needs['race-test'].result }}" "success skipped"
+          require musl-test "${{ needs['musl-test'].result }}" "success"
           require e2e-test "${{ needs['e2e-test'].result }}" "success"
           require image-check "${{ needs['image-check'].result }}" "success"
           exit $fail
@@ -1116,12 +1276,12 @@ jobs:
       - name: Build corescope-decrypt (static, linux/amd64)
         run: |
           cd cmd/decrypt
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-amd64 .
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s -Wl,-z,stack-size=8388608' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-amd64 .
 
       - name: Build corescope-decrypt (static, linux/arm64)
         run: |
           cd cmd/decrypt
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-arm64 .
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s -Wl,-z,stack-size=8388608' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-arm64 .
 
       - name: Verify release binaries are static and runnable
         run: |

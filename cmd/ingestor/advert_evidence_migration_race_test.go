@@ -19,7 +19,7 @@ func seedUnbackfilledAdvert(t *testing.T, canonical, observed string) (*Store, s
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type) VALUES(1,'legacy-advert',?,'2026-01-01T00:00:00Z',4,?);
-		INSERT INTO observations(id,transmission_id,observer_idx,raw_hex,path_json,timestamp) VALUES(1,1,(SELECT rowid FROM observers WHERE id='fixture-observer'),?,'[]',1)`, canonical, int(canonical[1]-'0')&3, observed); err != nil {
+		INSERT INTO observations(id,transmission_id,observer_idx,raw_hex,path_json,timestamp) VALUES(1,1,(SELECT idx FROM observers WHERE id='fixture-observer'),?,'[]',1)`, canonical, int(canonical[1]-'0')&3, observed); err != nil {
 		s.Close()
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func BenchmarkAdvertEvidenceLegacyPreservation(b *testing.B) {
 		b.Fatal(err)
 	}
 	var observerIdx int64
-	if err := s.db.QueryRow(`SELECT rowid FROM observers WHERE id='fixture-observer'`).Scan(&observerIdx); err != nil {
+	if err := s.db.QueryRow(`SELECT idx FROM observers WHERE id='fixture-observer'`).Scan(&observerIdx); err != nil {
 		b.Fatal(err)
 	}
 	for _, state := range []string{"pending", "checkpointed", "complete"} {

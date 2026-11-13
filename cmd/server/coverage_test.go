@@ -35,7 +35,7 @@ func setupTestDBv2(t *testing.T) *DB {
 			battery_mv INTEGER, temperature_c REAL, foreign_advert INTEGER DEFAULT 0
 		);
 		CREATE TABLE observers (
-			id TEXT PRIMARY KEY, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT,
+			idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT,
 			packet_count INTEGER DEFAULT 0, model TEXT, firmware TEXT,
 			client_version TEXT, radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL,
 			inactive INTEGER DEFAULT 0
@@ -157,46 +157,6 @@ func TestDetectSchemaV2Queries(t *testing.T) {
 	}
 	if mResult.Total != 1 {
 		t.Errorf("expected 1 multi-node packet in v2, got %d", mResult.Total)
-	}
-}
-
-// --- buildPacketWhere ---
-
-func TestBuildPacketWhere(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	tests := []struct {
-		name      string
-		query     PacketQuery
-		wantWhere int
-	}{
-		{"empty", PacketQuery{}, 0},
-		{"type filter", PacketQuery{Type: intPtr(4)}, 1},
-		{"route filter", PacketQuery{Route: intPtr(1)}, 1},
-		{"observer filter", PacketQuery{Observer: "obs1"}, 1},
-		{"hash filter", PacketQuery{Hash: "ABC123DEF4567890"}, 1},
-		{"since filter", PacketQuery{Since: "2025-01-01"}, 1},
-		{"until filter", PacketQuery{Until: "2099-01-01"}, 1},
-		{"region filter", PacketQuery{Region: "SJC"}, 1},
-		{"node filter", PacketQuery{Node: "TestRepeater"}, 1},
-		{"all filters", PacketQuery{
-			Type: intPtr(4), Route: intPtr(1), Observer: "obs1",
-			Hash: "abc123", Since: "2025-01-01", Until: "2099-01-01",
-			Region: "SJC", Node: "TestRepeater",
-		}, 8},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			where, args := db.buildPacketWhere(tc.query)
-			if len(where) != tc.wantWhere {
-				t.Errorf("expected %d where clauses, got %d", tc.wantWhere, len(where))
-			}
-			if len(where) != len(args) {
-				t.Errorf("where count (%d) != args count (%d)", len(where), len(args))
-			}
-		})
 	}
 }
 

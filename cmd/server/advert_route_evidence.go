@@ -15,8 +15,7 @@ func (db *DB) advertEvidencePresent() bool {
 	if db.advertEvidenceTable.Load() {
 		return true
 	}
-	var exists int
-	if err := db.conn.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='advert_route_evidence'`).Scan(&exists); err != nil {
+	if !db.tablePresent("advert_route_evidence") {
 		return false
 	}
 	db.advertEvidenceTable.Store(true)

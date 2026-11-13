@@ -72,7 +72,8 @@ incomplete, and the log says what is missing.
 |---|---|
 | `adminEmails` | Addresses that become admin on activation. They cannot be demoted, disabled or deleted from the UI. Remove an address here first. |
 | `publicBaseUrl` | The address visitors use. Every mail link is built from it, never from the request. It must match the browser origin, because state-changing requests from another origin are refused. |
-| `dbPath` | Where accounts are stored. Default: `users.db` next to the analyzer database. |
+| `dbPath` | Where accounts are stored. Default: `users.db` next to the analyzer database. Unused with `dsn`. |
+| `dsn` | Keep the accounts in PostgreSQL instead of `users.db`; see [Accounts in PostgreSQL](#accounts-in-postgresql). `DB_DSN_ACCOUNTS` is used when this is empty. |
 | `sessionDays` | Login lifetime, extended while in use. Default 30, maximum 365. |
 | `trustedProxies` | CIDRs of your reverse proxy, so the per-IP login limits see real client IPs. Without it, behind a proxy every client shares the proxy's IP for the per-IP limits (they are switched off when that IP is loopback or private). Per-address and per-account limits apply either way. |
 | `mail.provider` | `brevo` (default) or `postal`. |
@@ -340,7 +341,24 @@ under *My account, Observer MQTT login*, admins under *Admin, Observer logins*.
 Configuration, the EMQX setup and the migration steps: [Personal MQTT logins for
 observers](../observer-mqtt-logins.md).
 
+### Accounts in PostgreSQL
+
+By default accounts are the SQLite file `users.db`, which needs a disk and a single server.
+Set `userManagement.dsn` (or the environment variable `DB_DSN_ACCOUNTS`) to a PostgreSQL
+role of their own and the accounts live in schema `corescope_users` instead: no disk, and any
+number of server replicas. `scripts/postgres-roles.sh` creates that role and the schema; the
+server does not create the schema and refuses a superuser or a role that owns the database or
+can `CREATE` in it. The order of steps, the role, the startup check, moving an existing `users.db`, backups
+and rollback are in
+[User accounts in PostgreSQL](../postgresql.md#user-accounts-in-postgresql). Nothing else about
+accounts changes for users or admins.
+
 ### Backups
+
+> With accounts in PostgreSQL there are no snapshots and no `backups/` directory, and
+> `GET /api/admin/users-backup` answers 501. Back up the schema with
+> `pg_dump -n corescope_users` instead; "Download my data" works as before. The rest of this
+> section is about `users.db`.
 
 `users.db` holds password hashes and addresses. The server keeps its own snapshots of
 it: at startup when the newest snapshot is older than 24 hours (or there is none), then
@@ -391,6 +409,12 @@ The analyzer database has its own backup route, `GET /api/backup`.
   where needed.
 
 The audit log is replaced too, so note the deletions before you overwrite it.
+
+> `users.db` is a SQLite file, including on installs whose measurement database is
+> [PostgreSQL](../postgresql.md), unless the accounts are moved into PostgreSQL (above). Back it
+> up and restore it as described here; a `pg_dump` of the measurement tables does not contain
+> it. In the Docker image on PostgreSQL the file is `/app/data/shared/users.db` and
+> its snapshots are in `/app/data/shared/backups/`.
 
 **Restore** (not automated). The commands use the `sqlite3` command-line tool; replace
 `2026-10-08 12:00:00` with the snapshot's time from its file name (UTC).

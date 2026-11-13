@@ -20,7 +20,6 @@ package dbschema
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -120,6 +119,11 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureObserverNeighborReports(rw); err != nil {
 		return fmt.Errorf("ensure observer neighbor reports: %w", err)
 	}
+	// Must run LAST: the ensureObserver*Column steps above bring a legacy
+	// observers table up to the canonical columns the rebuild copies.
+	if err := ensureObserversIdx(rw, logf); err != nil {
+		return fmt.Errorf("ensure observers.idx: %w", err)
+	}
 	// Advert evidence is intentionally not required by AssertReady: a legacy
 	// read-only server reports unknown until this table/backfill is available,
 	// and re-probes absence instead of caching the startup race permanently.
@@ -147,12 +151,11 @@ func AssertReady(ro *sql.DB) error {
 		}
 	}
 	mustTable := func(name string) {
-		var n int
-		err := ro.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n)
-		if errors.Is(err, sql.ErrNoRows) {
-			missing = append(missing, "table:"+name)
-		} else if err != nil {
+		has, err := TableExists(ro, name)
+		if err != nil {
 			missing = append(missing, fmt.Sprintf("table:%s (probe error: %v)", name, err))
+		} else if !has {
+			missing = append(missing, "table:"+name)
 		}
 	}
 
@@ -202,6 +205,9 @@ func AssertReady(ro *sql.DB) error {
 	// an explicit value; can_relay_seen=0 means leave the UI badge
 	// unset (unknown state).
 	mustCol("observers", "can_relay_seen")
+	// observations.observer_idx references observers.idx, an explicit
+	// INTEGER PRIMARY KEY (== rowid) that survives dump-and-reload.
+	mustCol("observers", "idx")
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",
@@ -231,6 +237,9 @@ type Querier interface {
 //
 // Pass the transaction, not the pool, when you are inside one. See Querier.
 func TableHasColumn(db Querier, table, column string) (bool, error) {
+	if found, ok, err := infoSchemaProbe(db, pgColumnProbe, table, column); ok {
+		return found, err
+	}
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
 		return false, err

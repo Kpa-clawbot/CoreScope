@@ -302,22 +302,30 @@ func NewPoller(db *DB, hub *Hub, interval time.Duration) *Poller {
 	return &Poller{db: db, hub: hub, interval: interval, stop: make(chan struct{})}
 }
 
-func (p *Poller) Start() {
-	lastID := p.db.GetMaxTransmissionID()
-	lastObsID := p.db.GetMaxObservationID()
-	// If the store already loaded data, use its max IDs as a floor.
-	// This prevents replaying the entire DB when the DB query fails
-	// (e.g., corrupted DB returns 0 from COALESCE).
-	if p.store != nil {
-		if storeMax := p.store.MaxTransmissionID(); storeMax > lastID {
-			lastID = storeMax
-		}
-		if storeMaxObs := p.store.MaxObservationID(); storeMaxObs > lastObsID {
-			lastObsID = storeMaxObs
-		}
+// pollFailure logs a failing poll once per streak of failures, and once when
+// it recovers. Owned by the Start goroutine.
+type pollFailure struct {
+	what    string
+	failing bool
+}
+
+func (f *pollFailure) note(err error, cursor int) {
+	switch {
+	case err != nil && !f.failing:
+		f.failing = true
+		log.Printf("[poller] %s poll failed, retrying from id %d each tick: %v", f.what, cursor, err)
+	case err == nil && f.failing:
+		f.failing = false
+		log.Printf("[poller] %s poll recovered at id %d", f.what, cursor)
 	}
+}
+
+func (p *Poller) Start() {
+	lastID, lastObsID := p.startCursors()
 	log.Printf("[poller] starting from transmission ID %d, obs ID %d, interval %v", lastID, lastObsID, p.interval)
 
+	txFail := pollFailure{what: "transmission"}
+	obsFail := pollFailure{what: "observation"}
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
@@ -329,11 +337,18 @@ func (p *Poller) Start() {
 				// new observation must be known before it is broadcast.
 				refreshRadioHistory(p.db.conn, false)
 				// Ingest new transmissions into in-memory store and broadcast
-				newTxs, newMax := p.store.IngestNewFromDB(lastID, 100)
+				// On error newMax is lastID: the same rows are read next tick.
+				newTxs, newMax, err := p.store.ingestNewFromDB(lastID, 100)
+				txFail.note(err, lastID)
 				if newMax > lastID {
 					lastID = newMax
 				}
-				// Ingest new observations for existing transmissions (fixes #174)
+				// Ingest new observations for existing transmissions (fixes #174).
+				// The bound below is read BEFORE ingestNewObservations polls the
+				// advert feed, which waits on advertEvidenceMu while a startup
+				// chunk sits between its query and its merge. So an observation
+				// of a transmission that chunk has not merged yet is either read
+				// after the merge or lies above the bound, never skipped below it.
 				nextObsID := lastObsID
 				if err := p.db.conn.QueryRow(`
 					SELECT COALESCE(MAX(id), ?) FROM (
@@ -344,8 +359,10 @@ func (p *Poller) Start() {
 					)`, lastObsID, lastObsID).Scan(&nextObsID); err != nil {
 					nextObsID = lastObsID
 				}
-				newObs := p.store.IngestNewObservations(lastObsID, 500)
-				if nextObsID > lastObsID {
+				newObs, err := p.store.ingestNewObservations(lastObsID, 500)
+				obsFail.note(err, lastObsID)
+				// A failed read saw none of these rows: keep the cursor.
+				if err == nil && nextObsID > lastObsID {
 					lastObsID = nextObsID
 				}
 				if len(newTxs) > 0 {
@@ -391,6 +408,37 @@ func (p *Poller) Start() {
 			return
 		}
 	}
+}
+
+// startCursors picks the ids polling starts above. A fresh MAX(id) here would
+// skip every row committed between the load's last snapshot and now: it is in
+// neither the store nor any later poll. So with a store, polling starts at the
+// high-water marks taken before the load. Rows between a mark and the end of
+// the load are read again and dedupe: transmissions by hash, observations by
+// byObsID or observer+path, and only rows new to the store are broadcast.
+func (p *Poller) startCursors() (lastID, lastObsID int) {
+	if p.store == nil {
+		return p.db.GetMaxTransmissionID(), p.db.GetMaxObservationID()
+	}
+	txMark, obsMark, ok := p.store.StartupMarks()
+	if ok {
+		lastID, lastObsID = txMark, obsMark
+	} else {
+		// No marks: keep the old fresh-MAX start, floored by the store so a
+		// failed query (COALESCE 0) cannot replay the whole DB.
+		lastID, lastObsID = p.db.GetMaxTransmissionID(), p.db.GetMaxObservationID()
+		if storeMaxObs := p.store.MaxObservationID(); storeMaxObs > lastObsID {
+			lastObsID = storeMaxObs
+		}
+	}
+	// The loaded max transmission id is a safe floor: one writer commits ids
+	// in order, so every lower id was visible to the chunk that loaded it.
+	// The loaded max observation id is not: a chunk-1 transmission can gain
+	// an observation after chunk 1 whose id is below one loaded in chunk 2.
+	if storeMax := p.store.MaxTransmissionID(); storeMax > lastID {
+		lastID = storeMax
+	}
+	return lastID, lastObsID
 }
 
 func (p *Poller) Stop() {

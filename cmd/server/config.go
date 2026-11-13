@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/url"
 	"os"
@@ -563,6 +565,7 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		cfg.migrateDeprecatedConfig()
 		cfg.applyListLimitsDefaults()
 		applyCORSEnv(cfg)
+		applyDBEnv(cfg)
 		cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
 		return cfg, nil
 	}
@@ -570,6 +573,7 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 	cfg.migrateDeprecatedConfig()
 	cfg.applyListLimitsDefaults()
 	applyCORSEnv(cfg)
+	applyDBEnv(cfg)
 	cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
 	return cfg, nil // defaults
 }
@@ -796,6 +800,23 @@ func (h HealthThresholds) ToClientMs() map[string]int {
 		"relayActiveMs":    int(h.RelayActiveHours * hourMs),
 		"observerOnlineMs": h.ObserverOnlineMinutes * minMs,
 		"observerStaleMs":  h.ObserverStaleMinutes * minMs,
+	}
+}
+
+// applyDBEnv fills db.driver / db.dsn from DB_DRIVER / DB_DSN. As with
+// ResolveDBPath, a value set in the config file wins over the environment.
+func applyDBEnv(cfg *Config) {
+	if v := os.Getenv("DB_DRIVER"); v != "" && (cfg.DB == nil || cfg.DB.Driver == "") {
+		if cfg.DB == nil {
+			cfg.DB = &DBConfig{}
+		}
+		cfg.DB.Driver = v
+	}
+	if v := os.Getenv("DB_DSN"); v != "" && (cfg.DB == nil || cfg.DB.DSN == "") {
+		if cfg.DB == nil {
+			cfg.DB = &DBConfig{}
+		}
+		cfg.DB.DSN = v
 	}
 }
 
@@ -1087,6 +1108,16 @@ func (c *Config) HiddenNamePrefixesGeneration() uint64 {
 // SaveGeoFilter writes the geo_filter section back to config.json on disk.
 // Pass gf=nil to remove the filter. The rest of config.json is preserved as-is.
 func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
+	return SaveGeoFilterBackup(configDir, "", gf)
+}
+
+// SaveGeoFilterBackup is SaveGeoFilter with the directory that receives
+// config.json.bak when the config directory cannot take a new file and the
+// save has to rewrite config.json in place (see writeConfigFile). backupDir
+// must be writable by the server; the natural choice is the directory of its
+// users.db and file queues, filepath.Dir(db.queueAnchor()). Empty means
+// os.TempDir().
+func SaveGeoFilterBackup(configDir, backupDir string, gf *GeoFilterConfig) error {
 	var configPath string
 	for _, p := range []string{
 		filepath.Join(configDir, "config.json"),
@@ -1148,16 +1179,53 @@ func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
 	}
 	out = append(out, '\n')
 
-	// Atomic write: temp file + rename. Keep the original file's mode:
-	// config.json holds the API key and broker passwords, and an operator
-	// who made it 0600 should not find it 0644 after a geo-filter save.
 	mode := os.FileMode(0644)
 	orig, origErr := os.Stat(configPath)
 	if origErr == nil {
 		mode = orig.Mode().Perm()
 	}
-	tmp := configPath + ".tmp"
-	if err := os.WriteFile(tmp, out, mode); err != nil {
+	if origErr != nil {
+		orig = nil
+	}
+	return writeConfigFile(configPath, backupDir, data, out, mode, orig)
+}
+
+// writeConfigFile replaces configPath with out. It prefers an atomic temp
+// file + rename in the config's own directory. Only when that directory
+// refuses a new file (permission denied: the Postgres Docker deployment
+// locks /app/data so the unprivileged server cannot plant files there, while
+// config.json itself is group-writable) does it fall back to rewriting the
+// existing file in place, after saving old (the current content) to
+// backupDir/config.json.bak so a torn write is recoverable.
+func writeConfigFile(configPath, backupDir string, old, out []byte, mode os.FileMode, orig os.FileInfo) error {
+	// Atomic write: temp file + rename. The temp name is unpredictable, and
+	// the original file's mode is kept: config.json holds the API key and
+	// broker passwords, and an operator who made it 0600 should not find it
+	// 0644 after a geo-filter save.
+	tmp, err := os.CreateTemp(filepath.Dir(configPath), "config.json.*.tmp")
+	if err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			return writeConfigInPlace(configPath, backupDir, old, out)
+		}
+		return fmt.Errorf("write config: %w", err)
+	}
+	tmpName := tmp.Name()
+	fail := func(what string, err error) error {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if _, err := tmp.Write(out); err != nil {
+		return fail("write config", err)
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		return fail("write config", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fail("write config", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
 		return fmt.Errorf("write config: %w", err)
 	}
 	// Keep the owner as well. The image runs the server as root by default,
@@ -1165,14 +1233,83 @@ func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
 	// config.json to root:root, which at 0600 they could no longer edit
 	// without sudo. Best effort: a server that may not chown leaves the file
 	// as it was created.
-	if origErr == nil {
-		copyOwner(tmp, orig)
+	if orig != nil {
+		copyOwner(tmpName, orig)
 	}
-	if err := os.Rename(tmp, configPath); err != nil {
-		os.Remove(tmp)
+	if err := os.Rename(tmpName, configPath); err != nil {
+		os.Remove(tmpName)
 		return fmt.Errorf("rename config: %w", err)
 	}
 	return nil
+}
+
+// writeConfigInPlace is the non-atomic fallback of writeConfigFile. The
+// backup is written first and atomically; if it fails nothing else is
+// touched. configPath must be an existing regular file (not a symlink, which
+// SaveGeoFilter has already resolved when it points at a regular file) and is
+// never created.
+func writeConfigInPlace(configPath, backupDir string, old, out []byte) error {
+	fi, err := os.Lstat(configPath)
+	if err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("write config: %s is not a regular file, refusing in-place write", configPath)
+	}
+	if backupDir == "" {
+		backupDir = os.TempDir()
+	}
+	bak, err := writeBackupAtomic(backupDir, old)
+	if err != nil {
+		return fmt.Errorf("backup config before in-place write: %w", err)
+	}
+	f, err := os.OpenFile(configPath, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	if _, err := f.Write(out); err != nil {
+		f.Close()
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	log.Printf("[config] config directory is not writable: saved %s in place (not atomic); previous content backed up to %s", configPath, bak)
+	return nil
+}
+
+// writeBackupAtomic stores data as dir/config.json.bak (0600) through a temp
+// file in dir and a rename, and returns the backup path.
+func writeBackupAtomic(dir string, data []byte) (string, error) {
+	tmp, err := os.CreateTemp(dir, "config.json.bak.*.tmp")
+	if err != nil {
+		return "", err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return "", err
+	}
+	dst := filepath.Join(dir, "config.json.bak")
+	if err := os.Rename(name, dst); err != nil {
+		os.Remove(name)
+		return "", err
+	}
+	return dst, nil
 }
 
 // obsBlacklistSet lazily builds and caches the observerBlacklist as a set for O(1) lookups.

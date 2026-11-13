@@ -139,7 +139,7 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 		if _, err := tx.Exec(`INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type) VALUES(?,?, '1100aa','2026-01-01T00:00:00Z',4,1)`, id, fmt.Sprintf("history-%d", id)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tx.Exec(`INSERT INTO observations(transmission_id,observer_idx,raw_hex,path_json,timestamp) VALUES(?,(SELECT rowid FROM observers WHERE id='fixture-observer'),'1200aa','[]',1)`, id); err != nil {
+		if _, err := tx.Exec(`INSERT INTO observations(transmission_id,observer_idx,raw_hex,path_json,timestamp) VALUES(?,(SELECT idx FROM observers WHERE id='fixture-observer'),'1200aa','[]',1)`, id); err != nil {
 			t.Fatal(err)
 		}
 	}

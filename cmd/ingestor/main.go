@@ -25,6 +25,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // finishIngestStartup keeps required migrations ahead of ingestion, but lets
@@ -83,12 +84,27 @@ func main() {
 
 	sources := cfg.ResolvedSources()
 
-	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
-	if err != nil {
-		log.Fatalf("db: %v", err)
+	if err := cfg.DB.Validate(); err != nil {
+		log.Fatalf("[db] %v", err)
+	}
+	var store *Store
+	if d, _ := cfg.DB.GetDriver(); d == dbconfig.DriverPostgres {
+		// cfg.DBPath is only what the empty-target guard checks: the
+		// exchanges with the server go through the database. Never log the
+		// DSN: it carries the password.
+		store, err = OpenPostgresStore(cfg.DB.DSN, cfg.DBPath, cfg.MetricsSampleInterval())
+		if err != nil {
+			log.Fatalf("db: %v", err)
+		}
+		log.Printf("[db] opened postgres")
+	} else {
+		store, err = OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
+		if err != nil {
+			log.Fatalf("db: %v", err)
+		}
+		log.Printf("SQLite opened: %s", cfg.DBPath)
 	}
 	defer store.Close()
-	log.Printf("SQLite opened: %s", cfg.DBPath)
 
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()
@@ -113,14 +129,25 @@ func main() {
 	}
 
 	keySet := newChannelKeySet(channelKeys, cfg.UsersDBPath(), cfg.ApprovedChannelsMax())
+	// On PostgreSQL each set reads the accounts on a read-only connection of
+	// its own, opened on its first read, never on the writer's (see
+	// users_postgres.go); the set closes it.
+	var linkedAccounts *accountsReader
+	if store.pg {
+		keySet.usePostgres(newAccountsReader(cfg.DB.DSN))
+		linkedAccounts = newAccountsReader(cfg.DB.DSN)
+	}
 	if cfg.ApprovedChannelsEnabled() {
+		if store.pg {
+			log.Printf("[proposals] reading approved channels from %s.proposals while that schema exists (accounts in PostgreSQL), else from users.db:", usersPGSchema)
+		}
 		logApprovedChannelsSource(cfg.UsersDBPath())
 		keySet.refresh()
 	}
 
 	// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): nil when
 	// off or ignored. Installed before any MQTT source connects.
-	if lc := newLinkedCompanionFilter(cfg); lc != nil {
+	if lc := newLinkedCompanionFilter(cfg, linkedAccounts); lc != nil {
 		store.linkedCompanions = lc
 		go lc.refreshLoop()
 	}
@@ -575,15 +602,18 @@ func main() {
 	// if the server's read connection holds frames, remaining pages stay in the
 	// WAL until the next tick. Staggered 30s after startup to avoid competing
 	// with the initial burst of ingest writes.
+	// SQLite only: Postgres has no WAL file to truncate (postgresMaintenanceNote).
 	walCheckpointTicker := time.NewTicker(1 * time.Hour)
-	go func() {
-		time.Sleep(30 * time.Second)
-		store.Checkpoint()
-		for range walCheckpointTicker.C {
+	if !store.pg {
+		go func() {
+			time.Sleep(30 * time.Second)
 			store.Checkpoint()
-		}
-	}()
-	log.Printf("[db] WAL checkpoint scheduled every 1h")
+			for range walCheckpointTicker.C {
+				store.Checkpoint()
+			}
+		}()
+		log.Printf("[db] WAL checkpoint scheduled every 1h")
+	}
 
 	// Daily planner statistics refresh (#2058), in two parts.
 	//
@@ -601,10 +631,14 @@ func main() {
 	// an unbounded ANALYZE does: 2.0s against 242.9s on a 9.4 GB database, both
 	// timed warm. Cold, on a first start, it is 3m43.9s.
 	{
+		// SQLite only: Postgres keeps its own statistics (autovacuum's
+		// ANALYZE), and has no sqlite_stat1 or stamp file next to a database.
 		analysisLimit := cfg.AnalysisLimit()
-		if analysisLimit < 0 {
+		switch {
+		case store.pg:
+		case analysisLimit < 0:
 			log.Printf("[analyze] planner statistics refresh disabled (db.analysisLimit=%d)", analysisLimit)
-		} else {
+		default:
 			go func() {
 				// Before the stagger, and only on a database that has never been
 				// analyzed: the stagger is a 2 minute window in which the first
@@ -670,24 +704,29 @@ func main() {
 	}()
 
 	// Prune-request queue (#669 M4 / #738): the read-only server enqueues
-	// geo-prune requests as marker files; the ingestor (which holds the
+	// geo-prune requests (marker files on SQLite, control-table rows on
+	// Postgres); the ingestor (which holds the
 	// write handle) executes the DELETEs. Process on startup, then every
 	// 15 seconds — short enough for a one-click UX, long enough to avoid
-	// useless wake-ups.
-	store.RunPendingPruneRequests()
+	// useless wake-ups. Each pass re-reads geo_filter from the config file
+	// (newGeoFilterSource), so a filter saved through the server applies
+	// without a restart.
+	pruneGeoFilter := newGeoFilterSource(*configPath, cfg.GeoFilter)
+	store.RunPendingPruneRequests(pruneGeoFilter.Current())
 	pruneQueueTicker := time.NewTicker(15 * time.Second)
 	go func() {
 		for range pruneQueueTicker.C {
-			store.RunPendingPruneRequests()
+			store.RunPendingPruneRequests(pruneGeoFilter.Current())
 		}
 	}()
 
-	// Per-second stats file writer for the server's /api/perf/write-sources
-	// endpoint (#1120). Best-effort; never fatal.
+	// Per-second stats writer for the server's /api/perf/write-sources
+	// endpoint (#1120): the stats file on SQLite, the ingestor_stats row on
+	// Postgres. Best-effort; never fatal.
 	StartStatsFileWriter(store, time.Second)
 
 	// Multi-byte capability persister (#1324 follow-up): the server's
-	// analytics cycle publishes a snapshot file via internal/mbcapqueue
+	// analytics cycle publishes a snapshot via internal/mbcapqueue
 	// (it cannot UPDATE itself, mode=ro since #1289). The ingestor
 	// applies the snapshot here every 5 minutes — derived/cached
 	// columns, ingestor owns the write.
@@ -753,6 +792,10 @@ func main() {
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
+	}
+	keySet.Close()
+	if store.linkedCompanions != nil {
+		store.linkedCompanions.Close()
 	}
 	log.Println("Done.")
 }
@@ -1842,7 +1885,11 @@ func loadChannelKeys(cfg *Config, configPath string) map[string]string {
 	}
 
 	rainbowCount := 0
-	if data, err := os.ReadFile(keysPath); err == nil {
+	data, readErr := readRegularFile(keysPath, maxChannelKeysFileBytes)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		log.Printf("Warning: not loading channel keys file %s: %v", keysPath, readErr)
+	}
+	if readErr == nil {
 		var fileKeys map[string]string
 		if err := json.Unmarshal(data, &fileKeys); err == nil {
 			for k, v := range fileKeys {

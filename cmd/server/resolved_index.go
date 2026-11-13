@@ -154,12 +154,14 @@ func (s *PacketStore) confirmResolvedPathContains(txID int, pubkey string) bool 
 	if s.db == nil || s.db.conn == nil {
 		return true
 	}
-	// Use INSTR with surrounding quotes for exact match — avoids LIKE escape issues.
+	// A substring search with surrounding quotes for exact match — avoids LIKE
+	// escape issues. Postgres has no INSTR; strpos is the same function.
 	// resolved_path format: ["pubkey1","pubkey2",...]
 	needle := `"` + strings.ToLower(pubkey) + `"`
 	var count int
-	err := s.db.conn.QueryRow(
+	err := s.db.conn.QueryRow(s.db.sqlFor(
 		`SELECT COUNT(*) FROM observations WHERE transmission_id = ? AND INSTR(LOWER(resolved_path), ?) > 0`,
+		`SELECT COUNT(*) FROM observations WHERE transmission_id = ? AND strpos(LOWER(resolved_path), ?) > 0`),
 		txID, needle,
 	).Scan(&count)
 	if err != nil {

@@ -16,6 +16,8 @@
 - [GET /api/health](#get-apihealth)
 - [GET /api/perf](#get-apiperf)
 - [POST /api/perf/reset](#post-apiperfreset)
+- [GET /api/perf/sqlite](#get-apiperfsqlite)
+- [GET /api/backup](#get-apibackup)
 - [GET /api/nodes](#get-apinodes)
 - [GET /api/nodes/search](#get-apinodessearch)
 - [GET /api/nodes/bulk-health](#get-apinodesbulk-health)
@@ -137,7 +139,7 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | `POST /api/admin/users/{id}/mail/{mailId}/refresh` | admin | -> mail record with `events`, pulled from the provider. `502` provider unavailable |
 | `GET /api/admin/audit?action=&user=&from=&to=&before=&limit=` | admin | -> `{entries, next}`, newest first. `action` is one action or a group ending in `.*` (`user.login.*`); `user` matches actor or target; `from`/`to` are RFC 3339 and inclusive; pass `next` as `before` for the next page (`null` on the last page); `limit` defaults to 100, capped at 500. Entry: `{id, at, action, actor, target, detail}`, with actor and target `{id, displayName, email}`, `{id, deleted: true}` or `null` (system). Login rows are kept 90 days. `400` on an invalid parameter |
 | `GET /api/admin/stats` | admin | -> `{total, active, pending, disabled, admins, stuckPending, bouncing, new7d, new30d, newPerDay, active7d, active30d, logins24h, failedLogins24h, mail7d, guessing}`. `newPerDay` is `[{day, count}]` for 30 UTC days, oldest first; registrations count `user.register` audit rows. `stuckPending` counts pending accounts older than 24 hours. `mail7d` is `{delivered, bounced, blocked, spam, pending, other}` by latest delivery event. `guessing` is `[{userId, displayName, failed}]`: accounts with 5 or more failed logins in 24 hours |
-| `GET /api/admin/users-backup` | admin | -> `application/octet-stream`, attachment `corescope-users-<YYYYMMDD-HHMMSS>.db` (UTC): a fresh consistent copy of `users.db`. It holds every password hash and address, so store it encrypted. Writes a `user.backup` audit row. Restore: docs/user-guide/accounts.md, Backups |
+| `GET /api/admin/users-backup` | admin | -> `application/octet-stream`, attachment `corescope-users-<YYYYMMDD-HHMMSS>.db` (UTC): a fresh consistent copy of `users.db`. It holds every password hash and address, so store it encrypted. Writes a `user.backup` audit row. With accounts in PostgreSQL (`userManagement.dsn`) it answers 501: use `pg_dump -n corescope_users`. Restore: docs/user-guide/accounts.md, Backups |
 | `POST /api/mail/brevo/webhook` | `Authorization: Bearer <webhookSecret>` | Brevo transactional event payload -> `{ok}`. `401` on a wrong secret |
 | `POST /api/mail/postal/webhook` | HTTP Basic auth, password `<webhookSecret>` (any user name) | Postal webhook payload `{event, timestamp, payload, uuid}` -> `{ok}`, also for events that are not about a message. `401` on a wrong secret |
 
@@ -252,7 +254,10 @@ Server health and telemetry. Used by monitoring.
 
 ## GET /api/perf
 
-Detailed performance metrics per endpoint.
+Detailed performance metrics per endpoint. The `sqlite` block describes the
+analyzer database whichever backend it uses (SQLite or PostgreSQL); the name is
+kept for compatibility and `sqlite.engine` says which one it is. The block is
+cached for 30 seconds.
 
 ### Response `200`
 
@@ -294,7 +299,7 @@ Detailed performance metrics per endpoint.
     "inserts":           number,
     "queries":           number,
     "inMemory":          number,
-    "sqliteOnly":        boolean,
+    "sqliteOnly":        boolean,        // always false; kept for compatibility, says nothing about the database backend
     "maxPackets":        number,
     "estimatedMB":       number,
     "maxMB":             number,
@@ -306,11 +311,12 @@ Detailed performance metrics per endpoint.
     }
   },
   "sqlite": {
-    "dbSizeMB":    number,
-    "walSizeMB":   number,
-    "freelistMB":  number,
-    "walPages":    { "total": number, "checkpointed": number, "busy": number } | null,
-    "rows": {
+    "engine":      "sqlite" | "postgres",
+    "dbSizeMB":    number,          // PostgreSQL: pg_database_size
+    "walSizeMB":   number,          // PostgreSQL: always 0
+    "freelistMB":  number,          // PostgreSQL: always 0
+    "walPages":    { "total": number, "checkpointed": number, "busy": number } | null,  // PostgreSQL: 0 values
+    "rows": {                       // PostgreSQL: planner estimates (pg_stat_user_tables.n_live_tup), not exact counts
       "transmissions": number,
       "observations":  number,
       "nodes":         number,
@@ -342,6 +348,56 @@ Resets performance counters. Requires API key.
 ```json
 { "ok": true }
 ```
+
+---
+
+## GET /api/perf/sqlite
+
+SQLite-specific diagnostics. Only available when the analyzer database is SQLite.
+
+### Response `200`
+
+```jsonc
+{
+  "walSizeMB":    number,         // WAL file size in MiB (0 when unavailable)
+  "walSize":      number,         // WAL file size in bytes
+  "pageCount":    number,
+  "pageSize":     number,
+  "cacheSize":    number,
+  "cacheHitRate": number          // PacketStore row-cache hit ratio (0-1), not a SQLite counter
+}
+```
+
+### Response `404` (PostgreSQL database)
+
+```json
+{ "error": "not available: the database is PostgreSQL" }
+```
+
+Use the `sqlite` block of [`GET /api/perf`](#get-apiperf) for database size and
+row counts on either backend.
+
+---
+
+## GET /api/backup
+
+Streams a consistent snapshot of the analyzer database. Requires admin
+(`X-API-Key` or an admin session). Only available when the analyzer database is
+SQLite.
+
+### Response `200`
+
+A `VACUUM INTO` snapshot as `application/octet-stream`, with
+`Content-Disposition: attachment; filename="corescope-backup-<unix>.db"`.
+
+### Response `501` (PostgreSQL database)
+
+```json
+{ "error": "backups of a PostgreSQL database are taken with pg_dump; see docs/postgresql.md" }
+```
+
+This route never covers the accounts; `users.db` is SQLite on both backends (unless the accounts
+are in PostgreSQL) and has its own admin route, `GET /api/admin/users-backup`.
 
 ---
 

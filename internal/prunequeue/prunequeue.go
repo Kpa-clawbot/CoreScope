@@ -16,15 +16,23 @@
 //	                      ingestor removes the request file in the same step
 //	                      using os.Rename (atomic on POSIX).
 //
+// Writers use a randomly named O_EXCL temp file plus rename and readers
+// refuse non-regular files, so a less-privileged peer sharing the directory
+// cannot redirect a write or read through a symlink.
+//
 // The server polls result-<id>.json to surface progress on
 // GET /api/admin/prune-geo-filter/status?id=<id>.
+//
+// Queue abstracts the channel: NewFS is this marker-file layout (SQLite,
+// shared data directory); NewPG carries the same JSON documents in the
+// <schema>.prune_requests / prune_results control tables, so a PostgreSQL
+// deployment needs no shared filesystem.
 package prunequeue
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,9 +44,10 @@ import (
 // request/result marker files.
 const QueueDirName = "prune-requests"
 
-// Request is the payload the server writes to request-<id>.json. The
-// ingestor honors the pubkeys list verbatim — the server is responsible
-// for the TOCTOU snapshot (only nodes that were in the preview).
+// Request is the payload the server writes to request-<id>.json. Pubkeys
+// are only candidates (the server sends the nodes of its preview that are
+// still outside the filter): the ingestor re-checks each against its own
+// geo_filter and deletes only the nodes that fall outside it.
 type Request struct {
 	ID          string    `json:"id"`
 	RequestedAt time.Time `json:"requestedAt"`
@@ -48,13 +57,17 @@ type Request struct {
 
 // Result is what the ingestor writes to result-<id>.json after running
 // the DELETE. Errors are captured as plain strings — the file is the
-// only channel back to the server.
+// only channel back to the server. Skipped counts the distinct requested
+// pubkeys the ingestor did not delete, and SkipReasons breaks that count
+// down by reason (e.g. "inside the ingestor's geo_filter").
 type Result struct {
-	ID          string    `json:"id"`
-	RequestedAt time.Time `json:"requestedAt"`
-	CompletedAt time.Time `json:"completedAt"`
-	Deleted     int64     `json:"deleted"`
-	Error       string    `json:"error,omitempty"`
+	ID          string           `json:"id"`
+	RequestedAt time.Time        `json:"requestedAt"`
+	CompletedAt time.Time        `json:"completedAt"`
+	Deleted     int64            `json:"deleted"`
+	Skipped     int64            `json:"skipped,omitempty"`
+	SkipReasons map[string]int64 `json:"skipReasons,omitempty"`
+	Error       string           `json:"error,omitempty"`
 }
 
 // NewID returns a 16-hex-char random id suitable for filenames. Random
@@ -80,9 +93,11 @@ func QueueDir(dbPath string) string {
 // EnsureDir creates the queue directory if missing.
 func EnsureDir(dbPath string) (string, error) {
 	dir := QueueDir(dbPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	root, err := openQueueRoot(dir, true)
+	if err != nil {
 		return "", err
 	}
+	_ = root.Close()
 	return dir, nil
 }
 
@@ -104,7 +119,7 @@ func validID(id string) bool {
 // RequestPath returns the full path for the request-<id>.json marker.
 func RequestPath(dbPath, id string) (string, error) {
 	if !validID(id) {
-		return "", errors.New("invalid prune request id")
+		return "", errInvalidID
 	}
 	return filepath.Join(QueueDir(dbPath), "request-"+id+".json"), nil
 }
@@ -112,7 +127,7 @@ func RequestPath(dbPath, id string) (string, error) {
 // ResultPath returns the full path for the result-<id>.json marker.
 func ResultPath(dbPath, id string) (string, error) {
 	if !validID(id) {
-		return "", errors.New("invalid prune request id")
+		return "", errInvalidID
 	}
 	return filepath.Join(QueueDir(dbPath), "result-"+id+".json"), nil
 }
@@ -120,25 +135,21 @@ func ResultPath(dbPath, id string) (string, error) {
 // WriteRequest atomically writes a request file (temp file + rename).
 func WriteRequest(dbPath string, req Request) error {
 	if !validID(req.ID) {
-		return errors.New("invalid prune request id")
+		return errInvalidID
 	}
-	if _, err := EnsureDir(dbPath); err != nil {
-		return err
-	}
-	p, _ := RequestPath(dbPath, req.ID)
 	b, err := json.MarshalIndent(req, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := checkSize(len(b)); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, p); err != nil {
-		_ = os.Remove(tmp)
+	root, err := openQueueRoot(QueueDir(dbPath), true)
+	if err != nil {
 		return err
 	}
-	return nil
+	defer root.Close()
+	return writeFileAtomic(root, "request-"+req.ID+".json", b)
 }
 
 // WriteResult atomically writes a result file (temp file + rename),
@@ -146,37 +157,42 @@ func WriteRequest(dbPath string, req Request) error {
 // the only writer.
 func WriteResult(dbPath string, res Result) error {
 	if !validID(res.ID) {
-		return errors.New("invalid prune request id")
+		return errInvalidID
 	}
-	if _, err := EnsureDir(dbPath); err != nil {
-		return err
-	}
-	p, _ := ResultPath(dbPath, res.ID)
 	b, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := checkSize(len(b)); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, p); err != nil {
-		_ = os.Remove(tmp)
+	root, err := openQueueRoot(QueueDir(dbPath), true)
+	if err != nil {
 		return err
 	}
-	reqPath, _ := RequestPath(dbPath, res.ID)
-	_ = os.Remove(reqPath)
+	defer root.Close()
+	if err := writeFileAtomic(root, "result-"+res.ID+".json", b); err != nil {
+		return err
+	}
+	_ = root.Remove("request-" + res.ID + ".json")
 	return nil
 }
 
 // ReadResult reads result-<id>.json. Returns (nil, nil) if the result
 // file does not yet exist (request still pending or unknown id).
 func ReadResult(dbPath, id string) (*Result, error) {
-	p, err := ResultPath(dbPath, id)
+	if !validID(id) {
+		return nil, errInvalidID
+	}
+	root, err := openQueueRoot(QueueDir(dbPath), false)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	b, err := os.ReadFile(p)
+	defer root.Close()
+	b, err := readRegularFile(root, "result-"+id+".json")
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -193,13 +209,21 @@ func ReadResult(dbPath, id string) (*Result, error) {
 // RequestExists returns true if request-<id>.json is still present
 // (i.e. the ingestor has not processed it yet).
 func RequestExists(dbPath, id string) (bool, error) {
-	p, err := RequestPath(dbPath, id)
+	if !validID(id) {
+		return false, errInvalidID
+	}
+	root, err := openQueueRoot(QueueDir(dbPath), false)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
 		return false, err
 	}
-	_, err = os.Stat(p)
+	defer root.Close()
+	fi, err := root.Lstat("request-" + id + ".json")
 	if err == nil {
-		return true, nil
+		// A symlink or other non-regular entry is not a real request.
+		return fi.Mode().IsRegular(), nil
 	}
 	if os.IsNotExist(err) {
 		return false, nil
@@ -211,16 +235,26 @@ func RequestExists(dbPath, id string) (bool, error) {
 // lexicographic order. Used by the ingestor's maintenance loop.
 func ListPending(dbPath string) ([]string, error) {
 	dir := QueueDir(dbPath)
-	entries, err := os.ReadDir(dir)
+	root, err := openQueueRoot(dir, false)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
+	defer root.Close()
+	d, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	entries, err := d.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
 	for _, e := range entries {
-		if e.IsDir() {
+		if !e.Type().IsRegular() {
 			continue
 		}
 		name := e.Name()
@@ -232,9 +266,15 @@ func ListPending(dbPath string) ([]string, error) {
 	return out, nil
 }
 
-// ReadRequest reads and parses a request file by full path.
+// ReadRequest reads and parses a request file by full path. Only the file's
+// own name is resolved inside its (non-symlink) parent directory.
 func ReadRequest(path string) (*Request, error) {
-	b, err := os.ReadFile(path)
+	root, err := openQueueRoot(filepath.Dir(path), false)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	b, err := readRegularFile(root, filepath.Base(path))
 	if err != nil {
 		return nil, err
 	}

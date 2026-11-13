@@ -134,14 +134,10 @@ func (s *Store) createSession(userID int64, ttl time.Duration, userAgent, kind, 
 		userAgent = strings.ToValidUTF8(userAgent[:maxUserAgent], "")
 	}
 	now := s.now()
-	res, err := s.db.Exec(`INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, expires_at, last_seen_at, user_agent, kind, label, scopes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, hash, userID, csrf, unix(now), unix(now.Add(ttl)), unix(now), userAgent,
-		kind, label, strings.Join(scopes, ","))
-	if err != nil {
-		return "", nil, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
+	var id int64
+	if err := s.db.QueryRow(`INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, expires_at, last_seen_at, user_agent, kind, label, scopes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`, hash, userID, csrf, unix(now), unix(now.Add(ttl)), unix(now), userAgent,
+		kind, label, strings.Join(scopes, ",")).Scan(&id); err != nil {
 		return "", nil, err
 	}
 	return raw, &Session{ID: id, UserID: userID, CSRFToken: csrf, CreatedAt: fromUnix(unix(now)),

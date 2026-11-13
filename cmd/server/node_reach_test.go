@@ -20,7 +20,7 @@ func newReachScanTestDB(t *testing.T) *DB {
 	}
 	stmts := []string{
 		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, from_pubkey TEXT, payload_type INTEGER)`,
-		`CREATE TABLE observers (id TEXT, inactive INTEGER)`,
+		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, inactive INTEGER)`,
 		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, snr REAL, path_json TEXT, timestamp INTEGER)`,
 		`INSERT INTO observers (id) VALUES ('OBS1')`, // rowid 1
 		`INSERT INTO transmissions (id, from_pubkey, payload_type) VALUES (1,'FF00',4),(2,'',5),(3,'',5)`,
@@ -318,7 +318,7 @@ func TestReachScanStartsFromObservationsTimeIndex(t *testing.T) {
 		}
 	}
 	args := []interface{}{int64(0), `%"01FA"%`, `%"01FA00"%`, 10}
-	rows, err := db.conn.Query("EXPLAIN QUERY PLAN "+reachScanSQL(2), args...)
+	rows, err := db.conn.Query("EXPLAIN QUERY PLAN "+db.reachScanSQL(2), args...)
 	if err != nil {
 		t.Fatal(err)
 	}
