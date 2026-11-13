@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -129,14 +130,23 @@ func main() {
 	}
 
 	keySet := newChannelKeySet(channelKeys, cfg.UsersDBPath(), cfg.ApprovedChannelsMax())
+	var usersPG *sql.DB // the store's connection on PostgreSQL, else nil
+	if store.pg {
+		usersPG = store.db
+		keySet.usePostgres(usersPG)
+	}
 	if cfg.ApprovedChannelsEnabled() {
-		logApprovedChannelsSource(cfg.UsersDBPath())
+		if usersPG != nil {
+			log.Printf("[proposals] reading approved channels from %s.proposals", usersPGSchema)
+		} else {
+			logApprovedChannelsSource(cfg.UsersDBPath())
+		}
 		keySet.refresh()
 	}
 
 	// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): nil when
 	// off or ignored. Installed before any MQTT source connects.
-	if lc := newLinkedCompanionFilter(cfg); lc != nil {
+	if lc := newLinkedCompanionFilter(cfg, usersPG); lc != nil {
 		store.linkedCompanions = lc
 		go lc.refreshLoop()
 	}

@@ -42,6 +42,7 @@ type linkedCompanionSet struct {
 
 	mu       sync.Mutex  // guards everything below
 	db       *sql.DB     // opened lazily, read-only
+	pgDB     *sql.DB     // PostgreSQL: the store's connection; db and path are unused
 	lastRead time.Time   // last read attempt, for the miss gap
 	reads    int         // read attempts (tests)
 	failing  bool        // the last read failed; logged once per failure streak
@@ -106,9 +107,9 @@ func (s *linkedCompanionSet) readLocked() {
 	s.lastRead = s.now()
 	s.reads++
 	keys, err := s.query()
-	if err != nil && strings.Contains(err.Error(), "no such table") {
+	if isMissingTable(err) {
 		if !s.noTable {
-			log.Printf("[companions] %s has no companion_links table (a server older than companion linking); passing client data until it appears", s.path)
+			log.Printf("[companions] %s has no companion_links table (a server older than companion linking); passing client data until it appears", s.source())
 			s.noTable = true
 		}
 		return
@@ -121,7 +122,7 @@ func (s *linkedCompanionSet) readLocked() {
 		return
 	}
 	if s.failing {
-		log.Printf("[companions] linked companions readable again from %s", s.path)
+		log.Printf("[companions] linked companions readable again from %s", s.source())
 		s.failing = false
 	}
 	next := make(map[string]struct{}, len(keys))
@@ -132,7 +133,21 @@ func (s *linkedCompanionSet) readLocked() {
 	s.loaded.Store(true)
 }
 
+// usePostgres reads corescope_users.companion_links through db (the
+// ingestor's store) instead of users.db. db stays the caller's.
+func (s *linkedCompanionSet) usePostgres(db *sql.DB) { s.pgDB = db }
+
+func (s *linkedCompanionSet) source() string {
+	if s.pgDB != nil {
+		return usersPGSchema + ".companion_links"
+	}
+	return s.path
+}
+
 func (s *linkedCompanionSet) query() ([]string, error) {
+	if s.pgDB != nil {
+		return queryUsersPG(s.pgDB, pgUsersQuery(linkedCompanionsQuery, "companion_links"))
+	}
 	if s.db == nil {
 		if _, err := os.Stat(s.path); err != nil {
 			if os.IsNotExist(err) {
@@ -192,7 +207,7 @@ func (s *Store) allowClientPubkey(pubkey string) bool {
 // once, when clientRxCoverage.requireLinkedCompanion is in effect, else nil.
 // The setting without userManagement.enabled is ignored with a startup
 // warning, as on the server.
-func newLinkedCompanionFilter(cfg *Config) *linkedCompanionSet {
+func newLinkedCompanionFilter(cfg *Config, pgDB *sql.DB) *linkedCompanionSet {
 	if !cfg.RequireLinkedCompanionSet() {
 		return nil
 	}
@@ -200,12 +215,17 @@ func newLinkedCompanionFilter(cfg *Config) *linkedCompanionSet {
 		log.Printf("[companions] WARNING: clientRxCoverage.requireLinkedCompanion is ignored: it needs userManagement.enabled")
 		return nil
 	}
-	shown := cfg.UsersDBPath()
-	if abs, err := filepath.Abs(shown); err == nil {
-		shown = abs
+	s := newLinkedCompanionSet(cfg.UsersDBPath())
+	if pgDB != nil {
+		s.usePostgres(pgDB)
+	}
+	shown := s.source()
+	if pgDB == nil {
+		if abs, err := filepath.Abs(shown); err == nil {
+			shown = abs
+		}
 	}
 	log.Printf("[companions] only linked companions may publish client data; reading companion_links from %s", shown)
-	s := newLinkedCompanionSet(cfg.UsersDBPath())
 	s.refresh()
 	return s
 }
