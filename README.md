@@ -12,7 +12,7 @@ Self-hosted, open-source MeshCore packet analyzer. Collects MeshCore packets via
 
 ## ⚡ Performance
 
-The Go backend serves its packet and analytics API from an in-memory packet store with 7 indexes (hash, txID, obsID, observer, node, path hop, payload type). SQLite is for persistence only — reads never touch disk.
+The Go backend serves its packet and analytics API from an in-memory packet store with 7 indexes (hash, txID, obsID, observer, node, path hop, payload type). The database (SQLite by default, or PostgreSQL) is for persistence only — reads never touch disk.
 
 | Metric | Value |
 |--------|-------|
@@ -164,16 +164,54 @@ Copy `config.example.json` to `config.json` and edit:
 | `mqttSources` | External MQTT broker connections (optional) |
 | `channelKeys` | Channel decryption keys (hex). Hashtag channels auto-derived via SHA256 |
 | `defaultRegion` | Default IATA region code for the UI |
-| `dbPath` | SQLite database path (default: `data/meshcore.db`) |
+| `dbPath` | SQLite database path (default: `data/meshcore.db`). With PostgreSQL it still anchors the directory for the file queues the server and ingestor share, so keep it mounted |
+| `db.driver` | `sqlite` (default) or `postgres`. See [Database: SQLite or PostgreSQL](#database-sqlite-or-postgresql) |
+| `db.dsn` | PostgreSQL connection URL, required when `db.driver` is `postgres`. It may hold a password: prefer the `DB_DSN` environment variable, and keep it out of git and out of world-readable files |
+| `db.statementTimeoutSec` | PostgreSQL only: per-statement timeout in seconds for the server (default 120, `0` disables). Ignored on SQLite |
 
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `DB_PATH` | Override SQLite database path |
+| `DB_DRIVER` | Database backend, `sqlite` or `postgres` (same as `db.driver`) |
+| `DB_DSN` | PostgreSQL connection URL (same as `db.dsn`) |
+| `DB_DSN_INGESTOR` | Docker image only: DSN for the ingestor (writer role). Defaults to `DB_DSN` |
+| `DB_DSN_SERVER` | Docker image only: DSN for the server (read-only role). Defaults to `DB_DSN` |
 | `GOMEMLIMIT` | Go soft memory limit, wins over `runtime.maxMemoryMB` |
 
 The HTTP port is set with `port` in `config.json` or the server's `-port` flag.
+
+## Database: SQLite or PostgreSQL
+
+CoreScope stores packets, nodes and observers in SQLite by default. No setup
+is needed and nothing changes for existing installs. For large or
+long-retention installs, or if you already run PostgreSQL, you can use
+PostgreSQL 16 or newer instead. It is an explicit choice: nothing migrates
+automatically, and the same binaries serve both backends.
+
+```json
+{ "db": { "driver": "postgres", "dsn": "postgres://corescope_writer@db:5432/corescope?sslmode=require" } }
+```
+
+- The ingestor is the only writer and needs a role that owns the schema. The
+  server uses a separate read-only role and refuses to start if its role can
+  write. `scripts/postgres-roles.sh` creates both roles.
+- `docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d`
+  starts PostgreSQL next to CoreScope with the roles provisioned.
+- `corescope-migrate copy` moves an existing SQLite database into PostgreSQL
+  (and back), then `corescope-migrate verify` compares the two. See
+  [cmd/migrate/README.md](cmd/migrate/README.md).
+- Optional user accounts (`users.db`) stay SQLite on both backends.
+- In the Docker image on PostgreSQL the server runs as its own unprivileged
+  user (`SERVER_RUN_AS_UID`, default 1001) so it cannot read the ingestor's
+  writer DSN, and the files it still writes (`users.db`, the shared file
+  queues) live in `/app/data/shared`. `config.json` must not carry a `dsn`
+  there; use `DB_DSN_INGESTOR` and `DB_DSN_SERVER`. `corescope-migrate` is in the
+  image at `/app/corescope-migrate`.
+
+Roles, Docker, backups with `pg_dump` and switching back are covered in
+[docs/postgresql.md](docs/postgresql.md).
 
 ## Architecture
 
@@ -181,7 +219,7 @@ The HTTP port is set with `port` in `config.json` or the server's `-port` flag.
                            ┌─────────────────────────────────────────────┐
                            │              Docker Container               │
                            │                                             │
-Observer → USB →           │  Mosquitto ──→ Go Ingestor ──→ SQLite DB   │
+Observer → USB →           │  Mosquitto ──→ Go Ingestor ──→ SQLite / PG │
   meshcoretomqtt → MQTT ──→│                    │                        │
                            │              Go HTTP Server ──→ WebSocket   │
                            │                    │               │        │
@@ -211,14 +249,14 @@ corescope/
 │   │   ├── main.go          # Entry point
 │   │   ├── routes.go        # 40+ API endpoint handlers
 │   │   ├── store.go         # In-memory packet store (5 indexes)
-│   │   ├── db.go            # SQLite persistence layer
+│   │   ├── db.go            # Database layer (SQLite or PostgreSQL, read-only)
 │   │   ├── decoder.go       # MeshCore packet decoder
 │   │   ├── websocket.go     # WebSocket broadcast
 │   │   └── *_test.go        # Server tests
 │   └── ingestor/            # Go MQTT ingestor
 │       ├── main.go          # MQTT subscription + packet processing
 │       ├── decoder.go       # Packet decoder (shared logic)
-│       ├── db.go            # SQLite write path
+│       ├── db.go            # Database write path (SQLite or PostgreSQL)
 │       └── *_test.go        # Ingestor tests
 ├── proto/                   # Protobuf API definitions
 ├── public/                  # Vanilla JS frontend (no build step)
@@ -261,6 +299,17 @@ works) and links statically against musl, so the result is one self-contained fi
 that runs on Alpine or scratch. The container build does the same thing — see
 `Dockerfile`.
 
+The static musl binaries must be linked with `-Wl,-z,stack-size=8388608`.
+musl gives non-main threads a 128 KiB stack, and deep SQLite queries overflowed
+it and crashed the server. `make crossbuild` and the `Dockerfile` already
+pass the flag (`STACK_LDFLAG` in the `Makefile`); keep it if you build the
+binaries another way.
+
+PostgreSQL support uses the pure-Go [`pgx`](https://github.com/jackc/pgx) driver,
+so it adds no cgo requirement. The SQLite driver is still linked in, because
+SQLite is the default backend, `users.db` is always SQLite, and
+`corescope-migrate` reads and writes both.
+
 ### Test Suite
 
 Go tests cover the backend, Node.js unit tests in `tests/unit/` cover the frontend logic, and Playwright tests in `tests/e2e/` validate the UI in a browser.
@@ -288,7 +337,7 @@ node tools/generate-packets.js --api --count 200
 
 ### Migrating from Node.js
 
-If you're running an existing Node.js deployment, see [docs/go-migration.md](docs/go-migration.md) for a step-by-step guide. The Go engine reads the same SQLite database and `config.json` — no data migration needed.
+If you're running an existing Node.js deployment, see [docs/go-migration.md](docs/go-migration.md) for a step-by-step guide. The Go engine reads the same SQLite database and `config.json` — no data migration needed. PostgreSQL is not part of that migration: it is an opt-in backend for the Go engine only (see [docs/postgresql.md](docs/postgresql.md)).
 
 ## Contributing
 

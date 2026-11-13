@@ -392,6 +392,11 @@ The analyzer database has its own backup route, `GET /api/backup`.
 
 The audit log is replaced too, so note the deletions before you overwrite it.
 
+> `users.db` is always a SQLite file, including on installs whose measurement database is
+> [PostgreSQL](../postgresql.md). Back it up and restore it as described here; a `pg_dump` does
+> not contain it. In the Docker image on PostgreSQL the file is `/app/data/shared/users.db` and
+> its snapshots are in `/app/data/shared/backups/`.
+
 **Restore** (not automated). The commands use the `sqlite3` command-line tool; replace
 `2026-10-08 12:00:00` with the snapshot's time from its file name (UTC).
 

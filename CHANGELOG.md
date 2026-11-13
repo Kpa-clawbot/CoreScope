@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Added
+- **PostgreSQL as an alternative database** - set `db.driver` to `postgres` and `db.dsn` (or `DB_DRIVER` / `DB_DSN`). SQLite stays the default and nothing migrates automatically. The ingestor is the only writer; the server connects with a read-only role and refuses to start if its role can write. `users.db` stays SQLite. See [docs/postgresql.md](docs/postgresql.md).
+- `corescope-migrate copy -from <db> -to <db>` and `corescope-migrate verify -a <db> -b <db>` move an installation between SQLite and Postgres in either direction and compare the result. `<db>` is `sqlite:<path>` or a `postgres://` URL. The copy refuses a non-empty target and is verified before it commits. See [cmd/migrate/README.md](cmd/migrate/README.md).
+- The Docker image takes `DB_DSN_INGESTOR` (writer role) and `DB_DSN_SERVER` (read-only role), so the server process never sees the writer credentials.
+- `corescope-decrypt -db` reads a Postgres database (a `postgres://` URL, opened read-only) as well as a SQLite file.
+- `corescope-migrate` ships in the Docker image at `/app/corescope-migrate`.
+- `db.statementTimeoutSec` caps each statement the server runs on PostgreSQL (default 120 seconds, `0` disables).
+- `docker-compose.postgres.yml` adds PostgreSQL to the Compose deployment, and `scripts/postgres-roles.sh` creates the writer and read-only roles.
+- The ingestor on Postgres refuses to start on an empty database while the SQLite file at `dbPath` still holds transmissions, so a forgotten copy cannot silently start a fresh history.
+
+### Fixed
+- **Server crash on the static musl binaries** - musl gives non-main threads a 128 KiB stack, and deep SQLite queries (`/api/nodes/reported`, rx-coverage on enough data) overflowed it with SIGSEGV. Every musl link now passes `-Wl,-z,stack-size=8388608`.
+- The server no longer attempts a write on the analyzer database (#1856). The content-hash migration runs in the ingestor as the async migration `content_hash_payload_bits_v1`, and `/api/stats` `hashMigrationComplete` reports its real status.
+- `observers` has an explicit `idx INTEGER PRIMARY KEY` instead of the implicit rowid, so a `sqlite3 .dump` and reload no longer re-links observations to the wrong observer. The ingestor migrates it at start; rolling upgrade and rollback are safe.
+- `corescope-decrypt` printed empty observer names; the join is fixed.
+- The server dropped observations with fractional scores on both backends.
+- The Docker image failed to build after the Postgres modules were added: the build stages lacked `internal/dbx`. `tests/unit/test-dockerfile-modules.js` now checks every stage.
+- The shared file queues (prune requests, multibyte snapshot) followed planted symlinks; they no longer do.
+
+### Security
+- In the Docker image on PostgreSQL the server runs as a separate unprivileged user (`SERVER_RUN_AS_UID`, default 1001), so it cannot read the ingestor's writer DSN. The files the server still writes live in `/app/data/shared`.
+- The server caps PostgreSQL statements with a timeout (`db.statementTimeoutSec`).
+- `scripts/postgres-roles.sh` refuses a `PG_ADMIN_URL` that contains a password, and refuses to adopt a database or role it did not create unless `CORESCOPE_ADOPT=1`.
+
+### Changed
+- `GET /api/perf` `sqlite` block gains `engine` (`"sqlite"` or `"postgres"`). On Postgres `dbSizeMB` is the database size, `rows` are planner estimates, and the WAL and freelist figures are 0. The Perf page labels the card and hides the WAL and freelist rows accordingly.
+- On Postgres, `GET /api/perf/sqlite` answers 404 and `GET /api/backup` answers 501 (use `pg_dump`).
+- CI runs the Go tests and every E2E shard against both SQLite and Postgres, and a new musl job tests the static build.
+
 ## [3.17.0] - 2026-11-11
 
 See [docs/release-notes/v3.17.0.md](docs/release-notes/v3.17.0.md) for the full notes. 24 commits since v3.16.0: 11 fix, 5 docs, 4 feat, 2 test, 1 ui, 1 chore.

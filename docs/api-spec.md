@@ -16,6 +16,8 @@
 - [GET /api/health](#get-apihealth)
 - [GET /api/perf](#get-apiperf)
 - [POST /api/perf/reset](#post-apiperfreset)
+- [GET /api/perf/sqlite](#get-apiperfsqlite)
+- [GET /api/backup](#get-apibackup)
 - [GET /api/nodes](#get-apinodes)
 - [GET /api/nodes/search](#get-apinodessearch)
 - [GET /api/nodes/bulk-health](#get-apinodesbulk-health)
@@ -252,7 +254,10 @@ Server health and telemetry. Used by monitoring.
 
 ## GET /api/perf
 
-Detailed performance metrics per endpoint.
+Detailed performance metrics per endpoint. The `sqlite` block describes the
+analyzer database whichever backend it uses (SQLite or PostgreSQL); the name is
+kept for compatibility and `sqlite.engine` says which one it is. The block is
+cached for 30 seconds.
 
 ### Response `200`
 
@@ -294,7 +299,7 @@ Detailed performance metrics per endpoint.
     "inserts":           number,
     "queries":           number,
     "inMemory":          number,
-    "sqliteOnly":        boolean,
+    "sqliteOnly":        boolean,        // always false; kept for compatibility, says nothing about the database backend
     "maxPackets":        number,
     "estimatedMB":       number,
     "maxMB":             number,
@@ -306,11 +311,12 @@ Detailed performance metrics per endpoint.
     }
   },
   "sqlite": {
-    "dbSizeMB":    number,
-    "walSizeMB":   number,
-    "freelistMB":  number,
-    "walPages":    { "total": number, "checkpointed": number, "busy": number } | null,
-    "rows": {
+    "engine":      "sqlite" | "postgres",
+    "dbSizeMB":    number,          // PostgreSQL: pg_database_size
+    "walSizeMB":   number,          // PostgreSQL: always 0
+    "freelistMB":  number,          // PostgreSQL: always 0
+    "walPages":    { "total": number, "checkpointed": number, "busy": number } | null,  // PostgreSQL: 0 values
+    "rows": {                       // PostgreSQL: planner estimates (pg_stat_user_tables.n_live_tup), not exact counts
       "transmissions": number,
       "observations":  number,
       "nodes":         number,
@@ -342,6 +348,56 @@ Resets performance counters. Requires API key.
 ```json
 { "ok": true }
 ```
+
+---
+
+## GET /api/perf/sqlite
+
+SQLite-specific diagnostics. Only available when the analyzer database is SQLite.
+
+### Response `200`
+
+```jsonc
+{
+  "walSizeMB":    number,         // WAL file size in MiB (0 when unavailable)
+  "walSize":      number,         // WAL file size in bytes
+  "pageCount":    number,
+  "pageSize":     number,
+  "cacheSize":    number,
+  "cacheHitRate": number          // PacketStore row-cache hit ratio (0-1), not a SQLite counter
+}
+```
+
+### Response `404` (PostgreSQL database)
+
+```json
+{ "error": "not available: the database is PostgreSQL" }
+```
+
+Use the `sqlite` block of [`GET /api/perf`](#get-apiperf) for database size and
+row counts on either backend.
+
+---
+
+## GET /api/backup
+
+Streams a consistent snapshot of the analyzer database. Requires admin
+(`X-API-Key` or an admin session). Only available when the analyzer database is
+SQLite.
+
+### Response `200`
+
+A `VACUUM INTO` snapshot as `application/octet-stream`, with
+`Content-Disposition: attachment; filename="corescope-backup-<unix>.db"`.
+
+### Response `501` (PostgreSQL database)
+
+```json
+{ "error": "backups of a PostgreSQL database are taken with pg_dump; see docs/postgresql.md" }
+```
+
+This route never covers `users.db`; that file is SQLite on both backends and
+has its own admin route, `GET /api/admin/users-backup`.
 
 ---
 

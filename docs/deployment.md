@@ -11,6 +11,7 @@ Comprehensive guide to deploying and operating CoreScope. For a quick start, see
 - [TLS / HTTPS](#tls--https)
 - [Behind a CDN (Cloudflare, Fastly)](#behind-a-cdn-cloudflare-fastly)
 - [Monitoring & Health Checks](#monitoring--health-checks)
+- [Using PostgreSQL](#using-postgresql)
 - [Backup & Restore](#backup--restore)
 - [Troubleshooting](#troubleshooting)
 
@@ -50,7 +51,7 @@ No `config.json` is required. The server starts with sensible defaults:
 - HTTP on port 3000 (Caddy proxies port 80 → 3000 internally)
 - Internal Mosquitto MQTT broker on port 1883
 - Ingestor connects to `mqtt://localhost:1883` automatically
-- SQLite database at `/app/data/meshcore.db`
+- SQLite database at `/app/data/meshcore.db` (the default; see [Using PostgreSQL](#using-postgresql) for the alternative)
 
 ### Full `docker run` Reference (recommended)
 
@@ -75,7 +76,7 @@ docker run -d --name corescope \
 | `-p 80:80` | Yes | HTTP web UI |
 | `-p 443:443` | No | HTTPS (only if using built-in Caddy with a domain) |
 | `-p 1883:1883` | No | MQTT broker (expose if external gateways connect directly) |
-| `-v /your/data:/app/data` | Yes | Persistent data: SQLite DB, config.json, theme.json |
+| `-v /your/data:/app/data` | Yes | Persistent data: SQLite DB (default), config.json, theme.json, `users.db` |
 | `-v /your/Caddyfile:/etc/caddy/Caddyfile:ro` | No | Custom Caddyfile for HTTPS |
 | `-v /your/caddy-data:/data/caddy` | No | Caddy TLS certificate storage |
 | `-e DISABLE_MOSQUITTO=true` | No | Skip the internal Mosquitto broker (use your own) |
@@ -254,7 +255,11 @@ CoreScope uses a layered configuration system (highest priority wins):
 |----------|---------|-------------|
 | `MQTT_BROKER` | `mqtt://localhost:1883` | MQTT broker URL (overrides config file) |
 | `MQTT_TOPIC` | `meshcore/#` | MQTT topic subscription pattern |
-| `DB_PATH` | `data/meshcore.db` | SQLite database path |
+| `DB_PATH` | `data/meshcore.db` | SQLite database path. On PostgreSQL it still anchors the directory for shared file queues and `users.db` |
+| `DB_DRIVER` | `sqlite` | `sqlite` or `postgres`. See [Using PostgreSQL](#using-postgresql) |
+| `DB_DSN` | — | PostgreSQL connection URL (when `DB_DRIVER=postgres`) |
+| `DB_DSN_INGESTOR` | `DB_DSN` | Docker image only: the ingestor's (writer) DSN |
+| `DB_DSN_SERVER` | `DB_DSN` | Docker image only: the server's (read-only) DSN |
 | `DISABLE_MOSQUITTO` | `false` | Skip the internal Mosquitto broker |
 | `DISABLE_CADDY` | `false` | Skip the built-in Caddy reverse proxy |
 
@@ -638,11 +643,36 @@ docker stats corescope
 
 ---
 
+## Using PostgreSQL
+
+SQLite is the default and needs no setup. The measurement database can instead live in
+PostgreSQL 16 or newer, which suits large or long-retention installs. With the Compose files:
+
+```bash
+# .env needs POSTGRES_PASSWORD, CORESCOPE_WRITER_PASSWORD and CORESCOPE_READER_PASSWORD
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+```
+
+The ingestor connects as a writer role and the server as a read-only role, which the server
+enforces at startup. Moving an existing SQLite install, running without Compose, backups with
+`pg_dump` and troubleshooting are in the [PostgreSQL guide](postgresql.md).
+
+In the Docker image on PostgreSQL the server runs as its own user (`corescope-server`, uid
+`SERVER_RUN_AS_UID`, default 1001) and what it writes (`users.db` and `backups/`, the file
+queues) lives in `/app/data/shared`. `config.json` must not contain a `dsn`, and
+`/app/data/.env` must not be readable by that user. `corescope-migrate` is shipped in the image
+at `/app/corescope-migrate`; the guide shows how to run it.
+
 ## Backup & Restore
+
+This section covers SQLite, the default. For PostgreSQL, see
+[Backups and restore](postgresql.md#backups-and-restore): `GET /api/backup` answers HTTP 501
+there and you use `pg_dump` and `pg_restore`. Backing up `config.json`, `theme.json`, secrets
+and `users.db` (always SQLite) is the same on both.
 
 ### Backup
 
-Use **`GET /api/backup`** for the telemetry database. It uses SQLite's
+Use **`GET /api/backup`** for the telemetry database (SQLite). It uses SQLite's
 [`VACUUM INTO`](https://www.sqlite.org/lang_vacuum.html) to produce a consistent
 snapshot while the ingestor is running, including committed data in the WAL.
 Do not copy the live `meshcore.db` file: a checkpoint followed by a file copy
@@ -775,7 +805,9 @@ The in-memory packet store grows with retained packets. Configure retention limi
 
 ### Database locked errors
 
-SQLite doesn't support concurrent writers well. Ensure only one CoreScope instance accesses the database file. If running multiple containers, each needs its own database.
+On SQLite: SQLite doesn't support concurrent writers well. Ensure only one CoreScope instance accesses the database file. If running multiple containers, each needs its own database.
+
+On PostgreSQL the database handles concurrent connections, but CoreScope still has exactly one writer: run one ingestor per database, because the server follows new rows by "id greater than last seen" and ids must commit in increasing order. Other PostgreSQL failures (the server refusing to start, empty-database guard) are listed in the [PostgreSQL guide](postgresql.md#troubleshooting).
 
 ### Container unhealthy
 

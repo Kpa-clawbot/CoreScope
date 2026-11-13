@@ -13,10 +13,20 @@ Go backend + static frontend. No build step. No framework. No bundler.
 cmd/server/        — Go API server (REST + WebSocket broadcast + static file serving)
   main.go          — Entry point, flags, SPA handler
   routes.go        — All /api/* endpoints
-  store.go         — In-memory packet store + analytics + SQLite queries
+  store.go         — In-memory packet store + analytics + SQL queries (SQLite or Postgres)
   config.go        — Configuration loading
   decoder.go       — MeshCore packet decoder
-cmd/ingestor/      — Go MQTT ingestor (separate binary, writes to shared SQLite DB)
+  backend.go       — isPostgres, sqlFor (per-backend SQL), queueAnchor
+  db_postgres.go   — OpenPostgresDB: the only Postgres open (forced read-only + privilege check)
+cmd/ingestor/      — Go MQTT ingestor (separate binary, the only writer to the shared DB: SQLite or Postgres)
+  db_postgres.go   — OpenPostgresStore (one writer connection, applies pgschema)
+  portable_sql.go  — SQL fragments that run on both backends + the per-backend hot-path statements
+cmd/migrate/       — corescope-migrate: legacy `-db` upgrade; `copy` / `verify` between SQLite and Postgres
+cmd/decrypt/       — corescope-decrypt (reads a SQLite path or a postgres:// URL, read-only)
+internal/dbx/      — "pgx-qmark" Postgres driver (rewrites `?` → `$n`), dbx.IsPostgres; dbxtest.OpenPostgres for tests
+internal/dbschema/ — SQLite schema (Apply, AssertReady) + probes that work on both backends (TableExists, TableHasColumn)
+  sqlite_endstate.sql — SQLite end-state schema of a fresh ingestor (dbschema.SQLiteEndState)
+  pgschema/        — Postgres schema: forward-only migrations/NNNN_name.sql, Apply (advisory lock), AssertReady, LatestVersion
 public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT DEPRECATED
   app.js           — SPA router, shared globals, theme loading
   roles.js         — ROLE_COLORS, TYPE_COLORS, health thresholds, shared helpers
@@ -34,22 +44,77 @@ public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT 
   live.css         — Live page styles
   home.css         — Home page styles
   index.html       — SPA shell, script/style tags with __BUST__ placeholder (auto-replaced at server startup)
-test-fixtures/     — Real data SQLite fixture from staging (used for E2E tests)
+test-fixtures/     — Real data SQLite fixture from staging (used for E2E tests; CI also copies it into Postgres)
 scripts/           — Tooling (coverage collector, fixture capture, frontend instrumentation)
+  postgres-roles.sh — Provisions the Postgres database + writer/reader roles (idempotent, never drops)
+docker-compose.postgres.yml — Compose override: Postgres service + split writer/reader DSNs
 ```
 
 ### Data Flow
-1. MQTT brokers → Go ingestor (`cmd/ingestor/`) ingests packets → decodes → writes to SQLite
-2. Go server (`cmd/server/`) polls SQLite for new packets, broadcasts via WebSocket
+1. MQTT brokers → Go ingestor (`cmd/ingestor/`) ingests packets → decodes → writes to the DB (SQLite or Postgres)
+2. Go server (`cmd/server/`) polls the DB for new packets (`id > last seen`), broadcasts via WebSocket
 3. Frontend fetches via REST API (`/api/*`), filters/sorts client-side
 
+### Two Database Backends
+SQLite is the default. PostgreSQL 16+ is an operator opt-in (`db.driver` / `db.dsn`, env `DB_DRIVER` / `DB_DSN`). Same binaries, same schema, same API results: every endpoint must return identical results on both, except `/api/backup` (501 on Postgres; use pg_dump) and `/api/perf/sqlite` (404). `users.db` is SQLite on both.
+
+**Portable SQL first.** SQL in a shared path must run unchanged on both. Placeholders stay `?` (the `pgx-qmark` driver in `internal/dbx` rewrites them). In order of preference:
+1. A portable form (list below).
+2. Only when no shared form exists, or the shared form measurably slows SQLite: a per-backend choice made once, with both texts side by side. Server: `db.sqlFor(sqlite, postgres)` (`cmd/server/backend.go`). Ingestor: a prepare-time branch on `Store.pg` (`cmd/ingestor/portable_sql.go`). Example: `RETURNING id` and the portable `last_seen` clamp cost SQLite ~12% and ~5% CPU in `BenchmarkInsertTransmissionHotPath`, so the transmissions insert and the clamp keep their original SQLite text (pinned by `TestSQLiteHotPathSQLUnchanged`) and Postgres gets the portable form. "Measurably" means a benchmark like that one (rule 0).
+
+| SQLite-only | Portable form |
+|---|---|
+| `INSERT OR IGNORE` / `INSERT OR REPLACE` / `REPLACE INTO` | `INSERT … ON CONFLICT (…) DO NOTHING` / `DO UPDATE` |
+| unqualified column in `ON CONFLICT DO UPDATE` | table-qualified column (ambiguous on Postgres) |
+| `a IS NOT b` (null-safe compare) | `a IS DISTINCT FROM b` |
+| two-argument `max(a, b)` / `min(a, b)` | `sqlMax2` / `sqlMin2` (`GREATEST` ignores NULLs) |
+| `res.LastInsertId()` | `RETURNING id` |
+| bare `?` in a SELECT list, `? IS NULL` | `CAST(? AS TEXT)` etc. (Postgres can't type a bare placeholder) |
+| `datetime('now')` in an ingestor runtime write | `sqliteDatetimeNow()` bound as a parameter |
+| default NULL placement, ORDER BY with ties | explicit `NULLS FIRST` / `NULLS LAST`; ORDER BY ends in a key |
+| `LIKE` relying on ASCII case-insensitivity | `LOWER(col) LIKE <lower-cased input>` (Postgres `LIKE` is case-sensitive) |
+
+`TestPortableSQLGuard` (`cmd/ingestor/portable_sql_guard_test.go`, go/ast) fails on the SQLite-only forms in ingestor runtime SQL outside a per-function allowlist that can only shrink. The server has no guard; its dual-backend tests are the check (see Testing).
+
+**Schema introspection.** Never `sqlite_master` or `PRAGMA` in code that runs on Postgres. Use `dbschema.TableExists` / `dbschema.TableHasColumn`: they work on both backends and inside a transaction (any error aborts a Postgres transaction, so they ask `information_schema` first).
+
+**Postgres types** (`internal/dbschema/pgschema/migrations/`): `TEXT`/`DATETIME` → `TEXT COLLATE "C"` (byte order, like SQLite's BINARY); `INTEGER` → `BIGINT`; `REAL` → `DOUBLE PRECISION`; `INTEGER PRIMARY KEY AUTOINCREMENT` → `BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`; defaults byte-identical to SQLite's; index names identical. The one documented exception: `observations.score` is `DOUBLE PRECISION` (SQLite declares INTEGER but stores floats), so the server scans it as `sql.NullFloat64`. Scan every `REAL` / `DOUBLE PRECISION` column into a float type (`float64`, `sql.NullFloat64`).
+
+**SQLite-only** (skip on Postgres behind `Store.pg` / `db.isPostgres()`): `users.db`; the hop index (`observation_hops*`, `retention.hopIndexDays`); VACUUM, incremental vacuum, WAL checkpoints and planner-stats refresh (`db.vacuumOnStartup`, `db.incrementalVacuumPages`, `db.analysisLimit`; autovacuum covers Postgres); the legacy migration history in `applySchema`. On Postgres `dbPath` still anchors the file queues shared by server and ingestor (`queueAnchor`); don't assume a DB file exists there. The ingestor refuses to start on an empty Postgres while the SQLite file at `dbPath`, or at `CORESCOPE_SQLITE_GUARD_PATH` (set by the Docker entrypoint, where `dbPath` moves into `/app/data/shared`), still holds transmissions (`refuseEmptyPostgresOverSQLite`).
+
 ### Read/Write Separation Invariant (#1283)
-- **All DB writes live in `cmd/ingestor/`.** INSERT / UPDATE / DELETE / VACUUM /
-  schema migrations / retention all run in the ingestor process.
+- **All DB writes live in `cmd/ingestor/`.** INSERT / UPDATE / DELETE / VACUUM
+  (SQLite) / schema migrations (both backends) / retention all run in the
+  ingestor process.
 - **`cmd/server/` never writes measurement data.** It opens the analyzer DB with
-  `mode=ro` and must not acquire a write lock on it. Adding a write-side helper
+  `mode=ro` (SQLite) and must not acquire a write lock on it. Adding a write-side helper
   (e.g. a `cachedRW`-style RW connection) regresses this invariant and races the
   ingestor → SQLITE_BUSY.
+- **On Postgres the database enforces it.** The server opens Postgres only through
+  `OpenPostgresDB` (`cmd/server/db_postgres.go`): every connection gets
+  `default_transaction_read_only=on`, and startup is refused if the role holds
+  INSERT/UPDATE/DELETE/TRUNCATE on any table in its schema (ownership, superuser
+  and inherited grants count) or the schema is not ready.
+  `TestPostgresOpenIsOnlyInOpenPostgresDB` pins the one open. Deployments use two
+  roles from `scripts/postgres-roles.sh`: a writer that owns the schema (ingestor)
+  and a read-only reader (server). The Docker image gives each process its own DSN
+  (`DB_DSN_INGESTOR`, `DB_DSN_SERVER`, both defaulting to `DB_DSN`); the server
+  process never sees the writer DSN, and on Postgres it runs as its own
+  unprivileged account (`docker/entrypoint-go.sh`) whose only writable paths are
+  `/app/data/shared` (`users.db`, the shared file queues) and `config.json`.
+  Never loosen any of this to make a server write work — move the write to the
+  ingestor.
+- **Files exchanged between server and ingestor** (`internal/prunequeue`,
+  `internal/mbcapqueue`) are written with `os.CreateTemp` in the target directory
+  + `os.Rename`, and read only if they are regular files (no symlinks). New code
+  that exchanges files must do the same and live under the queue anchor.
+- **One writer connection, on both backends.** The ingestor keeps
+  `SetMaxOpenConns(1)` on Postgres too (`openPostgresStoreDB`). The reason there is
+  not locking: the server tails `transmissions` and `observations` by
+  `id > last seen`, which misses nothing only if ids commit in increasing order.
+  With two connections id 102 can commit before 101, a poll in between moves the
+  cursor past 101, and that row never reaches the live feed. Don't raise it or add
+  a second writer pool.
 - **Single exception: `users.db` (optional user management).** When
   `userManagement.enabled`, the server owns a *separate* SQLite file through
   `internal/users` only. `users.Open` refuses the analyzer DB path, and
@@ -105,9 +170,11 @@ Every change must consider performance impact BEFORE implementation. This codeba
 No proof = no merge.
 
 ### 1. No commit without tests
-Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`, or `make test` for all 14 modules. For frontend: `node tests/unit/test-packet-filter.js && node tests/unit/test-aging.js && node tests/unit/test-frontend-helpers.js`. If you add new logic, add tests. No exceptions.
+Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`, or `make test` for all 17 modules (set `CORESCOPE_TEST_PG_DSN` or the Postgres tests skip; see Testing → PostgreSQL). For frontend: `node tests/unit/test-packet-filter.js && node tests/unit/test-aging.js && node tests/unit/test-frontend-helpers.js`. If you add new logic, add tests. No exceptions.
 
-The SQLite driver (`github.com/mattn/go-sqlite3`) is cgo. **`CGO_ENABLED=0` still *builds*** — that is the trap. It links a stub, and the binary dies on the first query with `go-sqlite3 requires cgo to work. This is a stub`, so a green build proves nothing. A plain `GOOS=linux go build` likewise cannot cross-compile it. Use `make build` / `make crossbuild` — the latter needs [`zig`](https://ziglang.org/download/) as the cross C compiler and produces static musl binaries. Never re-add `CGO_ENABLED=0`.
+The SQLite driver (`github.com/mattn/go-sqlite3`) is cgo. **`CGO_ENABLED=0` still *builds*** — that is the trap. It links a stub, and the binary dies on the first query with `go-sqlite3 requires cgo to work. This is a stub`, so a green build proves nothing. A plain `GOOS=linux go build` likewise cannot cross-compile it. Use `make build` / `make crossbuild` — the latter needs [`zig`](https://ziglang.org/download/) as the cross C compiler and produces static musl binaries. Never re-add `CGO_ENABLED=0`. Postgres doesn't change this: its driver is pure Go, but the same binaries still link SQLite (the default backend and `users.db`).
+
+**musl stack size — never remove `-Wl,-z,stack-size=8388608`.** musl gives non-main threads a 128 KiB stack (glibc: 8 MiB). cgo calls into SQLite run on that stack, and deep queries overflowed it and crashed the server with SIGSEGV (`/api/nodes/reported`, rx-coverage) once there was enough data. Every musl link passes the flag: Makefile `STACK_LDFLAG`, the Dockerfile's `ARG STACK_LDFLAG`, the CI `corescope-decrypt` builds; `make test` passes it too. Any new musl link (binary, Dockerfile stage, CI build) must add it. Running `go test` by hand on musl (Alpine): add `-ldflags=-extldflags=-Wl,-z,stack-size=8388608`.
 
 ### 2. No commit without browser validation
 After pushing, verify the change works in an actual browser. Use `browser profile=openclaw` against the running instance. Take a screenshot if the change is visual. If you can't validate it, say so — don't claim it works.
@@ -244,8 +311,22 @@ node tests/unit/test-frontend-helpers.js     # frontend logic (via vm.createCont
 node tests/e2e/test-e2e-playwright.js       # Playwright browser tests (default: localhost:3000)
 ```
 
+### PostgreSQL tests
+Postgres tests **skip** unless `CORESCOPE_TEST_PG_DSN` is set, so a green run without it has not tested Postgres. Any role that can `CREATE SCHEMA` works; `dbxtest.OpenPostgres(t)` gives each test its own schema.
+```bash
+docker run -d --name cs-pg -e POSTGRES_USER=corescope -e POSTGRES_PASSWORD=corescope -e POSTGRES_DB=corescope_test -p 127.0.0.1:5432:5432 postgres:17-alpine
+export CORESCOPE_TEST_PG_DSN='postgres://corescope:corescope@127.0.0.1:5432/corescope_test?sslmode=disable'
+make test
+```
+- **Server — dual-backend harness** (`cmd/server/dual_testhelp_test.go`): `newDualTestDB` builds the end-state schema on both backends with the real read-only opens; `d.exec` seeds both; `requireSame` calls a server method on each and fails unless the results are deeply equal. Every new or changed server query gets a `requireSame` test whose seed makes the result non-empty (two empty results are trivially equal). Examples: `pg_db_queries_test.go`, `pg_store_queries_test.go`.
+- **Ingestor — differential test** (`cmd/ingestor/ingest_backends_diff_test.go`): `TestIngestSameOnBothBackends` drives a SQLite and a Postgres store through `handleMessage` with real packets and requires every table to match. A new write path extends its sequence.
+- **Schema**: `TestPgSchemaParity` and `TestSQLiteEndStateMatchesIngestor` — see MIGRATIONS.md.
+- **CI** runs Go tests with a Postgres service, a `musl-test` job (Alpine), and every E2E shard on both SQLite and Postgres (the fixture copied into Postgres, served through the read-only role).
+
 ### Rules
 **ALL existing tests must pass before pushing.** No exceptions. No "known failures."
+
+**Database changes are tested on both backends.** A new or changed query, write path or schema change passes locally with `CORESCOPE_TEST_PG_DSN` set, not just in CI.
 
 **Every new feature must add tests.** Unit tests for logic, Playwright tests for UI changes. Test count only goes up.
 
@@ -273,6 +354,7 @@ Tests that need live mesh data can use `https://analyzer.00id.net` — all API e
 - Threshold/status calculations (aging, health)
 - Data transformations (hash size computation, field resolvers)
 - Anything with edge cases (null handling, boundary values)
+- SQL queries, write paths and schema changes — on both backends (`requireSame`, the ingestor differential test, the schema parity tests)
 - UI interactions that exercise frontend code branches
 
 ## Engineering Principles
@@ -378,6 +460,13 @@ One logical change per commit. Each commit is deployable. Each commit has its te
 | Gave up testing locally | 2 | Basic tests work on ARM — only heavy coverage scripts crash |
 | Copy-pasted functions for "coverage" | 1 | Test the real code, not copies in a helper file |
 | Subagent timed out mid-work | 4 | Give clear scope, don't try to run slow pipelines locally |
+| SQLite-only SQL in a shared path | — | Portable form first; `sqlFor` / `Store.pg` only with a benchmark; `requireSame` test |
+| Tested on SQLite only | — | Set `CORESCOPE_TEST_PG_DSN`; Postgres tests skip without it |
+| Schema change on one backend only | — | SQLite migration + `pgschema` migration + `sqlite_endstate.sql` (MIGRATIONS.md) |
+| `sqlite_master` / `PRAGMA` on Postgres | — | `dbschema.TableExists` / `TableHasColumn` |
+| Second ingestor connection on Postgres | — | Keep `SetMaxOpenConns(1)`: the server tails by id |
+| New `internal/` dependency missing from a Dockerfile stage | — | Add the `COPY internal/<m>/` line to every stage that builds it; `tests/unit/test-dockerfile-modules.js` checks |
+| Missing or removed musl stack flag | 1 | Keep `-Wl,-z,stack-size=8388608` on every musl link |
 
 ## File Naming
 - Tests: `test-{feature}.js` in `tests/unit/` (standalone, listed in `test-all.sh`) or `tests/e2e/` (browser, listed in `scripts/non-unit-tests.json`) — never in repo root

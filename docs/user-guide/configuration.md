@@ -8,7 +8,7 @@ CoreScope is configured via `config.json` in the server's working directory. Cop
 |-------|---------|-------------|
 | `port` | `3000` | HTTP server port |
 | `apiKey` | — | Secret key for admin API endpoints (POST/PUT routes) |
-| `dbPath` | — | Path to SQLite database file (optional, defaults to `meshcore.db`) |
+| `dbPath` | — | Path to the SQLite database file (optional, defaults to `meshcore.db`). On PostgreSQL it is not the database, but it still anchors the directory for the file queues the server and ingestor share (geo-prune requests, the multibyte snapshot) and the default location of `users.db`: keep that directory mounted. |
 
 ## MQTT
 
@@ -99,8 +99,9 @@ How long (in hours) before a node is marked degraded or silent:
 | `retention.packetDays` | `30` | Packets older than N days are deleted daily |
 
 > **Note:** Lowering retention does **not** immediately shrink the database file.
-> SQLite marks deleted pages as free but does not return them to the filesystem
-> unless [incremental auto-vacuum](database.md) is enabled. New databases created
+> On SQLite, deleted pages are marked free but not returned to the filesystem
+> unless [incremental auto-vacuum](database.md) is enabled (PostgreSQL reclaims space through
+> autovacuum). New databases created
 > after v0.x.x have auto-vacuum enabled automatically. Existing databases require
 > a one-time migration — see the [Database](database.md) guide.
 
@@ -108,8 +109,22 @@ How long (in hours) before a node is marked degraded or silent:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `db.vacuumOnStartup` | `false` | Run a one-time full `VACUUM` on startup to enable incremental auto-vacuum (blocks for minutes on large DBs) |
-| `db.incrementalVacuumPages` | `1024` | Free pages returned to the OS after each retention reaper cycle |
+| `db.driver` | `sqlite` | `sqlite` (aliases `sqlite3`, empty) or `postgres` (aliases `postgresql`, `pg`). Case-insensitive; anything else is a startup error. |
+| `db.dsn` | — | PostgreSQL connection URL, e.g. `postgres://user:pass@host:5432/dbname?sslmode=require`. Required when `db.driver` is `postgres`. |
+| `db.statementTimeoutSec` | `120` | PostgreSQL only: `statement_timeout` for the server's sessions, in seconds. `0` disables it; a negative value is a startup error. |
+| `db.vacuumOnStartup` | `false` | **SQLite only.** Run a one-time full `VACUUM` on startup to enable incremental auto-vacuum (blocks for minutes on large DBs) |
+| `db.incrementalVacuumPages` | `1024` | **SQLite only.** Free pages returned to the OS after each retention reaper cycle |
+| `db.analysisLimit` | — | **SQLite only.** Ignored on PostgreSQL |
+
+The environment variables `DB_DRIVER` and `DB_DSN` set the same two keys. Precedence follows
+`DB_PATH`: in the ingestor the environment overrides `config.json`; in the server `config.json`
+wins and the environment only fills keys that are empty there. The server and the ingestor need
+different PostgreSQL roles (the server must be read-only), so give each its own DSN; in the
+Docker image use `DB_DSN_INGESTOR` and `DB_DSN_SERVER`. Keep DSNs, which contain a password,
+out of git and out of the data directory. See the [PostgreSQL guide](../postgresql.md).
+
+`retention.hopIndexDays` is also SQLite-only; on PostgreSQL it is ignored with one warning.
+Retention settings otherwise work on both backends.
 
 See [Database](database.md) for details on SQLite auto-vacuum, WAL, and manual maintenance.
 See [#919](https://github.com/Kpa-clawbot/CoreScope/issues/919) for background.
