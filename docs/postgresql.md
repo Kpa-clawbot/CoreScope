@@ -56,18 +56,37 @@ CoreScope runs with two PostgreSQL roles, and the split is enforced, not advisor
 | Role | Used by | Needs |
 |------|---------|-------|
 | Writer (default `corescope_writer`) | Ingestor | Owns the database and schema. It creates and migrates the schema (versioned migrations recorded in `schema_version`, applied under a PostgreSQL advisory lock). |
-| Reader (default `corescope_reader`) | Server | `USAGE` on the schema and `SELECT` on its tables. Nothing else. |
+| Reader (default `corescope_reader`) | Server | `USAGE` on the schema and `SELECT` on its tables, plus membership in the group role below. Nothing else. |
+| `corescope_control_client` (fixed name, `NOLOGIN` group role) | Server, through the reader | `SELECT` and `INSERT` on the geo-prune request and multibyte-snapshot tables and `SELECT` on the prune results, all in the `corescope_control` schema. |
 
 The ingestor is the only process that writes measurement data, as it is with SQLite. It keeps
 one writer connection on PostgreSQL too, because the server follows new rows by "id greater
 than the last one seen" and ids must therefore commit in increasing order.
+
+The server and the ingestor share no files on PostgreSQL. What used to travel through files
+goes through the database instead:
+
+- geo-prune requests and results, and the multibyte-capability snapshot, through the
+  `corescope_control` schema (the server inserts a request; the ingestor performs the deletion
+  and stores the result),
+- the ingestor's statistics (perf page, `/api/healthz` ingest liveness, `/api/mqtt/status`)
+  through the `ingestor_stats` table.
+
+The server writes only those control rows, through a separate pool of at most two connections.
+Its main pool stays forced read-only. The control pool is opened only when the server's role is a
+member of `corescope_control_client` and that group holds exactly the control grants above; the
+ingestor re-applies those grants at every start. If not, the server still starts, logs one
+warning, answers the geo-prune endpoints with 503 and does not publish the multibyte snapshot
+(see [Troubleshooting](#troubleshooting)). Measurement writes are still refused at startup.
 
 The server is read-only:
 
 - It sets `default_transaction_read_only=on` on every connection.
 - At startup it checks the privileges of its role and **refuses to start** if that role holds
   `INSERT`, `UPDATE`, `DELETE` or `TRUNCATE` on any table in its schema. Ownership, superuser
-  and privileges inherited through role membership all count. The error prints the `GRANT`
+  and privileges inherited through role membership all count. It applies the same rule to the
+  `corescope_control` schema: any write power there other than through
+  `corescope_control_client` also refuses startup. The error prints the `GRANT`
   statements for a suitable read-only role.
 - It also refuses to start when the schema is missing or older than it expects. Start the
   ingestor first.
@@ -136,9 +155,10 @@ PostgreSQL is not published to the host; it is reachable only on the Compose net
 ```
 
 Keep the `/app/data` mount. See [In the Docker image](#in-the-docker-image) for what the
-container does with it on PostgreSQL (`/app/data/shared`, the separate server user). The
-ingestor's I/O statistics for the perf page go through `/app/data/shared/ingestor-stats.json`,
-which the override sets in both containers.
+container does with it on PostgreSQL (`/app/data/shared`, the separate server user). The server
+and the ingestor no longer exchange files: prune requests, the multibyte snapshot and the
+ingestor's statistics go through the database. What still needs the directory is `users.db` (and
+its backups) when user accounts are enabled, plus the data directory's `config.json`.
 
 If you already have SQLite data, copy it before the first start; see
 [Moving an existing SQLite install](#moving-an-existing-sqlite-install).
@@ -169,6 +189,20 @@ If you already have SQLite data, copy it before the first start; see
    both passwords and re-applies the grants, revoking any write privilege the reader has since
    been given. Passwords never appear on a command line or in the output, but a server with
    `log_statement=ddl` or `all` logs them as it would for any `ALTER ROLE`.
+
+   The script also creates the group role `corescope_control_client` (fixed name, `NOLOGIN`)
+   and grants it to the reader as the reader's only membership. The ingestor grants the group its
+   privileges on the control tables at every start; the script grants the same when the tables
+   already exist, so either may run first. That is how an **existing install gets the control
+   role after an upgrade**: re-run the script with the same environment as at setup (it is safe to
+   repeat), then restart the ingestor. Until then geo-prune and the multibyte snapshot are off
+   (see [Troubleshooting](#troubleshooting)). The group role's name is fixed and cluster-wide, so
+   the script refuses it as a writer or reader name.
+
+   **One CoreScope install per database.** The `corescope_control` schema and `ingestor_stats`
+   belong to the database, so everything connected to one database shares them: do not point two
+   separate CoreScope installs at the same database (give each its own database, and its own
+   writer and reader roles).
 
    It prints the two connection URLs without passwords:
 
@@ -258,12 +292,12 @@ Whichever layout, the entrypoint arranges the following on PostgreSQL:
   the ingestor's uid in the single-container layout). Its environment is an allow-list
   (`docker/server-exec.sh`), so `PG*`, `POSTGRES_*` and other secrets do not reach it. A new
   environment variable the server must read has to be added to that list.
-- Everything the server writes lives in **`/app/data/shared`**: `users.db` (with its `-wal`/`-shm`
-  and `backups/`), `prune-requests/` and `mbcap-snapshot/`. The directory is group
-  `corescope-share` (gid `CORESCOPE_SHARE_GID`, default 61001, above the range of ordinary
-  users) and sticky. The ingestor's `DB_PATH` points into it (on PostgreSQL `DB_PATH` only
-  anchors these shared paths). A `users.db` left in `/app/data` by an earlier SQLite run is moved
-  there once, with its backups.
+- What the server writes to disk lives in **`/app/data/shared`**: `users.db` (with its
+  `-wal`/`-shm` and `backups/`); the geo-prune and multibyte exchanges go through the
+  database. The directory is group `corescope-share` (gid `CORESCOPE_SHARE_GID`, default 61001,
+  above the range of ordinary users) and sticky. The ingestor's `DB_PATH` points into it (on
+  PostgreSQL `DB_PATH` only locates local files such as `users.db`, not the database). A
+  `users.db` left in `/app/data` by an earlier SQLite run is moved there once, with its backups.
 - If you set `userManagement.dbPath`, it must be under `/app/data/shared`; the entrypoint warns
   otherwise, because the server can write only there.
 - `config.json` must not contain a `dsn`: the container refuses to start. It is made group
@@ -308,24 +342,24 @@ database. The write side cannot. Plan the cluster around that asymmetry.
 >
 > Never put a HorizontalPodAutoscaler on the ingestor.
 
-**What "HA" means for each piece.** Server replicas make the UI and API survive pod and (with a
-suitable volume, below) node failures. The ingestor is recovered rather than replicated: if it
+**What "HA" means for each piece.** Server replicas make the UI and API survive pod and node
+failures. The ingestor is recovered rather than replicated: if it
 dies, Kubernetes restarts it. Its MQTT session is a clean session, so packets published while it
 is down are not delivered to it later — a restart costs the seconds of traffic it was down for.
 That is the trade-off for a single writer; there is no leader election to fail over to a hot
 standby.
 
-**The shared data volume.** The servers and the ingestor exchange a few files beside the
-configured `dbPath`: geo-prune requests and their results (the admin geo-filter prune action),
-the multibyte-capability snapshot the ingestor persists, and the ingestor's statistics for the
-perf page. Ingest and the whole read API work without it; those three features need it.
+**No shared data volume.** On PostgreSQL the servers and the ingestor exchange everything through
+the database (geo-prune requests and results and the multibyte snapshot in the
+`corescope_control` schema, the ingestor's statistics in `ingestor_stats`). No `ReadWriteMany`
+volume is needed, servers can be spread across nodes, and the pods need no volume at all. The one
+exception is **user management**: `users.db` is still a SQLite file on disk, written by the
+server, until accounts move to PostgreSQL. If you enable it, mount a volume for the server and run
+a **single server replica**; several replicas must not share that file.
 
-- With a `ReadWriteOnce` volume (for example `local-path`), every pod that mounts it must run on
-  one node: you get pod-level HA, not node-level.
-- For node-level HA, put `/app/data` on a `ReadWriteMany` volume (NFS, CephFS, Longhorn RWX…) so
-  servers can be spread across nodes.
-- If **user management** is enabled, `users.db` is a SQLite file on that volume, written by the
-  server. Several server replicas must not share it: run a single server replica in that case.
+**Control role.** The reader must belong to `corescope_control_client`, which
+`scripts/postgres-roles.sh` creates. A cluster set up before this existed needs one re-run of the
+script (see [Set up without Compose](#set-up-without-compose)); otherwise geo-prune answers 503.
 
 **PostgreSQL itself.** Point both roles at the **primary** through a stable name — for example
 the read-write service of a PostgreSQL operator (CloudNativePG's `<cluster>-rw`). Don't point
@@ -377,12 +411,9 @@ spec:
             - {name: DB_DRIVER, value: postgres}
             - name: DB_DSN
               valueFrom: {secretKeyRef: {name: corescope-postgres, key: writer-dsn}}
-            - {name: CORESCOPE_INGESTOR_STATS, value: /app/data/ingestor-stats.json}
           volumeMounts:
-            - {name: data, mountPath: /app/data}
             - {name: config, mountPath: /app/config, readOnly: true}
       volumes:
-        - {name: data, persistentVolumeClaim: {claimName: corescope-data}}
         - {name: config, secret: {secretName: corescope-config}}
 ---
 apiVersion: apps/v1
@@ -399,23 +430,26 @@ spec:
       containers:
         - name: server
           image: <registry>/corescope:<version>
-          # -db only anchors the shared file queues on PostgreSQL
+          # No volume: on PostgreSQL nothing is shared with the ingestor through files.
+          # With user management on, also mount a volume for users.db (below) and keep
+          # replicas: 1.
           command: ["/app/corescope-server", "-config-dir", "/app/config",
-                    "-db", "/app/data/meshcore.db", "-public", "/app/public", "-port", "3000"]
+                    "-public", "/app/public", "-port", "3000"]
           workingDir: /app
           env:
             - {name: DB_DRIVER, value: postgres}
             - name: DB_DSN
               valueFrom: {secretKeyRef: {name: corescope-postgres, key: reader-dsn}}
-            - {name: CORESCOPE_INGESTOR_STATS, value: /app/data/ingestor-stats.json}
           ports: [{name: http, containerPort: 3000}]
           readinessProbe: {httpGet: {path: /api/healthz, port: http}}
           volumeMounts:
-            - {name: data, mountPath: /app/data}
             - {name: config, mountPath: /app/config, readOnly: true}
+            # Only with user management enabled (single replica):
+            # - {name: data, mountPath: /app/data}
       volumes:
-        - {name: data, persistentVolumeClaim: {claimName: corescope-data}}
         - {name: config, secret: {secretName: corescope-config}}
+        # Only with user management enabled (single replica):
+        # - {name: data, persistentVolumeClaim: {claimName: corescope-data}}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -719,6 +753,21 @@ from `db.dsn` and from the role and database settings (`ALTER ROLE ... SET`, `AL
 **`postgres role "<role>" has no current schema; set search_path in db.dsn to the CoreScope schema`**
 The role's `search_path` resolves to no existing schema. Set `search_path` in the DSN, or use
 the default `public`.
+
+**`[db] WARNING: geo-prune and multibyte capability publishing are disabled: <reason>`**, and the geo-prune endpoints answer 503 (`geo-prune is unavailable: the server's Postgres role is not a member of corescope_control_client with the control grants; see the server log at startup`)
+The server started without its control pool. The reason names the cause: the role
+`corescope_control_client` does not exist, the server's role does not inherit it, or the group
+does not hold exactly the control grants. Re-run `scripts/postgres-roles.sh` (it creates the
+group role and grants it to the reader), then start the ingestor, which repairs the grants. The
+ingestor logs `role corescope_control_client is missing or not set up` when it sees the group
+missing. The rest of the server, and ingest, are unaffected.
+
+**`postgres role "<role>" could gain write access to schema "<schema>": ...` naming `<role> has INSERT on corescope_control.<table>`, `PUBLIC has CREATE on schema corescope_control`, `role <role> owns corescope_control.<table>` and similar**
+Something other than `corescope_control_client` holds write power in the control schema: a
+direct grant to the reader, a grant to `PUBLIC`, a reachable role that owns a control table or
+the schema, or `CREATE` on the schema. The server refuses to start. Revoke it, or re-run
+`scripts/postgres-roles.sh`, which revokes everything on that schema from `PUBLIC` and the reader
+and re-grants only the group's privileges.
 
 **Queries fail with `canceling statement due to statement timeout`**
 On PostgreSQL the server's sessions have a `statement_timeout` of 120 seconds by default. Raise

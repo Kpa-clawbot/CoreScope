@@ -41,6 +41,16 @@ Enforced by tests that fail when any of the three is missing:
 - `TestEmbeddedMigrationsMatchLatestVersion` (`internal/dbschema/pgschema`)
   fails when the last migration file and `LatestVersion` disagree.
 
+**The one Postgres-only part: the `corescope_control` schema** (server →
+ingestor requests; migration `0002_control.sql`). SQLite has no control
+tables — it keeps the file queues — so a control-schema change needs only
+step 2, and `TestPgSchemaParity` doesn't see it (it reads the current schema
+only). Instead it changes together with `pgschema.EnsureControlGrants`,
+`pgschema.ControlGrantsOK` and `scripts/postgres-roles.sh` (AGENTS.md →
+Read/Write Separation Invariant). Tables the ingestor writes for the server,
+such as `ingestor_stats`, are ordinary tables in both schemas and follow all
+three steps.
+
 How Postgres migrations run: `pgschema.Apply` (ingestor only; the server calls
 `pgschema.AssertReady` and refuses to start until the schema is current) takes
 a Postgres advisory lock for the whole run and applies each pending file in

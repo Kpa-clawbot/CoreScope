@@ -255,7 +255,7 @@ CoreScope uses a layered configuration system (highest priority wins):
 |----------|---------|-------------|
 | `MQTT_BROKER` | `mqtt://localhost:1883` | MQTT broker URL (overrides config file) |
 | `MQTT_TOPIC` | `meshcore/#` | MQTT topic subscription pattern |
-| `DB_PATH` | `data/meshcore.db` | SQLite database path. On PostgreSQL it still anchors the directory for shared file queues and `users.db` |
+| `DB_PATH` | `data/meshcore.db` | SQLite database path. On PostgreSQL it only locates local files such as `users.db`, not the database |
 | `DB_DRIVER` | `sqlite` | `sqlite` or `postgres`. See [Using PostgreSQL](#using-postgresql) |
 | `DB_DSN` | — | PostgreSQL connection URL (when `DB_DRIVER=postgres`) |
 | `DB_DSN_INGESTOR` | `DB_DSN` | Docker image, single-container PostgreSQL only: the ingestor's (writer) DSN |
@@ -666,8 +666,7 @@ recommended. See [In the Docker image](postgresql.md#in-the-docker-image) and, f
 [Kubernetes](postgresql.md#kubernetes-and-high-availability).
 
 In the Docker image on PostgreSQL the server runs as its own user (`corescope-server`, uid
-`SERVER_RUN_AS_UID`, default 1001) and what it writes (`users.db` and `backups/`, the file
-queues) lives in `/app/data/shared`. `config.json` must not contain a `dsn`, and
+`SERVER_RUN_AS_UID`, default 1001) and what it writes to disk (`users.db` and its `backups/`) lives in `/app/data/shared`. `config.json` must not contain a `dsn`, and
 `/app/data/.env` must not be readable by that user. `corescope-migrate` is shipped in the image
 at `/app/corescope-migrate`; the guide shows how to run it.
 

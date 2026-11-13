@@ -8,7 +8,7 @@ CoreScope is configured via `config.json` in the server's working directory. Cop
 |-------|---------|-------------|
 | `port` | `3000` | HTTP server port |
 | `apiKey` | — | Secret key for admin API endpoints (POST/PUT routes) |
-| `dbPath` | — | Path to the SQLite database file (optional, defaults to `meshcore.db`). On PostgreSQL it is not the database, but it still anchors the directory for the file queues the server and ingestor share (geo-prune requests, the multibyte snapshot) and the default location of `users.db`: keep that directory mounted. |
+| `dbPath` | — | Path to the SQLite database file (optional, defaults to `meshcore.db`). On PostgreSQL it is not the database; it only sets the default location of `users.db` (the server and ingestor no longer share files there, and the geo-prune and multibyte exchanges go through the database), so a directory is needed only when user accounts are enabled. |
 
 ## MQTT
 
