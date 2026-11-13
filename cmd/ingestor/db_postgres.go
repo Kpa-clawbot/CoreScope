@@ -26,10 +26,13 @@ import (
 const postgresMaintenanceNote = "[db] maintenance handled by PostgreSQL autovacuum (WAL checkpoint, incremental vacuum and planner statistics are SQLite-only and skipped)"
 
 // OpenPostgresStore opens the measurement database on PostgreSQL, creating or
-// upgrading its schema (pgschema.Apply). queuePath is the configured dbPath:
-// on Postgres it is only the anchor for the file queues the server shares
-// (prunequeue, mbcapqueue), and the place the empty-target guard looks for a
-// SQLite database that has not been copied over yet.
+// upgrading its schema (pgschema.Apply) and granting the server's control
+// role its privileges on the control tables (pgschema.EnsureControlGrants).
+// queuePath is the configured dbPath: on Postgres it is only the place the
+// empty-target guard looks for a SQLite database that has not been copied
+// over yet. Nothing is exchanged with the server through files: geo-prune
+// requests and multi-byte snapshots go through corescope_control, the stats
+// through ingestor_stats.
 //
 // No error it returns contains the DSN or its password.
 func OpenPostgresStore(dsn, queuePath string, sampleIntervalSec int) (*Store, error) {
@@ -73,6 +76,9 @@ func openPostgresStoreDB(db *sql.DB, queuePath string, sampleIntervalSec int) (*
 	if err := pgschema.Apply(context.Background(), db, log.Printf); err != nil {
 		return nil, fmt.Errorf("applying postgres schema: %w", err)
 	}
+	if err := ensureControlGrants(db); err != nil {
+		return nil, err
+	}
 	for _, p := range sqliteGuardPaths(queuePath) {
 		if err := refuseEmptyPostgresOverSQLite(db, p); err != nil {
 			return nil, err
@@ -86,6 +92,31 @@ func openPostgresStoreDB(db *sql.DB, queuePath string, sampleIntervalSec int) (*
 	s.loadAdvertEvidenceStatus()
 	log.Print(postgresMaintenanceNote)
 	return s, nil
+}
+
+// controlRoleMissingNote is logged when the server's control role is absent
+// (or not set up as scripts/postgres-roles.sh sets it up). Ingest is
+// unaffected; only the server's writes to corescope_control are.
+const controlRoleMissingNote = "[db] role corescope_control_client is missing or not set up: geo-prune requests and multi-byte capability snapshots from the server need it; run scripts/postgres-roles.sh"
+
+// ensureControlGrants grants corescope_control_client exactly its privileges
+// on the control tables, which the ingestor owns. The role itself is created
+// by scripts/postgres-roles.sh (it needs CREATEROLE, which the writer should
+// not hold); without it the grants are skipped and one line says so.
+func ensureControlGrants(db *sql.DB) error {
+	ctx := context.Background()
+	if err := pgschema.EnsureControlGrants(ctx, db); err != nil {
+		return fmt.Errorf("granting control-table privileges: %w", err)
+	}
+	ok, err := pgschema.ControlGrantsOK(ctx, db)
+	if err != nil {
+		log.Printf("[db] checking role corescope_control_client: %v", err)
+		return nil
+	}
+	if !ok {
+		log.Print(controlRoleMissingNote)
+	}
+	return nil
 }
 
 // refuseEmptyPostgresOverSQLite stops an ingestor that was switched to
@@ -115,15 +146,16 @@ func refuseEmptyPostgresOverSQLite(db *sql.DB, sqlitePath string) error {
 
 // sqliteGuardEnv names an extra SQLite file the empty-target guard checks.
 // The Docker image sets it on Postgres: there the ingestor's DB_PATH points
-// into /app/data/shared (it only anchors the file queues), while an
-// operator's existing SQLite data is still at /app/data/meshcore.db.
+// into /app/data/shared (where the file queues lived before they moved into
+// the database), while an operator's existing SQLite data is still at
+// /app/data/meshcore.db.
 const sqliteGuardEnv = "CORESCOPE_SQLITE_GUARD_PATH"
 
 // sqliteGuardPaths returns the SQLite files the guard must check. When
 // $CORESCOPE_SQLITE_GUARD_PATH is set it names the operator's real SQLite
-// file and is the only one checked: queuePath then only anchors the file
-// queues (in the image it sits in a directory shared with the API server).
-// Otherwise it is queuePath, the configured dbPath.
+// file and is the only one checked (in the image queuePath sits in what was
+// the directory shared with the API server). Otherwise it is queuePath, the
+// configured dbPath.
 func sqliteGuardPaths(queuePath string) []string {
 	if extra := strings.TrimSpace(os.Getenv(sqliteGuardEnv)); extra != "" {
 		return []string{extra}

@@ -89,8 +89,9 @@ func main() {
 	}
 	var store *Store
 	if d, _ := cfg.DB.GetDriver(); d == dbconfig.DriverPostgres {
-		// cfg.DBPath stays the anchor for the file queues shared with the
-		// server. Never log the DSN: it carries the password.
+		// cfg.DBPath is only what the empty-target guard checks: the
+		// exchanges with the server go through the database. Never log the
+		// DSN: it carries the password.
 		store, err = OpenPostgresStore(cfg.DB.DSN, cfg.DBPath, cfg.MetricsSampleInterval())
 		if err != nil {
 			log.Fatalf("db: %v", err)
@@ -692,7 +693,8 @@ func main() {
 	}()
 
 	// Prune-request queue (#669 M4 / #738): the read-only server enqueues
-	// geo-prune requests as marker files; the ingestor (which holds the
+	// geo-prune requests (marker files on SQLite, control-table rows on
+	// Postgres); the ingestor (which holds the
 	// write handle) executes the DELETEs. Process on startup, then every
 	// 15 seconds — short enough for a one-click UX, long enough to avoid
 	// useless wake-ups.
@@ -704,12 +706,13 @@ func main() {
 		}
 	}()
 
-	// Per-second stats file writer for the server's /api/perf/write-sources
-	// endpoint (#1120). Best-effort; never fatal.
+	// Per-second stats writer for the server's /api/perf/write-sources
+	// endpoint (#1120): the stats file on SQLite, the ingestor_stats row on
+	// Postgres. Best-effort; never fatal.
 	StartStatsFileWriter(store, time.Second)
 
 	// Multi-byte capability persister (#1324 follow-up): the server's
-	// analytics cycle publishes a snapshot file via internal/mbcapqueue
+	// analytics cycle publishes a snapshot via internal/mbcapqueue
 	// (it cannot UPDATE itself, mode=ro since #1289). The ingestor
 	// applies the snapshot here every 5 minutes — derived/cached
 	// columns, ingestor owns the write.

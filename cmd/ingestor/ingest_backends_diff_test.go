@@ -118,6 +118,7 @@ func TestIngestSameOnBothBackends(t *testing.T) {
 	lite.WaitForAsyncMigrations()
 	pgDir := t.TempDir()
 	pg := openPostgresTestStore(t, filepath.Join(pgDir, "meshcore.db"))
+	isolateControlTables(t, pg)
 	if !pg.pg || lite.pg {
 		t.Fatalf("backend detection: lite.pg=%v pg.pg=%v", lite.pg, pg.pg)
 	}
@@ -295,14 +296,15 @@ func TestIngestSameOnBothBackends(t *testing.T) {
 		`{"pubkey":"`+strings.ToUpper(pubs[0])+`","snr":5.5,"heard_secs_ago":30,"status":"responded","scopes":"be,eu"},`+
 		`{"pubkey":"`+pubs[1]+`","snr":-2,"heard_secs_ago":90,"status":"timeout","scopes":""}]}`)
 
-	// Server-written multibyte snapshot, applied through each store's queue.
+	// Server-written multibyte snapshot, applied through each store's queue
+	// (the file on SQLite, the control table on Postgres).
 	snap := mbcapqueue.Snapshot{WrittenAt: testStart, Entries: []mbcapqueue.Entry{
 		{PublicKey: pubs[0], Status: "confirmed", Evidence: "advert"},
 		{PublicKey: pubs[1], Status: "suspected", Evidence: "path"},
 		{PublicKey: pubs[2], Status: "unknown"},
 	}}
 	each("multibyte snapshot", func(s *Store) error {
-		if err := mbcapqueue.WriteSnapshot(s.path, snap); err != nil {
+		if err := s.mbcap.WriteSnapshot(snap); err != nil {
 			return err
 		}
 		_, err := s.RunMultibyteCapPersist()

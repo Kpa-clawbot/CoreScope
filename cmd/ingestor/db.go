@@ -17,7 +17,9 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/dbx"
+	"github.com/meshcore-analyzer/mbcapqueue"
 	"github.com/meshcore-analyzer/packetpath"
+	"github.com/meshcore-analyzer/prunequeue"
 )
 
 // DBStats tracks operational metrics for the ingestor database.
@@ -76,11 +78,17 @@ type Store struct {
 	// portable form costs SQLite on the ingest hot path are chosen per
 	// backend once, in prepareStatements; see portable_sql.go.
 	pg bool
-	// path is the configured dbPath. On SQLite it is the database file; on
-	// Postgres it is only the anchor for the file queues shared with the
-	// server (prunequeue, mbcapqueue) and is never opened as a database.
-	path  string
-	Stats DBStats
+	// path is the configured dbPath. On SQLite it is the database file and
+	// the anchor of the file queues shared with the server; on Postgres it is
+	// only what the empty-target guard checks and is never opened.
+	path string
+	// pruneQ and mbcap are the server -> ingestor channels (geo-prune
+	// requests, multi-byte capability snapshots), chosen once in newStore:
+	// marker files next to the SQLite database, or the corescope_control
+	// tables on Postgres, so the two processes share no filesystem there.
+	pruneQ prunequeue.Queue
+	mbcap  mbcapqueue.Store
+	Stats  DBStats
 	// plannerStatsAt is when RefreshPlannerStats last succeeded in this
 	// process, in Unix nanoseconds (0: not yet).
 	plannerStatsAt atomic.Int64
@@ -202,6 +210,13 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 // empty-target guard) stays with the openers.
 func newStore(db *sql.DB, path string, sampleIntervalSec int) (*Store, error) {
 	s := &Store{db: db, pg: dbx.IsPostgres(db), path: path, sampleIntervalSec: sampleIntervalSec}
+	if s.pg {
+		s.pruneQ = prunequeue.NewPG(db, "")
+		s.mbcap = mbcapqueue.NewPG(db, "")
+	} else {
+		s.pruneQ = prunequeue.NewFS(path)
+		s.mbcap = mbcapqueue.NewFS(path)
+	}
 	if err := s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}

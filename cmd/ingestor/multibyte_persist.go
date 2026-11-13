@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/meshcore-analyzer/dbschema"
-	"github.com/meshcore-analyzer/mbcapqueue"
 )
 
 // MultibyteCapPersistStats holds counts for /api/healthz exposure / logging.
@@ -19,8 +18,9 @@ type MultibyteCapPersistStats struct {
 }
 
 // RunMultibyteCapPersist consumes the latest multi-byte capability snapshot
-// written by the server (internal/mbcapqueue) and persists it to nodes /
-// inactive_nodes. Owned by the ingestor per #1287: the server is read-only
+// written by the server (internal/mbcapqueue, through s.mbcap: a file next to
+// the SQLite database, or corescope_control.mbcap_snapshots on Postgres) and
+// persists it to nodes / inactive_nodes. Owned by the ingestor per #1287: the server is read-only
 // since #1289 and cannot UPDATE these columns itself.
 //
 // INVARIANT (canonical owner): multibyte_sup / multibyte_evidence are
@@ -42,7 +42,7 @@ type MultibyteCapPersistStats struct {
 // pre-dates the multibyte_sup migration (#1386).
 func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 	var stats MultibyteCapPersistStats
-	snap, err := mbcapqueue.ReadSnapshot(s.path)
+	snap, err := s.mbcap.ReadSnapshot()
 	if err != nil {
 		// os.ErrNotExist is the steady state until the server's first
 		// analytics cycle completes — silent no-op. A malformed file
@@ -57,7 +57,7 @@ func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 		// snapshot on disk" from this loop's perspective.
 		var jsonErr *json.SyntaxError
 		if errors.As(err, &jsonErr) || isMalformedSnapshotErr(err) {
-			log.Printf("[multibyte-persist] malformed snapshot on disk (no-op): %v", err)
+			log.Printf("[multibyte-persist] malformed snapshot in %s (no-op): %v", s.mbcap.Location(), err)
 			return stats, nil
 		}
 		log.Printf("[multibyte-persist] read snapshot: %v (no-op)", err)
@@ -65,6 +65,7 @@ func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 	}
 	stats.ReadEntries = len(snap.Entries)
 	if len(snap.Entries) == 0 {
+		s.pruneMultibyteSnapshots()
 		return stats, nil
 	}
 
@@ -129,11 +130,26 @@ func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 	if err := tx.Commit(); err != nil {
 		return stats, err
 	}
+	s.pruneMultibyteSnapshots()
 	if stats.UpdatedActive+stats.UpdatedInactive > 0 {
 		log.Printf("[multibyte-persist] applied snapshot: %d entries (%d skipped); updated %d active + %d inactive nodes",
 			stats.ReadEntries, stats.Skipped, stats.UpdatedActive, stats.UpdatedInactive)
 	}
 	return stats, nil
+}
+
+// multibyteSnapshotsKept is how many of the newest snapshots survive a prune.
+// Only the newest is ever read; the rest are kept for inspection.
+const multibyteSnapshotsKept = 3
+
+// pruneMultibyteSnapshots drops all but the newest multibyteSnapshotsKept
+// snapshots once the newest has been applied (a no-op for the single file on
+// SQLite). A failure is logged and retried after the next persist; it never
+// fails the persist that already committed.
+func (s *Store) pruneMultibyteSnapshots() {
+	if err := s.mbcap.Prune(multibyteSnapshotsKept); err != nil {
+		log.Printf("[multibyte-persist] pruning old snapshots in %s: %v", s.mbcap.Location(), err)
+	}
 }
 
 // isMalformedSnapshotErr returns true if err looks like a JSON parse /
