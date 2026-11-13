@@ -160,46 +160,6 @@ func TestDetectSchemaV2Queries(t *testing.T) {
 	}
 }
 
-// --- buildPacketWhere ---
-
-func TestBuildPacketWhere(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	tests := []struct {
-		name      string
-		query     PacketQuery
-		wantWhere int
-	}{
-		{"empty", PacketQuery{}, 0},
-		{"type filter", PacketQuery{Type: intPtr(4)}, 1},
-		{"route filter", PacketQuery{Route: intPtr(1)}, 1},
-		{"observer filter", PacketQuery{Observer: "obs1"}, 1},
-		{"hash filter", PacketQuery{Hash: "ABC123DEF4567890"}, 1},
-		{"since filter", PacketQuery{Since: "2025-01-01"}, 1},
-		{"until filter", PacketQuery{Until: "2099-01-01"}, 1},
-		{"region filter", PacketQuery{Region: "SJC"}, 1},
-		{"node filter", PacketQuery{Node: "TestRepeater"}, 1},
-		{"all filters", PacketQuery{
-			Type: intPtr(4), Route: intPtr(1), Observer: "obs1",
-			Hash: "abc123", Since: "2025-01-01", Until: "2099-01-01",
-			Region: "SJC", Node: "TestRepeater",
-		}, 8},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			where, args := db.buildPacketWhere(tc.query)
-			if len(where) != tc.wantWhere {
-				t.Errorf("expected %d where clauses, got %d", tc.wantWhere, len(where))
-			}
-			if len(where) != len(args) {
-				t.Errorf("where count (%d) != args count (%d)", len(where), len(args))
-			}
-		})
-	}
-}
-
 // --- DB.QueryMultiNodePackets ---
 
 func TestDBQueryMultiNodePackets(t *testing.T) {

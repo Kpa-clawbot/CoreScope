@@ -952,7 +952,7 @@ func (s *PacketStore) Load() error {
 	if maxPackets > 0 {
 		if s.db.hasLastSeen {
 			loadConditions = append(loadConditions, fmt.Sprintf(
-				"t.id IN (SELECT id FROM transmissions ORDER BY last_seen DESC LIMIT %d)", maxPackets))
+				"t.id IN (SELECT id FROM transmissions ORDER BY last_seen DESC, id DESC LIMIT %d)", maxPackets))
 		} else {
 			loadConditions = append(loadConditions, fmt.Sprintf(
 				"t.id IN (SELECT id FROM transmissions ORDER BY first_seen DESC LIMIT %d)", maxPackets))
@@ -967,11 +967,11 @@ func (s *PacketStore) Load() error {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
+				o.snr, o.rssi, o.score, o.path_json, ` + s.db.obsTimestampISOSQL() + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.idx = o.observer_idx` + filterClause + `
-			ORDER BY t.first_seen ASC, o.timestamp DESC`
+			` + loadOrderByFirstSeen
 	} else {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
@@ -1280,11 +1280,11 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
+				o.snr, o.rssi, o.score, o.path_json, ` + s.db.obsTimestampISOSQL() + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.idx = o.observer_idx` + filterClause + `
-			ORDER BY t.first_seen ASC, o.timestamp DESC`
+			` + loadOrderByFirstSeen
 	} else {
 		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
@@ -3025,12 +3025,12 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		querySQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRHCol + scopeNameCol + `
+				o.snr, o.rssi, o.score, o.path_json, ` + s.db.obsTimestampISOSQL() + obsRHCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.idx = o.observer_idx
 			WHERE t.id > ?
-			ORDER BY t.id ASC, o.timestamp DESC`
+			` + loadOrderByTxID
 	} else {
 		querySQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
@@ -3429,7 +3429,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	}
 	if s.db.isV3 {
 		querySQL = `SELECT o.id, o.transmission_id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRHCol2 + `
+				o.snr, o.rssi, o.score, o.path_json, ` + s.db.obsTimestampISOSQL() + obsRHCol2 + `
 			FROM observations o
 			LEFT JOIN observers obs ON obs.idx = o.observer_idx
 			WHERE o.id > ?
@@ -9733,7 +9733,7 @@ func (s *PacketStore) loadMultibyteCapFromDB() {
 // nodes.multibyte_* — see readonly_invariant_test.go. This helper is
 // the only side-effect path for capability data leaving the server.
 func (s *PacketStore) publishMultibyteCapSnapshot(entries []MultiByteCapEntry) {
-	if s.db == nil || s.db.path == "" {
+	if s.db == nil || s.db.queueAnchor() == "" {
 		return
 	}
 	out := make([]mbcapqueue.Entry, 0, len(entries))
@@ -9744,7 +9744,7 @@ func (s *PacketStore) publishMultibyteCapSnapshot(entries []MultiByteCapEntry) {
 			Evidence:  e.Evidence,
 		})
 	}
-	if err := mbcapqueue.WriteSnapshot(s.db.path, mbcapqueue.Snapshot{Entries: out}); err != nil {
+	if err := mbcapqueue.WriteSnapshot(s.db.queueAnchor(), mbcapqueue.Snapshot{Entries: out}); err != nil {
 		log.Printf("[multibyte] publish snapshot: %v", err)
 	}
 }
@@ -9947,7 +9947,9 @@ func (s *PacketStore) bulkHealthNodes(limit int, regionFilter bool, areaNodes ma
 	if filtered {
 		queryLimit = 10000
 	}
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC LIMIT ?", queryLimit)
+	// NULLS LAST is SQLite's default for DESC and must be spelled out for
+	// Postgres; public_key makes ties at the LIMIT edge pick the same nodes.
+	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC NULLS LAST, public_key ASC LIMIT ?", queryLimit)
 	if err != nil {
 		return nil, err
 	}

@@ -15,10 +15,6 @@ import (
 // method returns identical results from each. It is how the server's SQL is
 // proven equivalent on both backends rather than merely runnable on Postgres.
 
-// sqliteEndStateSchema is the SQLite end-state schema (kept as a name for the
-// tests that already use it; the source of truth is dbschema.SQLiteEndState).
-var sqliteEndStateSchema = dbschema.SQLiteEndState
-
 type dualDB struct {
 	sqlite, pg     *DB     // server handles: read-only, exactly as production opens them
 	sqliteRW, pgRW *sql.DB // writable handles on the same databases, for seeding only

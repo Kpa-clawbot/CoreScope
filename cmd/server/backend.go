@@ -17,3 +17,17 @@ func (db *DB) sqlFor(sqlite, postgres string) string {
 	}
 	return sqlite
 }
+
+// queueAnchor is the path the file queues shared with the ingestor
+// (prunequeue, mbcapqueue) are placed beside: the SQLite database file, or on
+// Postgres the configured dbPath (default data/meshcore.db), which the
+// ingestor uses as the same anchor.
+func (db *DB) queueAnchor() string {
+	if db == nil {
+		return ""
+	}
+	if db.queuePath != "" {
+		return db.queuePath
+	}
+	return db.path
+}

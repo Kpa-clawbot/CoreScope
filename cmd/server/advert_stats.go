@@ -63,7 +63,7 @@ func (db *DB) CountFloodAdvertsForNode(pubkey string, windowHours float64, rowCa
 	}
 	floor := time.Now().UTC().Add(-time.Duration(windowHours*float64(time.Hour))).AddDate(0, 0, -1).Format("2006-01-02")
 	rows, err := db.conn.Query(
-		`SELECT COALESCE(first_seen, ''), ?, COALESCE(hash, '') FROM transmissions t
+		`SELECT COALESCE(first_seen, ''), CAST(? AS INTEGER), COALESCE(hash, '') FROM transmissions t
  WHERE from_pubkey=? AND payload_type=? AND first_seen>=?
  AND EXISTS(SELECT 1 FROM advert_route_evidence e WHERE e.tx_id=t.id AND e.bit=?)
  ORDER BY id DESC LIMIT ?`,

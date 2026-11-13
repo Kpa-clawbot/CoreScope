@@ -770,14 +770,21 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 // read through idx_observations_timestamp for the window. With a plain JOIN
 // the planner scanned every transmission and probed observations per row
 // (3.2-3.3 s against 1.8-2.0 s on an 18M-observation database, #2146).
-func reachScanSQL(nTokens int) string {
+//
+// Postgres rejects CROSS JOIN ... ON and its planner needs no such hint, so it
+// gets a plain JOIN. Stored hops are a mix of upper and lower case and the
+// tokens are uppercase: SQLite's LIKE ignores ASCII case, Postgres's does not,
+// so Postgres matches with ILIKE (ASCII-only folding under COLLATE "C").
+func (db *DB) reachScanSQL(nTokens int) string {
+	join := db.sqlFor("CROSS JOIN", "JOIN")
+	like := db.sqlFor("o.path_json LIKE ?", "o.path_json ILIKE ?")
 	likes := make([]string, nTokens)
 	for i := range likes {
-		likes[i] = "o.path_json LIKE ?"
+		likes[i] = like
 	}
 	return `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.payload_type,0), o.path_json, o.snr
 	      FROM observations o
-	      CROSS JOIN transmissions t ON t.id = o.transmission_id
+	      ` + join + ` transmissions t ON t.id = o.transmission_id
 	      LEFT JOIN observers obs ON obs.idx = o.observer_idx
 	      WHERE o.timestamp >= ? AND (` + strings.Join(likes, " OR ") + `)
 	      LIMIT ?`
@@ -824,7 +831,7 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 		args = append(args, "%\""+tok+"\"%")
 	}
 	args = append(args, reachScanRowLimit)
-	return s.readReachRows(ctx, reachScanSQL(len(toks)), args)
+	return s.readReachRows(ctx, s.db.reachScanSQL(len(toks)), args)
 }
 
 // readReachRows runs a reach scan query (column order fixed by the callers) and
@@ -876,7 +883,13 @@ func (s *Server) readReachRows(ctx context.Context, q string, args []interface{}
 // ingestor when retention.hopIndexDays > 0 (see
 // internal/dbschema/observation_hops.go): a missing table or coverage row
 // (index off, older DB, ingestor not yet started) just means "no".
+//
+// The index is SQLite-only: the Postgres schema has no observation_hops, so a
+// Postgres server always takes the path_json scan without asking.
 func (s *Server) reachHopIndexCovers(ctx context.Context, sinceEpoch int64) bool {
+	if s.db.isPostgres() {
+		return false
+	}
 	var covered int64
 	err := s.db.conn.QueryRowContext(ctx,
 		`SELECT since FROM `+dbschema.ObservationHopsCoverageTable+` WHERE id = 1`).Scan(&covered)
