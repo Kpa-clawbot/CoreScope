@@ -16,7 +16,7 @@
 // Layout (under <dir(dbPath)>/mbcap-snapshot/):
 //
 //	snapshot.json       — atomic-replaced by the server each analytics cycle
-//	snapshot.json.tmp   — transient (rename target)
+//	snapshot.json.*.tmp — transient random-named temp (rename source)
 //
 // The file is rewritten in full each cycle (idempotent overwrite). The
 // ingestor reads the file at most once per persist tick; if absent, the
@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -88,13 +89,8 @@ func WriteSnapshot(dbPath string, snap Snapshot) error {
 		return fmt.Errorf("marshal: %w", err)
 	}
 	final := SnapshotPath(dbPath)
-	tmp := final + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return fmt.Errorf("write tmp: %w", err)
-	}
-	if err := os.Rename(tmp, final); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
+	if err := writeFileAtomic(final, b); err != nil {
+		return fmt.Errorf("write: %w", err)
 	}
 	return nil
 }
@@ -104,7 +100,7 @@ func WriteSnapshot(dbPath string, snap Snapshot) error {
 // "nothing to persist" rather than an error.
 func ReadSnapshot(dbPath string) (Snapshot, error) {
 	var snap Snapshot
-	b, err := os.ReadFile(SnapshotPath(dbPath))
+	b, err := readRegularFile(SnapshotPath(dbPath))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return snap, os.ErrNotExist
@@ -115,4 +111,79 @@ func ReadSnapshot(dbPath string) (Snapshot, error) {
 		return snap, fmt.Errorf("unmarshal: %w", err)
 	}
 	return snap, nil
+}
+
+// maxFileBytes caps how much of a queue file is read. The documents are
+// small JSON (a request lists pubkeys at ~70 bytes each, so even 100k nodes
+// is ~7 MiB); 16 MiB leaves headroom while stopping a hostile peer sharing
+// the directory from making the reader allocate unbounded memory.
+const maxFileBytes = 16 << 20
+
+// writeFileAtomic writes b to path via a randomly named temp file in the
+// same directory (os.CreateTemp is O_EXCL, so a symlink pre-planted at any
+// guessable name is never followed), fsyncs, then renames over path. Rename
+// replaces a symlink at path itself rather than writing through it. The
+// result is mode 0644 so the other process (a different user) can read it.
+func writeFileAtomic(path string, b []byte) (err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(tmp)
+		}
+	}()
+	if err = f.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err = f.Write(b); err != nil {
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// readRegularFile reads path only if it is a regular file (not a symlink,
+// directory, device or FIFO) no larger than maxFileBytes. A missing file
+// yields an error satisfying os.IsNotExist. The opened handle is re-checked
+// against the Lstat result so a swap between the two calls is detected.
+func readRegularFile(path string) ([]byte, error) {
+	li, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !li.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: not a regular file", filepath.Base(path))
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() || !os.SameFile(li, fi) {
+		return nil, fmt.Errorf("%s: changed while opening", filepath.Base(path))
+	}
+	if fi.Size() > maxFileBytes {
+		return nil, fmt.Errorf("%s: exceeds %d bytes", filepath.Base(path), maxFileBytes)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxFileBytes {
+		return nil, fmt.Errorf("%s: exceeds %d bytes", filepath.Base(path), maxFileBytes)
+	}
+	return b, nil
 }

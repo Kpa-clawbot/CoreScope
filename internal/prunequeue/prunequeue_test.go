@@ -1,7 +1,10 @@
 package prunequeue
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -64,5 +67,98 @@ func TestReadResultMissing(t *testing.T) {
 	}
 	if res != nil {
 		t.Errorf("expected nil result, got %+v", res)
+	}
+}
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+}
+
+func readFileStr(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestWriteDoesNotFollowPlantedSymlinks(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "x.db")
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	dir, _ := EnsureDir(dbPath)
+	rp, _ := RequestPath(dbPath, id)
+	resp, _ := ResultPath(dbPath, id)
+	// Old predictable temp names and the final names.
+	for _, l := range []string{rp + ".tmp", resp + ".tmp", rp, resp} {
+		mustSymlink(t, victim, l)
+	}
+	if err := WriteRequest(dbPath, Request{ID: id, Pubkeys: []string{"aa"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteResult(dbPath, Result{ID: id, Deleted: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileStr(t, victim); got != "precious" {
+		t.Fatalf("symlink target was written through: %q", got)
+	}
+	fi, err := os.Lstat(resp)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o644 {
+		t.Fatalf("result not a regular 0644 file: %v %v", fi, err)
+	}
+	// No stray random temp files left behind.
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		if strings.Contains(e.Name(), ".tmp") && e.Type().IsRegular() {
+			t.Errorf("leftover temp %s", e.Name())
+		}
+	}
+}
+
+func TestSymlinksSkippedOnRead(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "x.db")
+	dir, _ := EnsureDir(dbPath)
+	target := filepath.Join(t.TempDir(), "t.json")
+	if err := os.WriteFile(target, []byte(`{"id":"abcdef0123456789","pubkeys":["aa"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id := "abcdef0123456789"
+	rp, _ := RequestPath(dbPath, id)
+	resp, _ := ResultPath(dbPath, id)
+	mustSymlink(t, target, rp)
+	mustSymlink(t, target, resp)
+
+	list, err := ListPending(dbPath)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("ListPending should skip symlink: %v %v", list, err)
+	}
+	if ok, err := RequestExists(dbPath, id); ok || err != nil {
+		t.Fatalf("RequestExists on symlink: %v %v", ok, err)
+	}
+	if _, err := ReadRequest(rp); err == nil {
+		t.Error("ReadRequest should reject symlink")
+	}
+	if r, err := ReadResult(dbPath, id); err == nil || r != nil {
+		t.Errorf("ReadResult should reject symlink: %v %v", r, err)
+	}
+	_ = dir
+}
+
+func TestOversizeRejected(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "x.db")
+	dir, _ := EnsureDir(dbPath)
+	p := filepath.Join(dir, "request-abcdef0123456789.json")
+	if err := os.WriteFile(p, bytes.Repeat([]byte(" "), maxFileBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadRequest(p); err == nil {
+		t.Error("oversize request should be rejected")
 	}
 }
