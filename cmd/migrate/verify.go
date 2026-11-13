@@ -246,9 +246,9 @@ func reportResults(lg *log.Logger, results []tableResult) error {
 	sort.Slice(results, func(i, j int) bool { return results[i].name < results[j].name })
 	bad := 0
 	for _, r := range results {
-		mark := "✓"
+		mark := "ok"
 		if !r.ok {
-			mark = "✗"
+			mark = "MISMATCH"
 			bad++
 		}
 		line := fmt.Sprintf("verify %-28s %s rows a=%d b=%d", r.name, mark, r.rowsA, r.rowsB)

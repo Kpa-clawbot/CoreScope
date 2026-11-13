@@ -291,11 +291,11 @@ func TestVerifyReportsFirstDifference(t *testing.T) {
 
 	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", "sqlite:"+dst)
 	wantFail(t, code, out,
-		"verify observations", "✗", "first difference at id=16: column snr",
+		"verify observations", "MISMATCH", "first difference at id=16: column snr",
 		"first difference at kind=\"channel\", key_fp=\"b\": row exists on side a only",
 		"2 of ")
-	if !strings.Contains(out, "verify nodes") || !strings.Contains(out, "✓") {
-		t.Errorf("unchanged tables should still report ✓")
+	if !strings.Contains(out, "verify nodes") || !strings.Contains(out, "ok rows") {
+		t.Errorf("unchanged tables should still report ok")
 	}
 }
 
@@ -721,7 +721,7 @@ func TestAbsentTableAndColumnNeedFlag(t *testing.T) {
 	mustExec(t, db, `INSERT INTO scope_match_totals VALUES (1, 1, 1, 1, 1, 1, 1)`)
 	db.Close()
 	code, out = run(t, "verify", "-a", "sqlite:"+src, "-b", "sqlite:"+dst)
-	wantFail(t, code, out, "first difference at id=2: column code2 is NULL on side a", "✗ rows a=0 b=1 — table is missing on side a")
+	wantFail(t, code, out, "first difference at id=2: column code2 is NULL on side a", "MISMATCH rows a=0 b=1 — table is missing on side a")
 
 	src2, dst2 := filepath.Join(dir, "src2.db"), filepath.Join(dir, "dst2.db")
 	newSource(t, src2, srcMigrations())
