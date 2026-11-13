@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/dbschema/pgschema"
 	"github.com/meshcore-analyzer/dbx"
@@ -41,9 +42,13 @@ func OpenPostgresStore(dsn, queuePath string, sampleIntervalSec int) (*Store, er
 	if err := checkPostgresDSN(dsn); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open(dbx.PostgresDriverName, dsn)
+	pinned, err := pinWriterSearchPath(dsn)
 	if err != nil {
-		return nil, redactDSNError(fmt.Errorf("opening postgres: %w", err), dsn)
+		return nil, redactDSNError(err, dsn)
+	}
+	db, err := sql.Open(dbx.PostgresDriverName, pinned)
+	if err != nil {
+		return nil, redactDSNError(redactDSNError(fmt.Errorf("opening postgres: %w", err), pinned), dsn)
 	}
 	s, err := openPostgresStoreDB(db, queuePath, sampleIntervalSec)
 	if err != nil {
@@ -54,9 +59,143 @@ func OpenPostgresStore(dsn, queuePath string, sampleIntervalSec int) (*Store, er
 		if errors.As(err, &refusal) {
 			return nil, err
 		}
-		return nil, redactDSNError(err, dsn)
+		return nil, redactDSNError(redactDSNError(err, pinned), dsn)
 	}
 	return s, nil
+}
+
+// pinWriterSearchPath returns dsn with the writer's search_path pinned as a
+// startup parameter, so every connection the pool opens resolves the
+// ingestor's unqualified names in the schemas it resolves them in today,
+// minus the "$user" hazard. The default search_path starts with "$user": a
+// schema named after the writer role, which any role allowed to CREATE in
+// the database could create, would come first and take the ingestor's
+// unqualified INSERTs into tables (and triggers) of its own.
+//
+// A search_path the DSN sets (as a parameter or in options, PGOPTIONS
+// included) is the operator's explicit choice and is kept as given.
+// Otherwise the session's own value (built in, or from ALTER ROLE / ALTER
+// DATABASE / postgresql.conf) is pinned with "$user" resolved now: to the
+// writer's own schema when one by that name exists and is owned by the
+// writer (only the writer or a superuser could have made it, and the
+// ingestor already writes there), else dropped. The standard setup (the
+// built-in "$user", public with no such schema) pins public, where the
+// migrations and the server expect the tables.
+func pinWriterSearchPath(dsn string) (string, error) {
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		// Not wrapped: pgx's parse error quotes the connection string.
+		return "", errors.New("opening postgres: db.dsn does not parse")
+	}
+	if setsSearchPath(cfg.RuntimeParams) {
+		return dsn, nil
+	}
+	probe, err := sql.Open(dbx.PostgresDriverName, dsn)
+	if err != nil {
+		return "", fmt.Errorf("opening postgres: %w", err)
+	}
+	defer probe.Close()
+	probe.SetMaxOpenConns(1)
+	if err := pingPostgres(probe); err != nil {
+		return "", fmt.Errorf("pinging postgres: %w", err)
+	}
+	// Everything is qualified: this session still has the unpinned path
+	// (pg_catalog is searched first anyway, so = and casts are the built-in
+	// ones).
+	var setting, user string
+	var owner sql.NullString
+	if err := probe.QueryRow(`
+		SELECT pg_catalog.current_setting('search_path'), current_user,
+		       (SELECT pg_catalog.pg_get_userbyid(n.nspowner) FROM pg_catalog.pg_namespace n WHERE n.nspname = current_user)`,
+	).Scan(&setting, &user, &owner); err != nil {
+		return "", fmt.Errorf("reading the writer's search_path: %w", err)
+	}
+	path := safeSearchPath(setting, user, owner.String)
+	if owner.Valid && owner.String != user && strings.Contains(setting, "$user") {
+		log.Printf("[db] WARNING: schema %q is named after the writer role but owned by %q; it is left out of the writer's search_path", user, owner.String)
+	}
+	log.Printf("[db] writer search_path pinned to %s", path)
+	return withSearchPathParam(dsn, path)
+}
+
+// setsSearchPath reports whether the DSN's startup parameters set
+// search_path, directly or through options ("-c search_path=..." or
+// "--search-path=...").
+func setsSearchPath(params map[string]string) bool {
+	for k, v := range params {
+		switch strings.ToLower(k) {
+		case "search_path":
+			return true
+		case "options":
+			if strings.Contains(strings.ReplaceAll(strings.ToLower(v), "-", "_"), "search_path") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// safeSearchPath is setting (a search_path value as current_setting returns
+// it) with every "$user" element replaced by user's schema when owner, the
+// owner of the schema named user ("" when there is none), is user itself,
+// and dropped otherwise. Other elements are kept as written.
+func safeSearchPath(setting, user, owner string) string {
+	var out []string
+	for _, el := range splitSearchPath(setting) {
+		if el == `"$user"` || el == `$user` {
+			if owner != "" && owner == user {
+				out = append(out, `"`+strings.ReplaceAll(user, `"`, `""`)+`"`)
+			}
+			continue
+		}
+		out = append(out, el)
+	}
+	return strings.Join(out, ", ")
+}
+
+// splitSearchPath splits a search_path value at the commas outside double
+// quotes and trims each element.
+func splitSearchPath(setting string) []string {
+	var out []string
+	var b strings.Builder
+	quoted := false
+	flush := func() {
+		if el := strings.TrimSpace(b.String()); el != "" {
+			out = append(out, el)
+		}
+		b.Reset()
+	}
+	for _, c := range setting {
+		switch {
+		case c == '"':
+			quoted = !quoted // a doubled "" toggles twice and stays quoted
+		case c == ',' && !quoted:
+			flush()
+			continue
+		}
+		b.WriteRune(c)
+	}
+	flush()
+	return out
+}
+
+// withSearchPathParam adds search_path=<path> to a URL or keyword/value DSN
+// that does not set it already.
+func withSearchPathParam(dsn, path string) (string, error) {
+	if isPostgresURL(dsn) {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return "", errors.New("opening postgres: db.dsn is not a valid postgres:// URL")
+		}
+		q := u.Query()
+		q.Set("search_path", path)
+		// pgx does not read "+" in a query value as a space; %20 it does.
+		// Encode writes a literal "+" as %2B, so every "+" left is a space.
+		u.RawQuery = strings.ReplaceAll(q.Encode(), "+", "%20")
+		return u.String(), nil
+	}
+	esc := strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(path)
+	return dsn + " search_path='" + esc + "'", nil
 }
 
 // allowSharedDatabaseForTests skips the single-install check

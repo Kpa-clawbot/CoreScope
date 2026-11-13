@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -130,13 +129,16 @@ func main() {
 	}
 
 	keySet := newChannelKeySet(channelKeys, cfg.UsersDBPath(), cfg.ApprovedChannelsMax())
-	var usersPG *sql.DB // the store's connection on PostgreSQL, else nil
+	// On PostgreSQL each set reads the accounts on a read-only connection of
+	// its own, opened on its first read, never on the writer's (see
+	// users_postgres.go); the set closes it.
+	var linkedAccounts *accountsReader
 	if store.pg {
-		usersPG = store.db
-		keySet.usePostgres(usersPG)
+		keySet.usePostgres(newAccountsReader(cfg.DB.DSN))
+		linkedAccounts = newAccountsReader(cfg.DB.DSN)
 	}
 	if cfg.ApprovedChannelsEnabled() {
-		if usersPG != nil {
+		if store.pg {
 			log.Printf("[proposals] reading approved channels from %s.proposals while that schema exists (accounts in PostgreSQL), else from users.db:", usersPGSchema)
 		}
 		logApprovedChannelsSource(cfg.UsersDBPath())
@@ -145,7 +147,7 @@ func main() {
 
 	// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): nil when
 	// off or ignored. Installed before any MQTT source connects.
-	if lc := newLinkedCompanionFilter(cfg, usersPG); lc != nil {
+	if lc := newLinkedCompanionFilter(cfg, linkedAccounts); lc != nil {
 		store.linkedCompanions = lc
 		go lc.refreshLoop()
 	}
@@ -790,6 +792,10 @@ func main() {
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
+	}
+	keySet.Close()
+	if store.linkedCompanions != nil {
+		store.linkedCompanions.Close()
 	}
 	log.Println("Done.")
 }

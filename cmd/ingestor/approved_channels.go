@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,18 +30,20 @@ var errUsersDBMissing = errors.New("users.db not found")
 
 // channelKeySet hands each message the current channel key map. Snapshots
 // are never mutated after they are stored, so decoders read them without a
-// lock. refresh is called from one goroutine only (startup, then the ticker).
+// lock. refresh is called from one goroutine only (startup, then the ticker);
+// mu serializes it with Close at shutdown.
 type channelKeySet struct {
 	configured map[string]string
 	path       string
 	max        int
 	cur        atomic.Pointer[map[string]string]
 
-	db       *sql.DB // opened lazily, read-only
-	pgDB     *sql.DB // PostgreSQL: the store's connection (accountsInPostgres picks the source)
-	fromFile bool    // with pgDB: the last read found no accounts schema and read users.db
-	failing  bool    // the last read failed; logged once per failure streak
-	approved int     // approved keys in the current snapshot
+	mu       sync.Mutex      // guards everything below
+	db       *sql.DB         // opened lazily, read-only
+	accounts *accountsReader // PostgreSQL: reads corescope_users while that schema exists
+	fromFile bool            // with accounts: the last read found no accounts schema and read users.db
+	failing  bool            // the last read failed; logged once per failure streak
+	approved int             // approved keys in the current snapshot
 }
 
 // newChannelKeySet starts with the configured keys (the very map
@@ -63,6 +66,8 @@ func (s *channelKeySet) current() *map[string]string { return s.cur.Load() }
 // A failed read keeps the current snapshot: only a successful read changes
 // the set, so a locked or missing users.db never drops a key.
 func (s *channelKeySet) refresh() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	names, err := s.readApproved()
 	if err != nil {
 		if !s.failing {
@@ -83,20 +88,24 @@ func (s *channelKeySet) refresh() {
 	s.cur.Store(&next)
 }
 
-// usePostgres reads the approved names from corescope_users.proposals through
-// db (the ingestor's store) while that schema exists, else from users.db.
-// db stays the caller's.
-func (s *channelKeySet) usePostgres(db *sql.DB) { s.pgDB = db }
+// usePostgres reads the approved names from corescope_users.proposals
+// through r while that schema exists, else from users.db. The set owns r from
+// here on and closes it in Close.
+func (s *channelKeySet) usePostgres(r *accountsReader) { s.accounts = r }
+
+// approvedChannelsColumns are the proposals columns approvedChannelsQuery
+// references (plainAccountsTable checks their types).
+var approvedChannelsColumns = []string{"id", "kind", "subject", "status", "decided_at"}
 
 func (s *channelKeySet) readApproved() ([]string, error) {
-	if s.pgDB != nil {
-		inPG, err := accountsInPostgres(s.pgDB)
+	if s.accounts != nil {
+		names, inPG, err := s.accounts.readAccounts("proposals", approvedChannelsColumns, pgUsersQuery(approvedChannelsQuery, "proposals"), s.max)
 		if err != nil {
 			return nil, err
 		}
 		s.fromFile = !inPG
 		if inPG {
-			return queryUsersPG(s.pgDB, pgUsersQuery(approvedChannelsQuery, "proposals"), s.max)
+			return names, nil
 		}
 	}
 	if s.db == nil {
@@ -188,16 +197,22 @@ func mergeApprovedKeys(configured map[string]string, names []string) (map[string
 }
 
 func (s *channelKeySet) source() string {
-	if s.pgDB != nil && !s.fromFile {
+	if s.accounts != nil && !s.fromFile {
 		return usersPGSchema + ".proposals"
 	}
 	return s.path
 }
 
-// Close closes the read-only handle, if any.
+// Close closes the read-only handles, if any.
 func (s *channelKeySet) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.db != nil {
 		s.db.Close()
+		s.db = nil
+	}
+	if s.accounts != nil {
+		s.accounts.Close()
 	}
 }
 
