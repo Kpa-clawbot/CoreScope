@@ -190,9 +190,10 @@ func main() {
 			log.Fatalf("[db] failed to open postgres: %v", err)
 		}
 		log.Printf("[db] opened postgres (read-only role verified)")
-		// The file queues shared with the ingestor (geo-prune requests, the
-		// multibyte snapshot) live beside the configured dbPath on both
-		// backends; on Postgres there is no database file to anchor them.
+		// On Postgres the geo-prune requests and the multibyte snapshot go
+		// through the control tables (control_pg.go), not files; there is no
+		// database file, so local files kept beside it (the geo-filter
+		// backup) are anchored at the configured dbPath.
 		database.queuePath = resolvedDB
 	} else {
 		database, err = OpenDB(resolvedDB)

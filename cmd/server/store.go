@@ -423,7 +423,7 @@ type PacketStore struct {
 	// Snapshot from the last analytics cycle + O(1) index, both under cacheMu.
 	// Populated by analytics + pre-populated from DB on Load (read-only path).
 	// Persistence to the DB is owned by the ingestor (#1289/#1324): the
-	// analytics cycle publishes a snapshot file via internal/mbcapqueue
+	// analytics cycle publishes a snapshot via internal/mbcapqueue
 	// and the ingestor's RunMultibyteCapPersist applies it.
 	mbCapSnapshot []MultiByteCapEntry
 	mbCapIndex    map[string]MultiByteCapEntry
@@ -9723,17 +9723,23 @@ func (s *PacketStore) loadMultibyteCapFromDB() {
 	log.Printf("[multibyte] loaded %d capability entries from DB", len(entries))
 }
 
-// publishMultibyteCapSnapshot writes the analytics-cycle output to the
-// on-disk handoff (internal/mbcapqueue). The ingestor's
-// RunMultibyteCapPersist consumes the file and writes confirmed /
-// suspected entries to the DB.
+// publishMultibyteCapSnapshot publishes the analytics-cycle output through
+// the handoff to the ingestor (internal/mbcapqueue: a file on SQLite, a
+// control-table row on Postgres). The ingestor's RunMultibyteCapPersist
+// consumes it and writes confirmed / suspected entries to the DB. Skipped
+// when there is no handoff (on Postgres: the control tables are unavailable,
+// which was logged once at startup).
 //
 // INVARIANT (#1289/#1324): the server is the read path and opens
 // SQLite mode=ro. It MUST NOT execute any UPDATE on
 // nodes.multibyte_* — see readonly_invariant_test.go. This helper is
 // the only side-effect path for capability data leaving the server.
 func (s *PacketStore) publishMultibyteCapSnapshot(entries []MultiByteCapEntry) {
-	if s.db == nil || s.db.queueAnchor() == "" {
+	if s.db == nil {
+		return
+	}
+	dst := s.db.mbcapStore()
+	if dst == nil {
 		return
 	}
 	out := make([]mbcapqueue.Entry, 0, len(entries))
@@ -9744,7 +9750,7 @@ func (s *PacketStore) publishMultibyteCapSnapshot(entries []MultiByteCapEntry) {
 			Evidence:  e.Evidence,
 		})
 	}
-	if err := mbcapqueue.WriteSnapshot(s.db.queueAnchor(), mbcapqueue.Snapshot{Entries: out}); err != nil {
+	if err := dst.WriteSnapshot(mbcapqueue.Snapshot{Entries: out}); err != nil {
 		log.Printf("[multibyte] publish snapshot: %v", err)
 	}
 }

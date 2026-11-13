@@ -304,6 +304,12 @@ var analyzerSQLCallArgs = map[string]int{
 
 var analyzerWriteSQL = regexp.MustCompile(`(?i)^(INSERT|UPDATE|DELETE|REPLACE)\b`)
 
+// controlPGFile is the one file allowed to open, hold or use the Postgres
+// control pool, the server's only writable connections (control_pg.go). It
+// is also the only file where INSERT SQL may appear; UPDATE, DELETE and
+// REPLACE may appear nowhere.
+const controlPGFile = "control_pg.go"
+
 // analyzerWriteViolations parses Go sources and reports, as "file:line: what",
 // every place that
 //
@@ -312,7 +318,9 @@ var analyzerWriteSQL = regexp.MustCompile(`(?i)^(INSERT|UPDATE|DELETE|REPLACE)\b
 //   - passes SQL starting with INSERT, UPDATE, DELETE or REPLACE to Exec,
 //     Query*, or Prepare* on any receiver. In cmd/server every such receiver
 //     is the analyzer handle or a Tx/Stmt made from it (users.db is written
-//     only inside internal/users), so the receiver is not narrowed.
+//     only inside internal/users), so the receiver is not narrowed. The one
+//     exception is INSERT in controlPGFile, whose control pool may insert
+//     into the control tables (and holds no other write privilege).
 //
 // The SQL is resolved from a string literal, a package-level string constant
 // or variable, or the leading operand of a + concatenation, after leading
@@ -425,7 +433,7 @@ func analyzerWriteViolations(t *testing.T, fset *token.FileSet, files map[string
 				}
 				if idx, ok := analyzerSQLCallArgs[method]; ok && idx < len(call.Args) {
 					if q, ok := resolve(call.Args[idx]); ok {
-						if m := analyzerWriteSQL.FindString(leadingSQL(q)); m != "" {
+						if m := analyzerWriteSQL.FindString(leadingSQL(q)); m != "" && !(name == controlPGFile && strings.EqualFold(m, "INSERT")) {
 							out = append(out, where+": "+strings.ToUpper(m)+" passed to "+method+" in "+fd.Name.Name)
 						}
 					}
@@ -518,7 +526,18 @@ func read(db *DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := analyzerWriteViolations(t, fset, map[string]*ast.File{"fixture.go": f})
+	ctlSrc := `package main
+
+func enqueue(ctl *sql.DB) {
+	ctl.Exec("INSERT INTO corescope_control.prune_requests (id) VALUES (?)", 1)
+	ctl.Exec("DELETE FROM corescope_control.prune_requests WHERE id = ?", 1)
+}
+`
+	cf, err := parser.ParseFile(fset, controlPGFile, ctlSrc, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := analyzerWriteViolations(t, fset, map[string]*ast.File{"fixture.go": f, controlPGFile: cf})
 	want := []string{
 		"fixture.go:9: Begin on the analyzer connection in migrate",
 		"fixture.go:10: UPDATE passed to Prepare in migrate",
@@ -527,6 +546,8 @@ func read(db *DB) {
 		"fixture.go:13: DELETE passed to Exec in migrate",
 		"fixture.go:14: BeginTx on the analyzer connection in migrate",
 	}
+	// control_pg.go may INSERT, never DELETE; sorted after fixture.go.
+	want = append([]string{controlPGFile + ":5: DELETE passed to Exec in enqueue"}, want...)
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("violations:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
@@ -534,16 +555,26 @@ func read(db *DB) {
 
 // TestPostgresOpenIsOnlyInOpenPostgresDB pins the Postgres side of the
 // read-only invariant: the analyzer database is opened on Postgres in exactly
-// one place, OpenPostgresDBWithStatementTimeout, from the DSN pgServerDSN produced — so every
-// connection starts with default_transaction_read_only=on and the role's
-// write privileges are checked before the handle is used.
+// two places. OpenPostgresDBWithStatementTimeout opens the main pool from the
+// DSN pgServerDSN produced, so every connection starts with
+// default_transaction_read_only=on and the role's write privileges are
+// checked before the handle is used. openPostgresControl (control_pg.go)
+// opens the control pool, with read-only transactions forced off, only after
+// those checks, as the same role.
 func TestPostgresOpenIsOnlyInOpenPostgresDB(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	driverUse := regexp.MustCompile(`\bPostgresDriverName\b`)
-	want := regexp.MustCompile(`sql\.Open\(dbx\.PostgresDriverName, roDSN\)`)
+	want := map[string]*regexp.Regexp{
+		"db_postgres.go": regexp.MustCompile(`sql\.Open\(dbx\.PostgresDriverName, roDSN\)`),
+		controlPGFile:    regexp.MustCompile(`sql\.Open\(dbx\.PostgresDriverName, ctlDSN\)`),
+	}
+	derive := map[string]string{
+		"db_postgres.go": "roDSN, secrets, err := pgServerDSN(dsn, params)",
+		controlPGFile:    "ctlDSN, secrets, err := pgServerDSN(dsn, ctlParams)",
+	}
 	var uses []string
 	good := 0
 	for _, e := range entries {
@@ -558,14 +589,94 @@ func TestPostgresOpenIsOnlyInOpenPostgresDB(t *testing.T) {
 		for range driverUse.FindAll(src, -1) {
 			uses = append(uses, name)
 		}
-		if name == "db_postgres.go" {
-			good += len(want.FindAll(src, -1))
-			if !strings.Contains(string(src), "roDSN, secrets, err := pgServerDSN(dsn, params)") {
-				t.Error("db_postgres.go no longer derives roDSN from pgServerDSN")
+		if re, ok := want[name]; ok {
+			good += len(re.FindAll(src, -1))
+			if !strings.Contains(string(src), derive[name]) {
+				t.Errorf("%s no longer derives its DSN with %q", name, derive[name])
 			}
 		}
 	}
-	if len(uses) != 1 || uses[0] != "db_postgres.go" || good != 1 {
-		t.Fatalf("Postgres driver uses in cmd/server: %v (read-only opens: %d); want exactly one, sql.Open(dbx.PostgresDriverName, roDSN) in db_postgres.go", uses, good)
+	sort.Strings(uses)
+	if strings.Join(uses, ",") != controlPGFile+",db_postgres.go" || good != 2 {
+		t.Fatalf("Postgres driver uses in cmd/server: %v (expected opens: %d); want exactly sql.Open(dbx.PostgresDriverName, roDSN) in db_postgres.go and sql.Open(dbx.PostgresDriverName, ctlDSN) in %s", uses, good, controlPGFile)
+	}
+}
+
+// readWriteSessionPattern matches source that turns read-only transactions
+// off: the forced parameter set to off (as a pgParam, in SQL or a DSN), or
+// an explicit read-write transaction.
+var readWriteSessionPattern = regexp.MustCompile(`(?i)(pgReadOnlyParam|default_transaction_read_only)\W{1,6}off\b|\bREAD\s+WRITE\b|transaction_read_only\s*(=|TO)\s*(off|false|0)\b`)
+
+// TestControlPoolConfinedToControlPG pins the one writable Postgres pool to
+// control_pg.go: read-only transactions are turned off there and nowhere else
+// (pgControlParams), and the pool (DB.ctl) is opened, stored, used and closed
+// only there. Every other file reaches the control tables through
+// pruneQueue / mbcapStore, which hand out the queues, never the pool.
+func TestControlPoolConfinedToControlPG(t *testing.T) {
+	fset, files := parseServerSources(t)
+	var bad []string
+	ctlFound := 0
+	for name, f := range files {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if locs := readWriteSessionPattern.FindAllIndex(src, -1); len(locs) > 0 {
+			if name == controlPGFile {
+				ctlFound += len(locs)
+			} else {
+				for _, loc := range locs {
+					bad = append(bad, fmt.Sprintf("%s:%d: turns read-only transactions off", name, 1+strings.Count(string(src[:loc[0]]), "\n")))
+				}
+			}
+		}
+		if name == controlPGFile {
+			continue
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			var id *ast.Ident
+			switch v := n.(type) {
+			case *ast.SelectorExpr:
+				id = v.Sel
+			case *ast.KeyValueExpr:
+				id, _ = v.Key.(*ast.Ident)
+			}
+			if id != nil && id.Name == "ctl" {
+				bad = append(bad, fmt.Sprintf("%s:%d: uses the control pool (.ctl)", name, fset.Position(id.Pos()).Line))
+			}
+			return true
+		})
+	}
+	sort.Strings(bad)
+	if len(bad) > 0 {
+		t.Errorf("the control pool must stay in %s:\n  %s", controlPGFile, strings.Join(bad, "\n  "))
+	}
+	if ctlFound != 1 {
+		t.Errorf("%s turns read-only transactions off %d times; want exactly once (pgControlParams)", controlPGFile, ctlFound)
+	}
+}
+
+// TestReadWriteSessionPattern proves the pattern bites on the spellings that
+// turn read-only transactions off, and not on the main pool's "on".
+func TestReadWriteSessionPattern(t *testing.T) {
+	for _, s := range []string{
+		`pgParam{pgReadOnlyParam, "off"}`,
+		`SET default_transaction_read_only = off`,
+		`dsn + " default_transaction_read_only=off"`,
+		`BEGIN TRANSACTION READ WRITE`,
+		`SET transaction_read_only TO false`,
+	} {
+		if !readWriteSessionPattern.MatchString(s) {
+			t.Errorf("not matched: %s", s)
+		}
+	}
+	for _, s := range []string{
+		`{pgReadOnlyParam, "on"}`,
+		`default_transaction_read_only=on`,
+		`pgReadOnlyParam    = "default_transaction_read_only"`,
+	} {
+		if readWriteSessionPattern.MatchString(s) {
+			t.Errorf("matched: %s", s)
+		}
 	}
 }

@@ -4065,15 +4065,21 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 // configured.
 //
 // Since #1283/#1289 the server opens SQLite read-only, so the actual DELETE is
-// performed by the ingestor. The server writes a request marker file (see
-// internal/prunequeue); the ingestor's maintenance loop consumes it and writes a
-// result marker. The confirm response is 202 Accepted with a request id;
+// performed by the ingestor. The server enqueues a request (internal/prunequeue:
+// a marker file on SQLite, a control-table row on Postgres); the ingestor's
+// maintenance loop consumes it and stores a result. On Postgres without the
+// control tables (control_pg.go) both prune endpoints answer 503. The confirm response is 202 Accepted with a request id;
 // clients poll GET /api/admin/prune-geo-filter/status?id=<id> for completion.
 //
 // Confirm requires the pubkeys from the preview in the request body to prevent
 // TOCTOU races: only nodes that were shown in preview AND are still outside the
 // filter are enqueued.
 func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
+	q := s.db.pruneQueue()
+	if q == nil {
+		writeError(w, http.StatusServiceUnavailable, msgControlUnavailable)
+		return
+	}
 	gf := s.getGeoFilter()
 	if gf == nil || len(gf.Polygon) < 3 {
 		writeError(w, http.StatusBadRequest, "no geo_filter configured")
@@ -4148,13 +4154,13 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 		Reason:      "geo-prune",
 		Pubkeys:     pubkeys,
 	}
-	if err := prunequeue.WriteRequest(s.db.queueAnchor(), req); err != nil {
+	if err := q.WriteRequest(req); err != nil {
 		log.Printf("[geo-prune] failed to enqueue request %s: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue prune request")
 		return
 	}
-	log.Printf("[geo-prune] enqueued request %s for %d node(s) (queue dir=%s)",
-		id, len(pubkeys), prunequeue.QueueDir(s.db.queueAnchor()))
+	log.Printf("[geo-prune] enqueued request %s for %d node(s) (queue=%s)",
+		id, len(pubkeys), q.Location())
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -4174,13 +4180,18 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 // {"status":"done","deleted":N,"completedAt":...} (or "error" if the ingestor
 // failed). Returns 404 when neither marker nor result is found.
 func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Request) {
+	q := s.db.pruneQueue()
+	if q == nil {
+		writeError(w, http.StatusServiceUnavailable, msgControlUnavailable)
+		return
+	}
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing id")
 		return
 	}
 
-	res, err := prunequeue.ReadResult(s.db.queueAnchor(), id)
+	res, err := q.ReadResult(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid prune request id") {
 			writeError(w, http.StatusBadRequest, "invalid id")
@@ -4205,7 +4216,7 @@ func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	pending, err := prunequeue.RequestExists(s.db.queueAnchor(), id)
+	pending, err := q.RequestExists(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid prune request id") {
 			writeError(w, http.StatusBadRequest, "invalid id")

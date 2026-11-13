@@ -17,7 +17,9 @@ import (
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/geofilter"
+	"github.com/meshcore-analyzer/mbcapqueue"
 	"github.com/meshcore-analyzer/packetpath"
+	"github.com/meshcore-analyzer/prunequeue"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -52,7 +54,7 @@ type DB struct {
 	conn                    *sql.DB
 	pg                      bool   // opened on Postgres (see backend.go); always the v3 schema
 	path                    string // filesystem path to the database file; empty on Postgres
-	queuePath               string // anchor for the file queues shared with the ingestor when path is empty (Postgres); see queueAnchor
+	queuePath               string // anchor for files kept beside the database when path is empty (Postgres); see queueAnchor
 	isV3                    bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
 	hasResolvedPath         bool   // observations table has resolved_path column
 	hasObsRawHex            bool   // observations table has raw_hex column (#881)
@@ -62,6 +64,13 @@ type DB struct {
 	hasDeclaredRegionsTable bool   // node_declared_regions table exists at startup (#1975); read via declaredRegionsTablePresent
 	hasMultibyteSupCols     bool   // nodes/inactive_nodes have multibyte_sup/multibyte_evidence (#903)
 	hasLastSeen             bool   // transmissions.last_seen column exists (#1690)
+
+	// Postgres only, set by openPostgresControl (control_pg.go) and nil when
+	// the control tables are unavailable: the control pool and the queues on
+	// it. Use them through pruneQueue / mbcapStore (backend.go).
+	ctl    *sql.DB
+	pruneQ prunequeue.Queue
+	mbcap  mbcapqueue.Store
 
 	// declaredRegionsTableLate latches true once node_declared_regions is found
 	// after startup. The ingestor creates that table, and the two processes
@@ -278,6 +287,7 @@ func (db *DB) Close() error {
 	// error (778)" on it. Attempting it emitted a misleading storage-fault line
 	// on every shutdown that wasted incident investigation time (#1901); the
 	// ingestor (the writer) owns checkpointing.
+	db.closeControl()
 	return db.conn.Close()
 }
 
