@@ -2178,8 +2178,8 @@ Scope-based packet statistics over a time window. Requires ingestor `scope_name_
 - `scoped` = packets with Code1 ≠ 0000
 - `unscoped` = `unscopedTransport` + `unscopedFlood` + `unscopedDirect`. Since #1838 it includes the
   non-transport routes 1 and 2, so it can exceed `transportTotal`; compute shares against `total` (#2364).
-- `unscopedFlood` is the figure to watch for region rollout: DIRECT packets (`unscopedDirect`) never
-  flood, so they never cross a region boundary.
+- `unscopedFlood` is the figure to watch for region rollout: DIRECT traffic (`unscopedDirect`) is not
+  subject to flood-region filtering, which repeaters apply to flood routes only.
 - `timeSeries` counts transport routes (0, 3) only; its `unscoped` corresponds to `unscopedTransport`.
 - `unknownScope` = scoped packets that did not match any configured region name
 - Time-series bucket size depends on window:

@@ -107,7 +107,7 @@ type StatsResponse struct {
 // Unscoped has folded in the non-transport routes since #1838, so it is
 // compared against Total, not TransportTotal. The three Unscoped* fields
 // split it by route so a client can, for example, look at unscoped floods
-// only (DIRECT packets never cross a region boundary).
+// only (DIRECT traffic is not subject to flood-region filtering).
 type ScopeStatsSummary struct {
 	Total             int `json:"total"`
 	TransportTotal    int `json:"transportTotal"`
