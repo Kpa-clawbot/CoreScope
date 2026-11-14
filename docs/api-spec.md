@@ -2144,10 +2144,14 @@ Scope-based packet statistics over a time window. Requires ingestor `scope_name_
 {
   "window":    string,               // echoed window ("1h", "24h", or "7d")
   "summary": {
-    "transportTotal": number,        // scoped + unscoped transport-route packets
-    "scoped":         number,        // Code1 ≠ 0000 (named + unknown regions)
-    "unscoped":       number,        // transport-route with Code1 = 0000
-    "unknownScope":   number         // scoped but no configured region matched (subset of scoped)
+    "total":             number,     // all observed transmissions, routes 0-3 (= scoped + unscoped)
+    "transportTotal":    number,     // transport routes 0 and 3 (= scoped + unscopedTransport)
+    "scoped":            number,     // Code1 ≠ 0000 (named + unknown regions)
+    "unscoped":          number,     // all unscoped traffic (= unscopedTransport + unscopedFlood + unscopedDirect)
+    "unscopedTransport": number,     // transport route (0, 3) with Code1 = 0000
+    "unscopedFlood":     number,     // FLOOD (route 1): no transport code, unscoped by protocol
+    "unscopedDirect":    number,     // DIRECT (route 2): no transport code, never floods
+    "unknownScope":      number      // scoped but no configured region matched (subset of scoped)
   },
   "byRegion": [
     { "name": string, "count": number }  // region name and packet count
@@ -2167,9 +2171,16 @@ Scope-based packet statistics over a time window. Requires ingestor `scope_name_
 ```
 
 **Notes:**
-- `transportTotal` = `scoped` + `unscoped` (only route_type 0 or 3 packets)
+- Route types per MeshCore `docs/packet_format.md`: 0 = TRANSPORT_FLOOD, 1 = FLOOD, 2 = DIRECT,
+  3 = TRANSPORT_DIRECT. Only routes 0 and 3 carry a transport code (Code1).
+- `total` = `scoped` + `unscoped` (all route types)
+- `transportTotal` = `scoped` + `unscopedTransport` (only route_type 0 or 3 packets)
 - `scoped` = packets with Code1 ≠ 0000
-- `unscoped` = transport-route packets with Code1 = 0000
+- `unscoped` = `unscopedTransport` + `unscopedFlood` + `unscopedDirect`. Since #1838 it includes the
+  non-transport routes 1 and 2, so it can exceed `transportTotal`; compute shares against `total` (#2364).
+- `unscopedFlood` is the figure to watch for region rollout: DIRECT traffic (`unscopedDirect`) is not
+  subject to flood-region filtering, which repeaters apply to flood routes only.
+- `timeSeries` counts transport routes (0, 3) only; its `unscoped` corresponds to `unscopedTransport`.
 - `unknownScope` = scoped packets that did not match any configured region name
 - Time-series bucket size depends on window:
   - `1h` window → 5-minute buckets
