@@ -765,7 +765,8 @@ func (c *Config) AutoRegionKeysRefreshMinutes() int {
 // plain json.Unmarshal, so a mis-nested key is silently ignored.
 type CatalogKeysConfig struct {
 	Enabled bool `json:"enabled"`
-	// URL is an http(s) URL or a local file path. Accepted shapes: the
+	// URL is an https URL or a local file path (plain http is accepted and
+	// logged as a warning). Read up to 8 MiB. Accepted shapes: the
 	// knownChannelsUrl catalogue ({"countries":{...}}) and
 	// {"channels":[{"n","s"}],"regions":[...]}.
 	URL            string `json:"url"`
@@ -776,10 +777,13 @@ type CatalogKeysConfig struct {
 	Regions  *bool `json:"regions,omitempty"`
 	// AutoPromoteRegions puts confirmed region names in force. Off by
 	// default: they are recorded as proposed and an operator confirms them
-	// by adding them to hashRegions.
+	// by adding them to hashRegions. Turning it off later does not demote
+	// regions already promoted; docs/catalogue-keys.md has how to revert one.
 	AutoPromoteRegions bool `json:"autoPromoteRegions"`
 	// IncludeExplicitSecrets admits catalogue channels whose key is not
-	// derived from "#name" (shared private keys). Off by default.
+	// derived from "#name" (shared private keys). Off by default. When on,
+	// private channels whose secrets a public catalogue lists are decrypted
+	// and shown in plaintext once traffic confirms them.
 	IncludeExplicitSecrets bool    `json:"includeExplicitSecrets"`
 	ChannelMinHits         int     `json:"channelMinHits"`
 	RegionMinHits          int     `json:"regionMinHits"`

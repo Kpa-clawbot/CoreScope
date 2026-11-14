@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"math"
@@ -57,10 +59,17 @@ import (
 // catalogue that is unreachable later does not drop keys already in force.
 // When the promoted set grows, the key backfill (#2133) is kicked and
 // re-decides history with the same decode path ingest uses.
+//
+// An operator can set a row to "rejected": it is taken out of force at the
+// next refresh or restart and never proposed or promoted again. How to undo a
+// promotion, history included, is in docs/catalogue-keys.md.
 
 const (
 	catalogStatusProposed = "proposed"
 	catalogStatusPromoted = "promoted"
+	// catalogStatusRejected is only ever set by an operator (see
+	// docs/catalogue-keys.md); the worker keeps such a name out for good.
+	catalogStatusRejected = "rejected"
 
 	// catalogMaxBytes caps the catalogue we parse (today's are < 1 MB).
 	catalogMaxBytes = 8 << 20
@@ -191,19 +200,31 @@ func catalogChannelFromEntry(e catalogEntry) (catalogChannel, bool) {
 	return catalogChannel{Name: name, KeyHex: secret, Explicit: true}, true
 }
 
-// catalogSecretHex normalises a 16-byte secret given as hex or base64 to
-// lowercase hex. "" is no secret; ok=false is a secret that cannot be read.
+// catalogSecretHex normalises a channel secret given as hex or base64 to
+// lowercase hex. The firmware accepts 16-byte (128-bit) and 32-byte (256-bit)
+// secrets; a 32-byte secret whose upper half is zero is the 16-byte key and is
+// returned as such. "" is no secret; ok=false is a secret that cannot be read.
 func catalogSecretHex(s string) (string, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "", true
 	}
-	if b, err := hex.DecodeString(s); err == nil && len(b) == 16 {
-		return hex.EncodeToString(b), true
+	usable := func(b []byte) (string, bool) {
+		if len(b) != 16 && len(b) != 32 {
+			return "", false
+		}
+		return hex.EncodeToString(trimChannelSecret(b)), true
+	}
+	if b, err := hex.DecodeString(s); err == nil {
+		if out, ok := usable(b); ok {
+			return out, true
+		}
 	}
 	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
-		if b, err := enc.DecodeString(s); err == nil && len(b) == 16 {
-			return hex.EncodeToString(b), true
+		if b, err := enc.DecodeString(s); err == nil {
+			if out, ok := usable(b); ok {
+				return out, true
+			}
 		}
 	}
 	return "", false
@@ -289,6 +310,12 @@ func newCatalogKeyWorker(store *Store, set catalogKeySettings, channels *channel
 // Start runs the first refresh after catalogFirstRunDelay and then every
 // refresh interval until ctx is cancelled.
 func (w *catalogKeyWorker) Start(ctx context.Context) <-chan struct{} {
+	if strings.HasPrefix(w.set.url, "http://") {
+		log.Printf("[catalog] WARNING: %s is fetched over plain http; anyone on the path can change the candidate list (the evidence gates still apply)", w.set.url)
+	}
+	if w.set.channels && w.set.includeExplicitSecrets {
+		log.Printf("[catalog] includeExplicitSecrets is on: private channels whose secrets a public catalogue lists are decrypted and shown in plaintext once traffic confirms them")
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -399,6 +426,10 @@ type encryptedRow struct{ raw, firstSeen string }
 
 // gateChannels returns the catalogue channels that stored traffic confirms.
 func (w *catalogKeyWorker) gateChannels(ctx context.Context, chans []catalogChannel) ([]catalogEvidence, error) {
+	rejected, err := w.rejected(ctx, keyBackfillKindChannel)
+	if err != nil {
+		return nil, err
+	}
 	inForce := w.channels.Snapshot()
 	secrets := make(map[string]bool, len(inForce))
 	for _, k := range inForce {
@@ -406,7 +437,7 @@ func (w *catalogKeyWorker) gateChannels(ctx context.Context, chans []catalogChan
 	}
 	byTag := map[string][]catalogChannel{}
 	for _, c := range chans {
-		if c.Explicit && !w.set.includeExplicitSecrets {
+		if (c.Explicit && !w.set.includeExplicitSecrets) || rejected[c.Name] {
 			continue
 		}
 		if _, ok := inForce[c.Name]; ok || secrets[c.KeyHex] {
@@ -506,6 +537,10 @@ type regionGate struct {
 // gateRegions counts unique matches per catalogue region name over the
 // window and returns the names at or above the population-aware threshold.
 func (w *catalogKeyWorker) gateRegions(ctx context.Context, names []string) (regionGate, error) {
+	rejected, err := w.rejected(ctx, keyBackfillKindRegion)
+	if err != nil {
+		return regionGate{}, err
+	}
 	snap := w.regions.snapshot()
 	cand := map[string][]byte{}
 	for _, raw := range names {
@@ -514,7 +549,7 @@ func (w *catalogKeyWorker) gateRegions(ctx context.Context, names []string) (reg
 			continue
 		}
 		name := "#" + canonical
-		if _, inForce := snap.all[name]; inForce {
+		if _, inForce := snap.all[name]; inForce || rejected[name] {
 			continue
 		}
 		h := sha256.Sum256([]byte(name))
@@ -526,14 +561,19 @@ func (w *catalogKeyWorker) gateRegions(ctx context.Context, names []string) (reg
 		return g, nil
 	}
 	hits := map[string]int{}
-	err := w.scanUnknownScope(ctx, func(payloadType byte, payload []byte, code1 string) {
+	// One keyed HMAC per name, reset per transmission: the gate is rows x
+	// names HMACs, so re-keying and hex-formatting per pair would dominate.
+	inForce, candidates := newRegionMatcher(snap.all), newRegionMatcher(cand)
+	var got []string
+	err = w.scanUnknownScope(ctx, func(payloadType byte, payload []byte, code1 uint16) {
 		// Matched by a key in force: either the backfill will name it or it
 		// is an ambiguous collision. Neither is evidence for a new name.
-		if len(matchingRegions(snap.all, payloadType, payload, code1)) > 0 {
+		if inForce.any(payloadType, payload, code1) {
 			return
 		}
 		g.n++
-		switch got := matchingRegions(cand, payloadType, payload, code1); len(got) {
+		got = candidates.match(payloadType, payload, code1, got)
+		switch len(got) {
 		case 0:
 		case 1:
 			hits[got[0]]++
@@ -560,7 +600,7 @@ func (w *catalogKeyWorker) gateRegions(ctx context.Context, names []string) (reg
 // scanUnknownScope calls fn for every transport-coded transmission in the
 // window whose scope is still unknown, newest first, in bounded id windows
 // that release the single connection between reads.
-func (w *catalogKeyWorker) scanUnknownScope(ctx context.Context, fn func(payloadType byte, payload []byte, code1 string)) error {
+func (w *catalogKeyWorker) scanUnknownScope(ctx context.Context, fn func(payloadType byte, payload []byte, code1 uint16)) error {
 	db := w.store.db
 	cutoff := w.now().Add(-w.set.regionWindow).UTC().Format(time.RFC3339)
 	var lo int64
@@ -590,10 +630,14 @@ func (w *catalogKeyWorker) scanUnknownScope(ctx context.Context, fn func(payload
 		}
 		for _, raw := range raws {
 			d, err := DecodePacket(raw, nil, false)
-			if err != nil || d.TransportCodes == nil || d.TransportCodes.Code1 == "0000" {
+			if err != nil || d.TransportCodes == nil || d.TransportCodes.Code1 == "0000" || len(d.payloadRaw) == 0 {
 				continue
 			}
-			fn(byte(d.Header.PayloadType), d.payloadRaw, d.TransportCodes.Code1)
+			code1, ok := parseCode1(d.TransportCodes.Code1)
+			if !ok {
+				continue
+			}
+			fn(byte(d.Header.PayloadType), d.payloadRaw, code1)
 			counted++
 		}
 		w.pause(ctx)
@@ -601,18 +645,21 @@ func (w *catalogKeyWorker) scanUnknownScope(ctx context.Context, fn func(payload
 	return nil
 }
 
+// unknownScopeRaws reads the same rows the region backfill reads
+// (unknownScopeWindowSQL).
 func (w *catalogKeyWorker) unknownScopeRaws(ctx context.Context, bottom, top int64) ([]string, error) {
-	rows, err := w.store.db.QueryContext(ctx, `
-		SELECT COALESCE(raw_hex,'') FROM transmissions
-		WHERE id > ? AND id <= ? AND scope_name = ''`, bottom, top)
+	rows, err := w.store.db.QueryContext(ctx, unknownScopeWindowSQL, bottom, top)
 	if err != nil {
 		return nil, fmt.Errorf("scan unknown scope: %w", err)
 	}
 	defer rows.Close()
 	var out []string
 	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
+		var (
+			id       int64
+			raw, old string
+		)
+		if err := rows.Scan(&id, &raw, &old); err != nil {
 			return nil, err
 		}
 		if raw != "" {
@@ -645,7 +692,9 @@ func sortEvidence(ev []catalogEvidence) {
 
 // record stores what one gate confirmed. Promotion is sticky: a promoted row
 // stays promoted when later evidence is weaker (it is in force and history
-// was rewritten with it). A proposed row the gate no longer confirms is
+// was rewritten with it), also when autoPromoteRegions is switched off later.
+// A rejected row stays rejected; the gates skip rejected names, so this only
+// guards a row an operator rejects while a run is in flight. A proposed row the gate no longer confirms is
 // dropped, so the proposals always reflect the current window.
 func (w *catalogKeyWorker) record(ctx context.Context, kind string, ev []catalogEvidence) error {
 	sortEvidence(ev)
@@ -676,7 +725,7 @@ func (w *catalogKeyWorker) record(ctx context.Context, kind string, ev []catalog
 				window_n = excluded.window_n,
 				candidates = excluded.candidates,
 				updated_at = CAST(strftime('%s','now') AS INTEGER),
-				status = CASE WHEN catalog_keys.status = 'promoted' THEN 'promoted' ELSE excluded.status END`,
+				status = CASE WHEN catalog_keys.status IN ('promoted','rejected') THEN catalog_keys.status ELSE excluded.status END`,
 			kind, e.name, e.keyHex, status, e.hits, e.threshold, e.n, e.m); err != nil {
 			return fmt.Errorf("record %s %s: %w", kind, e.name, err)
 		}
@@ -729,7 +778,7 @@ func (w *catalogKeyWorker) apply(ctx context.Context) error {
 		}
 		switch {
 		case kind == keyBackfillKindChannel && w.set.channels && len(chans) < w.set.maxPromoted:
-			if _, err := hex.DecodeString(keyHex); err == nil && len(keyHex) == 32 {
+			if _, err := hex.DecodeString(keyHex); err == nil && (len(keyHex) == 32 || len(keyHex) == 64) {
 				chans[name] = strings.ToLower(keyHex)
 			}
 		case kind == keyBackfillKindRegion && w.set.regions && len(regs) < w.set.maxPromoted:
@@ -755,4 +804,83 @@ func (w *catalogKeyWorker) apply(ctx context.Context) error {
 		w.kick()
 	}
 	return nil
+}
+
+// rejected returns the names of kind an operator rejected.
+func (w *catalogKeyWorker) rejected(ctx context.Context, kind string) (map[string]bool, error) {
+	rows, err := w.store.db.QueryContext(ctx, `SELECT name FROM catalog_keys WHERE kind=? AND status=?`, kind, catalogStatusRejected)
+	if err != nil {
+		return nil, fmt.Errorf("load rejected %s names: %w", kind, err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out[name] = true
+	}
+	return out, rows.Err()
+}
+
+// regionMatcher matches a transmission's code1 against a fixed set of region
+// keys. Each key's HMAC is set up once and reset per transmission, and the
+// code is compared as a uint16, so a match costs one HMAC-SHA256 over the
+// payload and no allocation. Not safe for concurrent use: the region gate
+// runs on one goroutine. Ingest keeps matchingRegions, which is.
+type regionMatcher struct {
+	names []string
+	macs  []hash.Hash
+	sum   [sha256.Size]byte
+	pt    [1]byte
+}
+
+func newRegionMatcher(keys map[string][]byte) *regionMatcher {
+	m := &regionMatcher{names: make([]string, 0, len(keys))}
+	for name := range keys {
+		m.names = append(m.names, name)
+	}
+	sort.Strings(m.names)
+	m.macs = make([]hash.Hash, len(m.names))
+	for i, name := range m.names {
+		m.macs[i] = hmac.New(sha256.New, keys[name])
+	}
+	return m
+}
+
+func (m *regionMatcher) code(i int, payloadType byte, payload []byte) uint16 {
+	mac := m.macs[i]
+	mac.Reset()
+	m.pt[0] = payloadType
+	mac.Write(m.pt[:])
+	mac.Write(payload)
+	return regionCode(mac.Sum(m.sum[:0]))
+}
+
+// match appends to out[:0] the names whose key yields code1, in name order.
+func (m *regionMatcher) match(payloadType byte, payload []byte, code1 uint16, out []string) []string {
+	out = out[:0]
+	if len(payload) == 0 {
+		return out
+	}
+	for i := range m.macs {
+		if m.code(i, payloadType, payload) == code1 {
+			out = append(out, m.names[i])
+		}
+	}
+	return out
+}
+
+// any reports whether some key yields code1, stopping at the first.
+func (m *regionMatcher) any(payloadType byte, payload []byte, code1 uint16) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	for i := range m.macs {
+		if m.code(i, payloadType, payload) == code1 {
+			return true
+		}
+	}
+	return false
 }

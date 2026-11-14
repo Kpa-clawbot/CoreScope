@@ -468,7 +468,7 @@ func countNonPrintable(s string) int {
 // HMAC-SHA256 MAC verification followed by AES-128-ECB decryption.
 func decryptChannelMessage(ciphertextHex, macHex, channelKeyHex string) (*channelDecryptResult, error) {
 	channelKey, err := hex.DecodeString(channelKeyHex)
-	if err != nil || len(channelKey) != 16 {
+	if err != nil || (len(channelKey) != 16 && len(channelKey) != 32) {
 		return nil, fmt.Errorf("invalid channel key")
 	}
 
@@ -482,7 +482,9 @@ func decryptChannelMessage(ciphertextHex, macHex, channelKeyHex string) (*channe
 		return nil, fmt.Errorf("invalid ciphertext")
 	}
 
-	// 32-byte channel secret: 16-byte key + 16 zero bytes
+	// The MAC is keyed with the 32-byte channel secret: a 16-byte key is
+	// zero-padded, a 32-byte secret is used whole. AES-128 uses the first 16
+	// bytes either way (firmware Utils::MACThenDecrypt, CIPHER_KEY_SIZE).
 	channelSecret := make([]byte, 32)
 	copy(channelSecret, channelKey)
 
@@ -498,7 +500,7 @@ func decryptChannelMessage(ciphertextHex, macHex, channelKeyHex string) (*channe
 	if len(ciphertext)%aes.BlockSize != 0 {
 		return nil, fmt.Errorf("ciphertext not aligned to AES block size")
 	}
-	block, err := aes.NewCipher(channelKey)
+	block, err := aes.NewCipher(channelKey[:16])
 	if err != nil {
 		return nil, fmt.Errorf("AES cipher: %w", err)
 	}
@@ -823,7 +825,7 @@ func decodeRawCustom(buf []byte) Payload {
 // parsing). See firmware/src/helpers/BaseChatMesh.cpp:376-391.
 func decryptChannelBlock(ciphertextHex, macHex, channelKeyHex string) ([]byte, error) {
 	channelKey, err := hex.DecodeString(channelKeyHex)
-	if err != nil || len(channelKey) != 16 {
+	if err != nil || (len(channelKey) != 16 && len(channelKey) != 32) {
 		return nil, fmt.Errorf("invalid channel key")
 	}
 	macBytes, err := hex.DecodeString(macHex)
@@ -845,7 +847,7 @@ func decryptChannelBlock(ciphertextHex, macHex, channelKeyHex string) ([]byte, e
 	if len(ciphertext)%aes.BlockSize != 0 {
 		return nil, fmt.Errorf("ciphertext not aligned to AES block size")
 	}
-	block, err := aes.NewCipher(channelKey)
+	block, err := aes.NewCipher(channelKey[:16])
 	if err != nil {
 		return nil, err
 	}

@@ -11,6 +11,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +26,7 @@ import (
 func grpTxtFrameAt(t *testing.T, keyHex, text string, ts uint32) string {
 	t.Helper()
 	key, err := hex.DecodeString(keyHex)
-	if err != nil || len(key) != 16 {
+	if err != nil || (len(key) != 16 && len(key) != 32) {
 		t.Fatalf("bad key %q", keyHex)
 	}
 	plain := make([]byte, 5, 64)
@@ -31,7 +35,7 @@ func grpTxtFrameAt(t *testing.T, keyHex, text string, ts uint32) string {
 	for len(plain)%aes.BlockSize != 0 {
 		plain = append(plain, 0)
 	}
-	block, _ := aes.NewCipher(key)
+	block, _ := aes.NewCipher(key[:16]) // AES-128 on the first 16 bytes of a 32-byte secret
 	ct := make([]byte, len(plain))
 	for i := 0; i < len(plain); i += aes.BlockSize {
 		block.Encrypt(ct[i:i+aes.BlockSize], plain[i:i+aes.BlockSize])
@@ -570,4 +574,331 @@ func TestCatalogKeys_ShippedDefaultIsOff(t *testing.T) {
 	if cfg.CatalogKeysEnabled() {
 		t.Fatal("catalogKeys must ship disabled")
 	}
+}
+
+// --- review follow-ups (#2366) ---
+
+// A 256-bit channel secret: AES-128 on its first half, the MAC and the
+// channel hash over all 32 bytes (firmware BaseChatMesh::setChannel,
+// Utils::MACThenDecrypt).
+func TestCatalogSecretHexAccepts256BitSecrets(t *testing.T) {
+	k32 := "00112233445566778899aabbccddeeff0123456789abcdeffedcba9876543210"
+	if got, ok := catalogSecretHex(strings.ToUpper(k32)); !ok || got != k32 {
+		t.Fatalf("32-byte hex = %q ok=%v, want %q", got, ok, k32)
+	}
+	raw, _ := hex.DecodeString(k32)
+	if got, ok := catalogSecretHex(base64.StdEncoding.EncodeToString(raw)); !ok || got != k32 {
+		t.Fatalf("32-byte base64 = %q ok=%v", got, ok)
+	}
+	// Upper half zero: that is the 128-bit key, and it must fingerprint and
+	// hash like one.
+	k16 := "00112233445566778899aabbccddeeff"
+	if got, ok := catalogSecretHex(k16 + strings.Repeat("0", 32)); !ok || got != k16 {
+		t.Fatalf("zero-padded 32-byte secret = %q ok=%v, want the 16-byte key", got, ok)
+	}
+	if _, ok := catalogSecretHex(strings.Repeat("ab", 24)); ok {
+		t.Fatal("a 24-byte secret is neither size the firmware accepts")
+	}
+	hb16, _ := channelKeyHashByte(k16)
+	hbPadded, _ := channelKeyHashByte(k16 + strings.Repeat("0", 32))
+	if hb16 != hbPadded {
+		t.Fatal("a zero-padded 32-byte secret must hash as its 16-byte key")
+	}
+	h := sha256.Sum256(raw)
+	if hb, ok := channelKeyHashByte(k32); !ok || hb != h[0] {
+		t.Fatalf("channel hash of a 256-bit secret = %02X ok=%v, want sha256(all 32 bytes)[0] = %02X", hb, ok, h[0])
+	}
+}
+
+func TestCatalogChannel256BitSecretConfirmedAndDecoded(t *testing.T) {
+	s := newTestStore(t)
+	k32 := "8f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff0"
+	frame := grpTxtFrameAt(t, k32, "Op: twofiftysix", uint32(testFirstSeen.Unix()))
+	insertTx(t, s, frame, 5, encTag(t, k32), "{}", nil)
+	set := testCatalogSettings()
+	set.includeExplicitSecrets = true
+	w, cs, kicks := newTestCatalogWorker(s, set, map[string]string{}, nil)
+	cat, err := parseKeyCatalog([]byte(`{"channels":[{"n":"#wide","s":"` + k32 + `"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.Channels) != 1 || cat.Channels[0].KeyHex != k32 || !cat.Channels[0].Explicit {
+		t.Fatalf("parsed %+v, want one explicit 256-bit candidate", cat.Channels)
+	}
+	if err := w.refresh(context.Background(), cat); err != nil {
+		t.Fatal(err)
+	}
+	if st, hits, _, _ := catalogRow(t, s, keyBackfillKindChannel, "#wide"); st != catalogStatusPromoted || hits != 1 {
+		t.Fatalf("#wide = %q hits=%d, want promoted on 1 hit", st, hits)
+	}
+	if cs.Snapshot()["#wide"] != k32 || *kicks != 1 {
+		t.Fatalf("256-bit key not put in force (kicks=%d)", *kicks)
+	}
+	d, err := DecodePacket(frame, map[string]string{"#wide": k32}, false)
+	if err != nil || d.Payload.Text != "Op: twofiftysix" {
+		t.Fatalf("decode with a 256-bit secret: %+v err=%v", d.Payload, err)
+	}
+}
+
+func TestCatalogFetchHTTPAndSizeCap(t *testing.T) {
+	body := []byte(`{"regions":["de-sl"]}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok":
+			rw.Write(body)
+		case "/exact":
+			rw.Write(bytes.Repeat([]byte(" "), catalogMaxBytes))
+		case "/big":
+			rw.Write(bytes.Repeat([]byte(" "), catalogMaxBytes+1))
+		default:
+			http.Error(rw, "nope", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+	w, _, _ := newTestCatalogWorker(newTestStore(t), testCatalogSettings(), nil, nil)
+	fetch := func(src string) ([]byte, error) {
+		w.set.url = src
+		return w.fetch(context.Background())
+	}
+	if got, err := fetch(srv.URL + "/ok"); err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("GET /ok = %q, %v", got, err)
+	}
+	if _, err := fetch(srv.URL + "/fail"); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("non-200 must fail, got %v", err)
+	}
+	if got, err := fetch(srv.URL + "/exact"); err != nil || len(got) != catalogMaxBytes {
+		t.Fatalf("a catalogue of exactly the cap must be read: len=%d err=%v", len(got), err)
+	}
+	if _, err := fetch(srv.URL + "/big"); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("a catalogue over the cap must be refused, got %v", err)
+	}
+	big := filepath.Join(t.TempDir(), "big.json")
+	if err := os.WriteFile(big, bytes.Repeat([]byte(" "), catalogMaxBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fetch(big); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("a local file over the cap must be refused, got %v", err)
+	}
+	// A failed fetch leaves the promoted tier alone.
+	w.set.url = srv.URL + "/fail"
+	w.runOnce(context.Background())
+}
+
+func TestCatalogAutoPromoteOffKeepsPromotedRegions(t *testing.T) {
+	s := newTestStore(t)
+	first, second := regionKey("#first"), regionKey("#second")
+	for i := 0; i < 3; i++ {
+		insertTx(t, s, transportFrame(first, 5, []byte(fmt.Sprintf("first-%d", i))), 5, "", "{}", strp(""))
+	}
+	on := testCatalogSettings()
+	on.autoPromoteRegions = true
+	rs := regionSetOf()
+	w, _, _ := newTestCatalogWorker(s, on, nil, rs)
+	cat := &keyCatalog{Regions: []string{"first", "second"}}
+	if err := w.refresh(context.Background(), cat); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _, _ := catalogRow(t, s, keyBackfillKindRegion, "#first"); st != catalogStatusPromoted {
+		t.Fatalf("#first = %q, want promoted", st)
+	}
+
+	// Switched off, with evidence for a second name arriving afterwards.
+	for i := 0; i < 3; i++ {
+		insertTx(t, s, transportFrame(second, 5, []byte(fmt.Sprintf("second-%d", i))), 5, "", "{}", strp(""))
+	}
+	w2, _, _ := newTestCatalogWorker(s, testCatalogSettings(), nil, rs)
+	if err := w2.apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w2.refresh(context.Background(), cat); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _, _ := catalogRow(t, s, keyBackfillKindRegion, "#first"); st != catalogStatusPromoted {
+		t.Fatalf("switching autoPromoteRegions off demoted #first to %q", st)
+	}
+	if !rs.snapshot().isCatalog("#first") {
+		t.Fatal("switching autoPromoteRegions off took #first out of force")
+	}
+	if st, _, _, _ := catalogRow(t, s, keyBackfillKindRegion, "#second"); st != catalogStatusProposed {
+		t.Fatalf("#second = %q, want proposed once autoPromoteRegions is off", st)
+	}
+	if _, ok := rs.snapshot().all["#second"]; ok {
+		t.Fatal("a proposal must not be in force")
+	}
+}
+
+// TestCatalogRegionRevertProcedure runs the steps in docs/catalogue-keys.md:
+// reject the name, un-name its history, forget the region passes, restart.
+func TestCatalogRegionRevertProcedure(t *testing.T) {
+	s := newTestStore(t)
+	wrong := regionKey("#wrong")
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		ids = append(ids, insertTx(t, s, transportFrame(wrong, 5, []byte(fmt.Sprintf("w-%d", i))), 5, "", "{}", strp("")))
+	}
+	set := testCatalogSettings()
+	set.autoPromoteRegions = true
+	rs := regionSetOf("#kept")
+	w, _, _ := newTestCatalogWorker(s, set, nil, rs)
+	cat := &keyCatalog{Regions: []string{"wrong"}}
+	if err := w.refresh(context.Background(), cat); err != nil {
+		t.Fatal(err)
+	}
+	b := newTestBackfiller(s, nil, rs)
+	if err := b.runKind(context.Background(), keyBackfillKindRegion); err != nil {
+		t.Fatal(err)
+	}
+	scope := func(id int64) string {
+		var sc string
+		if err := s.db.QueryRow(`SELECT scope_name FROM transmissions WHERE id=?`, id).Scan(&sc); err != nil {
+			t.Fatal(err)
+		}
+		return sc
+	}
+	if scope(ids[0]) != "#wrong" {
+		t.Fatalf("setup: backfill should have named history #wrong, got %q", scope(ids[0]))
+	}
+
+	// The documented SQL, with the ingestor stopped.
+	for _, q := range []string{
+		`UPDATE catalog_keys SET status='rejected' WHERE kind='region' AND name='#wrong'`,
+		`UPDATE transmissions SET scope_name='' WHERE scope_name='#wrong'`,
+		`DELETE FROM key_backfill_done WHERE kind='region'`,
+		`DELETE FROM key_backfill_state WHERE kind='region'`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+
+	// Restart: apply before ingest, then the backfill pass.
+	rs2 := regionSetOf("#kept")
+	w2, _, kicks := newTestCatalogWorker(s, set, nil, rs2)
+	if err := w2.apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rs2.snapshot().all["#wrong"]; ok || *kicks != 0 {
+		t.Fatal("a rejected name must not be loaded at startup")
+	}
+	b2 := newTestBackfiller(s, nil, rs2)
+	if err := b2.runKind(context.Background(), keyBackfillKindRegion); err != nil {
+		t.Fatal(err)
+	}
+	var done int
+	s.db.QueryRow(`SELECT COUNT(*) FROM key_backfill_done WHERE kind='region'`).Scan(&done)
+	if done != 1 {
+		t.Fatalf("the remaining region key must get a fresh pass, key_backfill_done has %d row(s)", done)
+	}
+	for _, id := range ids {
+		if sc := scope(id); sc != "" {
+			t.Fatalf("row %d still named %q after the revert", id, sc)
+		}
+	}
+
+	// The next catalogue run sees the same evidence and leaves it alone.
+	if err := w2.refresh(context.Background(), cat); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _, _ := catalogRow(t, s, keyBackfillKindRegion, "#wrong"); st != catalogStatusRejected {
+		t.Fatalf("#wrong = %q after a refresh, want it to stay rejected", st)
+	}
+	if _, ok := rs2.snapshot().all["#wrong"]; ok {
+		t.Fatal("a rejected name was put back in force")
+	}
+}
+
+func TestCatalogRejectedChannelIsSkipped(t *testing.T) {
+	s := newTestStore(t)
+	key := deriveHashtagChannelKey("#nope")
+	insertTx(t, s, grpTxtFrame(t, key, "A: hi"), 5, encTag(t, key), "{}", nil)
+	if _, err := s.db.Exec(`INSERT INTO catalog_keys(kind, name, key_hex, status) VALUES('channel','#nope',?,'rejected')`, key); err != nil {
+		t.Fatal(err)
+	}
+	w, cs, _ := newTestCatalogWorker(s, testCatalogSettings(), map[string]string{}, nil)
+	if err := w.refresh(context.Background(), &keyCatalog{Channels: []catalogChannel{{Name: "#nope", KeyHex: key}}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _, _ := catalogRow(t, s, keyBackfillKindChannel, "#nope"); st != catalogStatusRejected {
+		t.Fatalf("#nope = %q, want rejected", st)
+	}
+	if _, ok := cs.Snapshot()["#nope"]; ok {
+		t.Fatal("a rejected channel was put in force")
+	}
+}
+
+// regionMatcher must decide exactly like matchingRegions, collisions included.
+func TestRegionMatcherAgreesWithMatchingRegions(t *testing.T) {
+	keys := map[string][]byte{}
+	for i := 0; i < 64; i++ {
+		n := fmt.Sprintf("#r%02d", i)
+		keys[n] = regionKey(n)
+	}
+	a, b := keys["#r01"], keys["#r02"]
+	payloads := [][]byte{collidingPayload(t, a, b, 5), []byte("x")}
+	for i := 0; i < 200; i++ {
+		payloads = append(payloads, []byte(fmt.Sprintf("payload-%d", i)))
+	}
+	m := newRegionMatcher(keys)
+	var out []string
+	for _, p := range payloads {
+		for _, pt := range []byte{2, 5} {
+			code := regionCodeBytes(a, pt, p)
+			code1 := strings.ToUpper(hex.EncodeToString(code))
+			want := matchingRegions(keys, pt, p, code1)
+			sortStrings(want)
+			v, ok := parseCode1(code1)
+			if !ok {
+				t.Fatalf("parseCode1(%q) failed", code1)
+			}
+			out = m.match(pt, p, v, out)
+			if fmt.Sprint(out) != fmt.Sprint(want) {
+				t.Fatalf("payload %q type %d: matcher %v, matchingRegions %v", p, pt, out, want)
+			}
+			if m.any(pt, p, v) != (len(want) > 0) {
+				t.Fatalf("any() disagrees for %q", p)
+			}
+		}
+	}
+	if _, ok := parseCode1("zz12"); ok {
+		t.Fatal("parseCode1 accepted non-hex")
+	}
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
+
+// BenchmarkRegionGatePerTransmission is the region gate's inner loop: one
+// unknown-scope transmission against the #2107 reference catalogue size
+// (1,924 names). A gate run costs rows x this; catalogRegionScanCap bounds
+// rows at 250,000.
+func BenchmarkRegionGatePerTransmission(b *testing.B) {
+	const names = 1924
+	keys := make(map[string][]byte, names)
+	for i := 0; i < names; i++ {
+		n := fmt.Sprintf("#bench-%04d", i)
+		keys[n] = regionKey(n)
+	}
+	payload := bytes.Repeat([]byte{0xA5}, 48) // a typical GRP_TXT payload
+	code1 := strings.ToUpper(hex.EncodeToString(regionCodeBytes(regionKey("#elsewhere"), 5, payload)))
+	v, _ := parseCode1(code1)
+	b.Run("matchingRegions", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			matchingRegions(keys, 5, payload, code1)
+		}
+	})
+	b.Run("regionMatcher", func(b *testing.B) {
+		m := newRegionMatcher(keys)
+		var out []string
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			out = m.match(5, payload, v, out)
+		}
+	})
 }

@@ -1961,24 +1961,45 @@ func matchingRegions(regionKeys map[string][]byte, payloadType byte, payloadRaw 
 	if code1 == "0000" || len(regionKeys) == 0 || len(payloadRaw) == 0 {
 		return nil
 	}
+	want, ok := parseCode1(code1)
+	if !ok {
+		return nil
+	}
 	var matched []string
+	var sum [sha256.Size]byte
+	pt := [1]byte{payloadType}
 	for name, key := range regionKeys {
 		mac := hmac.New(sha256.New, key)
-		mac.Write([]byte{payloadType})
+		mac.Write(pt[:])
 		mac.Write(payloadRaw)
-		hmacBytes := mac.Sum(nil)
-		code := uint16(hmacBytes[0]) | uint16(hmacBytes[1])<<8
-		if code == 0 {
-			code = 1
-		} else if code == 0xFFFF {
-			code = 0xFFFE
-		}
-		codeBytes := [2]byte{byte(code & 0xFF), byte(code >> 8)}
-		if strings.ToUpper(hex.EncodeToString(codeBytes[:])) == code1 {
+		if regionCode(mac.Sum(sum[:0])) == want {
 			matched = append(matched, name)
 		}
 	}
 	return matched
+}
+
+// regionCode is the 16-bit transport code an HMAC-SHA256 sum yields: its
+// first two bytes, little-endian, with 0000 and FFFF clamped because the
+// firmware reserves them (TransportKeyStore.cpp, calcTransportCode).
+func regionCode(sum []byte) uint16 {
+	code := uint16(sum[0]) | uint16(sum[1])<<8
+	if code == 0 {
+		code = 1
+	} else if code == 0xFFFF {
+		code = 0xFFFE
+	}
+	return code
+}
+
+// parseCode1 turns code1 as the decoder reports it (the two code bytes in
+// wire order, as hex) into the value regionCode returns.
+func parseCode1(code1 string) (uint16, bool) {
+	b, err := hex.DecodeString(code1)
+	if err != nil || len(b) != 2 {
+		return 0, false
+	}
+	return uint16(b[0]) | uint16(b[1])<<8, true
 }
 
 // Version info (set via ldflags)
