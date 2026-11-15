@@ -98,11 +98,25 @@ type StatsResponse struct {
 
 // ─── Scope Stats ───────────────────────────────────────────────────────────────
 
+// ScopeStatsSummary invariants (#2364):
+//
+//	transportTotal = scoped + unscopedTransport           (routes 0, 3)
+//	unscoped       = unscopedTransport + unscopedFlood + unscopedDirect
+//	total          = scoped + unscoped                    (routes 0-3)
+//
+// Unscoped has folded in the non-transport routes since #1838, so it is
+// compared against Total, not TransportTotal. The three Unscoped* fields
+// split it by route so a client can, for example, look at unscoped floods
+// only (DIRECT traffic is not subject to flood-region filtering).
 type ScopeStatsSummary struct {
-	TransportTotal int `json:"transportTotal"`
-	Scoped         int `json:"scoped"`
-	Unscoped       int `json:"unscoped"`
-	UnknownScope   int `json:"unknownScope"`
+	Total             int `json:"total"`
+	TransportTotal    int `json:"transportTotal"`
+	Scoped            int `json:"scoped"`
+	Unscoped          int `json:"unscoped"`
+	UnscopedTransport int `json:"unscopedTransport"`
+	UnscopedFlood     int `json:"unscopedFlood"`
+	UnscopedDirect    int `json:"unscopedDirect"`
+	UnknownScope      int `json:"unknownScope"`
 }
 
 type ScopeRegionCount struct {
