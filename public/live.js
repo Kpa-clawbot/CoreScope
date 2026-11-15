@@ -306,11 +306,7 @@
     }
     const d = isoLike ? new Date(isoLike) : null;
     const iso = d && isFinite(d.getTime()) ? d.toISOString() : null;
-    const f = formatTimestampWithTooltip(iso, getTimestampMode());
-    const warn = f.isFuture
-      ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
-      : '';
-    return `<span class="timestamp-text" title="${escapeHtml(f.tooltip)}">${escapeHtml(f.text)}</span>${warn}`;
+    return renderTimestampHtml(iso);
   }
 
   function initResizeHandler() {
