@@ -42,7 +42,7 @@
   var FALLBACK_VIEW = { center: [20, 0], zoom: 2 };
   var CONFIG_ZOOM = 9;          // zoom for a configured map center that names none
   var mapCenter = null;         // [lat, lon] from /api/config/map, once known
-  var FOOTER = 'Terrain: SRTM ~90 m (may include some trees and buildings) · line of sight only, not a link budget · survey before you build';
+  var FOOTER = 'Terrain: SRTM ~90 m (a narrow ridge can be missed; may include some trees and buildings) · line of sight only, not a link budget · survey before you build';
   var READOUT_HINT = 'Move along a profile to read the terrain at each point';
   var CFG_DEFAULTS = {
     defaultRangeKm: 30, rangesKm: [10, 15, 20, 30, 40, 50, 60], newAntennaM: 10, existingAntennaM: 5,

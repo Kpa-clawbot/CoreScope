@@ -107,6 +107,9 @@ func analyzeLOS(elevM []float64, distKm float64, p losParams) (losResult, bool) 
 }
 
 // planProfileSamples: samples for a leg, ~90 m spacing, clamped to [64, 600].
+// Above ~54 km the cap widens the spacing past the grid's 90 m, so a ridge
+// narrower than the spacing can fall between samples and the verdict leans
+// towards clear; the UI footers and docs/api-spec.md say so.
 func planProfileSamples(distKm float64) int {
 	if !losFinite(distKm) || distKm < 0 {
 		return 64

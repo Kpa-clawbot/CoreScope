@@ -751,9 +751,9 @@ async function main() {
 
   console.log('\n=== panel footer ===');
   {
-    assert(I.footText('SRTM (AWS Open Data)') === 'Elevation: SRTM (AWS Open Data) · terrain only, trees and buildings are not modelled',
+    assert(I.footText('SRTM (AWS Open Data)') === 'Elevation: SRTM (AWS Open Data) · ~90 m terrain only: a narrow ridge can be missed, trees and buildings are not modelled',
       'footer names the source the server sent');
-    assert(I.footText(null) === 'Elevation: SRTM · terrain only, trees and buildings are not modelled', 'footer before any response');
+    assert(I.footText(null) === 'Elevation: SRTM · ~90 m terrain only: a narrow ridge can be missed, trees and buildings are not modelled', 'footer before any response');
     assert(/textContent = footText\(S\.source\)/.test(RLOS_SRC), 'the panel footer uses footText (as text, never HTML)');
     assert(!/Copernicus|GLO-90|open-meteo/i.test(RLOS_SRC), 'no trace of the old elevation service');
   }

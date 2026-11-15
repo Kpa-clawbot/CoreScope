@@ -166,7 +166,7 @@ const chipInfo = (page) => page.evaluate(() =>
     const obst = await page.locator('.mc-los-panel .mc-los-obst').textContent();
     assert(/Terrain rises/.test(obst), 'obst text: ' + obst);
     const foot = await page.locator('.mc-los-panel .mc-los-foot').textContent();
-    assert(foot === 'Elevation: ' + SOURCE + ' · terrain only, trees and buildings are not modelled', 'footer: ' + foot);
+    assert(foot === 'Elevation: ' + SOURCE + ' · ~90 m terrain only: a narrow ridge can be missed, trees and buildings are not modelled', 'footer: ' + foot);
     assert(await page.locator('.mc-rt-detail-panel').count() === 0, 'hop detail panel should be absent');
     assert(/los=2/.test(await hash(page)), 'hash: ' + await hash(page));
   });

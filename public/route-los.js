@@ -657,9 +657,10 @@
 
   var READOUT_HINT = 'Move along the profile to read the terrain at each point';
 
-  // Panel footer: the terrain attribution the server sent (body.source).
+  // Panel footer: the terrain attribution the server sent (body.source), and
+  // what the ~90 m grid cannot see, so "clear" is read as a best case.
   function footText(source) {
-    return 'Elevation: ' + (source || 'SRTM') + ' · terrain only, trees and buildings are not modelled';
+    return 'Elevation: ' + (source || 'SRTM') + ' · ~90 m terrain only: a narrow ridge can be missed, trees and buildings are not modelled';
   }
 
   // The panel body. Every node-controlled string (leg.nameA/nameB) goes

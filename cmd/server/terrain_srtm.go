@@ -7,7 +7,9 @@ package main
 // keep signatures):
 //   - Tiles: <TileURL>/<N30>/<N30W098>.hgt.gz, gzipped raw big-endian int16,
 //     3601×3601, row 0 = north edge, 1 arc-second. Downsampled in memory to
-//     3 arc-seconds (1201×1201). Missing (404/ocean) tiles have no elevation:
+//     3 arc-seconds (1201×1201) by keeping every third sample, not each
+//     cell's highest: a ridge under ~90 m wide can be missed (documented in
+//     the UI footers and docs/api-spec.md). Missing (404/ocean) tiles have no elevation:
 //     never 0 m, which would read as sea level.
 //   - terrainView is immutable and safe for concurrent use without locks.
 //   - The planner loads a rectangle of tiles (View); route LOS loads only the
