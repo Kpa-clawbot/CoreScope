@@ -59,8 +59,8 @@ func (c *clientLimiter) clientKey(r *http.Request) (key string, distinct bool) {
 }
 
 // take consumes one token from r's bucket. When none is left it reports how
-// long until the next one. It writes nothing, so callers may hold their own
-// locks around it.
+// long until the next one. It writes nothing and takes no lock but the
+// bucket map's, so callers may hold their own locks around it.
 func (c *clientLimiter) take(r *http.Request) (bool, time.Duration) {
 	return c.takeN(r, 1)
 }
@@ -91,20 +91,6 @@ func (c *clientLimiter) refundN(r *http.Request, n int) {
 }
 
 func (c *clientLimiter) off() bool { return c == nil || c.ipr == nil || c.rl == nil }
-
-// allow is take that answers 429 "rate limited" + Retry-After itself.
-func (c *clientLimiter) allow(w http.ResponseWriter, r *http.Request) bool {
-	return c.allowN(w, r, 1)
-}
-
-// allowN is takeN that answers 429 "rate limited" + Retry-After itself.
-func (c *clientLimiter) allowN(w http.ResponseWriter, r *http.Request, n int) bool {
-	ok, wait := c.takeN(r, n)
-	if !ok {
-		writeRateLimited(w, wait)
-	}
-	return ok
-}
 
 // retryAfterSecs rounds wait up to whole seconds, at least 1.
 func retryAfterSecs(wait time.Duration) int {

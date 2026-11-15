@@ -943,3 +943,38 @@ func BenchmarkElevationServeResident(b *testing.B) {
 		}
 	}
 }
+
+// Requests that arrive together for the same cold tile start one download,
+// and exactly one of them pays for it: the charge and the start happen in one
+// step, so no second request can be charged in between (review #2391).
+func TestElevationConcurrentRequestsChargeOneDownload(t *testing.T) {
+	et := newElevTest(t, nil) // every tile answers 404: known missing, quickly
+	const clients, rounds = 8, 60
+	for round := 0; round < rounds; round++ {
+		withElevLimit(et.svc, et.clk, 10)
+		pts := fmt.Sprintf("%d.2,10.2,%d.8,10.8", round, round)
+		et.nodes.register(elevParsePts(pts)...)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for c := 0; c < clients; c++ {
+			wg.Add(1)
+			go func(c int) {
+				defer wg.Done()
+				<-start
+				if w := et.raw(pts, fmt.Sprintf("192.0.2.%d:5000", 100+c), nil); w.Code != http.StatusOK && w.Code != http.StatusAccepted {
+					t.Errorf("round %d client %d: %d %s", round, c, w.Code, w.Body.String())
+				}
+			}(c)
+		}
+		close(start)
+		wg.Wait()
+		charged := 0.0
+		for c := 0; c < clients; c++ {
+			charged += 10 - elevBucketTokens(et.svc, fmt.Sprintf("192.0.2.%d", 100+c))
+		}
+		if charged != 1 {
+			t.Fatalf("round %d: %v tokens charged for one download", round, charged)
+		}
+		et.clk.add(time.Minute) // room in the global download budget again
+	}
+}

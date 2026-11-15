@@ -196,6 +196,20 @@ func srtmBox(k srtmKey) geoBBox {
 	return geoBBox{S: la + 0.25, W: lo + 0.25, N: la + 0.75, E: lo + 0.75}
 }
 
+// terrainStarts is how many downloads src.Begin(bb) would charge for and
+// start now. Its charge refuses, so it starts none.
+func terrainStarts(src terrainSource, bb geoBBox) int {
+	n := 0
+	src.Begin(bb, func(starts int) bool { n = starts; return false })
+	return n
+}
+
+// srtmLook is s.tiles(keys) with a charge that refuses: it starts nothing.
+func srtmLook(s *srtmSource, keys []srtmKey) srtmTileSet {
+	ts, _ := s.tiles(keys, func(int) bool { return false })
+	return ts
+}
+
 // srtmServe serves body for path and 404 for everything else.
 func srtmServe(tiles map[string][]byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1057,7 +1071,7 @@ func TestSRTMBudgetFor(t *testing.T) {
 	}
 }
 
-// room peeks at what take would admit; tiles and Starts count only the
+// room peeks at what take would admit; tiles and Begin count only the
 // downloads it admits (code review #1, #2391), the first ones first.
 func TestSRTMBudgetRoomAndStarts(t *testing.T) {
 	s, u, clk := newSRTMTest(t, 0, srtmServe(nil))
@@ -1086,7 +1100,7 @@ func TestSRTMBudgetRoomAndStarts(t *testing.T) {
 	box := geoBBox{S: 40.5, W: 10.5, N: 41.5, E: 11.5} // 4 tiles
 	keys := []srtmKey{{40, 10}, {40, 11}, {41, 10}, {41, 11}}
 	s.put(keys[3], elevFlatGrid(1))
-	if n := s.Starts(box); n != 3 {
+	if n := terrainStarts(s, box); n != 3 {
 		t.Fatalf("Starts = %d, want the 3 tiles not in memory", n)
 	}
 	s.mu.Lock()
@@ -1094,21 +1108,21 @@ func TestSRTMBudgetRoomAndStarts(t *testing.T) {
 		s.budget.starts = append(s.budget.starts, clk.now())
 	}
 	s.mu.Unlock()
-	if n := s.Starts(box); n != 2 {
+	if n := terrainStarts(s, box); n != 2 {
 		t.Fatalf("Starts = %d with room for 2", n)
 	}
-	ts := s.tiles(keys)
+	ts := srtmLook(s, keys)
 	if ts.starts != 2 || !slices.Equal(ts.need, keys[:2]) || !slices.Equal(ts.refused, keys[2:3]) {
 		t.Fatalf("tiles: starts %d, need %v, refused %v", ts.starts, ts.need, ts.refused)
 	}
 	s.mu.Lock()
 	s.coolTo = clk.now().Add(time.Minute)
 	s.mu.Unlock()
-	if n := s.Starts(box); n != 0 {
+	if n := terrainStarts(s, box); n != 0 {
 		t.Fatalf("Starts = %d while downloads are paused", n)
 	}
 	for _, bad := range []geoBBox{{S: 40.5, W: 10.5, N: 41.5, E: 30.5}, {S: math.NaN()}} {
-		if n := s.Starts(bad); n != 0 {
+		if n := terrainStarts(s, bad); n != 0 {
 			t.Fatalf("Starts(%+v) = %d for a box View refuses", bad, n)
 		}
 	}
@@ -1680,7 +1694,11 @@ func TestSRTMTilesAndAwait(t *testing.T) {
 	s.put(here, elevFlatGrid(5))
 
 	keys := []srtmKey{gated, gone, here}
-	ts := s.tiles(keys)
+	charged := 0
+	ts, ok := s.tiles(keys, func(starts int) bool { charged += starts; return true })
+	if !ok || charged != 2 {
+		t.Fatalf("first look: ok %v, charged %d for 2 downloads", ok, charged)
+	}
 	if len(ts.grids) != 1 || ts.grids[here] == nil || !slices.Equal(ts.need, []srtmKey{gated, gone}) || ts.starts != 2 || len(ts.refused) != 0 {
 		t.Fatalf("first look: %d resident, need %v, starts %d, refused %v", len(ts.grids), ts.need, ts.starts, ts.refused)
 	}
@@ -1695,8 +1713,8 @@ func TestSRTMTilesAndAwait(t *testing.T) {
 	// Still downloading: known missing counts as resident, and loading the
 	// gated tile again would start nothing.
 	srtmEventually(t, "the gated download", func() bool { return u.hitsFor(srtmPath(gated)) == 1 })
-	ts = s.tiles(keys)
-	if len(ts.grids) != 2 || !slices.Equal(ts.need, []srtmKey{gated}) || ts.starts != 0 {
+	ts, ok = s.tiles(keys, func(int) bool { t.Error("charged for a tile already downloading"); return true })
+	if !ok || len(ts.grids) != 2 || !slices.Equal(ts.need, []srtmKey{gated}) || ts.starts != 0 {
 		t.Fatalf("second look: %d resident, need %v, starts %d", len(ts.grids), ts.need, ts.starts)
 	}
 	// A caller that went away returns at once, and the download goes on.
@@ -1711,7 +1729,7 @@ func TestSRTMTilesAndAwait(t *testing.T) {
 	if g := got[gated]; len(g) != srtmSide*srtmSide || g[0] != 77 || u.hitsFor(srtmPath(gated)) != 1 {
 		t.Fatalf("gated tile: %d samples, fetched %d times", len(g), u.hitsFor(srtmPath(gated)))
 	}
-	if ts = s.tiles(keys); len(ts.need) != 0 || ts.starts != 0 {
+	if ts = srtmLook(s, keys); len(ts.need) != 0 || ts.starts != 0 {
 		t.Fatalf("all resident: need %v", ts.need)
 	}
 
@@ -1722,12 +1740,17 @@ func TestSRTMTilesAndAwait(t *testing.T) {
 	// Paused: nothing would start, so every download is refused and none is
 	// counted, or charged.
 	paused := []srtmKey{broken, {41, 10}}
-	if ts = s.tiles(paused); len(ts.need) != 0 || ts.starts != 0 || !slices.Equal(ts.refused, paused) {
+	if ts = srtmLook(s, paused); len(ts.need) != 0 || ts.starts != 0 || !slices.Equal(ts.refused, paused) {
 		t.Fatalf("after a 503: need %v, starts %d, refused %v", ts.need, ts.starts, ts.refused)
 	}
 	clk.add(srtmBackoff[0])
-	if ts = s.tiles(paused); ts.starts != 2 || len(ts.refused) != 0 {
+	if ts = srtmLook(s, paused); ts.starts != 2 || len(ts.refused) != 0 {
 		t.Fatalf("cooldown did not lapse: starts %d, refused %v", ts.starts, ts.refused)
+	}
+	// A refused charge starts nothing: the tiles are still to start.
+	hits := u.total()
+	if ts, ok := s.tiles(paused, func(int) bool { return false }); ok || terrainStarts(s, srtmBox(paused[1])) != 1 || u.total() != hits {
+		t.Fatalf("refused charge: ok %v, need %v, %d downloads", ok, ts.need, u.total()-hits)
 	}
 }
 

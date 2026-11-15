@@ -1249,9 +1249,11 @@ func (p *plannerService) serve(w http.ResponseWriter, r *http.Request, spec plan
 
 // attach returns the live job for spec.key, or the result that landed since
 // the caller's cache miss, or starts a job. Starting one checks capacity
-// first (free), then charges the client a job and the downloads its view
-// would start (p.src.Starts, all or nothing), then the global budget: a
-// client over its own limit never spends everyone else's.
+// first (free), then charges the client a job, the global budget a job, and
+// the client the downloads its view starts (p.src.Begin, all or nothing, in
+// the step that starts them, so a tile two jobs or route LOS ask for at once
+// is charged once). A refusal gives back what was charged before it, all
+// under p.mu: a client over its own limit never spends everyone else's.
 func (p *plannerService) attach(r *http.Request, spec plannerJobSpec, heavy bool, now time.Time) (*plannerJob, []byte, *plannerReject) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1278,15 +1280,20 @@ func (p *plannerService) attach(r *http.Request, spec plannerJobSpec, heavy bool
 	if ok, wait := p.limit.take(r); !ok {
 		return nil, nil, &plannerReject{http.StatusTooManyRequests, "rate limited", retryAfterSecs(wait)}
 	}
-	starts := p.src.Starts(spec.view)
-	if ok, wait := p.downloads.takeN(r, starts); !ok {
-		p.limit.refundN(r, 1)
-		return nil, nil, &plannerReject{http.StatusTooManyRequests, "rate limited", retryAfterSecs(wait)}
-	}
 	if ok, wait := p.global.take("all"); !ok {
 		p.limit.refundN(r, 1)
-		p.downloads.refundN(r, starts)
 		return nil, nil, &plannerReject{http.StatusServiceUnavailable, "planner busy", retryAfterSecs(wait)}
+	}
+	// Last, so nothing can refuse the job once its downloads have started.
+	var retry time.Duration
+	if !p.src.Begin(spec.view, func(starts int) bool {
+		var ok bool
+		ok, retry = p.downloads.takeN(r, starts)
+		return ok
+	}) {
+		p.limit.refundN(r, 1)
+		p.global.refundN("all", 1)
+		return nil, nil, &plannerReject{http.StatusTooManyRequests, "rate limited", retryAfterSecs(retry)}
 	}
 	ctx, cancel := context.WithCancelCause(p.ctx)
 	j := &plannerJob{

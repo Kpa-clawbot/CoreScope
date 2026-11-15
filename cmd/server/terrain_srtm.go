@@ -13,8 +13,8 @@ package main
 //   - The planner loads a rectangle of tiles (View); route LOS loads only the
 //     tiles its legs' samples fall in (tiles + await, read through an
 //     srtmTileView). Both share the cache, the downloads and the budget, and
-//     both charge their client for the downloads they start (Starts, tiles)
-//     before starting any.
+//     both charge their client for the downloads they start (Begin, tiles)
+//     in the same step that starts them, so one download is charged once.
 //
 // Safety model (this runs inside a public web server; nothing touches disk):
 //   - Tile names and URLs are built only from clamped integer indices.
@@ -72,11 +72,15 @@ type terrainSource interface {
 	Resident(bb geoBBox) bool
 	// TileCount is the number of 1° tiles covering bb.
 	TileCount(bb geoBBox) int
-	// Starts is how many downloads View(bb) would start now: tiles neither
-	// loaded, known missing nor already downloading, as many as the download
-	// budget admits (none while downloads are paused). 0 for a box View
-	// refuses.
-	Starts(bb geoBBox) int
+	// Begin charges for, then starts, the downloads View(bb) would start
+	// now: tiles neither loaded, known missing nor already downloading, as
+	// many as the download budget admits (none while downloads are paused).
+	// With at least one, charge is called once with their number while the
+	// source's lock is held, so no other caller is charged for the same
+	// download; it must not block or call back into the source. When it
+	// refuses, nothing starts and Begin reports false. A box View refuses
+	// starts nothing and is not charged.
+	Begin(bb geoBBox, charge func(starts int) bool) bool
 }
 
 // terrainCoverage is implemented by views that know which of their tiles
@@ -521,29 +525,20 @@ func (s *srtmSource) View(ctx context.Context, bb geoBBox) (terrainView, error) 
 	return v, nil
 }
 
-// Starts mirrors tiles for View's rectangle, without touching LRU order.
-func (s *srtmSource) Starts(bb geoBBox) int {
+// Begin is tiles for View's rectangle, without touching LRU order.
+func (s *srtmSource) Begin(bb geoBBox, charge func(starts int) bool) bool {
 	sp, ok := srtmSpanOf(bb)
 	if !ok || sp.count() > s.maxTiles {
-		return 0
+		return true
+	}
+	keys := make([]srtmKey, sp.count())
+	for i := range keys {
+		keys[i] = sp.key(i)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := s.now()
-	n := 0
-	for i := 0; i < sp.count(); i++ {
-		k := sp.key(i)
-		if _, ok := s.lookupLocked(k, now, false); ok {
-			continue
-		}
-		if _, running := s.loading[k]; !running {
-			n++
-		}
-	}
-	if n == 0 {
-		return 0
-	}
-	return min(n, s.roomLocked(now))
+	ts := s.tilesLocked(keys, false)
+	return s.beginLocked(&ts, charge)
 }
 
 // roomLocked is how many downloads admit would accept now: none while they
@@ -563,19 +558,28 @@ type srtmTileSet struct {
 	refused []srtmKey           // not downloading, and over what the budget admits now (all of them while downloads are paused)
 }
 
-// tiles looks keys up in one pass, marking the cached ones used. It starts
-// nothing, so the caller can charge for starts before calling await, and
-// it counts as starts only the downloads the budget would admit now: the
-// rest are refused, so no caller is charged for a download that would fail
-// at once. Tiles already downloading cost no start.
-func (s *srtmSource) tiles(keys []srtmKey) srtmTileSet {
-	ts := srtmTileSet{grids: make(map[srtmKey][]int16, len(keys))}
+// tiles looks keys up in one pass, marking the cached ones used, then
+// charges for and starts the downloads the keys need. It counts as starts
+// only the downloads the budget would admit now: the rest are refused, so no
+// caller is charged for a download that would fail at once, and tiles already
+// downloading cost no start. charge is called as Begin calls it; a nil
+// charge is free. When charge refuses, nothing starts and tiles reports
+// false.
+func (s *srtmSource) tiles(keys []srtmKey, charge func(starts int) bool) (srtmTileSet, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ts := s.tilesLocked(keys, true)
+	return ts, s.beginLocked(&ts, charge)
+}
+
+// tilesLocked sorts keys into resident, to load and refused, starting
+// nothing. touch marks the cached ones used. Caller holds s.mu.
+func (s *srtmSource) tilesLocked(keys []srtmKey, touch bool) srtmTileSet {
+	ts := srtmTileSet{grids: make(map[srtmKey][]int16, len(keys))}
 	now := s.now()
 	room := -1 // looked up at the first tile that needs a download
 	for _, k := range keys {
-		if g, ok := s.lookupLocked(k, now, true); ok {
+		if g, ok := s.lookupLocked(k, now, touch); ok {
 			ts.grids[k] = g
 			continue
 		}
@@ -592,6 +596,19 @@ func (s *srtmSource) tiles(keys []srtmKey) srtmTileSet {
 		ts.need = append(ts.need, k)
 	}
 	return ts
+}
+
+// beginLocked charges for ts.starts, then starts every load ts.need lacks.
+// Charging and starting under one hold of s.mu is what makes a download
+// cost one caller: the next one finds it in s.loading. Caller holds s.mu.
+func (s *srtmSource) beginLocked(ts *srtmTileSet, charge func(starts int) bool) bool {
+	if ts.starts > 0 && charge != nil && !charge(ts.starts) {
+		return false
+	}
+	for _, k := range ts.need {
+		s.startLocked(k)
+	}
+	return true
 }
 
 // await starts (or joins) the load of each key and waits until all are done,

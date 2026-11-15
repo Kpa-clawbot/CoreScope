@@ -135,17 +135,18 @@ func (f *fakeTerrain) TileCount(bb geoBBox) int {
 	return len(fakeTiles(bb))
 }
 
-// Starts is f.starts(bb), or 0: the fake does not track which tiles are
-// downloading, so the tests that charge downloads use a real srtmSource
-// (planner_tiles_test.go).
-func (f *fakeTerrain) Starts(bb geoBBox) int {
+// Begin charges for f.starts(bb) downloads, or none: the fake does not track
+// which tiles are downloading, so the tests that charge downloads use a real
+// srtmSource (planner_tiles_test.go).
+func (f *fakeTerrain) Begin(bb geoBBox, charge func(starts int) bool) bool {
 	f.mu.Lock()
 	fn := f.starts
 	f.mu.Unlock()
 	if fn == nil {
-		return 0
+		return true
 	}
-	return fn(bb)
+	n := fn(bb)
+	return n < 1 || charge(n)
 }
 
 func (f *fakeTerrain) set(fn func(f *fakeTerrain)) { f.mu.Lock(); fn(f); f.mu.Unlock() }
@@ -1389,17 +1390,24 @@ func TestClientLimitPerClientAndShared(t *testing.T) {
 	clk := &plannerTestClock{t: plannerTestStart}
 	c := &clientLimiter{ipr: &wsLimiter{state: map[string]*wsIPState{}}, rl: newRateLimiter(2, time.Minute), tag: "test", what: "test"}
 	c.rl.now = clk.now
+	allow := func(w http.ResponseWriter, r *http.Request) bool {
+		ok, wait := c.take(r)
+		if !ok {
+			writeRateLimited(w, wait)
+		}
+		return ok
+	}
 	for i := 0; i < 2; i++ {
-		if !c.allow(httptest.NewRecorder(), req("203.0.113.1:1", "")) {
+		if !allow(httptest.NewRecorder(), req("203.0.113.1:1", "")) {
 			t.Fatalf("request %d limited", i)
 		}
 	}
 	w := httptest.NewRecorder()
-	if c.allow(w, req("203.0.113.1:2", "")) || w.Code != http.StatusTooManyRequests ||
+	if allow(w, req("203.0.113.1:2", "")) || w.Code != http.StatusTooManyRequests ||
 		w.Header().Get("Retry-After") != "30" || !strings.Contains(w.Body.String(), "rate limited") {
 		t.Fatalf("3rd: %d RA=%q %s", w.Code, w.Header().Get("Retry-After"), w.Body.String())
 	}
-	if !c.allow(httptest.NewRecorder(), req("203.0.113.2:1", "")) {
+	if !allow(httptest.NewRecorder(), req("203.0.113.2:1", "")) {
 		t.Fatal("another client shares the bucket")
 	}
 	// Behind an untrusted local proxy, X-Forwarded-For is ignored and the
@@ -1408,7 +1416,7 @@ func TestClientLimitPerClientAndShared(t *testing.T) {
 		t.Fatalf("indistinct key %q, distinct %v", k, distinct)
 	}
 	for i := 0; i < 5; i++ {
-		if !c.allow(httptest.NewRecorder(), req("127.0.0.1:1", "198.51.100.1")) {
+		if !allow(httptest.NewRecorder(), req("127.0.0.1:1", "198.51.100.1")) {
 			t.Fatalf("indistinct request %d limited", i)
 		}
 	}

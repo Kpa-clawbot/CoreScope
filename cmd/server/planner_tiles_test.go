@@ -499,7 +499,7 @@ func TestPlannerChargesTileDownloads(t *testing.T) {
 	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "rate limited") || w.Header().Get("Retry-After") == "" {
 		t.Fatalf("over the download budget: %d %s", w.Code, w.Body.String())
 	}
-	if rlTokens(tb.p.limit.rl, ip) != jobs || tb.tokens(ip) != 2 || tb.p.src.Starts(plannerProfileView(geoBBox{S: 50.8, W: 5.8, N: 51.2, E: 6.2},
+	if rlTokens(tb.p.limit.rl, ip) != jobs || tb.tokens(ip) != 2 || terrainStarts(tb.p.src, plannerProfileView(geoBBox{S: 50.8, W: 5.8, N: 51.2, E: 6.2},
 		plannerProfilePad(defaultPlannerMaxLegKm))) != 4 {
 		t.Fatalf("refused job: %v job tokens (want %v), %v download tokens", rlTokens(tb.p.limit.rl, ip), jobs, tb.tokens(ip))
 	}
@@ -555,7 +555,7 @@ func TestPlannerLargestViewLoadsCold(t *testing.T) {
 	}
 
 	s, u, _ := newSRTMTestViews(t, 0, terrainViewTiles(both.LOS, cfg), srtmServe(nil)) // every tile 404s
-	if n := s.Starts(view); n != 40 {
+	if n := terrainStarts(s, view); n != 40 {
 		t.Fatalf("Starts = %d, want all 40", n)
 	}
 	if _, err := s.View(context.Background(), view); err != nil {

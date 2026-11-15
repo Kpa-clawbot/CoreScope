@@ -107,21 +107,28 @@ func (s *Server) handleElevationProfile(w http.ResponseWriter, r *http.Request) 
 // serve answers a validated request. It waits up to e.wait for the tiles it
 // needs, then answers 200, or 202 while some are still downloading. The
 // client is charged one token per download the request starts, all or
-// nothing, before any starts; resident tiles, tiles already downloading
+// nothing, in the step that starts them (srtmSource.tiles), so requests that
+// arrive together pay for a tile once; resident tiles, tiles already downloading
 // (another request's, or the planner's) and tiles the download budget has no
 // room for cost nothing, so a poll that only waits is free. The legs on
 // refused tiles answer upstream; the rest are answered.
 func (e *elevationService) serve(w http.ResponseWriter, r *http.Request, pts []geoPoint) {
 	legs, keys := e.plan(pts)
-	ts := e.src.tiles(keys)
+	var retry time.Duration
+	ts, ok := e.src.tiles(keys, func(starts int) bool {
+		var ok bool
+		ok, retry = e.downloads.takeN(r, starts)
+		return ok
+	})
+	if !ok {
+		writeRateLimited(w, retry)
+		return
+	}
 	failed := make(map[srtmKey]bool, len(ts.refused))
 	for _, k := range ts.refused {
 		failed[k] = true
 	}
 	if len(ts.need) > 0 {
-		if !e.downloads.allowN(w, r, ts.starts) {
-			return
-		}
 		got, bad := e.src.await(r.Context(), ts.need, e.wait)
 		maps.Copy(ts.grids, got)
 		maps.Copy(failed, bad)
