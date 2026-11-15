@@ -101,6 +101,12 @@ console.log('\n=== no new hardcoded colours ===');
   const BASELINE_BARE_HEX = 8; // bare hex colours in master's route-view.css before this feature
   const after = bare(css);
   assert(after <= BASELINE_BARE_HEX, 'bare hex colours in route-view.css did not increase (' + BASELINE_BARE_HEX + ' -> ' + after + ')');
+  // rgba()/rgb() literals that are NOT a var(--x, rgba(...)) fallback (review #2391).
+  const bareRgb = s => (s.replace(/var\(--[a-z0-9-]+, *rgba?\([^)]*\)\)/gi, '').match(/rgba?\(/g) || []).length;
+  const BASELINE_BARE_RGB = 15; // bare rgb()/rgba() colours in master's route-view.css before this feature
+  const rgbAfter = bareRgb(css);
+  assert(rgbAfter <= BASELINE_BARE_RGB, 'bare rgb()/rgba() colours in route-view.css did not increase (' + BASELINE_BARE_RGB + ' -> ' + rgbAfter + ')');
+  assert(/\.mc-rt-map-badge \{[^}]*box-shadow: [^;]*var\(--shadow\)/.test(css), 'map badge shadow uses --shadow');
 }
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
