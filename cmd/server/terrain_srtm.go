@@ -812,7 +812,7 @@ func (s *srtmSource) fetchAndStore(k srtmKey) ([]int16, error) {
 		return s.missing(k, srtmNegTTL, "HTTP 404")
 	case status == http.StatusForbidden:
 		return s.missing(k, srtmForbiddenTTL, "HTTP 403")
-	case err == nil && voids == srtmSide*srtmSide && srtmAllZero(grid):
+	case err == nil && grid == nil:
 		return s.missing(k, srtmNegTTL, "all void")
 	case err == nil:
 	case srtmUpstreamFailed(status, err):
@@ -825,7 +825,7 @@ func (s *srtmSource) fetchAndStore(k srtmKey) ([]int16, error) {
 		return s.missing(k, srtmBadTTL, err.Error())
 	}
 	if frac := float64(voids) / (srtmSide * srtmSide); frac > srtmVoidWarnFrac {
-		log.Printf("[terrain] tile %s is %.0f%% void (filled from neighbours or 0 m)", k.name(), frac*100)
+		log.Printf("[terrain] tile %s is %.0f%% void (filled from the nearest valid samples)", k.name(), frac*100)
 	}
 	s.put(k, grid)
 	log.Printf("[terrain] tile %s loaded in %s", k.name(), time.Since(start).Round(time.Millisecond))
@@ -871,16 +871,6 @@ func (b *srtmBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// srtmAllZero reports whether every sample of grid is 0.
-func srtmAllZero(grid []int16) bool {
-	for _, v := range grid {
-		if v != 0 {
-			return false
-		}
-	}
-	return true
-}
-
 // fetch downloads and decodes one tile. status is the HTTP status, 0 when no
 // response arrived; err is nil only for a complete, valid tile, and is an
 // *srtmUpstreamError when the network, not the tile, failed.
@@ -916,7 +906,10 @@ func (s *srtmSource) fetch(ctx context.Context, k srtmKey) (grid []int16, voids,
 }
 
 // srtmDecode gunzips one 1-arc-second tile and returns it downsampled to the
-// 1201² grid, with voids filled, plus the number of void samples found. It
+// 1201² grid, with voids filled, plus the number of void samples found. A
+// void is filled from the nearest valid sample in its row, and a row without
+// any from the nearest rows that have some, so no void ever reads as 0 m; a
+// tile without one valid sample has no terrain and decodes to a nil grid. It
 // reads the 3601 rows with io.ReadFull (exactly srtmRawBytes in all), keeping
 // every srtmStep-th row and column, then requires EOF on one more read, which
 // is also when gzip checks the CRC and length trailer. Anything short, long
@@ -929,7 +922,8 @@ func srtmDecode(r io.Reader) (grid []int16, voids int, err error) {
 	defer zr.Close()
 	grid = make([]int16, srtmSide*srtmSide)
 	buf := make([]byte, srtmRawRowBytes)
-	var raw []int16 // full-resolution row, only for rows with voids
+	var raw []int16    // full-resolution row, only for rows with voids
+	var voidRows []int // kept rows without one valid sample, ascending
 	for y := 0; y < srtmRawSide; y++ {
 		if _, err := io.ReadFull(zr, buf); err != nil {
 			return nil, 0, fmt.Errorf("tile shorter than %d bytes: %w", srtmRawBytes, err)
@@ -957,7 +951,10 @@ func srtmDecode(r io.Reader) (grid []int16, voids int, err error) {
 		for c := range raw {
 			raw[c] = int16(binary.BigEndian.Uint16(buf[2*c:]))
 		}
-		srtmFillVoids(raw)
+		if !srtmFillVoids(raw) {
+			voidRows = append(voidRows, y/srtmStep) // out is all void: filled below
+			continue
+		}
 		for c := range out {
 			out[c] = raw[c*srtmStep]
 		}
@@ -969,12 +966,18 @@ func srtmDecode(r io.Reader) (grid []int16, voids int, err error) {
 	case err != io.EOF:
 		return nil, 0, fmt.Errorf("tile trailer: %w", err)
 	}
+	if len(voidRows) == srtmSide {
+		return nil, voids, nil
+	}
+	srtmFillVoidRows(grid, srtmSide, voidRows)
 	return grid, voids, nil
 }
 
 // srtmFillVoids replaces each void in row with the nearest valid sample in
-// the same row (ties go west), or 0 when the row has none.
-func srtmFillVoids(row []int16) {
+// the same row (ties go west). A row without a valid sample is left as it is
+// and reported false: it has nothing to fill from, and 0 would read as sea
+// level.
+func srtmFillVoids(row []int16) bool {
 	for i := 0; i < len(row); {
 		if row[i] != srtmVoid {
 			i++
@@ -984,19 +987,44 @@ func srtmFillVoids(row []int16) {
 		for j < len(row) && row[j] == srtmVoid {
 			j++
 		}
+		if i == 0 && j == len(row) {
+			return false
+		}
 		// row[i:j] is a run of voids; row[i-1] and row[j] are valid if present.
 		for p := i; p < j; p++ {
-			switch {
-			case i == 0 && j == len(row):
-				row[p] = 0
-			case i == 0:
-				row[p] = row[j]
-			case j == len(row), p-(i-1) <= j-p:
-				row[p] = row[i-1]
-			default:
-				row[p] = row[j]
-			}
+			row[p] = row[srtmNearest(p, i, j, len(row))]
 		}
 		i = j
+	}
+	return true
+}
+
+// srtmNearest is the index nearest to p just outside the run [i, j) of an
+// n-long line: i-1 or j, whichever exists and is closer (ties go to i-1).
+// One of them must exist.
+func srtmNearest(p, i, j, n int) int {
+	if i == 0 || (j < n && j-p < p-(i-1)) {
+		return j
+	}
+	return i - 1
+}
+
+// srtmFillVoidRows copies into each of the side-long rows of grid listed in
+// void (ascending) the nearest row not listed (ties go north). At least one
+// row must not be listed.
+func srtmFillVoidRows(grid []int16, side int, void []int) {
+	rows := len(grid) / side
+	for a := 0; a < len(void); {
+		b := a
+		for b+1 < len(void) && void[b+1] == void[b]+1 {
+			b++
+		}
+		// void[a..b] is a run of rows i..j-1; rows i-1 and j are valid if present.
+		i, j := void[a], void[b]+1
+		for p := i; p < j; p++ {
+			src := srtmNearest(p, i, j, rows)
+			copy(grid[p*side:][:side], grid[src*side:][:side])
+		}
+		a = b + 1
 	}
 }

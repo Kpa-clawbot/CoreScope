@@ -507,21 +507,61 @@ func TestSRTMFillVoids(t *testing.T) {
 	const V = srtmVoid
 	cases := []struct{ in, want []int16 }{
 		{[]int16{1, 2, 3}, []int16{1, 2, 3}},
-		{[]int16{V, V, V}, []int16{0, 0, 0}},
+		{[]int16{V, V, V}, nil}, // nothing to fill from: left void, never 0 m
 		{[]int16{V, V, 7, 8}, []int16{7, 7, 7, 8}},
 		{[]int16{7, 8, V, V}, []int16{7, 8, 8, 8}},
 		{[]int16{1, V, 3}, []int16{1, 1, 3}},             // tie goes west
 		{[]int16{1, V, V, 4}, []int16{1, 1, 4, 4}},       // each to its nearest
 		{[]int16{1, V, V, V, 5}, []int16{1, 1, 1, 5, 5}}, // middle tie goes west
 		{[]int16{-5, V, V, V, V, 9}, []int16{-5, -5, -5, 9, 9, 9}},
-		{[]int16{V}, []int16{0}},
+		{[]int16{V}, nil},
 		{[]int16{}, []int16{}},
 	}
 	for _, c := range cases {
 		got := append([]int16(nil), c.in...)
-		srtmFillVoids(got)
-		if fmt.Sprint(got) != fmt.Sprint(c.want) {
-			t.Errorf("srtmFillVoids(%v) = %v, want %v", c.in, got, c.want)
+		ok := srtmFillVoids(got)
+		want := c.want
+		if want == nil {
+			want = c.in
+		}
+		if ok != (c.want != nil) || fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("srtmFillVoids(%v) = %v, %v; want %v, %v", c.in, got, ok, want, c.want != nil)
+		}
+	}
+}
+
+// Rows without a valid sample take the nearest row that has some (ties go
+// north), whatever the run's length or position.
+func TestSRTMFillVoidRows(t *testing.T) {
+	const V = srtmVoid
+	// One value per row; the rows listed in void hold V.
+	cases := []struct {
+		rows []int16
+		void []int
+		want []int16
+	}{
+		{[]int16{1, 2, 3}, nil, []int16{1, 2, 3}},
+		{[]int16{V, 2, 3}, []int{0}, []int16{2, 2, 3}},
+		{[]int16{V, V, 3}, []int{0, 1}, []int16{3, 3, 3}},
+		{[]int16{1, V, V}, []int{1, 2}, []int16{1, 1, 1}},
+		{[]int16{1, V, 3}, []int{1}, []int16{1, 1, 3}},          // tie goes north
+		{[]int16{1, V, V, 4}, []int{1, 2}, []int16{1, 1, 4, 4}}, // each to its nearest
+		{[]int16{1, V, V, V, 5}, []int{1, 2, 3}, []int16{1, 1, 1, 5, 5}},
+		{[]int16{V, 2, V, 4, V, V, 7, V}, []int{0, 2, 4, 5, 7}, []int16{2, 2, 2, 4, 4, 7, 7, 7}},
+	}
+	for _, c := range cases {
+		const side = 3
+		grid := make([]int16, 0, side*len(c.rows))
+		for _, v := range c.rows {
+			grid = append(grid, v, v, v)
+		}
+		srtmFillVoidRows(grid, side, c.void)
+		for r, want := range c.want {
+			for col := 0; col < side; col++ {
+				if got := grid[r*side+col]; got != want {
+					t.Errorf("rows %v: row %d col %d = %d, want %d", c.rows, r, col, got, want)
+				}
+			}
 		}
 	}
 }
@@ -534,7 +574,7 @@ func srtmVoidTileValue(r, c int) int16 {
 			return V
 		}
 		return int16(c)
-	case r == 1, r == 3, r >= 1800: // row 1 is dropped; 3 and ≥1800 are kept, all void
+	case r == 1, r == 3, r >= 1800: // row 1 is dropped; 3 and ≥1800 are kept, without a valid sample
 		return V
 	case r == 6: // leading and trailing void runs
 		switch {
@@ -561,10 +601,12 @@ func TestSRTMDecodeVoids(t *testing.T) {
 		want int16
 	}{
 		{0, 0, 0}, {0, 1, 2}, {0, 2, 5}, {0, 10, 29}, {0, 11, 36}, {0, 12, 36}, {0, 1200, 3600},
-		{1, 0, 0}, {1, 600, 0}, {1, 1200, 0},
+		// Kept row 1 has no valid sample: it takes row 0 (the tie goes north).
+		{1, 0, 0}, {1, 1, 2}, {1, 600, 1800}, {1, 1200, 3600},
 		{2, 0, 777}, {2, 1, 777}, {2, 2, 777}, {2, 3, 777}, {2, 4, 500},
 		{2, 1196, 500}, {2, 1197, 888}, {2, 1200, 888},
-		{5, 5, 500}, {599, 1200, 500}, {600, 0, 0}, {1200, 1200, 0},
+		// Kept rows 600 to 1200 have none either: they take row 599, never 0 m.
+		{5, 5, 500}, {599, 1200, 500}, {600, 0, 500}, {900, 600, 500}, {1200, 1200, 500},
 	}
 	for _, c := range checks {
 		if got := at(c.R, c.C); got != c.want {
@@ -584,7 +626,7 @@ func TestSRTMDecodeVoids(t *testing.T) {
 	s, _, _ := newSRTMTest(t, 0, srtmServe(map[string][]byte{srtmPath(k): body}))
 	v := srtmMustView(t, s, srtmBox(k))
 	srtmWantElev(t, v, 31, -98+1.0/srtmCells, 2)
-	srtmWantElev(t, v, 30, -97.5, 0)
+	srtmWantElev(t, v, 30, -97.5, 500)
 	if !strings.Contains(logs.String(), "N30W098 is 50% void") {
 		t.Errorf("void warning missing from log: %q", logs.String())
 	}
@@ -1389,8 +1431,8 @@ func TestSRTMViewMissingTiles(t *testing.T) {
 	srtmWantNoElev(t, v, 31.5, -97.5)
 }
 
-// A tile with no valid sample would decode to 0 m everywhere: it is reported
-// missing, has no elevation, and is not held as 2.9 MB of zeros.
+// A tile with no valid sample decodes to no grid: it is reported missing, has
+// no elevation, and never reads as 0 m.
 func TestSRTMAllVoidTileIsMissing(t *testing.T) {
 	k := srtmKey{30, -98}
 	s, u, clk := newSRTMTest(t, 0, srtmServe(map[string][]byte{
