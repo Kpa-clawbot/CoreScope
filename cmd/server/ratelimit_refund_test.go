@@ -13,15 +13,15 @@ func TestRateLimiterRefundReturnsOneToken(t *testing.T) {
 	if ok, _ := l.take("ip"); ok {
 		t.Fatal("bucket of 1 must be empty after one take")
 	}
-	l.refund("ip")
+	l.refundN("ip", 1)
 	if ok, _ := l.take("ip"); !ok {
 		t.Fatal("refund must give the token back")
 	}
-	l.refund("ip")
-	l.refund("ip") // never above burst
+	l.refundN("ip", 1)
+	l.refundN("ip", 1) // never above burst
 	l.take("ip")
 	if ok, _ := l.take("ip"); ok {
 		t.Fatal("refund must not raise the bucket above its burst")
 	}
-	l.refund("unknown") // no bucket: no-op, no panic
+	l.refundN("unknown", 1) // no bucket: no-op, no panic
 }

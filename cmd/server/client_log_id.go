@@ -19,7 +19,7 @@ var clientLogKey = func() []byte {
 }()
 
 // clientLogID names a client in logs without recording its IP: the first 12
-// hex chars of HMAC-SHA256(clientLogKey, ip). The shared bucket has no IP to
+// hex chars of HMAC-SHA256(clientLogKey, ip). clientSharedKey has no IP to
 // hide and logs as itself.
 func clientLogID(ip string) string {
 	if ip == clientSharedKey {

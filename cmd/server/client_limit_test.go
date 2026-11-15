@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func xffReq(peer string, xff ...string) *http.Request {
@@ -67,9 +69,9 @@ func TestClientIPRightmost(t *testing.T) {
 
 func TestClientKeyMasksIPv6To64(t *testing.T) {
 	c := &clientLimiter{ipr: &wsLimiter{trustedProxies: parseCIDRList([]string{"10.0.0.0/8"}, "test")}, tag: "t", what: "w"}
-	a := c.clientKey(xffReq("10.0.0.2:1", "2001:db8:1:2::1"))
-	b := c.clientKey(xffReq("10.0.0.2:1", "2001:db8:1:2:ffff:ffff:ffff:ffff"))
-	d := c.clientKey(xffReq("10.0.0.2:1", "2001:db8:1:3::1"))
+	a, _ := c.clientKey(xffReq("10.0.0.2:1", "2001:db8:1:2::1"))
+	b, _ := c.clientKey(xffReq("10.0.0.2:1", "2001:db8:1:2:ffff:ffff:ffff:ffff"))
+	d, _ := c.clientKey(xffReq("10.0.0.2:1", "2001:db8:1:3::1"))
 	if a != b {
 		t.Errorf("same /64 gave different keys %q, %q", a, b)
 	}
@@ -77,10 +79,10 @@ func TestClientKeyMasksIPv6To64(t *testing.T) {
 		t.Errorf("different /64 shared key %q", a)
 	}
 	// Untrusted IPv6 peer is masked too; IPv4-mapped stays an IPv4 key.
-	if k := c.clientKey(xffReq("[2001:db8:9:9::5]:1")); k != "2001:db8:9:9::" {
+	if k, _ := c.clientKey(xffReq("[2001:db8:9:9::5]:1")); k != "2001:db8:9:9::" {
 		t.Errorf("peer key = %q", k)
 	}
-	if k := c.clientKey(xffReq("10.0.0.2:1", "::ffff:1.2.3.4")); k != "1.2.3.4" {
+	if k, _ := c.clientKey(xffReq("10.0.0.2:1", "::ffff:1.2.3.4")); k != "1.2.3.4" {
 		t.Errorf("mapped key = %q", k)
 	}
 }
@@ -88,9 +90,42 @@ func TestClientKeyMasksIPv6To64(t *testing.T) {
 func TestClientLimiterKeysOnRightmostUntrusted(t *testing.T) {
 	c := &clientLimiter{ipr: &wsLimiter{trustedProxies: parseCIDRList([]string{"10.0.0.0/8"}, "test")}, tag: "t", what: "w"}
 	// A client rotating its own leftmost entry must stay in one bucket.
-	a := c.clientKey(xffReq("10.0.0.2:1", "1.1.1.1, 203.0.113.20"))
-	b := c.clientKey(xffReq("10.0.0.2:1", "2.2.2.2, 203.0.113.20"))
+	a, _ := c.clientKey(xffReq("10.0.0.2:1", "1.1.1.1, 203.0.113.20"))
+	b, _ := c.clientKey(xffReq("10.0.0.2:1", "2.2.2.2, 203.0.113.20"))
 	if a != "203.0.113.20" || a != b {
 		t.Errorf("keys %q, %q: want both 203.0.113.20", a, b)
+	}
+}
+
+// Without webSocket.trustedProxies a local reverse proxy hides every client
+// behind one address (the bundled Caddyfile on a default install). One bucket
+// for the whole site would refuse real visitors, so nothing is charged; the
+// global budgets still apply (review #2391).
+func TestClientLimiterSkipsClientsItCannotTellApart(t *testing.T) {
+	c := &clientLimiter{ipr: &wsLimiter{}, rl: newRateLimiter(2, time.Hour), tag: "t", what: "w"}
+	for i := 0; i < 10; i++ {
+		r := xffReq("127.0.0.1:1", fmt.Sprintf("198.51.100.%d", i))
+		if key, distinct := c.clientKey(r); distinct || key != clientSharedKey {
+			t.Fatalf("clientKey = %q, %v: a loopback peer without trustedProxies is not a client", key, distinct)
+		}
+		if ok, _ := c.takeN(r, 2); !ok {
+			t.Fatalf("request %d limited: every visitor shares one bucket", i)
+		}
+		c.refundN(r, 2)
+	}
+	if n := len(c.rl.buckets); n != 0 {
+		t.Fatalf("%d buckets for clients that cannot be told apart", n)
+	}
+	// Listing the proxy turns the per-client limit on.
+	c.ipr.trustedProxies = parseCIDRList([]string{"127.0.0.1"}, "test")
+	r := xffReq("127.0.0.1:1", "198.51.100.1")
+	if ok, _ := c.takeN(r, 2); !ok {
+		t.Fatal("first request of a distinct client limited")
+	}
+	if ok, _ := c.takeN(r, 1); ok {
+		t.Fatal("a distinct client over its limit was not limited")
+	}
+	if ok, _ := c.takeN(xffReq("127.0.0.1:1", "198.51.100.2"), 2); !ok {
+		t.Fatal("another client was charged for the first one")
 	}
 }

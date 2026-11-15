@@ -717,10 +717,13 @@ func TestElevationPollAfterRefusedIsFree(t *testing.T) {
 	}
 }
 
-func TestElevationRateLimitIndistinctClientsShareBucket(t *testing.T) {
+// Without trustedProxies every visitor behind the local proxy looks like one
+// client, so the per-client budget is skipped (review #2391); with the proxy
+// listed, each client has its own.
+func TestElevationRateLimitSkipsIndistinctClients(t *testing.T) {
 	tile := srtmConstTile(t, 120, srtmRawBytes, gzip.BestSpeed)
 	tiles := map[string][]byte{}
-	for lon := 20; lon <= 22; lon++ {
+	for lon := 20; lon <= 25; lon++ {
 		tiles[srtmPath(srtmKey{40, lon})] = tile
 	}
 	et := newElevTest(t, srtmServe(tiles))
@@ -732,8 +735,22 @@ func TestElevationRateLimitIndistinctClientsShareBucket(t *testing.T) {
 			t.Fatalf("request %d: %d", i, w.Code)
 		}
 	}
-	if w := et.getFrom("40.2,22.2,40.8,22.8", "127.0.0.1:1", map[string]string{"X-Forwarded-For": "198.51.100.3"}); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("shared bucket not enforced: %d", w.Code)
+	if w := et.getFrom("40.2,22.2,40.8,22.8", "127.0.0.1:1", map[string]string{"X-Forwarded-For": "198.51.100.3"}); w.Code != http.StatusOK {
+		t.Fatalf("visitors behind an unlisted proxy share one bucket: %d", w.Code)
+	}
+	if n := len(et.svc.downloads.rl.buckets); n != 0 {
+		t.Fatalf("%d buckets for clients that cannot be told apart", n)
+	}
+	// The proxy listed: X-Forwarded-For is believed and the client is charged.
+	et.svc.downloads.ipr.trustedProxies = parseCIDRList([]string{"127.0.0.1"}, "test")
+	xff := map[string]string{"X-Forwarded-For": "198.51.100.4"}
+	for lon := 23; lon <= 24; lon++ {
+		if w := et.getFrom(fmt.Sprintf("40.2,%d.2,40.8,%d.8", lon, lon), "127.0.0.1:1", xff); w.Code != http.StatusOK {
+			t.Fatalf("tile %d: %d", lon, w.Code)
+		}
+	}
+	if w := et.getFrom("40.2,25.2,40.8,25.8", "127.0.0.1:1", xff); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("a distinct client over its budget: %d", w.Code)
 	}
 }
 

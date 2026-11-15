@@ -28,7 +28,7 @@ func TestClientLogID(t *testing.T) {
 		}
 	}
 	if clientLogID(clientSharedKey) != "shared" {
-		t.Error("the shared bucket must log as shared")
+		t.Error("clients that cannot be told apart must log as shared")
 	}
 }
 

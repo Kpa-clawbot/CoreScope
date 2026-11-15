@@ -1402,14 +1402,19 @@ func TestClientLimitPerClientAndShared(t *testing.T) {
 	if !c.allow(httptest.NewRecorder(), req("203.0.113.2:1", "")) {
 		t.Fatal("another client shares the bucket")
 	}
-	// Behind an untrusted local proxy, X-Forwarded-For is ignored and
-	// everyone shares one bucket.
-	if k := c.clientKey(req("127.0.0.1:1", "198.51.100.1")); k != clientSharedKey {
-		t.Fatalf("indistinct key %q", k)
+	// Behind an untrusted local proxy, X-Forwarded-For is ignored and the
+	// clients cannot be told apart: none is charged.
+	if k, distinct := c.clientKey(req("127.0.0.1:1", "198.51.100.1")); k != clientSharedKey || distinct {
+		t.Fatalf("indistinct key %q, distinct %v", k, distinct)
+	}
+	for i := 0; i < 5; i++ {
+		if !c.allow(httptest.NewRecorder(), req("127.0.0.1:1", "198.51.100.1")) {
+			t.Fatalf("indistinct request %d limited", i)
+		}
 	}
 	c.ipr.trustedProxies = parseCIDRList([]string{"127.0.0.1"}, "test")
-	if k := c.clientKey(req("127.0.0.1:1", "198.51.100.1")); k != "198.51.100.1" {
-		t.Fatalf("trusted proxy key %q", k)
+	if k, distinct := c.clientKey(req("127.0.0.1:1", "198.51.100.1")); k != "198.51.100.1" || !distinct {
+		t.Fatalf("trusted proxy key %q, distinct %v", k, distinct)
 	}
 	if retryAfterSecs(0) != 1 || retryAfterSecs(1500*time.Millisecond) != 2 {
 		t.Fatal("retryAfterSecs")

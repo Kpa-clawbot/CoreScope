@@ -8,7 +8,11 @@ package main
 // leftmost entry buys nothing (these limits protect an upstream quota).
 // Operators behind a CDN must list the CDN's ranges in
 // webSocket.trustedProxies, or every client behind it looks like the CDN.
-// When clients cannot be told apart, every request shares one bucket and a
+// When clients cannot be told apart (a local reverse proxy that is not in
+// webSocket.trustedProxies, the shipped default), the per-client limit is
+// skipped, as /ws and the login limiter skip theirs: one bucket for the whole
+// site would refuse real visitors. The global budgets still apply (terrain
+// downloads: srtmBudgetFor; planner jobs: plannerGlobalJobsPerMin), and a
 // one-time warning tells the operator what to configure.
 
 import (
@@ -31,26 +35,27 @@ type clientLimiter struct {
 	tag, what string
 }
 
-// clientSharedKey is the bucket every request shares when clients cannot be
-// told apart.
+// clientSharedKey names, in logs, the clients that cannot be told apart. It
+// is never a bucket: those clients are not charged.
 const clientSharedKey = "shared"
 
-// clientKey is r's bucket: the client IP when it identifies a client, else
-// clientSharedKey (logging the one-time warning).
-func (c *clientLimiter) clientKey(r *http.Request) string {
+// clientKey is r's bucket, the client IP, and whether it identifies a
+// client. When it does not, the key is clientSharedKey, nothing is charged
+// to it and the one-time warning is logged.
+func (c *clientLimiter) clientKey(r *http.Request) (key string, distinct bool) {
 	if c.ipr == nil {
-		return clientSharedKey
+		return clientSharedKey, false
 	}
 	ip, distinct := c.ipr.clientIPRightmost(r)
 	if distinct && ip != nil {
-		return ip.String()
+		return ip.String(), true
 	}
 	c.warn.Do(func() {
 		log.Printf("[%s] WARNING: clients cannot be told apart (requests arrive from %v), "+
-			"so the %s rate limit is shared by everyone. "+
+			"so the per-client %s rate limit is off and only the global budget applies. "+
 			"Set webSocket.trustedProxies to your reverse proxy's address for per-client limits.", c.tag, ip, c.what)
 	})
-	return clientSharedKey
+	return clientSharedKey, false
 }
 
 // take consumes one token from r's bucket. When none is left it reports how
@@ -62,12 +67,17 @@ func (c *clientLimiter) take(r *http.Request) (bool, time.Duration) {
 
 // takeN consumes n tokens from r's bucket, all or nothing; on refusal it
 // reports how long until n are available and takes none. n < 1 always
-// succeeds, and leaves no bucket behind.
+// succeeds, and leaves no bucket behind, as does a client that cannot be
+// told apart from the others (clientKey).
 func (c *clientLimiter) takeN(r *http.Request, n int) (bool, time.Duration) {
 	if c.off() || n < 1 {
 		return true, 0
 	}
-	return c.rl.takeN(c.clientKey(r), n)
+	key, distinct := c.clientKey(r)
+	if !distinct {
+		return true, 0
+	}
+	return c.rl.takeN(key, n)
 }
 
 // refundN gives back n tokens takeN just took from r's bucket.
@@ -75,7 +85,9 @@ func (c *clientLimiter) refundN(r *http.Request, n int) {
 	if c.off() || n < 1 {
 		return
 	}
-	c.rl.refundN(c.clientKey(r), n)
+	if key, distinct := c.clientKey(r); distinct {
+		c.rl.refundN(key, n)
+	}
 }
 
 func (c *clientLimiter) off() bool { return c == nil || c.ipr == nil || c.rl == nil }

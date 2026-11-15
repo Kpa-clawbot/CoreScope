@@ -1274,17 +1274,17 @@ func (p *plannerService) attach(r *http.Request, spec plannerJobSpec, heavy bool
 	if len(p.jobs) >= plannerMaxLiveJobs || (heavy && p.covQueued >= plannerMaxQueuedCoverage) {
 		return nil, nil, &plannerReject{http.StatusServiceUnavailable, "planner busy", plannerFullRetryS}
 	}
-	client := p.limit.clientKey(r)
+	client, _ := p.limit.clientKey(r)
 	if ok, wait := p.limit.take(r); !ok {
 		return nil, nil, &plannerReject{http.StatusTooManyRequests, "rate limited", retryAfterSecs(wait)}
 	}
 	starts := p.src.Starts(spec.view)
 	if ok, wait := p.downloads.takeN(r, starts); !ok {
-		p.refundClient(client)
+		p.limit.refundN(r, 1)
 		return nil, nil, &plannerReject{http.StatusTooManyRequests, "rate limited", retryAfterSecs(wait)}
 	}
 	if ok, wait := p.global.take("all"); !ok {
-		p.refundClient(client)
+		p.limit.refundN(r, 1)
 		p.downloads.refundN(r, starts)
 		return nil, nil, &plannerReject{http.StatusServiceUnavailable, "planner busy", retryAfterSecs(wait)}
 	}
@@ -1301,16 +1301,6 @@ func (p *plannerService) attach(r *http.Request, spec plannerJobSpec, heavy bool
 	p.wg.Add(1)
 	go p.run(j, spec)
 	return j, nil, nil
-}
-
-// refundClient gives back the token p.limit.take just charged key, when a
-// later check refused the job after all. Every take and refund on
-// p.limit.rl happens under p.mu, so no other charge slips in between.
-func (p *plannerService) refundClient(key string) {
-	if p.limit.ipr == nil || p.limit.rl == nil {
-		return // take charged nothing
-	}
-	p.limit.rl.refund(key)
 }
 
 func (p *plannerService) run(j *plannerJob, spec plannerJobSpec) {

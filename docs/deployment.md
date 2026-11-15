@@ -433,6 +433,13 @@ the visitor's own header through untouched, and the entry CoreScope trusts is
 chosen by the visitor. `$proxy_add_x_forwarded_for` appends the real peer
 address.
 
+Those limits apply only when CoreScope can tell clients apart. A reverse proxy
+on a loopback or private address that is not listed in
+`webSocket.trustedProxies` (the shipped default) makes every visitor look like
+one client, so the per-client limits are skipped and one warning is logged;
+the server-wide terrain download and planner job budgets still apply. List the
+proxy's address to turn them on.
+
 A proxy listed in `webSocket.trustedProxies` MUST append to `X-Forwarded-For`
 (never replace it with a client-supplied value). If you list a CDN's ranges,
 anyone who can send requests from inside those ranges (for example CDN

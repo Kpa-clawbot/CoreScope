@@ -100,10 +100,6 @@ func (l *rateLimiter) takeN(key string, n int) (bool, time.Duration) {
 	return false, time.Duration(wait * float64(time.Second))
 }
 
-// refund gives back one token taken from key (a charge for work that was then
-// refused elsewhere), never above the burst. A key with no bucket is a no-op.
-func (l *rateLimiter) refund(key string) { l.refundN(key, 1) }
-
 // refundN gives back n tokens taken from key, to both buckets of a capped
 // limiter, never above either's size. A key with no bucket is a no-op.
 func (l *rateLimiter) refundN(key string, n int) {

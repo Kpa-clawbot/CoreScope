@@ -1504,6 +1504,8 @@ Tiles are 1 arc-second SRTM, downsampled to 3 arc-seconds (about 90 m) and held 
 
 Each client IP also has one download budget for both features, so using both buys no more downloads. A route line-of-sight request, or a new planner job, takes one token for each tile download it starts, all or nothing, before any starts. Tiles already in memory or already downloading (for any client, or for either feature) cost nothing, and neither do downloads the server-wide limits above would refuse. The budget holds the largest single load of an enabled feature (16 tiles for route line of sight, 12 to 40 for the planner depending on its size limits), so any one request fits it, and refills at 10 tokens a minute. A second bucket caps it at 40 tokens an hour, or twice the largest load when that is more, refilled at the same number an hour. The startup log prints the numbers in effect.
 
+The per-client budgets (this one and the planner's jobs per minute) need clients the server can tell apart. Behind a reverse proxy on a loopback or private address that is not in `webSocket.trustedProxies`, every visitor arrives from the proxy's address, so no client is charged and only the server-wide limits apply; one warning is logged.
+
 ### Caching & limits
 
 - Terrain comes from SRTM 1° tiles held in server memory (see [Terrain tiles](#terrain-tiles)). Only the tiles the legs' samples fall in are loaded, not each leg's bounding box. A request loads at most 16 distinct tiles.
