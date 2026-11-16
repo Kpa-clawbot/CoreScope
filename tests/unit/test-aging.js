@@ -1,12 +1,14 @@
 /* Unit tests for node aging system */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const assert = require('assert');
 
 // Load roles.js in a sandboxed context
 const ctx = { window: {}, console, Date, Infinity, document: { readyState: 'complete', createElement: () => ({ id: '' }), head: { appendChild: () => {} }, getElementById: () => null, addEventListener: () => {} }, fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }) };
 vm.createContext(ctx);
+loadApiBase(ctx);
 vm.runInContext(fs.readFileSync('public/roles.js', 'utf8'), ctx);
 
 // The IIFE assigns to window.*, but the functions reference HEALTH_THRESHOLDS as a bare global

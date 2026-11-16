@@ -10,6 +10,7 @@
  */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
@@ -32,6 +33,7 @@ function loadRoles(config) {
     fetch: () => Promise.resolve({ json: () => Promise.resolve(config || {}) }),
   };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(ROLES_JS, ctx);
   // roles.js reads HEALTH_THRESHOLDS as a bare global; window.X does not create one here.
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];

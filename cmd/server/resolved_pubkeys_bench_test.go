@@ -25,13 +25,3 @@ func BenchmarkResolvedPubkeysFromJSON(b *testing.B) {
 		_ = resolvedPubkeysFromJSON(paths[i%len(paths)])
 	}
 }
-
-// An eviction batch of 1,000 packets with 3 observations each.
-func BenchmarkResolvedPubkeysForEvictionBatch(b *testing.B) {
-	s, ids := evictionResolvedStore(b, 1000)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = s.resolvedPubkeysForEvictionBatch(ids)
-	}
-}

@@ -7,7 +7,7 @@
   var state = { enabled: false, user: null, ready: null };
 
   function request(method, path, body) {
-    var opts = { method: method, credentials: 'same-origin', headers: { 'Accept': 'application/json' } };
+    var opts = { method: method, headers: { 'Accept': 'application/json' } };
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -15,7 +15,7 @@
     if (method !== 'GET' && state.user && state.user.csrfToken) {
       opts.headers['X-CS-CSRF'] = state.user.csrfToken;
     }
-    return fetch(path, opts).then(function (res) {
+    return CSApi.fetch(path, opts).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (data) {
         if (res.status === 401 && state.user && path !== '/api/auth/login' && path !== '/api/auth/activate') {
           setUser(null);
@@ -171,7 +171,28 @@
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeMenu(); });
 
+  // Anonymous static build on a server with accounts: the nav offers the
+  // classic site's login, on the same page, instead of a login of its own.
+  function renderClassicLogin() {
+    var href = CSApi.classicHref('#/account/login');
+    var right = document.querySelector('.top-nav .nav-right');
+    if (!href || !right || document.getElementById('accountWrap')) return;
+    var wrap = document.createElement('div');
+    wrap.id = 'accountWrap';
+    wrap.className = 'nav-account-wrap';
+    var a = document.createElement('a');
+    a.className = 'nav-account-btn';
+    a.id = 'accountToggle';
+    a.href = href;
+    a.title = 'Accounts live on the classic site';
+    a.innerHTML = icon('ph-user-circle') + '<span class="nav-account-label">Log in on classic</span>';
+    wrap.appendChild(a);
+    right.insertBefore(wrap, document.getElementById('hamburger'));
+    window.dispatchEvent(new CustomEvent('cs-auth-control-added'));
+  }
+
   state.ready = Promise.resolve(window.MeshConfigReady).then(function () {
+    if (window.MC_ACCOUNTS_ON_CLASSIC) { renderClassicLogin(); return null; }
     if (!window.MC_USER_MGMT || !window.MC_USER_MGMT.enabled) return null;
     state.enabled = true;
     renderControl();
