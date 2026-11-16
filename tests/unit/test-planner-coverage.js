@@ -307,6 +307,23 @@ test('layer switch repaints without another fetch', async () => {
   t.inst.unmount();
 });
 
+test('blocked links get a red dot but no line', async () => {
+  const t = mountWith({ site: '51,5', layer: 'repeaters' });
+  t.calls[0].d.resolve(result({ links: [
+    { pubkey: 'a', name: 'A', lat: 51.1, lon: 5.2, link: { distance_km: 4, clearance_pct: 20, verdict: 'marginal' } },
+    { pubkey: 'b', name: 'B', lat: 51.0, lon: 5.3, link: { distance_km: 9, clearance_pct: -10, verdict: 'blocked' } },
+    { pubkey: 'c', name: 'C', lat: 50.9, lon: 5.1, link: { distance_km: 12, clearance_pct: -90, verdict: 'blocked' } }
+  ] }));
+  await flush();
+  const lines = t.m.log.shapes.filter((s) => s.kind === 'line');
+  const dots = t.m.log.shapes.filter((s) => s.kind === 'circle' && /mc-pl-cov-node/.test(s.opts.className));
+  assert.strictEqual(lines.length, 2, 'lines for line of sight and slightly blocked only');
+  assert(!lines.some((l) => /mc-pl-cov-link-1/.test(l.opts.className)), 'no blocked line');
+  assert.strictEqual(dots.length, 3, 'every linked repeater keeps a coloured dot');
+  assert.strictEqual(dots.filter((d) => /mc-pl-cov-node-1/.test(d.opts.className)).length, 1);
+  t.inst.unmount();
+});
+
 test('links list escapes repeater names', async () => {
   const t = mountWith({ site: '51,5', layer: 'repeaters' });
   t.calls[0].d.resolve(result());

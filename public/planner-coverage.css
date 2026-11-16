@@ -19,7 +19,6 @@
   stroke-width: 3; stroke-linecap: round;
   filter: drop-shadow(0 0 1px var(--surface-1)) drop-shadow(0 0 1px var(--surface-1));
 }
-.leaflet-overlay-pane path.mc-pl-cov-link-1 { stroke: var(--pl-cov-rep-1); stroke-dasharray: 2 9; }
 .leaflet-overlay-pane path.mc-pl-cov-link-2 { stroke: var(--pl-cov-rep-2); stroke-dasharray: 12 8; }
 .leaflet-overlay-pane path.mc-pl-cov-link-3 { stroke: var(--pl-cov-rep-3); }
 .leaflet-overlay-pane path.mc-pl-cov-node { stroke: var(--surface-1); fill-opacity: 1; }

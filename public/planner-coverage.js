@@ -259,9 +259,13 @@
         var k = l.link || {};
         var cls = linkClass(k);
         if (!cls) return;
-        L.polyline([[state.site.lat, state.site.lon], [l.lat, l.lon]], {
-          className: 'mc-pl-cov-link mc-pl-cov-link-' + cls, interactive: false
-        }).addTo(linkLayer);
+        // Blocked links get only the red dot: a line per blocked repeater
+        // buries the useful ones.
+        if (cls > 1) {
+          L.polyline([[state.site.lat, state.site.lon], [l.lat, l.lon]], {
+            className: 'mc-pl-cov-link mc-pl-cov-link-' + cls, interactive: false
+          }).addTo(linkLayer);
+        }
         // Recolour the repeater's dot by its link class; not interactive, so
         // the planner's node tooltip and click underneath keep working.
         L.circleMarker([l.lat, l.lon], {
