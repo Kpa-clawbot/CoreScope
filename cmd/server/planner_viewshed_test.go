@@ -83,10 +83,17 @@ func TestUserReachClassBounds(t *testing.T) {
 	}
 }
 
-func TestVerdictClass(t *testing.T) {
-	for v, want := range map[string]byte{"blocked": 1, "marginal": 2, "clear60": 3, "clear": 4} {
-		if got := verdictClass(v); got != want {
-			t.Errorf("verdictClass(%q) = %d, want %d", v, got, want)
+func TestRepeaterClass(t *testing.T) {
+	for _, tc := range []struct {
+		c    float64
+		want byte
+	}{
+		{1.5, 3}, {1, 3}, {0.6, 3}, {0, 3},
+		{-0.0001, 2}, {-0.2, 2},
+		{-0.2001, 1}, {-1, 1}, {-6, 1},
+	} {
+		if got := repeaterClass(tc.c); got != tc.want {
+			t.Errorf("repeaterClass(%v) = %d, want %d", tc.c, got, tc.want)
 		}
 	}
 }
@@ -155,11 +162,11 @@ func checkFlatViewshed(t *testing.T, p viewshedParams, clearWithinKm float64) {
 			if !ok {
 				t.Fatalf("analyzeLOS failed at %.2f km", d)
 			}
-			if want := verdictClass(res.Verdict); rep != want {
+			if want := repeaterClass(res.Clearance); rep != want {
 				t.Fatalf("cell (%d,%d) at %.2f km: repeaters %d, want %d (%s)", r, c, d, rep, want, res.Verdict)
 			}
-			if d <= clearWithinKm && rep != 4 {
-				t.Fatalf("cell (%d,%d) at %.2f km: repeaters %d, want 4 within %.0f km", r, c, d, rep, clearWithinKm)
+			if d <= clearWithinKm && rep != 3 {
+				t.Fatalf("cell (%d,%d) at %.2f km: repeaters %d, want 3 within %.0f km", r, c, d, rep, clearWithinKm)
 			}
 			cells = append(cells, cell{d, rep})
 		}
@@ -289,7 +296,7 @@ func checkViewshedAgainstLOS(t *testing.T, p viewshedParams, verdicts map[string
 			t.Fatalf("analyzeLOS failed for cell (%d,%d)", r, c)
 		}
 		verdicts[res.Verdict]++
-		if got, want := g.Cells[r*g.Cols+c]>>4, verdictClass(res.Verdict); got != want {
+		if got, want := g.Cells[r*g.Cols+c]>>4, repeaterClass(res.Clearance); got != want {
 			t.Errorf("cell (%d,%d) at %.2f km: repeaters %d, analyzeLOS %d (%s, clearance %.4f)",
 				r, c, d, got, want, res.Verdict, res.Clearance)
 		}

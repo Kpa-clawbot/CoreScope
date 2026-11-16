@@ -16,11 +16,15 @@
   };
   // Same bounds as the server (planner_api.go plannerMinAntennaM / plannerMaxAntennaM).
   var HEIGHT_MIN = 1, HEIGHT_MAX = 100;
-  var LAYERS = { users: 5, repeaters: 4 };          // highest class code per layer
+  var LAYERS = { users: 5, repeaters: 3 };          // highest class code per layer
   // Lowest painted code. Users class 1 (< 10%) and Repeaters class 1 (blocked)
   // are left transparent: they would otherwise tint the whole range disc.
   var LAYER_MIN = { users: 2, repeaters: 2 };
-  var VERDICT_CODE = { blocked: 1, marginal: 2, clear60: 3, clear: 4 };
+  // Repeaters classes from the first-Fresnel clearance, same bounds as the
+  // server (planner_viewshed.go repeaterClass / viewshedNearClearance).
+  var NEAR_PCT = -20;
+  var REP_CLASSES = ['', 'Blocked by terrain', 'Slightly blocked (up to 20% of the Fresnel zone)', 'Line of sight'];   // codes 0..3
+  var REP_NOTE = 'Checked against real links: line of sight predicted the links heard up to about 20 km; beyond that it is not enough on its own.';
   var USER_CLASSES = ['≥ 75%', '50–75%', '25–50%', '10–25%'];   // codes 5..2
   var HEIGHT_NOTE = 'Height mainly changes reach to other repeaters; user reach is measured and barely depends on height.';
   var OUTDATED_NOTE = 'Outdated, press Compute coverage.';
@@ -86,9 +90,10 @@
     return '/api/planner/viewshed?site=' + siteString(st.site) + '&h=' + st.h + '&rx=' + st.rx + '&range=' + st.range;
   }
 
-  function verdictText(v) {
-    var V = window.MeshLOS && window.MeshLOS.VERDICTS;
-    return V && V[v] ? V[v].detail : String(v || '');
+  function linkClass(k) {
+    if (!k || k.error || k.clearance_pct == null || !isFinite(Number(k.clearance_pct))) return 0;
+    var c = Number(k.clearance_pct);
+    return c >= 0 ? 3 : c >= NEAR_PCT ? 2 : 1;
   }
 
   /* ---------- HTML builders ---------- */
@@ -133,17 +138,15 @@
     var intro;
     if (layer === 'repeaters') {
       intro = 'Line of sight to another repeater at ' + Number(st.rx) + ' m:';
-      for (i = 4; i >= LAYER_MIN.repeaters; i--) {
-        var v = ['', 'blocked', 'marginal', 'clear60', 'clear'][i];
-        items.push('<li>' + swatch(layer, i) + verdictText(v) + '</li>');
-      }
+      for (i = LAYERS.repeaters; i >= LAYER_MIN.repeaters; i--) items.push('<li>' + swatch(layer, i) + REP_CLASSES[i] + '</li>');
     } else {
       var d50 = Number(cfgOf(cfg).userReach && cfgOf(cfg).userReach.d50Km);
       intro = 'Chance that a handheld at 1.5 m hears the site' +
         (isFinite(d50) && d50 > 0 ? ' (measured reach: 50% at ' + d50 + ' km; terrain removes deep shadow)' : '') + ':';
       for (i = 5; i >= LAYER_MIN.users; i--) items.push('<li>' + swatch(layer, i) + USER_CLASSES[5 - i] + '</li>');
     }
-    return '<p class="mc-pa-hint">' + intro + '</p><ul class="mc-pl-cov-legend" aria-label="Map legend">' + items.join('') + '</ul>';
+    return '<p class="mc-pa-hint">' + intro + '</p><ul class="mc-pl-cov-legend" aria-label="Map legend">' + items.join('') + '</ul>' +
+      (layer === 'repeaters' ? '<p class="mc-pa-hint">' + REP_NOTE + '</p>' : '');
   }
 
   function linksHtml(d, esc) {
@@ -153,8 +156,9 @@
     out += '<p class="mc-pa-label">Links to known repeaters</p><ul class="mc-pl-cov-links">';
     links.forEach(function (l) {
       var k = l.link || {};
-      var verdict = k.error ? 'No terrain data' : verdictText(k.verdict);
-      out += '<li>' + (k.error ? '' : swatch('repeaters', VERDICT_CODE[k.verdict] || 0)) +
+      var cls = linkClass(k);
+      var verdict = cls ? REP_CLASSES[cls] : 'No terrain data';
+      out += '<li>' + (cls ? swatch('repeaters', cls) : '') +
         '<span>' + esc(l.name || String(l.pubkey || '').slice(0, 8) || 'Unnamed repeater') + ' · ' +
         Number(k.distance_km).toFixed(1) + ' km · ' + esc(verdict) + '</span></li>';
     });
@@ -253,9 +257,10 @@
       if (!data || outdated || !state.site || state.layer !== 'repeaters') return;
       (data.links || []).forEach(function (l) {
         var k = l.link || {};
-        if (k.error) return;
+        var cls = linkClass(k);
+        if (!cls) return;
         L.polyline([[state.site.lat, state.site.lon], [l.lat, l.lon]], {
-          className: 'mc-pl-cov-link mc-pl-cov-link-' + (VERDICT_CODE[k.verdict] || 0), interactive: false
+          className: 'mc-pl-cov-link mc-pl-cov-link-' + cls, interactive: false
         }).addTo(linkLayer);
       });
     }
@@ -407,7 +412,8 @@
       stateToHash: stateToHash,
       buildViewshedUrl: buildViewshedUrl,
       legendHtml: legendHtml,
-      linksHtml: linksHtml
+      linksHtml: linksHtml,
+      linkClass: linkClass
     }
   };
 })();

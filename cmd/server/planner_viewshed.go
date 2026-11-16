@@ -65,13 +65,22 @@ func userReachClass(p float64) byte {
 	return 5
 }
 
-func verdictClass(verdict string) byte {
-	switch verdict {
-	case "clear":
-		return 4
-	case "clear60":
+// viewshedNearClearance is the lower bound of the Repeaters "slightly
+// blocked" class: the line of sight at most this fraction of the first
+// Fresnel radius under terrain. Calibrated loosely on one repeater
+// (2026-11-16, 17 heard links): every link heard within 16 km had a clearance
+// of 2% to 54%, so the textbook 60%/100% classes never mark working links on
+// SRTM; one link was heard at -20%.
+const viewshedNearClearance = -0.2
+
+// repeaterClass maps a first-Fresnel clearance (1 = fully clear) to the
+// Repeaters class: 3 line of sight (>= 0), 2 slightly blocked (down to
+// viewshedNearClearance), 1 blocked.
+func repeaterClass(c float64) byte {
+	switch {
+	case c >= 0:
 		return 3
-	case "marginal":
+	case c >= viewshedNearClearance:
 		return 2
 	}
 	return 1
@@ -119,7 +128,7 @@ func computeViewshed(ctx context.Context, v terrainView, p viewshedParams, progr
 					users = 1
 				}
 			}
-			g.Cells[r*cols+c] = users | verdictClass(losVerdict(cr))<<4
+			g.Cells[r*cols+c] = users | repeaterClass(cr)<<4
 		}
 		if e.err != nil {
 			return viewshedGrid{}, e.err

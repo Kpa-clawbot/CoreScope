@@ -289,7 +289,6 @@
   --pl-cov-rep-1: var(--status-red);
   --pl-cov-rep-2: var(--status-amber);
   --pl-cov-rep-3: var(--status-green);
-  --pl-cov-rep-4: var(--status-green-text);
   --pl-cov-opacity: 0.5;
   --pl-cov-opacity-outdated: 0.2;
   /* #1719 — `--skew-badge-no-clock-bg` carries the muted "no clock data"
@@ -438,7 +437,6 @@
     --pl-cov-rep-1: var(--status-red);
     --pl-cov-rep-2: var(--status-amber);
     --pl-cov-rep-3: var(--palette-green-300);
-    --pl-cov-rep-4: var(--status-green-text);
     --pl-cov-opacity: 0.55;
     --pl-cov-opacity-outdated: 0.25;
     --path-inspector-speculative: #f59e0b;
@@ -519,7 +517,6 @@
   --pl-cov-rep-1: var(--status-red);
   --pl-cov-rep-2: var(--status-amber);
   --pl-cov-rep-3: var(--palette-green-300);
-  --pl-cov-rep-4: var(--status-green-text);
   --pl-cov-opacity: 0.55;
   --pl-cov-opacity-outdated: 0.25;
   --status-info: #60a5fa;

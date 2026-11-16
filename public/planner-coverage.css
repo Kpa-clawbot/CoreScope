@@ -13,7 +13,6 @@
 .mc-pl-cov-sw-rep-1 { background: var(--pl-cov-rep-1); }
 .mc-pl-cov-sw-rep-2 { background: var(--pl-cov-rep-2); }
 .mc-pl-cov-sw-rep-3 { background: var(--pl-cov-rep-3); }
-.mc-pl-cov-sw-rep-4 { background: var(--pl-cov-rep-4); }
 
 .leaflet-overlay-pane path.mc-pl-cov-site { stroke: var(--accent); stroke-width: 3; fill: var(--surface-2); fill-opacity: 1; }
 .leaflet-overlay-pane path.mc-pl-cov-link {
@@ -23,4 +22,3 @@
 .leaflet-overlay-pane path.mc-pl-cov-link-1 { stroke: var(--pl-cov-rep-1); stroke-dasharray: 2 9; }
 .leaflet-overlay-pane path.mc-pl-cov-link-2 { stroke: var(--pl-cov-rep-2); stroke-dasharray: 12 8; }
 .leaflet-overlay-pane path.mc-pl-cov-link-3 { stroke: var(--pl-cov-rep-3); }
-.leaflet-overlay-pane path.mc-pl-cov-link-4 { stroke: var(--pl-cov-rep-4); }

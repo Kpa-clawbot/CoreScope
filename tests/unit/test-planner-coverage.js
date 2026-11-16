@@ -81,7 +81,7 @@ function fakeCanvas(log) {
 }
 const VARS = {
   '--pl-cov-user-2': 'orange', '--pl-cov-user-3': 'yellow', '--pl-cov-user-4': 'lime', '--pl-cov-user-5': 'green',
-  '--pl-cov-rep-1': 'red', '--pl-cov-rep-2': 'orange', '--pl-cov-rep-3': 'lime', '--pl-cov-rep-4': 'green',
+  '--pl-cov-rep-1': 'red', '--pl-cov-rep-2': 'orange', '--pl-cov-rep-3': 'lime',
   '--pl-cov-opacity': ' 0.5', '--pl-cov-opacity-outdated': ' 0.2'
 };
 const RGB = { red: [255, 0, 0, 255], orange: [255, 128, 0, 255], yellow: [255, 255, 0, 255], lime: [128, 255, 0, 255], green: [0, 128, 0, 255] };
@@ -125,7 +125,8 @@ test('cellCode splits the nibbles per layer', () => {
 test('colorVarFor names the CSS variable; 0 and out-of-range are transparent', () => {
   assert.strictEqual(I.colorVarFor('users', 3), '--pl-cov-user-3');
   assert.strictEqual(I.colorVarFor('users', 1), null, 'the <10% class is not painted');
-  assert.strictEqual(I.colorVarFor('repeaters', 4), '--pl-cov-rep-4');
+  assert.strictEqual(I.colorVarFor('repeaters', 3), '--pl-cov-rep-3');
+  assert.strictEqual(I.colorVarFor('repeaters', 4), null, 'three repeater classes since the 2026-11-16 calibration');
   assert.strictEqual(I.colorVarFor('repeaters', 1), null, 'the blocked class is not painted');
   assert.strictEqual(I.colorVarFor('users', 0), null);
   assert.strictEqual(I.colorVarFor('repeaters', 0), null);
@@ -252,7 +253,33 @@ test('users legend has no <10% swatch', () => {
 test('repeaters legend has no blocked swatch', () => {
   const html = I.legendHtml('repeaters', { rx: 5 }, CFG);
   assert(html.indexOf('sw-rep-1') < 0, html);
-  assert(html.indexOf('sw-rep-2') >= 0, html);
+  assert(html.indexOf('sw-rep-4') < 0, html);
+  assert(html.indexOf('sw-rep-3') >= 0 && /Line of sight/.test(html), html);
+  assert(html.indexOf('sw-rep-2') >= 0 && /Slightly blocked/.test(html), html);
+  assert(/20 km/.test(html), 'says line of sight alone stops predicting links beyond about 20 km');
+});
+
+test('linkClass follows the grid classes from clearance_pct', () => {
+  const c = (k) => I.linkClass(k);
+  assert.strictEqual(c({ clearance_pct: 54, verdict: 'marginal' }), 3);
+  assert.strictEqual(c({ clearance_pct: 0, verdict: 'marginal' }), 3);
+  assert.strictEqual(c({ clearance_pct: -0.1, verdict: 'blocked' }), 2);
+  assert.strictEqual(c({ clearance_pct: -20, verdict: 'blocked' }), 2);
+  assert.strictEqual(c({ clearance_pct: -20.1, verdict: 'blocked' }), 1);
+  assert.strictEqual(c({ error: 'no terrain' }), 0);
+  assert.strictEqual(c({}), 0);
+});
+
+test('links list names the class, not the textbook verdict', () => {
+  const d = { links: [
+    { pubkey: 'a', name: 'A', link: { distance_km: 4, clearance_pct: 20, verdict: 'marginal' } },
+    { pubkey: 'b', name: 'B', link: { distance_km: 9, clearance_pct: -10, verdict: 'blocked' } },
+    { pubkey: 'c', name: 'C', link: { distance_km: 20, clearance_pct: -90, verdict: 'blocked' } }
+  ] };
+  const html = I.linksHtml(d, esc);
+  assert(/sw-rep-3[^]*A · 4\.0 km · Line of sight/.test(html), html);
+  assert(/sw-rep-2[^]*B · 9\.0 km · Slightly blocked/.test(html), html);
+  assert(/sw-rep-1[^]*C · 20\.0 km · Blocked by terrain/.test(html), html);
 });
 
 test('layer switch repaints without another fetch', async () => {
