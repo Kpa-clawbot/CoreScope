@@ -7,6 +7,7 @@
  *   GET /api/planner/profile   → canned legs (flat, 900 m ridge)
  *   GET /api/planner/relay     → job protocol: 202 then 200
  *   GET /api/planner/coverage  → job protocol: 202 then 200, or an error
+ *   GET /api/planner/viewshed  → job protocol: 202 then 200 (small canned grid)
  * Negative case: without the config stub the page shows its disabled state.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-planner-e2e.js
@@ -132,6 +133,23 @@ function areaBody() {
       joins_components: [1],
     }],
     warnings: [], truncated: false, computed_at: new Date().toISOString(),
+  };
+}
+
+// 4x4 grid, row 0 north; byte = users | repeaters << 4.
+function viewshedBody() {
+  const rows = 4, cols = 4;
+  const b = Buffer.alloc(rows * cols);
+  for (let i = 0; i < b.length; i++) b[i] = ((i % 5) + 1) | (((i % 4) + 1) << 4);
+  return {
+    source: 'e2e-stub',
+    params: { site: { lat: 30.3, lon: -97.9 }, antenna_m: 10, rx_antenna_m: 5, range_km: 30, frequency_mhz: 910.525, k_factor: 1.3333, user_reach: { d50Km: 2.7, slope: 0.3 } },
+    bbox: [30.2, -98.0, 30.4, -97.8], rows, cols, cell_km: 5, cells: b.toString('base64'),
+    links: [
+      { pubkey: 'aa'.repeat(32), name: 'Cov Alpha', lat: 30.25, lon: -97.95, link: { distance_km: 7, clearance_pct: 90, verdict: 'clear', worst_km: 3, obstruction_m: 0 } },
+      { pubkey: 'bb'.repeat(32), name: 'Cov Bravo', lat: 30.35, lon: -97.85, link: { distance_km: 9, clearance_pct: -20, verdict: 'blocked', worst_km: 4, obstruction_m: 80 } },
+    ],
+    warnings: [], truncated: false,
   };
 }
 
@@ -339,6 +357,55 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
       const links = await page.locator('.mc-pa-links').textContent();
       assert(links.includes(XSS), 'links text: ' + links);
       assert(await page.locator('img[src="x"]').count() === 0, 'injected <img> found');
+    });
+    await page.close();
+  }
+
+  // ── Coverage ──
+  {
+    const page = await newPage(true);
+    const vs = await stubJob(page, '**/api/planner/viewshed*', [job202(), { fulfill: json(200, viewshedBody()) }]);
+    await openPlanner(page, '?mode=coverage');
+    const overlays = () => page.locator('img.leaflet-image-layer').count();
+
+    await step('coverage: map click requests a viewshed, overlay and legend appear', async () => {
+      assert(await overlays() === 0, 'overlay before click');
+      const box = await page.locator('.leaflet-container').boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await page.waitForSelector('img.leaflet-image-layer');
+      assert(vs.count === 2, 'viewshed requests (202 + 200): ' + vs.count);
+      assert(await page.locator('.mc-pl-cov-legend li').count() === 5, 'users legend rows');
+      assert(/[?&]site=/.test(await page.evaluate(() => location.hash)), 'site in hash');
+    });
+
+    await step('coverage: Repeaters layer lists links, no new viewshed request', async () => {
+      const before = vs.count;
+      await page.locator('[data-f="layer"][value="repeaters"]').check();
+      await page.waitForSelector('.mc-pl-cov-links li');
+      assert(await page.locator('.mc-pl-cov-links li').count() === 2, 'link rows');
+      assert(vs.count === before, 'layer switch refetched: ' + (vs.count - before));
+      assert(/[?&]layer=repeaters(&|$)/.test(await page.evaluate(() => location.hash)), 'layer in hash');
+      assert(await overlays() === 1, 'overlay kept');
+    });
+
+    await step('coverage: deep link restores site, Repeaters layer and overlay', async () => {
+      const hash = await page.evaluate(() => location.hash);
+      const m = hash.match(/[?&]site=([^&]+)/);
+      assert(m, 'no site in hash: ' + hash);
+      const p2 = await newPage(true);
+      await stubJob(p2, '**/api/planner/viewshed*', [{ fulfill: json(200, viewshedBody()) }]);
+      await openPlanner(p2, '?mode=coverage&site=' + m[1] + '&layer=repeaters');
+      await p2.waitForSelector('img.leaflet-image-layer');
+      assert(await p2.locator('path.mc-pl-cov-site').count() === 1, 'site marker');
+      assert(await p2.locator('[data-f="layer"][value="repeaters"]').isChecked(), 'Repeaters selected');
+      await p2.waitForSelector('.mc-pl-cov-links li');
+      await p2.close();
+    });
+
+    await step('coverage: switching to Chain removes the overlay', async () => {
+      await page.locator('.mc-pl-tab[data-mode="chain"]').click();
+      await page.waitForFunction(() => document.querySelectorAll('img.leaflet-image-layer').length === 0);
+      assert(await overlays() === 0, 'overlay still present');
     });
     await page.close();
   }
