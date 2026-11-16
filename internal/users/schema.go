@@ -170,6 +170,26 @@ var migrations = [][]string{
 		`ALTER TABLE observer_bindings ADD COLUMN confirmed_at INTEGER`,
 		`UPDATE observer_bindings SET confirmed_at = bound_at WHERE bound_by = 'auto'`,
 	},
+	// v9: repeater claims and community-maintained repeater details.
+	{
+		`CREATE TABLE repeater_claims (
+			pubkey TEXT NOT NULL,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			claimed_at INTEGER NOT NULL,
+			PRIMARY KEY (pubkey, user_id)
+		)`,
+		`CREATE INDEX repeater_claims_user ON repeater_claims(user_id)`,
+		`CREATE TABLE repeater_info (
+			pubkey TEXT PRIMARY KEY,
+			height_m REAL,
+			gain_dbi REAL NOT NULL DEFAULT 0,
+			status TEXT CHECK (status IN ('active','maintenance','decommissioned')),
+			power TEXT CHECK (power IN ('mains','battery','solar')),
+			notes TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL,
+			updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+		)`,
+	},
 }
 
 func (s *Store) migrate() error {
