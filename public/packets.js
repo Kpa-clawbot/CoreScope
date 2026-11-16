@@ -3529,10 +3529,13 @@
               || document.querySelector('#pktTable tbody tr[data-id="' + esc + '"]');
         },
         onClose: function () {
+          // Only closing this preview returns to the list; keep any new route.
+          if (location.hash.split('?')[0] === '#/packets/' + (hash || id)) {
+            history.replaceState(null, '', '#/packets');
+            if (window.setRouteTitle) window.setRouteTitle('packets');
+          }
           selectedId = null;
           selectedObservationId = null;
-          history.replaceState(null, '', '#/packets');
-          if (window.setRouteTitle) window.setRouteTitle('packets');
           renderTableRows();
         }
       });
