@@ -12,6 +12,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 
 const fs = require('fs');
 const path = require('path');
@@ -95,6 +96,7 @@ let env;
 try {
   env = makeSandbox();
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
 } catch (e) {

@@ -14,6 +14,7 @@
  */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const assert = require('assert');
 
@@ -47,6 +48,7 @@ function makeCtx(fetchImpl) {
     Map, Set,
   };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   // Provide the no-op fetch('/api/config/cache') hit that app.js makes
   // on module load by returning a thenable that ignores.
   const src = fs.readFileSync('public/app.js', 'utf8');

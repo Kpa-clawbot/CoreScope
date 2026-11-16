@@ -2,6 +2,7 @@
  * loaded in a vm sandbox, same pattern as test-frontend-helpers.js. */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
@@ -80,6 +81,7 @@ function makeEnv(routes) {
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/auth.js'), 'utf8'), ctx);
   return { win, els, events, calls, loc };
 }
@@ -96,6 +98,7 @@ test('inert when the server does not advertise userManagement', async () => {
     console, Promise, JSON, String, Object, setTimeout, clearTimeout, CustomEvent: function () {},
     escapeHtml: loadEscapeHtml(), fetch() { calls.push(1); return Promise.reject(new Error('no')); } };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/auth.js'), 'utf8'), ctx);
   await win.CSAuth.ready();
   assert.strictEqual(win.CSAuth.isEnabled(), false);
@@ -310,6 +313,7 @@ function sliceBetween(file, from, to) {
 function loadNav(file, from, to, fn, win) {
   const sb = { window: Object.assign({ addEventListener() {} }, win), console };
   vm.createContext(sb);
+  loadApiBase(sb);
   vm.runInContext(sliceBetween(file, from, to) + '\nthis.fn = ' + fn + ';', sb);
   return sb.fn;
 }
@@ -378,6 +382,7 @@ function loadAccount(hash, routes, extraWin) {
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } },
     escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, viewGeneration: () => 0, console };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   Object.assign(CSAuth, loadAuthHelpers(ctx));
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/account.js'), 'utf8'), ctx);
   return { setRequest(f) { override = f; }, doc, t: ctx.window.CSAccount._test, els, calls, loc, user, pages, logouts, replaced,
@@ -895,6 +900,7 @@ function loadAdmin(hash, routes, opts) {
     confirm() { return true; }, debounce: (opts && opts.debounce) || function (fn) { return fn; },
     escapeHtml: loadEscapeHtml(), console };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   Object.assign(CSAuth, loadAuthHelpers(ctx));
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/admin-users.js'), 'utf8'), ctx);
   const app = { innerHTML: '', querySelector() { return els.umPage || (els.umPage = mk('umPage')); } };
@@ -1107,6 +1113,7 @@ function loadPerf() {
     performance: { now: () => 0 }, registerPage() {} };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/perf.js'), 'utf8'), ctx);
   return ctx;
 }

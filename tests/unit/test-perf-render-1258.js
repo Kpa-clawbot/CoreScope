@@ -7,6 +7,7 @@
  */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const assert = require('assert');
 
@@ -55,7 +56,8 @@ function makeSandbox(opts = {}) {
 function loadPerf() {
   const sb = makeSandbox();
   const code = fs.readFileSync('public/perf.js', 'utf8');
-  vm.runInNewContext(code, sb.ctx);
+  loadApiBase(sb.ctx);
+  vm.runInContext(code, sb.ctx);
   return sb;
 }
 
