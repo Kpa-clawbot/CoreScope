@@ -80,7 +80,7 @@ function fakeCanvas(log) {
   return c;
 }
 const VARS = {
-  '--pl-cov-user-1': 'red', '--pl-cov-user-2': 'orange', '--pl-cov-user-3': 'yellow', '--pl-cov-user-4': 'lime', '--pl-cov-user-5': 'green',
+  '--pl-cov-user-2': 'orange', '--pl-cov-user-3': 'yellow', '--pl-cov-user-4': 'lime', '--pl-cov-user-5': 'green',
   '--pl-cov-rep-1': 'red', '--pl-cov-rep-2': 'orange', '--pl-cov-rep-3': 'lime', '--pl-cov-rep-4': 'green',
   '--pl-cov-opacity': ' 0.5'
 };
@@ -124,6 +124,7 @@ test('cellCode splits the nibbles per layer', () => {
 
 test('colorVarFor names the CSS variable; 0 and out-of-range are transparent', () => {
   assert.strictEqual(I.colorVarFor('users', 3), '--pl-cov-user-3');
+  assert.strictEqual(I.colorVarFor('users', 1), null, 'the <10% class is not painted');
   assert.strictEqual(I.colorVarFor('repeaters', 4), '--pl-cov-rep-4');
   assert.strictEqual(I.colorVarFor('users', 0), null);
   assert.strictEqual(I.colorVarFor('repeaters', 0), null);
@@ -159,7 +160,7 @@ test('buildViewshedUrl: fixed key order, 4 decimals', () => {
 function result(over) {
   return Object.assign({
     source: 'srtm', params: {}, bbox: [51, 5, 51.2, 5.4], rows: 2, cols: 2, cell_km: 0.2,
-    cells: Buffer.from([0x15, 0x24, 0x33, 0x00]).toString('base64'),
+    cells: Buffer.from([0x15, 0x24, 0x31, 0x00]).toString('base64'),
     links: [{ pubkey: 'ab', name: 'Rep <b>', lat: 51.1, lon: 5.2, link: { distance_km: 4.2, clearance_pct: 80, verdict: 'clear60' } }],
     warnings: [], truncated: false
   }, over || {});
@@ -232,8 +233,16 @@ test('paint: users layer colours each cell from its nibble; code 0 stays transpa
   const px = (i) => Array.from(img.data.slice(i * 4, i * 4 + 4));
   assert.deepStrictEqual(px(0), RGB.green);   // 0x15 users 5
   assert.deepStrictEqual(px(1), RGB.lime);    // 0x24 users 4
+  assert.deepStrictEqual(px(2), [0, 0, 0, 0]); // 0x31 users 1 (<10%) is not painted
   assert.deepStrictEqual(px(3), [0, 0, 0, 0]); // 0x00 transparent
   t.inst.unmount();
+});
+
+test('users legend has no <10% swatch', () => {
+  const html = I.legendHtml('users', { rx: 5 }, CFG);
+  assert(html.indexOf('< 10%') < 0, html);
+  assert(html.indexOf('sw-user-1') < 0, html);
+  assert(html.indexOf('10–25%') >= 0);
 });
 
 test('layer switch repaints without another fetch', async () => {

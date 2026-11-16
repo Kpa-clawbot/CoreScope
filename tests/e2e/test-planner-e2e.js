@@ -374,7 +374,7 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
       await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
       await page.waitForSelector('img.leaflet-image-layer');
       assert(vs.count === 2, 'viewshed requests (202 + 200): ' + vs.count);
-      assert(await page.locator('.mc-pl-cov-legend li').count() === 5, 'users legend rows');
+      assert(await page.locator('.mc-pl-cov-legend li').count() === 4, 'users legend rows');
       assert(/[?&]site=/.test(await page.evaluate(() => location.hash)), 'site in hash');
     });
 

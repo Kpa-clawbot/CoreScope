@@ -17,8 +17,11 @@
   // Same bounds as the server (planner_api.go plannerMinAntennaM / plannerMaxAntennaM).
   var HEIGHT_MIN = 1, HEIGHT_MAX = 100;
   var LAYERS = { users: 5, repeaters: 4 };          // highest class code per layer
+  // Lowest painted code. Users class 1 (< 10%) is left transparent: it would
+  // otherwise tint the whole range disc.
+  var LAYER_MIN = { users: 2, repeaters: 1 };
   var VERDICT_CODE = { blocked: 1, marginal: 2, clear60: 3, clear: 4 };
-  var USER_CLASSES = ['≥ 75%', '50–75%', '25–50%', '10–25%', '< 10%'];   // codes 5..1
+  var USER_CLASSES = ['≥ 75%', '50–75%', '25–50%', '10–25%'];   // codes 5..2
   var HEIGHT_NOTE = 'Height mainly changes reach to other repeaters; user reach is measured and barely depends on height.';
   var DISCLAIMER = 'An estimate from a terrain model (SRTM ~90 m) and a measured reach curve, not a survey.';
   var PANE = 'mc-pl-cov';
@@ -45,7 +48,7 @@
   }
   function cellCode(b, layer) { return layer === 'repeaters' ? (b >> 4) & 15 : b & 15; }
   function colorVarFor(layer, code) {
-    if (!(code >= 1 && code <= LAYERS[layer])) return null;
+    if (!(code >= LAYER_MIN[layer] && code <= LAYERS[layer])) return null;
     return '--pl-cov-' + (layer === 'repeaters' ? 'rep' : 'user') + '-' + code;
   }
 
@@ -135,7 +138,7 @@
       var d50 = Number(cfgOf(cfg).userReach && cfgOf(cfg).userReach.d50Km);
       intro = 'Chance that a handheld at 1.5 m hears the site' +
         (isFinite(d50) && d50 > 0 ? ' (measured reach: 50% at ' + d50 + ' km; terrain removes deep shadow)' : '') + ':';
-      for (i = 5; i >= 1; i--) items.push('<li>' + swatch(layer, i) + USER_CLASSES[5 - i] + '</li>');
+      for (i = 5; i >= 2; i--) items.push('<li>' + swatch(layer, i) + USER_CLASSES[5 - i] + '</li>');
     }
     return '<p class="mc-pa-hint">' + intro + '</p><ul class="mc-pl-cov-legend" aria-label="Map legend">' + items.join('') + '</ul>';
   }
@@ -202,7 +205,7 @@
     function readColors(layer) {
       var cs = getComputedStyle(document.documentElement);
       var out = [null];
-      for (var code = 1; code <= LAYERS[layer]; code++) out.push(cs.getPropertyValue(colorVarFor(layer, code)).trim() || null);
+      for (var code = 1; code <= LAYERS[layer]; code++) out.push(code < LAYER_MIN[layer] ? null : (cs.getPropertyValue(colorVarFor(layer, code)).trim() || null));
       return { colors: out, opacity: parseFloat(cs.getPropertyValue('--pl-cov-opacity')) };
     }
     // CSS colour string → RGBA bytes, through the canvas so any CSS colour syntax works.

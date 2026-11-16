@@ -282,7 +282,6 @@
   --status-amber-text: #92400e;
   /* Planner Coverage tab: Users layer red (<10%) to green (>=75%); Repeaters
      layer blocked, marginal, clear60, clear on the route LOS verdict hues. */
-  --pl-cov-user-1: var(--palette-red-500);
   --pl-cov-user-2: var(--palette-amber-600);
   --pl-cov-user-3: var(--palette-amber-400);
   --pl-cov-user-4: var(--palette-green-400);
@@ -431,7 +430,6 @@
     --status-amber: #f59e0b;
     --status-amber-light: #422006;
     --status-amber-text: #fcd34d;
-    --pl-cov-user-1: var(--palette-red-400);
     --pl-cov-user-2: var(--palette-amber-500);
     --pl-cov-user-3: var(--palette-amber-300);
     --pl-cov-user-4: var(--palette-green-300);
@@ -512,7 +510,6 @@
   --status-amber: #f59e0b;
   --status-amber-light: #422006;
   --status-amber-text: #fcd34d;
-  --pl-cov-user-1: var(--palette-red-400);
   --pl-cov-user-2: var(--palette-amber-500);
   --pl-cov-user-3: var(--palette-amber-300);
   --pl-cov-user-4: var(--palette-green-300);

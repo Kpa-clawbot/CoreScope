@@ -6,7 +6,6 @@
 .mc-pl-cov-legend, .mc-pl-cov-links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .mc-pl-cov-legend li, .mc-pl-cov-links li { display: flex; align-items: center; gap: 8px; }
 .mc-pl-cov-sw { flex: none; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); }
-.mc-pl-cov-sw-user-1 { background: var(--pl-cov-user-1); }
 .mc-pl-cov-sw-user-2 { background: var(--pl-cov-user-2); }
 .mc-pl-cov-sw-user-3 { background: var(--pl-cov-user-3); }
 .mc-pl-cov-sw-user-4 { background: var(--pl-cov-user-4); }
