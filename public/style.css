@@ -280,8 +280,9 @@
   --status-amber: #f59e0b;
   --status-amber-light: #fef3c7;
   --status-amber-text: #92400e;
-  /* Planner Coverage tab: Users layer red (<10%) to green (>=75%); Repeaters
-     layer blocked, marginal, clear60, clear on the route LOS verdict hues. */
+  /* Planner Coverage tab: Users layer orange (10-25%) to green (>=75%), <10%
+     unpainted; Repeaters layer blocked (dots only), slightly blocked, line of
+     sight on the status red, amber and green hues. */
   --pl-cov-user-2: var(--palette-amber-600);
   --pl-cov-user-3: var(--palette-amber-400);
   --pl-cov-user-4: var(--palette-green-400);

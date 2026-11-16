@@ -90,6 +90,10 @@
     return '/api/planner/viewshed?site=' + siteString(st.site) + '&h=' + st.h + '&rx=' + st.rx + '&range=' + st.range;
   }
 
+  // From the link's clearance_pct, which the server rounds to 0.1%: within
+  // 0.05% of a bound a link can land one class off the raw-clearance grid
+  // (a cell centre is never exactly at the repeater anyway). List swatch,
+  // line and dot all use this, so they always agree with each other.
   function linkClass(k) {
     if (!k || k.error || k.clearance_pct == null || !isFinite(Number(k.clearance_pct))) return 0;
     var c = Number(k.clearance_pct);

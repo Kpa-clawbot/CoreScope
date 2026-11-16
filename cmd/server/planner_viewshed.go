@@ -70,7 +70,8 @@ func userReachClass(p float64) byte {
 // Fresnel radius under terrain. Calibrated loosely on one repeater
 // (2026-11-16, 17 heard links): every link heard within 16 km had a clearance
 // of 2% to 54%, so the textbook 60%/100% classes never mark working links on
-// SRTM; one link was heard at -20%.
+// SRTM; within 20 km, 12 of 15 links with clearance >= 0 were heard against 1
+// of 8 below 0; one link was heard at -20%.
 const viewshedNearClearance = -0.2
 
 // repeaterClass maps a first-Fresnel clearance (1 = fully clear) to the
