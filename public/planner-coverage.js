@@ -17,9 +17,9 @@
   // Same bounds as the server (planner_api.go plannerMinAntennaM / plannerMaxAntennaM).
   var HEIGHT_MIN = 1, HEIGHT_MAX = 100;
   var LAYERS = { users: 5, repeaters: 4 };          // highest class code per layer
-  // Lowest painted code. Users class 1 (< 10%) is left transparent: it would
-  // otherwise tint the whole range disc.
-  var LAYER_MIN = { users: 2, repeaters: 1 };
+  // Lowest painted code. Users class 1 (< 10%) and Repeaters class 1 (blocked)
+  // are left transparent: they would otherwise tint the whole range disc.
+  var LAYER_MIN = { users: 2, repeaters: 2 };
   var VERDICT_CODE = { blocked: 1, marginal: 2, clear60: 3, clear: 4 };
   var USER_CLASSES = ['≥ 75%', '50–75%', '25–50%', '10–25%'];   // codes 5..2
   var HEIGHT_NOTE = 'Height mainly changes reach to other repeaters; user reach is measured and barely depends on height.';
@@ -133,7 +133,7 @@
     var intro;
     if (layer === 'repeaters') {
       intro = 'Line of sight to another repeater at ' + Number(st.rx) + ' m:';
-      for (i = 4; i >= 1; i--) {
+      for (i = 4; i >= LAYER_MIN.repeaters; i--) {
         var v = ['', 'blocked', 'marginal', 'clear60', 'clear'][i];
         items.push('<li>' + swatch(layer, i) + verdictText(v) + '</li>');
       }
@@ -141,7 +141,7 @@
       var d50 = Number(cfgOf(cfg).userReach && cfgOf(cfg).userReach.d50Km);
       intro = 'Chance that a handheld at 1.5 m hears the site' +
         (isFinite(d50) && d50 > 0 ? ' (measured reach: 50% at ' + d50 + ' km; terrain removes deep shadow)' : '') + ':';
-      for (i = 5; i >= 2; i--) items.push('<li>' + swatch(layer, i) + USER_CLASSES[5 - i] + '</li>');
+      for (i = 5; i >= LAYER_MIN.users; i--) items.push('<li>' + swatch(layer, i) + USER_CLASSES[5 - i] + '</li>');
     }
     return '<p class="mc-pa-hint">' + intro + '</p><ul class="mc-pl-cov-legend" aria-label="Map legend">' + items.join('') + '</ul>';
   }

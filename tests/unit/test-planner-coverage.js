@@ -126,6 +126,7 @@ test('colorVarFor names the CSS variable; 0 and out-of-range are transparent', (
   assert.strictEqual(I.colorVarFor('users', 3), '--pl-cov-user-3');
   assert.strictEqual(I.colorVarFor('users', 1), null, 'the <10% class is not painted');
   assert.strictEqual(I.colorVarFor('repeaters', 4), '--pl-cov-rep-4');
+  assert.strictEqual(I.colorVarFor('repeaters', 1), null, 'the blocked class is not painted');
   assert.strictEqual(I.colorVarFor('users', 0), null);
   assert.strictEqual(I.colorVarFor('repeaters', 0), null);
   assert.strictEqual(I.colorVarFor('users', 6), null);
@@ -248,6 +249,12 @@ test('users legend has no <10% swatch', () => {
   assert(html.indexOf('10–25%') >= 0);
 });
 
+test('repeaters legend has no blocked swatch', () => {
+  const html = I.legendHtml('repeaters', { rx: 5 }, CFG);
+  assert(html.indexOf('sw-rep-1') < 0, html);
+  assert(html.indexOf('sw-rep-2') >= 0, html);
+});
+
 test('layer switch repaints without another fetch', async () => {
   const t = mountWith({ site: '51,5' });
   t.calls[0].d.resolve(result());
@@ -258,7 +265,7 @@ test('layer switch repaints without another fetch', async () => {
   assert.strictEqual(t.m.log.overlays.length, 2, 'repainted');
   const img = t.m.log.images[1];
   const px = (i) => Array.from(img.data.slice(i * 4, i * 4 + 4));
-  assert.deepStrictEqual(px(0), RGB.red);     // 0x15 repeaters 1 (blocked)
+  assert.deepStrictEqual(px(0), [0, 0, 0, 0]); // 0x15 repeaters 1 (blocked) is not painted
   assert.deepStrictEqual(px(3), [0, 0, 0, 0]);
   const lines = t.m.log.shapes.filter((s) => s.kind === 'line');
   assert.strictEqual(lines.length, 1, 'repeaters layer draws the link line');
