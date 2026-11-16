@@ -1915,17 +1915,20 @@ func TestPlannerViewshedSkipsStale(t *testing.T) {
 func TestPlannerViewshedTruncatedOnlyWhenInRangeLost(t *testing.T) {
 	h := newPlannerHarness(t)
 	ns := plannerTestNodes()
-	// Mesa (aa02) sits 13 km away: inside the square view of range=10, beyond
-	// the radius. 301 repeaters stacked there overflow the cap.
+	// Inside the square view of range=10 (north edge 30.1999) but ~12.8 km from
+	// the site, beyond the radius: 301 repeaters there overflow the cap.
 	for i := 0; i <= plannerMaxNodes; i++ {
 		ns = append(ns, nodeInfo{PublicKey: fmt.Sprintf("ee%04d", i), Name: "Corner", Role: "repeater",
-			Lat: 30.20 + float64(i)*0.00001, Lon: -97.0, HasGPS: true, LastSeen: plannerTestStart})
+			Lat: 30.195 + float64(i)*0.00001, Lon: -97.0, HasGPS: true, LastSeen: plannerTestStart})
 	}
 	h.data.setNodes(ns)
 	w := h.pollUntil(t, plannerViewshedPath+"&range=10", "198.51.100.123", http.StatusOK)
 	resp, _ := decodeViewshed(t, w)
 	if len(resp.Links) != 1 || resp.Links[0].PubKey != "aa01" {
 		t.Fatalf("links %+v, want only aa01", resp.Links)
+	}
+	if len(resp.Links) != 1 {
+		t.Fatalf("links %+v", resp.Links)
 	}
 	if resp.Truncated {
 		t.Fatal("truncated set although only nodes beyond range were dropped")

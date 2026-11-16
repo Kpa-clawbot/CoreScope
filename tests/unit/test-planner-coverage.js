@@ -203,13 +203,14 @@ test('mount with a site in the hash fetches once with the state URL', () => {
   t.inst.unmount();
 });
 
-test('stale result: first answer after setSite is ignored and its signal aborted', async () => {
+test('stale result: a Compute click supersedes the in-flight run and its answer is ignored', async () => {
   const t = mountWith({ site: '51.0023,5.6708' });
   const first = t.calls[0];
   t.inst.setSite({ lat: 51.1, lon: 5.3, node: null });
   assert.strictEqual(t.calls.length, 1, 'setSite does not fetch');
-  assert.strictEqual(first.opts.signal.aborted, true, 'first request aborted');
+  assert.strictEqual(first.opts.signal.aborted, false, 'setSite keeps the run');
   clickRun(t.panel);
+  assert.strictEqual(first.opts.signal.aborted, true, 'Compute aborts the first request');
   assert.strictEqual(t.calls.length, 2);
   assert.strictEqual(t.calls[1].opts.signal.aborted, false);
   assert(/site=51\.1000,5\.3000/.test(t.calls[1].url), t.calls[1].url);
@@ -318,6 +319,20 @@ test('param changes never fetch, hash updates, overlay is dimmed and flagged out
   assert(/Outdated/.test(outdatedHtml(t)), outdatedHtml(t));
   const last = t.m.log.overlays[t.m.log.overlays.length - 1];
   assert.strictEqual(last.opts.opacity, 0.2, 'overlay dimmed');
+  t.inst.unmount();
+});
+
+test('a parameter change during the first compute does not abort it; the result arrives outdated', async () => {
+  const t = mountWith({ site: '51,5' });
+  fireInput(t.panel, 'h', '12');
+  assert.strictEqual(t.calls.length, 1, 'no second fetch');
+  assert.strictEqual(t.calls[0].opts.signal.aborted, false, 'in-flight run kept');
+  t.calls[0].d.resolve(result());
+  await flush();
+  assert.strictEqual(t.calls.length, 1);
+  assert.strictEqual(t.m.log.overlays.length, 1, 'overlay rendered');
+  assert.strictEqual(t.m.log.overlays[0].opts.opacity, 0.2, 'dimmed');
+  assert(/Outdated/.test(outdatedHtml(t)), 'note shown');
   t.inst.unmount();
 });
 

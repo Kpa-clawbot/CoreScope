@@ -179,7 +179,7 @@
     var siteLayer = L.layerGroup().addTo(root);
     var state = parseCoverageParams(ctx.params, cfg);
     var siteName = null;
-    var data = null, cells = null, abort = null, runId = 0, dead = false, outdated = false;
+    var data = null, cells = null, ranUrl = null, abort = null, runId = 0, dead = false, outdated = false;
     var themeObs = null;
 
     panel.innerHTML = controlsHtml(cfg);
@@ -298,6 +298,7 @@
       showError('');
       if (!url) return;
       var myRun = ++runId;
+      ranUrl = url;
       var ac = new AbortController();
       abort = ac;
       setProgress('queued', null);
@@ -310,6 +311,8 @@
         setProgress(null);
         data = d;
         cells = decodeCells(d.cells);
+        outdated = buildViewshedUrl(state) !== ranUrl;
+        syncControls();
         repaint();
         if (opts && opts.fit && map.fitBounds && d.bbox) map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]], { animate: false });
       }, function (err) {
@@ -323,8 +326,8 @@
 
     // A changed input never fetches: it flags the shown result as outdated
     // (dimmed, link lines hidden) until the button starts the next job.
+    // An in-flight run is kept: its result arrives flagged outdated if the inputs moved on.
     function markOutdated() {
-      cancelRun();
       if (!data || outdated) return;
       outdated = true;
       syncControls();
