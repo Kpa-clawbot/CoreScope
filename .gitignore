@@ -24,6 +24,9 @@ public-instrumented/
 .squad/sessions/
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
+# Local worktrees at the repository root
+/_wt-*/
+/.worktrees/
 # Temp scripts / build artifacts
 recover-delta.sh
 merge.sh

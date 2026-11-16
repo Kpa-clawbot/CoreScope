@@ -1,5 +1,11 @@
 # Repeater Liveness Implementation Plan
 
+> **Archived plan.** Historical planning material; proposals, status claims, and
+> instructions below may be outdated or unimplemented. The proposed `relaying`
+> status and helper signature are not current. For current liveness guidance,
+> see [AGENTS.md](../../AGENTS.md#last_heard-vs-last_seen) and the
+> [status helpers](../../public/roles.js).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Distinguish repeaters that are actively relaying traffic from those that are alive but idle, using a precomputed O(log n) sorted-timestamp index.

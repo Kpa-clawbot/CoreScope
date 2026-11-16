@@ -98,11 +98,25 @@ type StatsResponse struct {
 
 // ─── Scope Stats ───────────────────────────────────────────────────────────────
 
+// ScopeStatsSummary invariants (#2364):
+//
+//	transportTotal = scoped + unscopedTransport           (routes 0, 3)
+//	unscoped       = unscopedTransport + unscopedFlood + unscopedDirect
+//	total          = scoped + unscoped                    (routes 0-3)
+//
+// Unscoped has folded in the non-transport routes since #1838, so it is
+// compared against Total, not TransportTotal. The three Unscoped* fields
+// split it by route so a client can, for example, look at unscoped floods
+// only (DIRECT traffic is not subject to flood-region filtering).
 type ScopeStatsSummary struct {
-	TransportTotal int `json:"transportTotal"`
-	Scoped         int `json:"scoped"`
-	Unscoped       int `json:"unscoped"`
-	UnknownScope   int `json:"unknownScope"`
+	Total             int `json:"total"`
+	TransportTotal    int `json:"transportTotal"`
+	Scoped            int `json:"scoped"`
+	Unscoped          int `json:"unscoped"`
+	UnscopedTransport int `json:"unscopedTransport"`
+	UnscopedFlood     int `json:"unscopedFlood"`
+	UnscopedDirect    int `json:"unscopedDirect"`
+	UnknownScope      int `json:"unknownScope"`
 }
 
 type ScopeRegionCount struct {
@@ -1112,8 +1126,11 @@ type ClientConfigResponse struct {
 	// Present (true) only when clientRxCoverage.requireLinkedCompanion is set
 	// and user management is on: CoreDrive RX then holds its queue until
 	// its companion is linked.
-	ClientRxRequireLinkedCompanion bool             `json:"clientRxRequireLinkedCompanion,omitempty"`
-	PathTrust                      *PathTrustConfig `json:"pathTrust,omitempty"`
+	ClientRxRequireLinkedCompanion bool `json:"clientRxRequireLinkedCompanion,omitempty"`
+	// Present only when clientRxCoverage is on and clientRxCoverage.appUrl
+	// is a valid https URL: the coverage page shows it as a QR code.
+	ClientRxAppURL string           `json:"clientRxAppUrl,omitempty"`
+	PathTrust      *PathTrustConfig `json:"pathTrust,omitempty"`
 	// Present only when user management is on, so the payload is unchanged
 	// for every instance that leaves it off.
 	UserManagement *ClientUserManagement `json:"userManagement,omitempty"`

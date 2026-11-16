@@ -64,6 +64,7 @@ async function run() {
     localStorage.setItem('meshcore-user-level', 'experienced');
     localStorage.setItem('meshcore-my-nodes', JSON.stringify(nodes.map((n) => ({ pubkey: n.pk, name: n.name, addedAt: 0 }))));
     localStorage.setItem('meshcore-favorites', JSON.stringify(nodes.map((n) => n.pk)));
+    window.addEventListener('theme-refresh', () => { window.__themeReady = true; }, { once: true });
   }, NODES);
   const page = await ctx.newPage();
   page.setDefaultTimeout(15000);
@@ -81,6 +82,8 @@ async function run() {
   console.log(`\nRunning role-aware health status E2E tests against ${BASE}\n`);
 
   await page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  // The initial theme refresh rebuilds Home, clearing any selected health card.
+  await page.waitForFunction(() => window.__themeReady === true);
   await page.waitForSelector('#myNodesGrid .my-node-card');
 
   await test('every mocked node was fetched from /api/nodes/<pk>/health', async () => {
@@ -142,8 +145,8 @@ async function run() {
   });
   await ctx.close();
 
-  // The analytics network status and the live node panel use the same helper
-  // with their own timestamps (last_heard || last_seen, and last_seen).
+  // The analytics network status and the live node panel use the shared
+  // role thresholds. Live also uses the newest certain activity (#2233).
   const listNode = (n) => ({ public_key: n.pk, name: n.name, role: n.role, last_heard: n.lastHeard, last_seen: n.lastSeen || n.lastHeard });
   const nodeListUrl = /\/api\/nodes(?:\?.*)?$/;
 
@@ -203,17 +206,38 @@ async function run() {
     await actx.close();
   });
 
-  const LIVE = { healthy: ['health-green', 'Online'], degraded: ['health-yellow', 'Degraded'], silent: ['health-red', 'Offline'] };
+  const LIVE = { healthy: ['health-green', 'Online'], degraded: ['health-yellow', 'Degraded'], silent: ['health-red', 'Offline'], uncertain: ['text-muted', 'Uncertain'] };
+  const fresh = ago(30 * 60 * 1000), stale = ago(120 * H);
+  const liveCases = [
+    ...[byPk[pk('a')], byPk[pk('e')], byPk[pk('d')]].map(n => ({ ...n, activity: n.lastSeen || n.lastHeard })),
+    { pk: pk('1'), name: 'Certain relay', role: 'repeater', lastSeen: stale, lastHeard: fresh, activity: fresh, want: 'healthy' },
+    { pk: pk('2'), name: 'Room health newer', role: 'room', lastSeen: stale, lastHeard: stale, healthHeard: fresh, activity: fresh, want: 'healthy' },
+    { pk: pk('3'), name: 'Companion traffic', role: 'companion', lastSeen: stale, lastHeard: fresh, activity: fresh, want: 'healthy' },
+    { pk: pk('4'), name: 'Node newer than health', role: 'repeater', lastSeen: stale, lastHeard: fresh, healthHeard: stale, activity: fresh, want: 'healthy' },
+    { pk: pk('5'), name: 'Ambiguous repeater', role: 'repeater', lastSeen: stale, lastRelayed: fresh, activity: stale, want: 'uncertain' },
+    { pk: pk('6'), name: 'Ambiguous room', role: 'room', lastSeen: stale, lastRelayed: fresh, activity: stale, want: 'uncertain' },
+    { pk: pk('7'), name: 'Ambiguous companion', role: 'companion', lastSeen: stale, lastRelayed: fresh, activity: stale, want: 'silent' },
+    { pk: pk('8'), name: 'Never heard', role: 'repeater', lastHeard: null, activity: null, want: 'silent' },
+    { pk: pk('9'), name: 'Missing health', role: 'room', lastSeen: 'bad date', lastHeard: fresh, healthFailed: true, activity: fresh, want: 'healthy' },
+  ];
   await test('live node panel shows each node\'s status by its role', async () => {
-    for (const n of [byPk[pk('a')], byPk[pk('e')], byPk[pk('d')]]) {
+    for (const n of liveCases) {
       const lctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
       const p = await lctx.newPage();
-      const node = listNode(n);
+      const errs = [];
+      p.on('pageerror', e => errs.push(e.message));
+      const node = { ...listNode(n), last_relayed: n.lastRelayed };
       await p.route(nodeListUrl, (route) => route.fulfill({ json: { nodes: [{ ...node, lat: 1, lon: 1 }], total: 1 } }));
       await p.route('**/api/nodes/' + n.pk, (route) => route.fulfill({ json: { node, recentAdverts: [] } }));
-      await p.route('**/api/nodes/' + n.pk + '/health', (route) => route.fulfill({ json: healthFor(n) }));
+      await p.route('**/api/nodes/' + n.pk + '/health', (route) => n.healthFailed
+        ? route.fulfill({ status: 500, json: { error: 'Unavailable' } })
+        : route.fulfill({ json: healthFor({ ...n, lastHeard: n.healthHeard || n.lastHeard }) }));
+      await p.route('**/api/nodes/' + n.pk + '/paths', (route) => route.fulfill({ json: { paths: [] } }));
       // live.js re-renders the panel on the first 'theme-refresh'; assert after it.
       await p.addInitScript(() => {
+        localStorage.setItem('meshcore-timestamp-mode', 'absolute');
+        localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+        localStorage.setItem('meshcore-timestamp-format', 'iso');
         window.addEventListener('theme-refresh', () => { window.__themeReady = true; }, { once: true });
       });
       await p.goto(`${BASE}/#/live?lat=1&lon=1&zoom=10`, { waitUntil: 'domcontentloaded' });
@@ -221,13 +245,19 @@ async function run() {
       await p.waitForFunction(() => window.__themeReady === true, null, { timeout: 8000 });
       await p.waitForFunction((name) => {
         const c = document.getElementById('nodeDetailContent');
-        return c && c.textContent.includes(name) && /health-(green|yellow|red)/.test(c.innerHTML);
+        return c && c.textContent.includes(name) && c.querySelector('table');
       }, n.name);
       const [dotCls, label] = LIVE[n.want];
-      const dot = await p.locator('#nodeDetailContent [class^="health-"]').first().getAttribute('class');
+      const dot = await p.locator('#nodeDetailContent h3').locator('..').locator('span').first().getAttribute('class');
       assert(dot === dotCls, `${n.name}: dot "${dot}", want ${dotCls}`);
       const labels = await p.locator('#nodeDetailContent span').filter({ hasText: new RegExp(`^${label}$`) }).count();
       assert(labels >= 1, `${n.name}: no "${label}" label in the live panel`);
+      const activity = p.locator('#nodeDetailContent tr').filter({ has: p.locator('td', { hasText: /^Last Activity$/ }) });
+      assert(await activity.count() === 1, `${n.name}: Last Activity row is missing`);
+      const timestamp = await activity.locator('.timestamp-text').innerText();
+      const expected = n.activity ? n.activity.replace('T', ' ').slice(0, 19) : '—';
+      assert(timestamp === expected, `${n.name}: activity "${timestamp}", want "${expected}"`);
+      assert(errs.length === 0, `${n.name}: page errors: ${errs.join(' | ')}`);
       await lctx.close();
     }
   });

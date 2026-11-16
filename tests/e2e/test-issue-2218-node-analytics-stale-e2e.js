@@ -96,8 +96,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   await page.route(ANALYTICS_RE, async (route) => {
     const response = await route.fetch();
     const data = await response.json();
-    data.peerInteractions = ['2024-01-02T03:04:05.123Z', null, '', 'not-a-date'].map((lastContact, i) => ({
-      peer_key: ['ab', 'cd', 'ef', '12'][i].repeat(32), peer_name: 'Example Peer ' + (i + 1), messageCount: 4 - i, lastContact,
+    data.peerInteractions = ['2024-01-02T03:04:05.123Z', null, '', 'not-a-date', '2099-01-02T03:04:05.123Z'].map((lastContact, i) => ({
+      peer_key: ['ab', 'cd', 'ef', '12', '34'][i].repeat(32), peer_name: 'Example Peer ' + (i + 1), messageCount: 5 - i, lastContact,
     }));
     await route.fulfill({ response, json: data });
   });
@@ -118,7 +118,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         await page.reload({ waitUntil: 'domcontentloaded' });
         await page.waitForSelector('.analytics-peer-table tbody tr');
         const cells = page.locator('.analytics-peer-table tbody td:nth-child(3)');
-        assert(await cells.count() === 4, 'all peer contacts render');
+        assert(await cells.count() === 5, 'all peer contacts render');
         const contact = cells.first().locator('[title]');
         assert(await contact.count() === 1, 'Last Contact needs a timestamp tooltip');
         await contact.hover();
@@ -126,10 +126,19 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         const title = await contact.getAttribute('title');
         assert((mode === 'ago' ? title : text) === absolute, 'absolute timestamp respects timezone and format');
         assert(/^\d+d ago$/.test(mode === 'ago' ? text : title), 'relative timestamp remains available');
+        assert(await cells.first().locator('.timestamp-future-icon').count() === 0, 'past contact has no clock warning');
         for (let i = 1; i < 4; i++) {
           assert((await cells.nth(i).textContent()).trim() === '—', 'missing or invalid contact stays a dash');
           assert(await cells.nth(i).locator('[title]').getAttribute('title') === '—', 'missing contact has no invented date');
+          assert(await cells.nth(i).locator('.timestamp-future-icon').count() === 0, 'missing or invalid contact has no clock warning');
         }
+        const future = cells.nth(4);
+        const warning = future.locator('.timestamp-future-icon');
+        assert(await warning.count() === 1, 'future Last Contact needs a clock warning');
+        assert(await warning.getAttribute('title') === 'Timestamp is in the future — node clock may be skewed', 'clock warning explains the skew');
+        assert(await warning.locator('use').getAttribute('href') === '/icons/phosphor-sprite.svg#ph-warning', 'clock warning uses the existing warning icon');
+        assert((await future.locator('.timestamp-text').textContent()).startsWith('2099-01-0'), 'future contact keeps its absolute display');
+        assert(/^in \d+d$/.test(await future.locator('.timestamp-text').getAttribute('title')), 'future contact keeps its relative tooltip');
         if (process.env.SCREENSHOT_DIR) {
           const path = require('path');
           require('fs').mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });

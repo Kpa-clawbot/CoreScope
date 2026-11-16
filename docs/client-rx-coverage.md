@@ -32,6 +32,21 @@ Coverage is **off by default**. To turn it on:
    dashboard. **Warn them first that their contribution is world-readable and a per-observer view can
    reconstruct their movements — see [Privacy](#privacy--contributor-location-is-public).**
 
+## App link on the coverage page (optional)
+
+Set `clientRxCoverage.appUrl` to your CoreDrive RX web deployment and the `#/rx-coverage` page shows
+a QR code of that URL plus the link itself, so a visitor can scan it with the CoreDrive RX app
+(Settings > Deployment) or open it on a phone:
+
+```json
+"clientRxCoverage": { "enabled": true, "appUrl": "https://rx.example.org" }
+```
+
+- Only an absolute `https://` URL with a host is used. Anything else is ignored, with one startup
+  log line from the server.
+- `/api/config/client` carries it as `clientRxAppUrl`, only while `clientRxCoverage.enabled` is on
+  and the URL is valid. Without it the page shows no QR panel.
+
 The rest of this document is the MQTT payload contract the companion app implements.
 
 ## Linked companions only (optional)

@@ -24,9 +24,10 @@ async function setup(browser, viewport, theme, options) {
   const network = [];
   let holdClock = false;
   function observer(letter, visit = 0) {
-    return { id: IDS[letter], name: 'Observer ' + letter + (visit ? ' visit ' + visit : ''),
+    const suffix = options.longMetadata && letter === 'B' ? ' with a long comparison label' : '';
+    return { id: IDS[letter], name: 'Observer ' + letter + suffix + (visit ? ' visit ' + visit : ''),
       last_seen: letter === 'B' ? new Date().toISOString() : null, packet_count: 5,
-      model: 'Test radio', radio: '910.0,250,10,5' };
+      model: 'Test radio', radio: options.longMetadata ? '910.5250244,62.5,7,5' : '910.0,250,10,5' };
   }
   await page.route('**/api/observers**', async route => {
     const url = new URL(route.request().url());
@@ -128,10 +129,10 @@ async function setup(browser, viewport, theme, options) {
     ] : { error: 'fixture calibration failure' } });
     await settled('/observers/clock-skew');
   }
-  async function release(letter, days, status = 200) {
+  async function release(letter, days, status = 200, analytics) {
     const route = await held(letter + ':' + days);
     const label = letter + ' ' + days + ' days';
-    await route.fulfill({ status, json: status === 200 ? {
+    await route.fulfill({ status, json: status === 200 ? analytics || {
       timeline: [{ label, count: days }], packetTypes: { 4: days },
       nodesTimeline: [{ label, count: 1 }], snrDistribution: [{ range: '0 to 5', count: days }], recentPackets: [],
     } : { error: 'fixture failure' } });
@@ -352,6 +353,138 @@ for (const lateFocus of [false, true]) test('dispose-and-controls' + (lateFocus 
   assert.strictEqual(await h.page.locator('#app').innerHTML(), before, 'disposed request cannot change comparison page');
   assert.strictEqual((await h.snapshot()).charts.length, 0);
 });
+
+async function trackChartLayout(page) {
+  await page.evaluate(() => {
+    window.__observerChartLayout = () => {
+      const box = element => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, width: rect.width, height: rect.height };
+      };
+      const grid = document.querySelector('.obs-charts');
+      return {
+        documentWidth: document.documentElement.scrollWidth,
+        grid: box(grid),
+        cards: [...grid.children].map(box),
+        charts: [...grid.querySelectorAll('canvas')].map(canvas => {
+          const chart = Chart.getChart(canvas);
+          const parent = canvas.parentElement;
+          const style = getComputedStyle(parent);
+          return { id: canvas.id, ...box(canvas), connected: canvas.isConnected,
+            responsive: chart?.options.responsive, chartWidth: chart?.width,
+            parent: box(parent), contentWidth: parent.getBoundingClientRect().width
+              - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+              - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth) };
+        }),
+      };
+    };
+  });
+}
+
+test('charts-fit-and-resize', async h => {
+  await h.open('A');
+  await h.release('A', 7);
+  await h.current('A', 7);
+  const originalViewport = h.page.viewportSize();
+  await trackChartLayout(h.page);
+  async function checkLayout(width, columns) {
+    await h.page.setViewportSize({ width, height: originalViewport.height });
+    // Chart.js may need several ResizeObserver deliveries to finish a resize.
+    // Wait for real canvas dimensions, without changing the charts ourselves.
+    await h.page.waitForFunction(() => {
+      const layout = window.__observerChartLayout();
+      return layout.charts.length === 4 && layout.charts.every(chart =>
+        Math.abs(chart.width - chart.contentWidth) <= 1 && Math.abs(chart.chartWidth - chart.width) <= 1);
+    });
+    const layout = await h.page.evaluate(() => window.__observerChartLayout());
+    assert.ok(layout.documentWidth <= width, 'observer charts must not widen the document at ' + width
+      + 'px: got ' + layout.documentWidth + 'px');
+    assert.strictEqual(layout.cards.length, 4);
+    assert.strictEqual(layout.charts.length, 4);
+    assert.strictEqual(layout.cards.filter(card => Math.abs(card.top - layout.cards[0].top) < 1).length,
+      columns, 'fluid column count at ' + width + 'px');
+    for (const card of layout.cards) {
+      assert.ok(card.width > 0 && card.left >= layout.grid.left - 1 && card.right <= layout.grid.right + 1,
+        'chart card must fit its grid at ' + width + 'px');
+    }
+    for (const chart of layout.charts) {
+      assert.ok(chart.connected && chart.responsive && chart.width > 0 && chart.height > 0,
+        chart.id + ' must remain a live responsive chart');
+      assert.ok(chart.left >= chart.parent.left - 1 && chart.right <= chart.parent.right + 1,
+        chart.id + ' canvas must fit its parent at ' + width + 'px');
+      assert.ok(Math.abs(chart.width - chart.contentWidth) <= 1 && Math.abs(chart.chartWidth - chart.width) <= 1,
+        chart.id + ' must resize to its available content width at ' + width + 'px');
+    }
+  }
+  const initialRequests = h.network.filter(url => url.includes('/analytics?')).length;
+  for (const [width, columns] of [[320, 1], [375, 1], [390, 1], [760, 1], [900, 2], [1400, 3], [390, 1]]) {
+    await checkLayout(width, columns);
+  }
+  assert.strictEqual(h.network.filter(url => url.includes('/analytics?')).length, initialRequests,
+    'viewport resizing must not fetch analytics again');
+  await h.page.selectOption('#obsDaysSelect', '30');
+  await h.release('A', 30);
+  await h.current('A', 30);
+  await checkLayout(390, 1);
+  assert.strictEqual(h.network.filter(url => url.includes('/analytics?')).length, initialRequests + 1,
+    'time-range reload keeps one analytics request per selection');
+  await h.page.locator('a[title="Back to Observers"]').click();
+  await h.page.waitForSelector('#obsTable tbody tr[data-value]');
+  assert.strictEqual((await h.snapshot()).charts.length, 0, 'leaving the resized detail destroys its charts');
+});
+
+test('empty-charts-and-long-metadata-fit', async h => {
+  await h.open('A');
+  await trackChartLayout(h.page);
+  const height = h.page.viewportSize().height;
+  const overflow = [];
+  const variants = [
+    { days: 7, name: 'empty-snr', charts: 3, data: {
+      timeline: [{ label: 'One packet', count: 1 }], packetTypes: { 5: 1 },
+      nodesTimeline: [{ label: 'One node', count: 1 }], snrDistribution: [], recentPackets: [],
+    } },
+    { days: 3, name: 'empty-datasets', charts: 1, data: {
+      timeline: [], packetTypes: {}, nodesTimeline: [], snrDistribution: [], recentPackets: [],
+    } },
+    { days: 1, name: 'missing-datasets', charts: 0, data: { recentPackets: [] } },
+  ];
+  for (const variant of variants) {
+    if (variant.days !== 7) await h.page.selectOption('#obsDaysSelect', String(variant.days));
+    await h.release('A', variant.days, 200, variant.data);
+    assert.strictEqual((await h.snapshot()).charts.length, variant.charts, variant.name);
+    for (const width of [320, 375, 390, 1400, 320]) {
+      await h.page.setViewportSize({ width, height });
+      await h.page.waitForFunction(() => window.__observerChartLayout().charts.every(chart =>
+        chart.chartWidth == null || (Math.abs(chart.width - chart.contentWidth) <= 1
+          && Math.abs(chart.chartWidth - chart.width) <= 1)));
+      const layout = await h.page.evaluate(() => window.__observerChartLayout());
+      assert.strictEqual(layout.charts.length, 4, 'all four canvases remain present without data');
+      assert.ok(layout.charts.every(chart => chart.width > 0 && chart.height > 0 && chart.connected));
+      const prefix = variant.name + '@' + width + ': ';
+      if (layout.documentWidth > width) overflow.push(prefix + 'document=' + layout.documentWidth);
+      for (const chart of layout.charts) {
+        if (chart.width > chart.contentWidth + 1 || chart.left < chart.parent.left - 1 || chart.right > chart.parent.right + 1) {
+          overflow.push(prefix + chart.id);
+        }
+      }
+      const metadataOverflow = await h.page.evaluate(() => {
+        const elements = document.querySelectorAll('.obs-info-grid .stat-value, .compare-with-group, .compare-with-group select, .compare-with-group button');
+        return [...elements].filter(el => {
+          const rect = el.getBoundingClientRect();
+          return rect.left < 0 || rect.right > innerWidth || el.scrollWidth > el.clientWidth + 1;
+        }).map(el => el.id || el.className);
+      });
+      overflow.push(...metadataOverflow.map(name => prefix + name));
+    }
+  }
+  assert.match(await h.page.locator('.obs-info-grid').innerText(), /910\.5250244 MHz · SF7 · BW62\.5 · CR5/);
+  await h.page.selectOption('#obsCompareWithPicker', IDS.B);
+  assert.strictEqual(await h.page.locator('[data-action="compare-with-go"]').isEnabled(), true);
+  assert.strictEqual(h.network.filter(url => url.includes('/analytics?')).length, variants.length,
+    'resizing empty charts does not add requests');
+  assert.deepStrictEqual(overflow, [], 'observer detail overflow: ' + [...new Set(overflow)].join('; '));
+  if (ARTIFACTS) await h.page.screenshot({ path: path.join(ARTIFACTS, h.label + '.png'), fullPage: true });
+}, { longMetadata: true });
 
 (async () => {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined,
