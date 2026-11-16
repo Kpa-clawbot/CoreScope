@@ -1974,6 +1974,29 @@ func TestPlannerViewshedLinksCarryNoElevProfile(t *testing.T) {
 	}
 }
 
+// A repeater at the site itself (within viewshedSelfKm) is the site, not a
+// link: it is left out of the list.
+func TestPlannerViewshedLinksSkipRepeaterAtSite(t *testing.T) {
+	h := newPlannerHarness(t)
+	ns := append(plannerTestNodes(),
+		nodeInfo{PublicKey: "ee0001", Name: "AtSite", Role: "repeater", Lat: 30.11, Lon: -97.09, HasGPS: true, LastSeen: plannerTestStart},
+		nodeInfo{PublicKey: "ee0002", Name: "Near90m", Role: "repeater", Lat: 30.1108, Lon: -97.09, HasGPS: true, LastSeen: plannerTestStart},
+		nodeInfo{PublicKey: "ee0003", Name: "At200m", Role: "repeater", Lat: 30.1118, Lon: -97.09, HasGPS: true, LastSeen: plannerTestStart})
+	h.data.setNodes(ns)
+	w := h.pollUntil(t, plannerViewshedPath, "198.51.100.123", http.StatusOK)
+	resp, _ := decodeViewshed(t, w)
+	got := map[string]bool{}
+	for _, l := range resp.Links {
+		got[l.PubKey] = true
+	}
+	if got["ee0001"] || got["ee0002"] {
+		t.Errorf("repeater within %.1f km of the site listed as a link: %v", viewshedSelfKm, got)
+	}
+	if !got["ee0003"] {
+		t.Error("repeater 200 m from the site missing from links")
+	}
+}
+
 func TestPlannerViewshedTruncated(t *testing.T) {
 	h := newPlannerHarness(t)
 	ns := plannerTestNodes()

@@ -705,6 +705,10 @@ func viewshedTruncated(site geoPoint, kept []plannerNode, rangeKm float64, cappe
 // viewshedLinks is the site's link to every repeater within rangeKm that
 // Relay would offer (not stale, valid position), nearest first (then by
 // pubkey), the site at h and the repeater at rx.
+// viewshedSelfKm: a repeater this close to the site is the site itself (a
+// candidate placed on an existing repeater), not a link to list.
+const viewshedSelfKm = 0.1
+
 func viewshedLinks(v terrainView, site geoPoint, nodes []plannerNode, rangeKm float64, lp losParams, h, rx float64) []PlannerViewshedLink {
 	type near struct {
 		n *plannerNode
@@ -716,7 +720,7 @@ func viewshedLinks(v terrainView, site geoPoint, nodes []plannerNode, rangeKm fl
 		if n.Role != "repeater" || n.Stale || !planCoordOK(n.Lat, n.Lon) {
 			continue
 		}
-		if d := geoDistKm(site, geoPoint{Lat: n.Lat, Lon: n.Lon}); d <= rangeKm {
+		if d := geoDistKm(site, geoPoint{Lat: n.Lat, Lon: n.Lon}); d >= viewshedSelfKm && d <= rangeKm {
 			in = append(in, near{n, d})
 		}
 	}
