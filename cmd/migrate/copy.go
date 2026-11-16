@@ -501,7 +501,8 @@ func refuseForeignSchema(ctx context.Context, q queryer, to dbRef) error {
 	err := q.QueryRowContext(ctx, `SELECT current_schema(),
 		(SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		 WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')),
-		EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'schema_version')`).
+		EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = current_schema() AND c.relname = 'schema_version' AND c.relkind IN ('r', 'p'))`).
 		Scan(&schemaName, &relations, &hasVersion)
 	if err != nil {
 		return fmt.Errorf("inspect target schema on %s: %w", to.display, err)
