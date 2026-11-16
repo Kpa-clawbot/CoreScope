@@ -45,6 +45,15 @@ type PlannerConfig struct {
 	NodeMarginKm float64 `json:"nodeMarginKm"`
 	// MaxLegKm: profile/relay A→B leg, 10-200. Ranges above it are not offered.
 	MaxLegKm float64 `json:"maxLegKm"`
+	// UserReach: the Users layer of the Coverage tab. Non-nil after resolved().
+	UserReach *PlannerUserReach `json:"userReach,omitempty"`
+}
+
+// PlannerUserReach is the handheld reach curve
+// P(heard) = 1/(1+exp((ln d - ln D50Km)/Slope)).
+type PlannerUserReach struct {
+	D50Km float64 `json:"d50Km"` // distance with P = 0.5, 0.2-50
+	Slope float64 `json:"slope"` // 0.05-2
 }
 
 const (
@@ -54,14 +63,18 @@ const (
 	defaultPlannerMaxAreaKm    = 100.0
 	defaultPlannerNodeMarginKm = 30.0
 	defaultPlannerMaxLegKm     = 100.0
+	defaultPlannerUserD50Km    = 2.7
+	defaultPlannerUserSlope    = 0.30
 
 	// Valid ranges of the size limits; outside them resolved() uses the default.
 	plannerAreaKmMin, plannerAreaKmMax = 20.0, 250.0
 	// The margin minimum is plannerAreaNodeKm: the "a repeater is near the box"
 	// check reaches that far, so a smaller margin could start a plan with no
 	// nodes in it.
-	plannerMarginKmMin, plannerMarginKmMax = 10.0, 60.0
-	plannerLegKmMin, plannerLegKmMax       = 10.0, 200.0
+	plannerMarginKmMin, plannerMarginKmMax   = 10.0, 60.0
+	plannerLegKmMin, plannerLegKmMax         = 10.0, 200.0
+	plannerUserD50KmMin, plannerUserD50KmMax = 0.2, 50.0
+	plannerUserSlopeMin, plannerUserSlopeMax = 0.05, 2.0
 
 	plannerMaxPoints    = 16   // profile: points per request
 	plannerMaxSites     = 10   // coverage: max suggested sites
@@ -80,18 +93,19 @@ var plannerRangesKm = []float64{10, 15, 20, 30, 40, 50, 60}
 
 // PlannerClientConfig is /api/config/client "planner"; present only when enabled.
 type PlannerClientConfig struct {
-	DefaultRangeKm   float64   `json:"defaultRangeKm"`
-	RangesKm         []float64 `json:"rangesKm"`
-	NewAntennaM      float64   `json:"newAntennaM"`
-	ExistingAntennaM float64   `json:"existingAntennaM"`
-	FrequencyMHz     float64   `json:"frequencyMhz"`
-	KFactor          float64   `json:"kFactor"`
-	MaxPoints        int       `json:"maxPoints"`
-	MaxLegKm         float64   `json:"maxLegKm"`
-	MaxAreaKm        float64   `json:"maxAreaKm"`
-	NodeMarginKm     float64   `json:"nodeMarginKm"`
-	MaxSites         int       `json:"maxSites"`
-	MinClearance     float64   `json:"minClearance"`
+	DefaultRangeKm   float64          `json:"defaultRangeKm"`
+	RangesKm         []float64        `json:"rangesKm"`
+	NewAntennaM      float64          `json:"newAntennaM"`
+	ExistingAntennaM float64          `json:"existingAntennaM"`
+	FrequencyMHz     float64          `json:"frequencyMhz"`
+	KFactor          float64          `json:"kFactor"`
+	MaxPoints        int              `json:"maxPoints"`
+	MaxLegKm         float64          `json:"maxLegKm"`
+	MaxAreaKm        float64          `json:"maxAreaKm"`
+	NodeMarginKm     float64          `json:"nodeMarginKm"`
+	MaxSites         int              `json:"maxSites"`
+	MinClearance     float64          `json:"minClearance"`
+	UserReach        PlannerUserReach `json:"userReach"`
 }
 
 // ─── Wire types ────────────────────────────────────────────────────────────
