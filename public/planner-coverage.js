@@ -23,6 +23,7 @@
   var VERDICT_CODE = { blocked: 1, marginal: 2, clear60: 3, clear: 4 };
   var USER_CLASSES = ['≥ 75%', '50–75%', '25–50%', '10–25%'];   // codes 5..2
   var HEIGHT_NOTE = 'Height mainly changes reach to other repeaters; user reach is measured and barely depends on height.';
+  var OUTDATED_NOTE = 'Outdated, press Compute coverage.';
   var DISCLAIMER = 'An estimate from a terrain model (SRTM ~90 m) and a measured reach curve, not a survey.';
   var PANE = 'mc-pl-cov';
 
@@ -114,7 +115,9 @@
         '<label class="mc-pa-check"><input type="radio" name="mc-pl-cov-layer" data-f="layer" value="repeaters"> Repeaters</label>' +
       '</fieldset>' +
       '<div data-f="rxWrap">' + height('rx', 'Repeaters at (m)') + '</div>' +
+      '<button type="button" class="btn mc-pa-primary" data-act="run">Compute coverage</button>' +
       '<div data-f="progress"></div>' +
+      '<div data-f="outdated"></div>' +
       '<div data-f="error"></div>' +
       '<div data-f="legend"></div>' +
       '<div data-f="results"></div>' +
@@ -176,7 +179,7 @@
     var siteLayer = L.layerGroup().addTo(root);
     var state = parseCoverageParams(ctx.params, cfg);
     var siteName = null;
-    var data = null, cells = null, abort = null, runId = 0, dead = false;
+    var data = null, cells = null, abort = null, runId = 0, dead = false, outdated = false;
     var themeObs = null;
 
     panel.innerHTML = controlsHtml(cfg);
@@ -193,6 +196,8 @@
         ? (siteName ? siteName + ' · ' : '') + siteString(state.site)
         : 'Click the map or a node to place the site.';
       f('legend').innerHTML = legendHtml(state.layer, state, cfg);
+      panel.querySelector('[data-act="run"]').disabled = !state.site;
+      f('outdated').innerHTML = outdated ? '<p class="mc-pa-note">' + OUTDATED_NOTE + '</p>' : '';
     }
     function pushHash() { ctx.setParams(stateToHash(state)); }
 
@@ -206,7 +211,8 @@
       var cs = getComputedStyle(document.documentElement);
       var out = [null];
       for (var code = 1; code <= LAYERS[layer]; code++) out.push(code < LAYER_MIN[layer] ? null : (cs.getPropertyValue(colorVarFor(layer, code)).trim() || null));
-      return { colors: out, opacity: parseFloat(cs.getPropertyValue('--pl-cov-opacity')) };
+      return { colors: out, opacity: parseFloat(cs.getPropertyValue('--pl-cov-opacity')),
+        dimmed: parseFloat(cs.getPropertyValue('--pl-cov-opacity-outdated')) };
     }
     // CSS colour string → RGBA bytes, through the canvas so any CSS colour syntax works.
     function rgbaOf(g, color) {
@@ -214,6 +220,10 @@
       g.fillStyle = color;
       g.fillRect(0, 0, 1, 1);
       return g.getImageData(0, 0, 1, 1).data;
+    }
+    function dim(theme) {
+      if (!outdated) return isFinite(theme.opacity) ? theme.opacity : 0.5;
+      return isFinite(theme.dimmed) ? theme.dimmed : 0.2;
     }
     function paint() {
       rasterLayer.clearLayers();
@@ -235,12 +245,12 @@
       }
       g.putImageData(img, 0, 0);
       L.imageOverlay(canvas.toDataURL(), [[b[0], b[1]], [b[2], b[3]]], {
-        opacity: isFinite(theme.opacity) ? theme.opacity : 0.5, interactive: false, pane: PANE, className: 'mc-pl-cov-overlay'
+        opacity: dim(theme), interactive: false, pane: PANE, className: 'mc-pl-cov-overlay'
       }).addTo(rasterLayer);
     }
     function drawLinks() {
       linkLayer.clearLayers();
-      if (!data || !state.site || state.layer !== 'repeaters') return;
+      if (!data || outdated || !state.site || state.layer !== 'repeaters') return;
       (data.links || []).forEach(function (l) {
         var k = l.link || {};
         if (k.error) return;
@@ -283,6 +293,8 @@
       var url = buildViewshedUrl(state);
       cancelRun();
       clearResult();
+      outdated = false;
+      syncControls();
       showError('');
       if (!url) return;
       var myRun = ++runId;
@@ -309,6 +321,15 @@
       });
     }
 
+    // A changed input never fetches: it flags the shown result as outdated
+    // (dimmed, link lines hidden) until the button starts the next job.
+    function markOutdated() {
+      cancelRun();
+      if (!data || outdated) return;
+      outdated = true;
+      syncControls();
+      repaint();
+    }
     function setSite(p) {
       if (dead || !p || !isFinite(p.lat) || !isFinite(p.lon)) return;
       state.site = { lat: Number(p.lat), lon: Number(p.lon) };
@@ -316,7 +337,7 @@
       syncControls();
       drawSite();
       pushHash();
-      run();
+      markOutdated();
     }
     function setLayer(layer) {
       state.layer = layer === 'repeaters' ? 'repeaters' : 'users';
@@ -335,11 +356,16 @@
       state.h = next.h; state.rx = next.rx; state.range = next.range;
       syncControls();
       pushHash();
-      run();
+      markOutdated();
+    }
+    function onClick(e) {
+      var btn = e && e.target && e.target.closest ? e.target.closest('[data-act]') : null;
+      if (btn && btn.getAttribute('data-act') === 'run' && state.site) run();
     }
     function onTheme() { if (!dead) paint(); }
 
     panel.addEventListener('change', onChange);
+    panel.addEventListener('click', onClick);
     // Same signals the planner map uses: data-theme flips dark/light,
     // theme-refresh follows a customizer colour change.
     if (typeof MutationObserver === 'function') {
@@ -359,6 +385,7 @@
         cancelRun();
         dead = true;
         panel.removeEventListener('change', onChange);
+        panel.removeEventListener('click', onClick);
         if (themeObs) themeObs.disconnect();
         window.removeEventListener('theme-refresh', onTheme);
         ctx.layer.clearLayers();

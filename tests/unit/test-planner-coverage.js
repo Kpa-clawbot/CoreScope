@@ -82,7 +82,7 @@ function fakeCanvas(log) {
 const VARS = {
   '--pl-cov-user-2': 'orange', '--pl-cov-user-3': 'yellow', '--pl-cov-user-4': 'lime', '--pl-cov-user-5': 'green',
   '--pl-cov-rep-1': 'red', '--pl-cov-rep-2': 'orange', '--pl-cov-rep-3': 'lime', '--pl-cov-rep-4': 'green',
-  '--pl-cov-opacity': ' 0.5'
+  '--pl-cov-opacity': ' 0.5', '--pl-cov-opacity-outdated': ' 0.2'
 };
 const RGB = { red: [255, 0, 0, 255], orange: [255, 128, 0, 255], yellow: [255, 255, 0, 255], lime: [128, 255, 0, 255], green: [0, 128, 0, 255] };
 function load() {
@@ -207,8 +207,10 @@ test('stale result: first answer after setSite is ignored and its signal aborted
   const t = mountWith({ site: '51.0023,5.6708' });
   const first = t.calls[0];
   t.inst.setSite({ lat: 51.1, lon: 5.3, node: null });
-  assert.strictEqual(t.calls.length, 2);
+  assert.strictEqual(t.calls.length, 1, 'setSite does not fetch');
   assert.strictEqual(first.opts.signal.aborted, true, 'first request aborted');
+  clickRun(t.panel);
+  assert.strictEqual(t.calls.length, 2);
   assert.strictEqual(t.calls[1].opts.signal.aborted, false);
   assert(/site=51\.1000,5\.3000/.test(t.calls[1].url), t.calls[1].url);
   first.d.resolve(result({ bbox: [1, 1, 2, 2] }));
@@ -272,6 +274,74 @@ test('links list escapes repeater names', async () => {
   assert(/Rep &lt;b&gt;/.test(html), 'name escaped');
   assert(!/Rep <b>/.test(html), 'no raw markup');
   assert(/4\.2 km/.test(html), 'distance shown');
+  t.inst.unmount();
+});
+
+function clickRun(panel) {
+  const btn = { getAttribute: (k) => (k === 'data-act' ? 'run' : null) };
+  (panel._l.click || []).forEach((f) => f({ target: { closest: () => btn } }));
+}
+function fireInput(panel, name, value) {
+  panel._els['[data-f="' + name + '"]'].value = value;
+  (panel._l.change || []).forEach((f) => f({ target: { getAttribute: (k) => (k === 'data-f' ? name : null), value, checked: true } }));
+}
+const runBtn = (t) => t.panel._els['[data-act="run"]'];
+const outdatedHtml = (t) => t.panel._els['[data-f="outdated"]'].innerHTML;
+
+test('mount with a site in the hash computes once, without one never', () => {
+  const a = mountWith({ site: '51,5' });
+  assert.strictEqual(a.calls.length, 1);
+  a.inst.unmount();
+  const b = mountWith({});
+  assert.strictEqual(b.calls.length, 0);
+  assert.strictEqual(runBtn(b).disabled, true, 'no site: button disabled');
+  b.inst.setSite({ lat: 51.1, lon: 5.1, node: null });
+  assert.strictEqual(b.calls.length, 0, 'setSite does not fetch');
+  assert.strictEqual(runBtn(b).disabled, false, 'site: button enabled');
+  assert.strictEqual(outdatedHtml(b), '', 'no overlay yet: no outdated note');
+  b.inst.unmount();
+});
+
+test('param changes never fetch, hash updates, overlay is dimmed and flagged outdated', async () => {
+  const t = mountWith({ site: '51,5' });
+  t.calls[0].d.resolve(result());
+  await flush();
+  assert.strictEqual(t.m.log.overlays[0].opts.opacity, 0.5);
+  assert.strictEqual(outdatedHtml(t), '');
+  const hashLen = t.hash.length;
+  t.inst.setSite({ lat: 51.1, lon: 5.1, node: null });
+  fireInput(t.panel, 'h', '12');
+  fireInput(t.panel, 'rx', '7');
+  fireInput(t.panel, 'range', '20');
+  assert.strictEqual(t.calls.length, 1, 'no refetch');
+  assert.strictEqual(t.hash.length, hashLen + 4, 'hash follows each change');
+  assert(/Outdated/.test(outdatedHtml(t)), outdatedHtml(t));
+  const last = t.m.log.overlays[t.m.log.overlays.length - 1];
+  assert.strictEqual(last.opts.opacity, 0.2, 'overlay dimmed');
+  t.inst.unmount();
+});
+
+test('button click starts exactly one job with the latest values; a newer click supersedes', async () => {
+  const t = mountWith({ site: '51,5' });
+  t.calls[0].d.resolve(result());
+  await flush();
+  t.inst.setSite({ lat: 51.1, lon: 5.1, node: null });
+  fireInput(t.panel, 'h', '12');
+  fireInput(t.panel, 'range', '20');
+  clickRun(t.panel);
+  assert.strictEqual(t.calls.length, 2);
+  assert.strictEqual(t.calls[1].url, '/api/planner/viewshed?site=51.1000,5.1000&h=12&rx=5&range=20');
+  clickRun(t.panel);
+  assert.strictEqual(t.calls.length, 3);
+  assert.strictEqual(t.calls[1].opts.signal.aborted, true, 'older click aborted');
+  t.calls[1].d.resolve(result({ bbox: [1, 1, 2, 2] }));
+  await flush();
+  const n = t.m.log.overlays.length;
+  t.calls[2].d.resolve(result());
+  await flush();
+  assert.strictEqual(t.m.log.overlays.length, n + 1, 'only the newest answer painted');
+  assert.strictEqual(outdatedHtml(t), '');
+  assert.strictEqual(t.m.log.overlays[n].opts.opacity, 0.5, 'fresh overlay at full opacity');
   t.inst.unmount();
 });
 

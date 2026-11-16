@@ -371,7 +371,13 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
     await step('coverage: map click requests a viewshed, overlay and legend appear', async () => {
       assert(await overlays() === 0, 'overlay before click');
       const box = await page.locator('.leaflet-container').boundingBox();
+      assert(await page.locator('[data-act="run"]').isDisabled(), 'Compute button enabled without a site');
       await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await page.waitForSelector('path.mc-pl-cov-site');
+      await page.waitForTimeout(300);
+      assert(vs.count === 0, 'a map click fetched: ' + vs.count);
+      assert(await overlays() === 0, 'overlay before Compute');
+      await page.locator('[data-act="run"]').click();
       await page.waitForSelector('img.leaflet-image-layer');
       assert(vs.count === 2, 'viewshed requests (202 + 200): ' + vs.count);
       assert(await page.locator('.mc-pl-cov-legend li').count() === 4, 'users legend rows');
@@ -392,14 +398,33 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
       assert(await overlays() === 1, 'overlay kept');
     });
 
+    await step('coverage: changing a parameter does not fetch, marks outdated; Compute refreshes', async () => {
+      const before = vs.count;
+      await page.locator('[data-f="h"]').fill('15');
+      await page.locator('[data-f="h"]').dispatchEvent('change');
+      await page.waitForSelector('[data-f="outdated"] .mc-pa-note');
+      await page.waitForTimeout(300);
+      assert(vs.count === before, 'parameter change refetched: ' + (vs.count - before));
+      assert(await overlays() === 1, 'overlay kept while outdated');
+      assert(await page.locator('path.mc-pl-cov-link').count() === 0, 'link lines shown while outdated');
+      assert(/[?&]h=15(&|$)/.test(await page.evaluate(() => location.hash)), 'h in hash');
+      await page.locator('[data-act="run"]').click();
+      await page.waitForFunction(() => !document.querySelector('[data-f="outdated"] .mc-pa-note'));
+      assert(vs.count === before + 1, 'Compute requests: ' + (vs.count - before));
+      assert(/[&?]h=15(&|$)/.test(vs.urls[vs.urls.length - 1]), 'latest h in request: ' + vs.urls[vs.urls.length - 1]);
+      await page.waitForSelector('path.mc-pl-cov-link');
+    });
+
     await step('coverage: deep link restores site, Repeaters layer and overlay', async () => {
       const hash = await page.evaluate(() => location.hash);
       const m = hash.match(/[?&]site=([^&]+)/);
       assert(m, 'no site in hash: ' + hash);
       const p2 = await newPage(true);
-      await stubJob(p2, '**/api/planner/viewshed*', [{ fulfill: json(200, viewshedBody()) }]);
+      const vs2 = await stubJob(p2, '**/api/planner/viewshed*', [{ fulfill: json(200, viewshedBody()) }]);
       await openPlanner(p2, '?mode=coverage&site=' + m[1] + '&layer=repeaters');
       await p2.waitForSelector('img.leaflet-image-layer');
+      await p2.waitForTimeout(300);
+      assert(vs2.count === 1, 'deep link computes once automatically: ' + vs2.count);
       assert(await p2.locator('path.mc-pl-cov-site').count() === 1, 'site marker');
       assert(await p2.locator('[data-f="layer"][value="repeaters"]').isChecked(), 'Repeaters selected');
       await p2.waitForSelector('.mc-pl-cov-links li');
