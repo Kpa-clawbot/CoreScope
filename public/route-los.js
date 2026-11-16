@@ -330,7 +330,7 @@
     function attempt() {
       var p;
       try {
-        p = fetch(url, { headers: { Accept: 'application/json' } });
+        p = CSApi.fetch(url, { headers: { Accept: 'application/json' } });
       } catch (e) {
         p = Promise.reject(e);
       }

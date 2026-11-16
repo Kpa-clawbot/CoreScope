@@ -4,6 +4,7 @@ const vm = require('vm');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
+const { loadApiBase } = require('./api-base-sandbox');
 process.chdir(path.resolve(__dirname, '..', '..'));
 
 let passed = 0, failed = 0;
@@ -33,6 +34,7 @@ function makeCtx() {
     addEventListener() {}, dispatchEvent() {}, requestAnimationFrame: (cb) => cb(),
   };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   for (const f of ['public/payload-labels.js', 'public/roles.js', 'public/app.js']) {
     vm.runInContext(fs.readFileSync(f, 'utf8'), ctx);
     for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];

@@ -14,6 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
 let passed = 0, failed = 0;
@@ -255,6 +256,7 @@ function load(opts) {
   if (opts.configReady) ctx.MeshConfigReady = opts.configReady;
   ctx.window = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx, opts.deployment);
   vm.runInContext(LOS_SRC, ctx);
   vm.runInContext(PANEL_SRC, ctx);
   vm.runInContext(RLOS_SRC, ctx);
@@ -575,6 +577,16 @@ async function main() {
     t.R.clear();
     assert(sb.querySelectorAll('.mc-los-chip').length === 0, 'clear() removes all chips');
     assert(!layer._map, 'clear() removes the LOS layer from the map');
+  }
+
+  console.log('\n=== update(): goes through CSApi (static host on another origin) ===');
+  {
+    const f = makeFetch(() => ({ distance_km: 2.7, elev_m: flat(20) }));
+    const t = load({ fetch: f, deployment: { apiBase: 'https://api.test', auth: false } });
+    t.R.update({ map: makeMap(), sidebar: makeSidebar([A, B]), seq: [A, B] });
+    await flush();
+    assert(f.calls.length === 1 && f.calls[0].indexOf('https://api.test/api/elevation/profile?pts=') === 0, 'the profile is requested from the API origin (got ' + f.calls[0] + ')');
+    assert(!/[^.\w]fetch\(/.test(RLOS_SRC), 'route-los.js has no direct fetch()');
   }
 
   console.log('\n=== update(): too_long cached, 429 not cached and not retried ===');

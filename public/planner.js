@@ -427,7 +427,7 @@
         if (signal && signal.aborted) { onAbort(); return; }
         var p;
         try {
-          p = fetch(url, { signal: signal || undefined, headers: { Accept: 'application/json' } });
+          p = CSApi.fetch(url, { signal: signal || undefined, headers: { Accept: 'application/json' } });
         } catch (e) {
           p = Promise.reject(e);
         }
@@ -1037,7 +1037,7 @@
       return;
     }
     var gen = pageGen;
-    fetch('/api/config/map').then(function (r) { return r.ok ? r.json() : null; }).then(function (m) {
+    CSApi.fetch('/api/config/map').then(function (r) { return r.ok ? r.json() : null; }).then(function (m) {
       if (gen !== pageGen || !S || !m) return;
       if (Array.isArray(m.center) && m.center.length === 2 && validLatLon(Number(m.center[0]), Number(m.center[1]))) {
         mapCenter = [Number(m.center[0]), Number(m.center[1])];
@@ -1118,7 +1118,7 @@
     } else if (typeof api === 'function') {
       p = api('/nodes?limit=2000', { ttl: ttl });
     } else {
-      p = fetch('/api/nodes?limit=2000').then(function (r) {
+      p = CSApi.fetch('/api/nodes?limit=2000').then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       });

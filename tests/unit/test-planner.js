@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
 let passed = 0, failed = 0;
@@ -80,6 +81,7 @@ function load(opts) {
   Object.assign(ctx, opts.globals || {});
   ctx.window = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx, opts.deployment);
   vm.runInContext(LOS_SRC, ctx);
   vm.runInContext(PANEL_SRC, ctx);
   vm.runInContext(PLANNER_SRC, ctx);
@@ -341,6 +343,16 @@ async function main() {
     assert(f.calls.every(c => c.url === url), 'every poll re-requests the SAME url');
     assert(out && out.source === 'SRTM' && !error, 'resolves with the 200 body');
     assert(T.pending().length === 0, 'no timer left behind');
+  }
+
+  console.log('\n=== fetchJob: goes through CSApi (static host on another origin) ===');
+  {
+    const f = makeFetch([res(200, { source: 'SRTM', legs: [] })]);
+    const { MP: P } = load({ fetch: f, deployment: { apiBase: 'https://api.test', auth: false } });
+    await P.fetchJob('/api/planner/profile?pts=1,2,3,4');
+    assert(f.calls.length === 1 && f.calls[0].url === 'https://api.test/api/planner/profile?pts=1,2,3,4', 'the job is requested from the API origin (got ' + (f.calls[0] || {}).url + ')');
+    assert(f.calls[0].opts.credentials === 'omit', 'an anonymous build sends no credentials');
+    assert(!/[^.\w]fetch\(/.test(PLANNER_SRC), 'planner.js has no direct fetch()');
   }
 
   console.log('\n=== fetchJob: 202 without retry_after_s, odd progress ===');
