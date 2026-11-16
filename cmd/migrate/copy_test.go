@@ -906,7 +906,7 @@ func TestPostgresForeignSchemaRefused(t *testing.T) {
 	newSource(t, src, srcMigrations())
 
 	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", pgURL)
-	wantFail(t, code, out, "holds 1 tables or views but no CoreScope schema_version", "Refusing to create anything")
+	wantFail(t, code, out, "holds 1 tables, views, or sequences but no CoreScope schema_version", "Refusing to create anything")
 	for _, tbl := range []string{"schema_version", "transmissions"} {
 		var n int
 		pg.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?`, tbl).Scan(&n)
