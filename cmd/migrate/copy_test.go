@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -905,7 +906,7 @@ func TestPostgresForeignSchemaRefused(t *testing.T) {
 	newSource(t, src, srcMigrations())
 
 	code, out := run(t, "copy", "-from", "sqlite:"+src, "-to", pgURL)
-	wantFail(t, code, out, "holds 1 tables or views but no CoreScope schema_version", "Refusing to create anything")
+	wantFail(t, code, out, "holds 1 tables, views, or sequences but no CoreScope schema_version", "Refusing to create anything")
 	for _, tbl := range []string{"schema_version", "transmissions"} {
 		var n int
 		pg.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?`, tbl).Scan(&n)
@@ -913,6 +914,53 @@ func TestPostgresForeignSchemaRefused(t *testing.T) {
 			t.Errorf("%s was created in a foreign schema", tbl)
 		}
 	}
+}
+
+func TestPostgresForeignSchemaSequenceRefused(t *testing.T) {
+	pg, pgURL := pgTarget(t)
+	mustExec(t, pg, `CREATE SEQUENCE standalone_sequence START WITH 73`)
+	src, srcURL := pgTarget(t)
+	if err := pgschema.Apply(t.Context(), src, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, src, `INSERT INTO nodes (public_key, name) VALUES ('keep', 'source node')`)
+	before, err := loadSchema(t.Context(), src, postgresBackend)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := run(t, "copy", "-from", srcURL, "-to", pgURL)
+
+	var lastValue int64
+	var isCalled bool
+	if err := pg.QueryRow(`SELECT last_value, is_called FROM standalone_sequence`).Scan(&lastValue, &isCalled); err != nil {
+		t.Fatal(err)
+	}
+	if lastValue != 73 || isCalled {
+		t.Errorf("sequence state = (%d, %t), want (73, false)", lastValue, isCalled)
+	}
+	var relations int
+	if err := pg.QueryRow(`SELECT COUNT(*) FROM pg_class WHERE relnamespace = current_schema()::regnamespace`).Scan(&relations); err != nil {
+		t.Fatal(err)
+	}
+	if relations != 1 {
+		t.Errorf("foreign schema has %d relations, want only the original sequence; CoreScope objects were created", relations)
+	}
+	after, err := loadSchema(t.Context(), src, postgresBackend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Error("source schema was modified")
+	}
+	var name string
+	if err := src.QueryRow(`SELECT name FROM nodes WHERE public_key = 'keep'`).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "source node" || count(t, src, "nodes") != 1 {
+		t.Error("source rows were modified")
+	}
+	wantFail(t, code, out, "no CoreScope schema_version", "Refusing to create anything")
 }
 
 // A server started straight after a copy (CI's E2E job, or before the first

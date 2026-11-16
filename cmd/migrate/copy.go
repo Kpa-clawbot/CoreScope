@@ -490,24 +490,25 @@ func (j *copyJob) intoPostgres(ctx context.Context, to dbRef) (err error) {
 	return nil
 }
 
-// refuseForeignSchema refuses a target schema that already holds tables but
-// no schema_version: someone else's database, which pgschema.Apply would
-// otherwise fill with CoreScope tables. It runs before Apply, so nothing is
-// created.
+// refuseForeignSchema refuses a target schema that already holds tables,
+// views or sequences but no schema_version: someone else's database, which
+// pgschema.Apply would otherwise fill with CoreScope tables. It runs before
+// Apply, so nothing is created.
 func refuseForeignSchema(ctx context.Context, q queryer, to dbRef) error {
 	var schemaName sql.NullString
-	var tables int
+	var relations int
 	var hasVersion bool
 	err := q.QueryRowContext(ctx, `SELECT current_schema(),
-		(SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema()),
+		(SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')),
 		EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'schema_version')`).
-		Scan(&schemaName, &tables, &hasVersion)
+		Scan(&schemaName, &relations, &hasVersion)
 	if err != nil {
 		return fmt.Errorf("inspect target schema on %s: %w", to.display, err)
 	}
-	if tables > 0 && !hasVersion {
-		return fmt.Errorf("target schema %q on %s holds %d tables or views but no CoreScope schema_version: it is not a CoreScope database. Refusing to create anything in it; use an empty database or schema",
-			schemaName.String, to.display, tables)
+	if relations > 0 && !hasVersion {
+		return fmt.Errorf("target schema %q on %s holds %d tables, views, or sequences but no CoreScope schema_version: it is not a CoreScope database. Refusing to create anything in it; use an empty database or schema",
+			schemaName.String, to.display, relations)
 	}
 	return nil
 }
