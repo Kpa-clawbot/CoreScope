@@ -112,15 +112,17 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   }
 
   // ============================================================
-  // Item 2: hashchange cleanup. Open slide-over on /#/packets,
-  // navigate to /#/nodes via location.hash, assert panel hidden,
-  // backdrop hidden, scroll-lock released.
+  // Item 2: hashchange cleanup. Open a real packet preview, navigate
+  // away, and retain the destination as well as releasing the overlay.
   // ============================================================
   {
-    const ctx = await browser.newContext({ viewport: { width: 800, height: 800 } });
+    const ctx = await browser.newContext({ viewport: { width: 800, height: 900 } });
     const page = await ctx.newPage();
     page.setDefaultTimeout(8000);
     page.on('pageerror', (e) => console.error('[pageerror]', e.message));
+    await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => window.SITE_CONFIG && window.SITE_CONFIG.timestamps && _themeRefreshTimer === null);
+    const homeTitle = await page.title();
     // #1923 follow-up: pin an explicit window so this step tests the munger
     // slide-over rather than the clock, the same way #1924 pinned
     // test-slideover-1056-e2e.js. The packets page defaults to
@@ -131,12 +133,10 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.goto(BASE + '/#/packets?timeWindow=180', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#pktTable tbody tr[data-action]', { timeout: 8000 });
 
-    await step('hashchange: navigating away closes slide-over + releases scroll-lock', async () => {
-      // Open slide-over via SlideOver API directly (page-agnostic).
-      await page.evaluate(() => {
-        const c = window.SlideOver.open({ title: 'X' });
-        c.innerHTML = '<p>x</p>';
-      });
+    await step('hashchange: packet cleanup preserves the destination and title', async () => {
+      // A generic SlideOver has no packet onClose callback and misses #2380.
+      await page.locator('#pktTable tbody tr[data-action]').first().locator('td').first().click();
+      await page.waitForSelector('.slide-over-panel');
       const before = await page.evaluate(() => ({
         open: window.SlideOver.isOpen(),
         bodyHasLockClass: document.body.classList.contains('scroll-locked'),
@@ -145,9 +145,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       assert(before.open, 'precondition: panel should be open');
 
       // Trigger a hashchange.
-      await page.evaluate(() => { location.hash = '#/nodes'; });
-      // Allow hashchange listeners to flush.
-      await page.waitForTimeout(150);
+      await page.evaluate(() => { location.hash = '#/home'; });
+      await page.waitForSelector('.slide-over-panel', { state: 'detached' });
 
       const after = await page.evaluate(() => {
         const p = document.querySelector('.slide-over-panel');
@@ -159,6 +158,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
           return r.width > 0 && r.height > 0;
         }
         return {
+          hash: location.hash,
+          title: document.title,
           isOpen: window.SlideOver.isOpen(),
           panelShown: shown(p),
           backdropShown: shown(b),
@@ -170,7 +171,44 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       assert(!after.panelShown, 'panel must be hidden after hashchange: ' + JSON.stringify(after));
       assert(!after.backdropShown, 'backdrop must be hidden after hashchange: ' + JSON.stringify(after));
       assert(!after.bodyHasLockClass, 'body must NOT carry scroll-locked class after hashchange: ' + JSON.stringify(after));
+      assert(after.bodyOverflowComputed !== 'hidden', 'body scroll lock must be released after hashchange: ' + JSON.stringify(after));
+      assert(after.hash === '#/home' && after.title === homeTitle,
+        'packet cleanup must preserve destination #/home and title ' + JSON.stringify(homeTitle) + ': ' + JSON.stringify(after));
     });
+
+    for (const method of ['X', 'Escape', 'backdrop', 'resize']) {
+      await step('packet dismissal: ' + method + ' returns to the list and restores focus', async () => {
+        await page.goto(BASE + '/#/packets?timeWindow=180', { waitUntil: 'domcontentloaded' });
+        const row = page.locator('#pktTable tbody tr[data-action]').first();
+        await row.waitFor();
+        const rowValue = await row.getAttribute('data-value');
+        const listTitle = await page.title();
+        await row.locator('td').first().click();
+        await page.waitForSelector('.slide-over-panel');
+        if (method === 'X') await page.locator('.slide-over-close').click();
+        else if (method === 'Escape') await page.keyboard.press('Escape');
+        else if (method === 'backdrop') await page.locator('.slide-over-backdrop').click({ position: { x: 10, y: 20 } });
+        else await page.setViewportSize({ width: 1440, height: 900 });
+        await page.waitForSelector('.slide-over-panel', { state: 'detached' });
+        const after = await page.evaluate(async () => {
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          return {
+            hash: location.hash,
+            title: document.title,
+            backdrop: !!document.querySelector('.slide-over-backdrop'),
+            locked: document.body.classList.contains('scroll-locked'),
+            overflow: getComputedStyle(document.body).overflow,
+            focusedValue: document.activeElement && document.activeElement.getAttribute('data-value'),
+          };
+        });
+        assert(after.hash === '#/packets' && after.title === listTitle,
+          'manual dismissal must return to the packet list and title: ' + JSON.stringify(after));
+        assert(!after.backdrop && !after.locked && after.overflow !== 'hidden',
+          'manual dismissal must release backdrop and scroll lock: ' + JSON.stringify(after));
+        assert(after.focusedValue === rowValue,
+          'manual dismissal must restore the originating row: ' + JSON.stringify(after));
+      });
+    }
 
     await ctx.close();
   }
