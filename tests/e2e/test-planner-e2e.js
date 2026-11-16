@@ -380,9 +380,13 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
 
     await step('coverage: Repeaters layer lists links, no new viewshed request', async () => {
       const before = vs.count;
+      assert(await page.locator('.mc-pl-cov-links').count() === 0, 'links list shown on Users layer');
+      assert(await page.locator('path.mc-pl-cov-link').count() === 0, 'map links drawn on Users layer');
       await page.locator('[data-f="layer"][value="repeaters"]').check();
       await page.waitForSelector('.mc-pl-cov-links li');
       assert(await page.locator('.mc-pl-cov-links li').count() === 2, 'link rows');
+      assert(await page.locator('path.mc-pl-cov-link').count() === 2, 'map link lines');
+      await page.waitForTimeout(300);
       assert(vs.count === before, 'layer switch refetched: ' + (vs.count - before));
       assert(/[?&]layer=repeaters(&|$)/.test(await page.evaluate(() => location.hash)), 'layer in hash');
       assert(await overlays() === 1, 'overlay kept');
