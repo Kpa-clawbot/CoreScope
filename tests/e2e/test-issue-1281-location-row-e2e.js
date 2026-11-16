@@ -197,6 +197,11 @@ async function findPacketDetailByType(page, predicate, maxRows = 40) {
     await step('#1149 ' + view.name + ' retains observer SNR without an aggregate headline', async () => {
       const nodePage = await browser.newPage({ locale: view.locale || 'en-US', viewport: { width: view.width, height: 900 } });
       try {
+        await nodePage.addInitScript(() => {
+          window.addEventListener('theme-refresh', () => {
+            if (window._customizerV2 && window._customizerV2.initDone) window.__nodeThemeReady = true;
+          });
+        });
         await nodePage.route('**/api/nodes**', async (route) => {
           const pathname = new URL(route.request().url()).pathname;
           const fixtures = {
@@ -214,6 +219,9 @@ async function findPacketDetailByType(page, predicate, maxRows = 40) {
             await route.continue();
           }
         });
+        // The initial server-theme refresh rebuilds node details and resets table sorting.
+        await nodePage.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+        await nodePage.waitForFunction(() => window.__nodeThemeReady);
         await nodePage.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
         await nodePage.locator('#nodesBody tr[data-key="' + pubkey + '"]').click();
         if (view.full && view.width > 640) {
