@@ -1,0 +1,453 @@
+/* route-los.css — radio line of sight on the map packet-route view
+   (route-los.js): sidebar chips, obstruction markers, the terrain-profile
+   panel and the los.js SVG layers. Colours come from style.css variables only. */
+
+/* ─── Sidebar chips ──────────────────────────────────────────────────── */
+
+/* The chip sits at the end of .mc-rt-name: the name gets its own ellipsis
+   box so a long name shrinks first and every chip lines up on the right. */
+.mc-rt-name.mc-los-has-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mc-rt-name.mc-los-has-chip > * { flex: none; }
+.mc-rt-name.mc-los-has-chip > .mc-los-name-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mc-rt-name.mc-los-has-chip > .mc-rt-obs-chip,
+.mc-rt-name.mc-los-has-chip > .mc-rt-status-chip { margin-left: 0; }
+.mc-rt-name.mc-los-has-chip > .mc-los-chip { margin-left: auto; }
+
+.mc-los-chip {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 20px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: 600 11px/18px system-ui, -apple-system, sans-serif;
+  font-style: normal;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out;
+}
+.mc-los-chip:hover,
+.mc-los-chip[aria-expanded="true"] { border-color: currentColor; border-style: solid; }
+.mc-los-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mc-los-chip.mc-los-tone-good {
+  color: var(--status-green-text);
+  background: color-mix(in srgb, var(--status-green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--status-green) 40%, transparent);
+}
+.mc-los-chip.mc-los-tone-warn {
+  color: var(--status-yellow-text);
+  background: color-mix(in srgb, var(--status-amber) 14%, transparent);
+  border-color: color-mix(in srgb, var(--status-amber) 50%, transparent);
+}
+.mc-los-chip.mc-los-tone-bad {
+  color: var(--status-red-text);
+  background: color-mix(in srgb, var(--status-red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--status-red) 40%, transparent);
+}
+.mc-los-chip.mc-los-tone-muted { border-style: dashed; border-color: var(--border); }
+.mc-los-chip.mc-los-tone-muted:hover,
+.mc-los-chip.mc-los-tone-muted[aria-expanded="true"] { border-color: var(--text-muted); }
+@media (pointer: coarse) {
+  .mc-los-chip { min-height: 24px; padding: 0 10px; }
+}
+
+@keyframes mc-los-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.mc-los-loading { animation: mc-los-pulse 1.2s ease-in-out infinite; }
+
+/* ─── Map: obstruction marker, crosshair, active leg ─────────────────── */
+
+.mc-los-obstruction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: var(--surface-2);
+  box-shadow: 0 1px 4px var(--shadow);
+  cursor: pointer;
+}
+.mc-los-obstruction .ph-icon { width: 16px; height: 16px; font-size: 16px; vertical-align: 0; }
+.mc-los-obstruction.mc-los-tone-warn { color: var(--status-yellow-text); border-color: var(--status-amber); }
+.mc-los-obstruction.mc-los-tone-bad { color: var(--status-red-text); border-color: var(--status-red); }
+.mc-los-obstruction:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.mc-los-cursor-marker {
+  box-sizing: border-box;
+  border: 3px solid var(--accent);
+  border-radius: 50%;
+  background: var(--surface-2);
+  box-shadow: 0 0 0 2px var(--surface-2), 0 1px 4px var(--shadow);
+  pointer-events: none;
+}
+
+/* route-view.css hides every overlay path that is not a route edge. */
+html body.mc-route-active .leaflet-overlay-pane svg path.mc-los-leg-active { display: inline !important; }
+.leaflet-overlay-pane path.mc-los-leg-active {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 2px var(--surface-2));
+  pointer-events: none;
+}
+
+/* The panel takes the bottom-centre spot of the "N hops shown" badge. */
+.mc-los-open .mc-rt-map-badge { display: none; }
+
+/* ─── Terrain-profile panel ──────────────────────────────────────────── */
+
+.mc-los-panel {
+  position: absolute;
+  left: 50%;
+  bottom: 28px; /* clear of the tile attribution */
+  transform: translateX(-50%);
+  z-index: 1001; /* above Leaflet's control corners (1000) */
+  box-sizing: border-box;
+  width: min(760px, calc(100% - 32px));
+  max-height: calc(100% - 56px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px var(--shadow);
+  font: 13px/1.45 system-ui, -apple-system, sans-serif;
+  cursor: auto;
+}
+.mc-los-panel:focus { outline: none; }
+.mc-los-panel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mc-los-panel p { margin: 0; }
+
+.mc-los-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mc-los-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-los-title .mc-los-ends { font-weight: 500; }
+.mc-los-nav {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.mc-los-nav.mc-los-single .mc-los-prev,
+.mc-los-nav.mc-los-single .mc-los-next,
+.mc-los-nav.mc-los-single .mc-los-pos { display: none; }
+.mc-los-pos {
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.mc-los-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.mc-los-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.mc-los-btn:active:not(:disabled) { border-color: var(--border); }
+.mc-los-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mc-los-btn:disabled { opacity: 0.4; cursor: default; }
+
+.mc-los-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 8px !important;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.mc-los-meta > span { white-space: nowrap; }
+.mc-los-sep { color: var(--text-muted); }
+.mc-los-pill {
+  margin-left: auto;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+}
+.mc-los-pill.mc-los-tone-good {
+  color: var(--status-green-text);
+  background: color-mix(in srgb, var(--status-green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--status-green) 40%, transparent);
+}
+.mc-los-pill.mc-los-tone-warn {
+  color: var(--status-yellow-text);
+  background: color-mix(in srgb, var(--status-amber) 14%, transparent);
+  border-color: color-mix(in srgb, var(--status-amber) 50%, transparent);
+}
+.mc-los-pill.mc-los-tone-bad {
+  color: var(--status-red-text);
+  background: color-mix(in srgb, var(--status-red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--status-red) 40%, transparent);
+}
+.mc-los-pill.mc-los-tone-muted { color: var(--text-muted); border: 1px dashed var(--border); font-weight: 600; }
+
+.mc-los-obst {
+  margin-top: 4px !important;
+  color: var(--status-red-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mc-los-chart {
+  position: relative;
+  margin-top: 8px;
+}
+.mc-los-chart-wait { aspect-ratio: 720 / 260; }
+.mc-los-chart-err { display: flex; }
+.mc-los-chart-err .mc-los-chart-state { height: auto; min-height: 96px; }
+.mc-los-chart-state {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.mc-los-chart-wait .mc-los-chart-state { animation: mc-los-pulse 1.6s ease-in-out infinite; }
+.mc-los-chart-state strong { color: var(--text); font-size: 13px; }
+.mc-los-retry {
+  margin-top: 4px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mc-los-retry:hover { background: var(--bg-hover); }
+.mc-los-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.mc-los-readout {
+  min-height: 20px;
+  margin-top: 4px !important;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.mc-los-readout b { color: var(--text); font-weight: 600; white-space: nowrap; }
+/* Keep each reading whole; only the first (it carries a node name) may wrap. */
+.mc-los-ri:not(:first-child) { white-space: nowrap; }
+.mc-los-readout .mc-los-sep { padding: 0 6px; }
+
+.mc-los-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.mc-los-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mc-los-field label,
+.mc-los-k-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.mc-los-panel input[type="number"] {
+  box-sizing: border-box;
+  width: 104px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+.mc-los-panel input[type="number"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+.mc-los-panel input[aria-invalid="true"] { border-color: var(--status-red); }
+.mc-los-k-val {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  font-variant-numeric: tabular-nums;
+}
+.mc-los-reset {
+  min-height: 32px;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--link-color);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.mc-los-reset:hover { color: var(--text); }
+.mc-los-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+.mc-los-input-err {
+  flex-basis: 100%;
+  color: var(--status-red-text);
+  font-size: 12px;
+}
+.mc-los-input-err:empty { display: none; }
+
+.mc-los-foot {
+  margin-top: 8px !important;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* ─── Profile SVG (los.js renderProfileSvg) ─────────────────────────── */
+
+.mc-los-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  touch-action: pan-y; /* horizontal drags scrub the chart, vertical ones scroll */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mc-los-grid { stroke: var(--border); stroke-width: 1; shape-rendering: crispEdges; }
+.mc-los-tick {
+  fill: var(--text-muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.mc-los-endlabel {
+  fill: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--surface-2);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.mc-los-f1 {
+  fill: var(--status-green);
+  fill-opacity: 0.16;
+  stroke: var(--status-green);
+  stroke-opacity: 0.55;
+  stroke-width: 1;
+}
+.mc-los-f60 { fill: var(--status-red); fill-opacity: 0.1; stroke: none; }
+.mc-los-ground {
+  fill: var(--text-muted);
+  fill-opacity: 0.28;
+  stroke: var(--status-amber);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+.mc-los-line { fill: none; stroke: var(--text); stroke-width: 1.5; }
+.mc-los-ant { stroke: var(--surface-2); stroke-width: 2; }
+.mc-los-ant-a { fill: var(--status-amber); }
+.mc-los-ant-b { fill: var(--status-green); }
+.mc-los-worst { stroke: var(--surface-2); stroke-width: 2; }
+.mc-los-worst.mc-los-tone-good { fill: var(--status-green); }
+.mc-los-worst.mc-los-tone-warn { fill: var(--status-amber); }
+.mc-los-worst.mc-los-tone-bad { fill: var(--status-red); }
+.mc-los-cursor { stroke: var(--accent); stroke-width: 1.5; pointer-events: none; }
+.mc-los-hit { cursor: crosshair; }
+
+/* ─── Phone: docked at the top (the route sidebar is a bottom sheet) ─── */
+
+@media (max-width: 767px) {
+  .mc-los-panel {
+    top: 8px;
+    right: 8px;
+    bottom: auto;
+    left: 8px;
+    transform: none;
+    width: auto;
+    max-height: min(55vh, calc(100% - 16px));
+    padding: 8px 12px 12px;
+    border-radius: 10px;
+  }
+  /* Buttons on top (close on the right), the full title wrapping below. */
+  .mc-los-head { flex-wrap: wrap; }
+  .mc-los-nav { order: 1; flex: 1; }
+  .mc-los-close { margin-left: auto; }
+  .mc-los-title { order: 2; flex-basis: 100%; white-space: normal; }
+  .mc-los-btn { width: 44px; height: 44px; }
+  .mc-los-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: end;
+  }
+  .mc-los-input-err { grid-column: 1 / -1; }
+  .mc-los-panel input[type="number"] { width: 100%; min-height: 44px; font-size: 16px; }
+  .mc-los-reset { justify-self: start; }
+  .mc-los-reset,
+  .mc-los-retry,
+  .mc-los-k-val { min-height: 44px; }
+  /* The chart scales to about half size here; enlarge text in viewBox units. */
+  .mc-los-tick { font-size: 18px; }
+  /* Drop the distance labels a little so "0 m" and "0 km" do not collide. */
+  .mc-los-tick[text-anchor="middle"] { transform: translateY(6px); }
+  .mc-los-endlabel { font-size: 20px; stroke-width: 4px; }
+  /* The map-controls gear sits fixed over the panel's close button. */
+  body.mc-route-active.mc-los-panel-open .map-controls-toggle { display: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-los-loading,
+  .mc-los-chart-wait .mc-los-chart-state { animation: none; }
+  .mc-los-chip { transition: none; }
+}

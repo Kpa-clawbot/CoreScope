@@ -236,6 +236,18 @@ type Config struct {
 	// LoRa RF parameters per node from the MeshCore map (issue #1268).
 	// OPT-IN: nil or an empty nodesUrl starts no fetch.
 	RfParams *RfParamsConfig `json:"rfParams,omitempty"`
+
+	// Radio line-of-sight on the map's packet route view (los_config.go).
+	// OPT-IN: nil or enabled=false fetches no elevation data.
+	LOS *LOSConfig `json:"los,omitempty"`
+
+	// Repeater planner (#/tools/planner, planner_types.go). OPT-IN: nil or
+	// enabled=false fetches no terrain tiles and /api/planner/* answers 404.
+	Planner *PlannerConfig `json:"planner,omitempty"`
+
+	// SRTM terrain tiles shared by route LOS and the planner
+	// (terrain_config.go). Read only while one of them is enabled.
+	Terrain *TerrainConfig `json:"terrain,omitempty"`
 }
 
 // CustomizerConfig holds operator-side knobs for the in-app customizer modal.
@@ -601,6 +613,12 @@ type WebSocketConfig struct {
 	// X-Forwarded-For may be believed. REQUIRED for the limits to do anything
 	// behind nginx/Caddy/Traefik/ingress: without it every visitor shares the
 	// proxy's address, so the limits are skipped and a warning is logged.
+	// /ws takes the leftmost X-Forwarded-For entry; the terrain-backed
+	// /api/elevation/profile and /api/planner/* limits take the rightmost
+	// entry that is not a trusted proxy, so behind a CDN list the CDN's
+	// ranges here too, or every client looks like the CDN.
+	// A listed proxy MUST append to X-Forwarded-For (nginx $proxy_add_x_forwarded_for);
+	// behind a CDN, anyone sending from inside its ranges can choose the hop used.
 	// Never list an address you do not control; anyone reaching the server
 	// from a trusted address can name any client IP they like.
 	TrustedProxies []string `json:"trustedProxies,omitempty"`

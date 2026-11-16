@@ -711,6 +711,11 @@
     var userMgmt = (cfg.userManagement && cfg.userManagement.enabled) ? { enabled: true, channelProposals: !!cfg.userManagement.channelProposals, notifications: !!cfg.userManagement.notifications, observerLogins: !!cfg.userManagement.observerLogins } : null;
     window.MC_USER_MGMT = CSApi.anonymous ? null : userMgmt;
     window.MC_ACCOUNTS_ON_CLASSIC = !!(CSApi.anonymous && userMgmt);
+    // Radio line-of-sight on the map route view: present only when the
+    // server enables los (route-los.js stays inert while this is null).
+    window.MC_LOS_CFG = (cfg.los && typeof cfg.los === 'object') ? cfg.los : null;
+    // Repeater planner: present only when the server enables planner.
+    window.MC_PLANNER_CFG = (cfg.planner && typeof cfg.planner === 'object') ? cfg.planner : null;
     // #1574 — operator-configurable cap on /live map node count.
     if (cfg.liveMapMaxNodes != null) window.LIVE_MAP_MAX_NODES = cfg.liveMapMaxNodes;
     // #1784 — path trust threshold: minimum hash bytes for mapping evidence.
