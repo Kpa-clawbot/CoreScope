@@ -426,7 +426,7 @@ type encryptedRow struct{ raw, firstSeen string }
 
 // gateChannels returns the catalogue channels that stored traffic confirms.
 func (w *catalogKeyWorker) gateChannels(ctx context.Context, chans []catalogChannel) ([]catalogEvidence, error) {
-	rejected, err := w.rejected(ctx, keyBackfillKindChannel)
+	rejected, rejectedKeys, err := w.rejected(ctx, keyBackfillKindChannel)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +437,7 @@ func (w *catalogKeyWorker) gateChannels(ctx context.Context, chans []catalogChan
 	}
 	byTag := map[string][]catalogChannel{}
 	for _, c := range chans {
-		if (c.Explicit && !w.set.includeExplicitSecrets) || rejected[c.Name] {
+		if (c.Explicit && !w.set.includeExplicitSecrets) || rejected[c.Name] || rejectedKeys[c.KeyHex] {
 			continue
 		}
 		if _, ok := inForce[c.Name]; ok || secrets[c.KeyHex] {
@@ -537,7 +537,8 @@ type regionGate struct {
 // gateRegions counts unique matches per catalogue region name over the
 // window and returns the names at or above the population-aware threshold.
 func (w *catalogKeyWorker) gateRegions(ctx context.Context, names []string) (regionGate, error) {
-	rejected, err := w.rejected(ctx, keyBackfillKindRegion)
+	// Region keys are derived from the name, so the name is enough.
+	rejected, _, err := w.rejected(ctx, keyBackfillKindRegion)
 	if err != nil {
 		return regionGate{}, err
 	}
@@ -762,6 +763,12 @@ func (w *catalogKeyWorker) record(ctx context.Context, kind string, ev []catalog
 // kicks the backfill when that put a new key in force. Startup calls it
 // before ingest begins, so promoted keys survive an unreachable catalogue.
 func (w *catalogKeyWorker) apply(ctx context.Context) error {
+	// A channel promoted under one name stays out once its secret is rejected
+	// under another.
+	_, rejectedKeys, err := w.rejected(ctx, keyBackfillKindChannel)
+	if err != nil {
+		return err
+	}
 	rows, err := w.store.db.QueryContext(ctx, `
 		SELECT kind, name, key_hex FROM catalog_keys
 		WHERE status = 'promoted' ORDER BY hits DESC, name`)
@@ -778,6 +785,9 @@ func (w *catalogKeyWorker) apply(ctx context.Context) error {
 		}
 		switch {
 		case kind == keyBackfillKindChannel && w.set.channels && len(chans) < w.set.maxPromoted:
+			if rejectedKeys[strings.ToLower(keyHex)] {
+				continue
+			}
 			if _, err := hex.DecodeString(keyHex); err == nil && (len(keyHex) == 32 || len(keyHex) == 64) {
 				chans[name] = strings.ToLower(keyHex)
 			}
@@ -806,22 +816,27 @@ func (w *catalogKeyWorker) apply(ctx context.Context) error {
 	return nil
 }
 
-// rejected returns the names of kind an operator rejected.
-func (w *catalogKeyWorker) rejected(ctx context.Context, kind string) (map[string]bool, error) {
-	rows, err := w.store.db.QueryContext(ctx, `SELECT name FROM catalog_keys WHERE kind=? AND status=?`, kind, catalogStatusRejected)
+// rejected returns the names of kind an operator rejected and their keys
+// (lowercase hex). Channels are matched on both: a rejected private channel
+// must stay unreadable when a catalogue lists its secret under another name.
+func (w *catalogKeyWorker) rejected(ctx context.Context, kind string) (names, keys map[string]bool, err error) {
+	rows, err := w.store.db.QueryContext(ctx, `SELECT name, key_hex FROM catalog_keys WHERE kind=? AND status=?`, kind, catalogStatusRejected)
 	if err != nil {
-		return nil, fmt.Errorf("load rejected %s names: %w", kind, err)
+		return nil, nil, fmt.Errorf("load rejected %s names: %w", kind, err)
 	}
 	defer rows.Close()
-	out := map[string]bool{}
+	names, keys = map[string]bool{}, map[string]bool{}
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
+		var name, keyHex string
+		if err := rows.Scan(&name, &keyHex); err != nil {
+			return nil, nil, err
 		}
-		out[name] = true
+		names[name] = true
+		if keyHex != "" {
+			keys[strings.ToLower(keyHex)] = true
+		}
 	}
-	return out, rows.Err()
+	return names, keys, rows.Err()
 }
 
 // regionMatcher matches a transmission's code1 against a fixed set of region

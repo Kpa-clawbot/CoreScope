@@ -12,7 +12,8 @@ This page covers what an operator needs to know when running it.
 |---|---|
 | `catalog_keys` | One row per catalogue name with evidence: `kind` (`channel`/`region`), `name`, `key_hex`, `status`, `hits`, `threshold`, `window_n`, `candidates`. |
 | key sets | Rows with status `promoted` are loaded as the lowest key tier, at startup before ingest and after every refresh. |
-| history | Each new promoted key starts the key backfill (#2133). The backfill names unresolved rows (`transmissions.scope_name = ''` for regions, `channel_hash = 'enc_XX'` for channels) and records each rewrite in `tx_rewrite_feed`. |
+| history | Each new promoted key starts the key backfill (#2133). The backfill names unresolved rows (`transmissions.scope_name = ''` for regions, `channel_hash = 'enc_XX'` for channels) and records each rewrite in `tx_rewrite_feed`. For a scoped ADVERT it also fills an empty `nodes`/`inactive_nodes.default_scope`. |
+| live ingest | While a region key is in force, live ingest also writes its name to `nodes.default_scope`, `inactive_nodes.default_scope` and `client_rx_observations.scope_name`. |
 
 `status` is one of:
 
@@ -41,9 +42,9 @@ This page covers what an operator needs to know when running it.
 ## Reverting a promoted region
 
 A wrongly promoted region names packets that belong to some other region, or to
-none. Undoing it takes three things: take the name out of force for good,
-un-name the history the backfill wrote, and let the remaining region keys
-decide those rows again.
+none. It also becomes the default scope of nodes whose adverts it matched. Undoing
+it takes three things: take the name out of force for good, un-name everything
+that carries it, and let the remaining region keys decide those rows again.
 
 The ingestor is the only writer to the database, so stop it first. In the
 Docker image, stop the container. Then, with `#wrong` being the name to revert:
@@ -53,9 +54,11 @@ Docker image, stop the container. Then, with `#wrong` being the name to revert:
 UPDATE catalog_keys SET status = 'rejected'
  WHERE kind = 'region' AND name = '#wrong';
 
--- 2. Un-name the history written with it.
-UPDATE transmissions SET scope_name = ''
- WHERE scope_name = '#wrong';
+-- 2. Un-name everything written with it, by the backfill and by live ingest.
+UPDATE transmissions           SET scope_name    = '' WHERE scope_name    = '#wrong';
+UPDATE nodes                   SET default_scope = '' WHERE default_scope = '#wrong';
+UPDATE inactive_nodes          SET default_scope = '' WHERE default_scope = '#wrong';
+UPDATE client_rx_observations  SET scope_name    = '' WHERE scope_name    = '#wrong';
 
 -- 3. Give every remaining region key a fresh pass over history, so the rows
 --    from step 2 are decided again with the keys still in force.
@@ -69,9 +72,15 @@ Then start the container again:
   in force. The region backfill then runs one full pass and names the rows from
   step 2 with any other key that matches them uniquely. Rows that only `#wrong`
   matched stay unnamed, which is what they were before the promotion.
+- The same pass refills an empty `default_scope` from each node's scoped
+  adverts in history. A node whose adverts only `#wrong` matched keeps an empty
+  `default_scope` until an advert matches a key in force.
+- `client_rx_observations` is not backfilled. Rows cleared in step 2 stay
+  unnamed, as rows stored before any key existed do.
 - The server reloads the rewritten rows from the database at startup. Step 2
   does not go through `tx_rewrite_feed`, so a server you do not restart keeps
-  showing `#wrong` until it reloads.
+  showing `#wrong` (in Scope Audit, node reach and neighbour reports too) until
+  it reloads.
 
 Step 3 costs one scan of the transmissions table in bounded batches, the same
 cost as adding a region key. Live ingest keeps running while it does.
@@ -87,6 +96,10 @@ SELECT name, hits, threshold, window_n, candidates,
 SELECT scope_name, COUNT(*) FROM transmissions
  WHERE scope_name IN (SELECT name FROM catalog_keys WHERE kind = 'region')
  GROUP BY scope_name;
+
+SELECT default_scope, COUNT(*) FROM nodes
+ WHERE default_scope IN (SELECT name FROM catalog_keys WHERE kind = 'region')
+ GROUP BY default_scope;
 ```
 
 To allow a rejected name again later, delete its row (`DELETE FROM
@@ -96,8 +109,10 @@ decides it from scratch.
 ## Rejecting a channel
 
 `UPDATE catalog_keys SET status = 'rejected' WHERE kind = 'channel' AND name =
-'#name'` takes a promoted catalogue channel out of force at the next restart
-and keeps it out. Messages it already decrypted stay decrypted, because the
+'#name'` takes a promoted catalogue channel out of force at the next refresh or
+restart and keeps it out. A rejected channel is matched on its name and on its
+secret: the same secret listed under another name is skipped as well, and a row
+promoted earlier under another name with that secret is no longer loaded. Messages it already decrypted stay decrypted, because the
 backfill never turns a decrypted row back into `enc_XX`. Given the channel
 gate's false rate, a wrong channel promotion is a theoretical case.
 

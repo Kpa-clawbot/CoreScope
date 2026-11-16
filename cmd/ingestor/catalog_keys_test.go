@@ -680,8 +680,24 @@ func TestCatalogFetchHTTPAndSizeCap(t *testing.T) {
 		t.Fatalf("a local file over the cap must be refused, got %v", err)
 	}
 	// A failed fetch leaves the promoted tier alone.
+	if _, err := w.store.db.Exec(`INSERT INTO catalog_keys(kind, name, key_hex, status) VALUES('region','#kept',?,'promoted')`,
+		hex.EncodeToString(regionKey("#kept"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !w.regions.snapshot().isCatalog("#kept") {
+		t.Fatal("setup: #kept should be in force")
+	}
 	w.set.url = srv.URL + "/fail"
 	w.runOnce(context.Background())
+	if !w.regions.snapshot().isCatalog("#kept") {
+		t.Fatal("a failed fetch took a promoted key out of force")
+	}
+	if st, _, _, _ := catalogRow(t, w.store, keyBackfillKindRegion, "#kept"); st != catalogStatusPromoted {
+		t.Fatalf("a failed fetch changed #kept to %q", st)
+	}
 }
 
 func TestCatalogAutoPromoteOffKeepsPromotedRegions(t *testing.T) {
@@ -736,6 +752,23 @@ func TestCatalogRegionRevertProcedure(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		ids = append(ids, insertTx(t, s, transportFrame(wrong, 5, []byte(fmt.Sprintf("w-%d", i))), 5, "", "{}", strp("")))
 	}
+	// A repeater whose only scoped advert matched #wrong: the backfill gives
+	// it default_scope #wrong. inactive_nodes and client_rx_observations got
+	// the name from live ingest while #wrong was in force.
+	pkAdv := strings.Repeat("cc", 32)
+	pkGone := strings.Repeat("dd", 32)
+	for _, q := range []string{
+		`INSERT INTO nodes(public_key, name) VALUES('` + pkAdv + `','adv')`,
+		`INSERT INTO inactive_nodes(public_key, name, default_scope) VALUES('` + pkGone + `','gone','#wrong')`,
+		`INSERT INTO client_rx_observations(rx_pubkey, rx_at, ingested_at, pkt_hash, route_type, payload_type, scope_name, hash_size, hop_count, lat, lon)
+			VALUES('rx','2026-10-01T00:00:00Z','2026-10-01T00:00:00Z','h1',0,5,'#wrong',1,0,49.2,7.0)`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	insertTx(t, s, transportFrame(wrong, 4, advertPayload(0xcc, "A")), 4, "", "{}", strp(""))
+
 	set := testCatalogSettings()
 	set.autoPromoteRegions = true
 	rs := regionSetOf("#kept")
@@ -758,11 +791,27 @@ func TestCatalogRegionRevertProcedure(t *testing.T) {
 	if scope(ids[0]) != "#wrong" {
 		t.Fatalf("setup: backfill should have named history #wrong, got %q", scope(ids[0]))
 	}
+	str := func(q string, args ...interface{}) string {
+		var v string
+		if err := s.db.QueryRow(q, args...).Scan(&v); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		return v
+	}
+	defaultScope := func(table, pk string) string {
+		return str(`SELECT COALESCE(default_scope,'') FROM `+table+` WHERE public_key=?`, pk)
+	}
+	if got := defaultScope("nodes", pkAdv); got != "#wrong" {
+		t.Fatalf("setup: the backfill should have set default_scope #wrong, got %q", got)
+	}
 
 	// The documented SQL, with the ingestor stopped.
 	for _, q := range []string{
 		`UPDATE catalog_keys SET status='rejected' WHERE kind='region' AND name='#wrong'`,
 		`UPDATE transmissions SET scope_name='' WHERE scope_name='#wrong'`,
+		`UPDATE nodes SET default_scope='' WHERE default_scope='#wrong'`,
+		`UPDATE inactive_nodes SET default_scope='' WHERE default_scope='#wrong'`,
+		`UPDATE client_rx_observations SET scope_name='' WHERE scope_name='#wrong'`,
 		`DELETE FROM key_backfill_done WHERE kind='region'`,
 		`DELETE FROM key_backfill_state WHERE kind='region'`,
 	} {
@@ -793,6 +842,46 @@ func TestCatalogRegionRevertProcedure(t *testing.T) {
 		if sc := scope(id); sc != "" {
 			t.Fatalf("row %d still named %q after the revert", id, sc)
 		}
+	}
+	if got := defaultScope("nodes", pkAdv); got != "" {
+		t.Fatalf("nodes.default_scope = %q after the revert, want empty", got)
+	}
+	if got := defaultScope("inactive_nodes", pkGone); got != "" {
+		t.Fatalf("inactive_nodes.default_scope = %q after the revert, want empty", got)
+	}
+	if n := str(`SELECT COUNT(*) FROM client_rx_observations WHERE scope_name='#wrong'`); n != "0" {
+		t.Fatalf("%s client_rx_observations row(s) still name #wrong", n)
+	}
+	var anyWrong int
+	for _, q := range []string{
+		`SELECT COUNT(*) FROM transmissions WHERE scope_name='#wrong'`,
+		`SELECT COUNT(*) FROM nodes WHERE default_scope='#wrong'`,
+		`SELECT COUNT(*) FROM inactive_nodes WHERE default_scope='#wrong'`,
+	} {
+		var n int
+		s.db.QueryRow(q).Scan(&n)
+		anyWrong += n
+	}
+	if anyWrong != 0 {
+		t.Fatalf("%d row(s) still carry #wrong", anyWrong)
+	}
+
+	// Step 3 refills default_scope from history: had the advert matched a key
+	// still in force, the fresh pass would have set it again.
+	keep := regionKey("#kept")
+	pkRefill := strings.Repeat("ee", 32)
+	if _, err := s.db.Exec(`INSERT INTO nodes(public_key, name) VALUES('` + pkRefill + `','refill')`); err != nil {
+		t.Fatal(err)
+	}
+	insertTx(t, s, transportFrame(keep, 4, advertPayload(0xee, "R")), 4, "", "{}", strp(""))
+	if _, err := s.db.Exec(`DELETE FROM key_backfill_done WHERE kind='region'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := b2.runKind(context.Background(), keyBackfillKindRegion); err != nil {
+		t.Fatal(err)
+	}
+	if got := defaultScope("nodes", pkRefill); got != "#kept" {
+		t.Fatalf("a fresh region pass should refill default_scope from history, got %q", got)
 	}
 
 	// The next catalogue run sees the same evidence and leaves it alone.
@@ -901,4 +990,41 @@ func BenchmarkRegionGatePerTransmission(b *testing.B) {
 			out = m.match(5, payload, v, out)
 		}
 	})
+}
+
+// Rejecting a private channel must hold when its secret turns up again under
+// another name, in the gate and for a row promoted before the rejection.
+func TestCatalogRejectedChannelSecretUnderAnotherName(t *testing.T) {
+	s := newTestStore(t)
+	secret := "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	insertTx(t, s, grpTxtFrameAt(t, secret, "B: private", uint32(testFirstSeen.Unix())), 5, encTag(t, secret), "{}", nil)
+	for _, q := range []string{
+		`INSERT INTO catalog_keys(kind, name, key_hex, status) VALUES('channel','private','` + secret + `','rejected')`,
+		`INSERT INTO catalog_keys(kind, name, key_hex, status) VALUES('channel','older-alias','` + strings.ToUpper(secret) + `','promoted')`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set := testCatalogSettings()
+	set.includeExplicitSecrets = true
+	w, cs, _ := newTestCatalogWorker(s, set, map[string]string{}, nil)
+	if err := w.apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cs.Snapshot()["older-alias"]; ok {
+		t.Fatal("a promoted row whose secret is rejected under another name was put in force")
+	}
+	cat := &keyCatalog{Channels: []catalogChannel{{Name: "renamed", KeyHex: secret, Explicit: true}}}
+	if err := w.refresh(context.Background(), cat); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, ok := catalogRow(t, s, keyBackfillKindChannel, "renamed"); ok {
+		t.Fatal("a rejected secret listed under a new name was recorded")
+	}
+	for name := range cs.Snapshot() {
+		if strings.EqualFold(cs.Snapshot()[name], secret) {
+			t.Fatalf("rejected secret in force as %q", name)
+		}
+	}
 }
