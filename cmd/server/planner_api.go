@@ -677,7 +677,7 @@ func (p *plannerService) handleViewshed(w http.ResponseWriter, r *http.Request) 
 				Cells:     base64.StdEncoding.EncodeToString(g.Cells),
 				Links:     viewshedLinks(v, site, nodes, rangeKm, losParams{FreqMHz: p.freqMHz, KFactor: p.kFactor}, h, rx),
 				Warnings:  []string{},
-				Truncated: truncated,
+				Truncated: viewshedTruncated(site, nodes, rangeKm, truncated),
 			}
 			if w := plannerTerrainWarning(v); w != "" {
 				res.Warnings = append(res.Warnings, w)
@@ -685,6 +685,21 @@ func (p *plannerService) handleViewshed(w http.ResponseWriter, r *http.Request) 
 			return res, nil
 		},
 	})
+}
+
+// viewshedTruncated reports a node-cap cut that may have cost a link. The cap
+// keeps the nodes nearest the site, so everything dropped lies at least as far
+// as the farthest kept one: when that is already beyond rangeKm (the square
+// view's corners), no in-range repeater was lost.
+func viewshedTruncated(site geoPoint, kept []plannerNode, rangeKm float64, capped bool) bool {
+	if !capped {
+		return false
+	}
+	var farthest float64
+	for i := range kept {
+		farthest = max(farthest, geoDistKm(site, geoPoint{Lat: kept[i].Lat, Lon: kept[i].Lon}))
+	}
+	return farthest <= rangeKm
 }
 
 // viewshedLinks is the site's link to every repeater within rangeKm that
@@ -716,7 +731,7 @@ func viewshedLinks(v terrainView, site geoPoint, nodes []plannerNode, rangeKm fl
 		pt := geoPoint{Lat: e.n.Lat, Lon: e.n.Lon}
 		out[i] = PlannerViewshedLink{
 			PubKey: e.n.PubKey, Name: e.n.Name, Lat: e.n.Lat, Lon: e.n.Lon,
-			Link: relayLink(v, site, pt, e.d, lp, h, rx),
+			Link: relayLink(v, site, pt, e.d, lp, h, rx, false),
 		}
 	}
 	return out

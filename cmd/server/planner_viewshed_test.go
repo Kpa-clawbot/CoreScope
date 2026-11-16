@@ -376,6 +376,39 @@ func TestViewshedReportsProgress(t *testing.T) {
 	}
 }
 
+// SkipUsers leaves the Users nibble 0 and must not change the Repeaters one.
+func TestViewshedSkipUsersKeepsRepeaters(t *testing.T) {
+	v := ridgeTerrainView{baseM: 50, ridgeM: 60, west: -97.45, east: -97.44}
+	p := viewshedTestParams(20)
+	full, err := computeViewshed(context.Background(), v, p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SkipUsers = true
+	skip, err := computeViewshed(context.Background(), v, p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.Cells) != len(skip.Cells) {
+		t.Fatalf("sizes %d vs %d", len(full.Cells), len(skip.Cells))
+	}
+	painted := 0
+	for i := range full.Cells {
+		if full.Cells[i]>>4 != skip.Cells[i]>>4 {
+			t.Fatalf("cell %d: repeaters nibble %d vs %d", i, full.Cells[i]>>4, skip.Cells[i]>>4)
+		}
+		if skip.Cells[i]&15 != 0 {
+			t.Fatalf("cell %d: users nibble %d with SkipUsers", i, skip.Cells[i]&15)
+		}
+		if full.Cells[i]&15 != 0 {
+			painted++
+		}
+	}
+	if painted == 0 {
+		t.Fatal("full grid has no users cells: the test proves nothing")
+	}
+}
+
 func benchmarkViewshed(b *testing.B, rangeKm float64) {
 	p := viewshedTestParams(rangeKm)
 	v := fakeTerrainView{bb: plannerExpandBBox(viewshedBBox(p.Site, p.RangeKm), 1)}
@@ -389,6 +422,5 @@ func benchmarkViewshed(b *testing.B, rangeKm float64) {
 
 func BenchmarkViewshed30km(b *testing.B) { benchmarkViewshed(b, 30) }
 
-// BenchmarkViewshedMaxLeg: the largest range the planner offers
-// (defaultPlannerMaxLegKm).
-func BenchmarkViewshedMaxLeg(b *testing.B) { benchmarkViewshed(b, defaultPlannerMaxLegKm) }
+// BenchmarkViewshedMaxLeg: the largest range the planner offers (60 km).
+func BenchmarkViewshedMaxLeg(b *testing.B) { benchmarkViewshed(b, 60) }

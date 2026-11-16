@@ -894,7 +894,7 @@ func runRelaySearch(ctx context.Context, v terrainView, nodes []plannerNode, p P
 
 	lp := losParams{FreqMHz: p.FrequencyMHz, KFactor: p.KFactor}
 	resp := PlannerRelayResponse{
-		Direct:   relayLink(v, a, b, D, lp, p.AntennaAM, p.AntennaBM),
+		Direct:   relayLink(v, a, b, D, lp, p.AntennaAM, p.AntennaBM, true),
 		Existing: relayOptions(v, nodes, existing, a, b, lp, p, "existing", p.ExistingAntennaM),
 		Open:     relayOptions(v, nodes, open, a, b, lp, p, "open", p.RelayAntennaM),
 		Params:   p,
@@ -985,24 +985,24 @@ func relayUsable(list []relayCand) []relayCand {
 	return slices.DeleteFunc(list, func(c relayCand) bool { return c.pct < 0 })
 }
 
-// relayLink is a reported leg: the shared LOS summary with its profile. A
-// leg with a sample that has no terrain is not measured: Error no_terrain,
-// no verdict and no profile, never a verdict read from 0 m.
-func relayLink(v terrainView, a, b geoPoint, d float64, lp losParams, ha, hb float64) PlannerLink {
+// relayLink is a reported leg: the shared LOS summary, with its profile when
+// withElev. A leg with a sample that has no terrain is not measured: Error
+// no_terrain, no verdict and no profile, never a verdict read from 0 m.
+func relayLink(v terrainView, a, b geoPoint, d float64, lp losParams, ha, hb float64, withElev bool) PlannerLink {
 	lp.AntennaAM, lp.AntennaBM = ha, hb
 	elev, ok := sampleTerrainProfile(v, a, b, planProfileSamples(d))
 	if !ok {
 		return PlannerLink{DistanceKm: losRound(math.Max(d, 0), 1000), Error: plannerErrNoTerrain}
 	}
-	return linkFromProfile(elev, d, lp, true)
+	return linkFromProfile(elev, d, lp, withElev)
 }
 
 func relayOptions(v terrainView, nodes []plannerNode, list []relayCand, a, b geoPoint, lp losParams,
 	p PlannerRelayParams, kind string, hR float64) []PlannerRelayOption {
 	out := make([]PlannerRelayOption, 0, len(list))
 	for _, c := range list {
-		legA := relayLink(v, a, c.pt, c.dA, lp, p.AntennaAM, hR)
-		legB := relayLink(v, c.pt, b, c.dB, lp, hR, p.AntennaBM)
+		legA := relayLink(v, a, c.pt, c.dA, lp, p.AntennaAM, hR, true)
+		legB := relayLink(v, c.pt, b, c.dB, lp, hR, p.AntennaBM, true)
 		if legA.Error != "" || legB.Error != "" {
 			// The search measured both legs, so only an interior sample an
 			// ulp across the edge of a tile without data gets here (planArc

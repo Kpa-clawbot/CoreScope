@@ -1845,7 +1845,7 @@ func TestPlannerViewshedResult(t *testing.T) {
 	lp := losParams{FreqMHz: radio.FrequencyMHz, KFactor: radio.KFactor}
 	hill := geoPoint{30.10, -97.10}
 	v := fakeTerrainView{bb: bb}
-	wantLink := relayLink(v, site, hill, geoDistKm(site, hill), lp, defaultPlannerNewAntennaM, defaultPlannerExistAntenna)
+	wantLink := relayLink(v, site, hill, geoDistKm(site, hill), lp, defaultPlannerNewAntennaM, defaultPlannerExistAntenna, false)
 	got := resp.Links[0]
 	if got.Name != "Hill" || got.Lat != hill.Lat || got.Lon != hill.Lon || got.Link.Verdict != wantLink.Verdict ||
 		got.Link.DistanceKm != wantLink.DistanceKm || got.Link.ClearancePct != wantLink.ClearancePct {
@@ -1910,6 +1910,67 @@ func TestPlannerViewshedSkipsStale(t *testing.T) {
 
 // More repeaters in the view than plannerMaxNodes: the farthest from the
 // site are dropped and the response says so.
+// The 300-node cap only drops nodes beyond the farthest kept one. When that
+// one is already farther than range, nothing in range was lost: not truncated.
+func TestPlannerViewshedTruncatedOnlyWhenInRangeLost(t *testing.T) {
+	h := newPlannerHarness(t)
+	ns := plannerTestNodes()
+	// Mesa (aa02) sits 13 km away: inside the square view of range=10, beyond
+	// the radius. 301 repeaters stacked there overflow the cap.
+	for i := 0; i <= plannerMaxNodes; i++ {
+		ns = append(ns, nodeInfo{PublicKey: fmt.Sprintf("ee%04d", i), Name: "Corner", Role: "repeater",
+			Lat: 30.20 + float64(i)*0.00001, Lon: -97.0, HasGPS: true, LastSeen: plannerTestStart})
+	}
+	h.data.setNodes(ns)
+	w := h.pollUntil(t, plannerViewshedPath+"&range=10", "198.51.100.123", http.StatusOK)
+	resp, _ := decodeViewshed(t, w)
+	if len(resp.Links) != 1 || resp.Links[0].PubKey != "aa01" {
+		t.Fatalf("links %+v, want only aa01", resp.Links)
+	}
+	if resp.Truncated {
+		t.Fatal("truncated set although only nodes beyond range were dropped")
+	}
+}
+
+func TestViewshedTruncatedRule(t *testing.T) {
+	site := geoPoint{Lat: 30.11, Lon: -97.09}
+	near := plannerNode{PubKey: "n", Lat: 30.12, Lon: -97.09}
+	far := plannerNode{PubKey: "f", Lat: 30.30, Lon: -97.09} // ~21 km
+	cases := []struct {
+		name      string
+		nodes     []plannerNode
+		truncated bool
+		want      bool
+	}{
+		{"not capped", []plannerNode{near}, false, false},
+		{"capped, farthest kept inside range", []plannerNode{near}, true, true},
+		{"capped, farthest kept beyond range", []plannerNode{near, far}, true, false},
+	}
+	for _, c := range cases {
+		if got := viewshedTruncated(site, c.nodes, 10, c.truncated); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestPlannerViewshedLinksCarryNoElevProfile(t *testing.T) {
+	h := newPlannerHarness(t)
+	h.data.setNodes(plannerTestNodes())
+	w := h.pollUntil(t, plannerViewshedPath, "198.51.100.123", http.StatusOK)
+	resp, _ := decodeViewshed(t, w)
+	if len(resp.Links) == 0 {
+		t.Fatal("no links")
+	}
+	for _, l := range resp.Links {
+		if l.Link.ElevM != nil {
+			t.Errorf("link %s carries a %d-sample elevation profile", l.PubKey, len(l.Link.ElevM))
+		}
+	}
+	if strings.Contains(w.Body.String(), `"elev_m"`) {
+		t.Error("body contains elev_m")
+	}
+}
+
 func TestPlannerViewshedTruncated(t *testing.T) {
 	h := newPlannerHarness(t)
 	ns := plannerTestNodes()

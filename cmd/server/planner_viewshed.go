@@ -25,6 +25,7 @@ type viewshedParams struct {
 	Site                                  geoPoint
 	SiteM, RxM, RangeKm, FreqMHz, KFactor float64
 	Reach                                 PlannerUserReach
+	SkipUsers                             bool // Users nibble stays 0: skips its shadow walk
 }
 
 // viewshedGrid: Rows×Cols cells over BBox, row 0 north, row-major; cell
@@ -109,14 +110,17 @@ func computeViewshed(ctx context.Context, v terrainView, p viewshedParams, progr
 			if !ok {
 				continue // no terrain on the path (or ctx cancelled: checked below)
 			}
-			users := userReachClass(userReachP(d, p.Reach))
-			// Same path as above, so terrain is present; the walk stops at
-			// the first sample below the shadow threshold.
-			if cu, ok := e.clearance(p.Site, cell, d, p.SiteM, viewshedUserRxM, viewshedShadowClearance); !ok && cu < viewshedShadowClearance {
-				if users > viewshedShadowDrop {
-					users -= viewshedShadowDrop
-				} else {
-					users = 1
+			var users byte
+			if !p.SkipUsers {
+				users = userReachClass(userReachP(d, p.Reach))
+				// Same path as above, so terrain is present; the walk stops at
+				// the first sample below the shadow threshold.
+				if cu, ok := e.clearance(p.Site, cell, d, p.SiteM, viewshedUserRxM, viewshedShadowClearance); !ok && cu < viewshedShadowClearance {
+					if users > viewshedShadowDrop {
+						users -= viewshedShadowDrop
+					} else {
+						users = 1
+					}
 				}
 			}
 			g.Cells[r*cols+c] = users | verdictClass(losVerdict(cr))<<4

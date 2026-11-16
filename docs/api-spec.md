@@ -1806,7 +1806,7 @@ Theoretical reach of one candidate repeater site, for the planner's Coverage tab
       "name": "Example Hilltop",
       "lat": 30.1,
       "lon": -97.1,
-      "link": {"distance_km": 1.43, "clearance_pct": 212.4, "verdict": "clear", "worst_km": 0.7, "obstruction_m": -14.2, "elev_m": [212.0, "..."]}
+      "link": {"distance_km": 1.43, "clearance_pct": 212.4, "verdict": "clear", "worst_km": 0.7, "obstruction_m": -14.2}
     }
   ],
   "warnings": [],
@@ -1814,7 +1814,7 @@ Theoretical reach of one candidate repeater site, for the planner's Coverage tab
 }
 ```
 
-Abbreviated: `cells` and the `elev_m` arrays are truncated for readability.
+Abbreviated: `cells` is truncated for readability.
 
 | Field | Description |
 |-------|-------------|
@@ -1824,9 +1824,9 @@ Abbreviated: `cells` and the `elev_m` arrays are truncated for readability.
 | `rows`, `cols` | Grid size. Cell (r, c) is centred in the r-th of `rows` equal latitude bands from the north and the c-th of `cols` equal longitude bands from the west |
 | `cell_km` | Nominal cell size: 0.2 km, or `range_km / 150` above 30 km |
 | `cells` | Base64 of `rows × cols` bytes, row 0 north, row-major. Low nibble: Users class 1 to 5 from the handheld reach curve `P(d) = 1 / (1 + exp((ln d - ln d50) / slope))` (1: P below 0.10, 2: below 0.25, 3: below 0.50, 4: below 0.75, 5: 0.75 or more), two classes lower (at least 1) where a 1.5 m receiver is in deep terrain shadow. High nibble: Repeaters class for a receiver at `rx`: 1 `blocked`, 2 `marginal`, 3 `clear60`, 4 `clear`. A nibble of 0 means no data: outside `range_km`, or no terrain at the cell, the site or the path between |
-| `links` | Known repeaters within `range_km` (rooms and stale repeaters excluded, as in `/api/planner/relay`), nearest first. Each carries `pubkey`, `name`, `lat`, `lon` and a `link` object (see [`/api/planner/relay`](#get-apiplannerrelay)) for the site at `h` to the repeater at `rx`. Always an array |
+| `links` | Known repeaters within `range_km` (rooms and stale repeaters excluded, as in `/api/planner/relay`), nearest first. Each carries `pubkey`, `name`, `lat`, `lon` and a `link` object (see [`/api/planner/relay`](#get-apiplannerrelay)) for the site at `h` to the repeater at `rx`. The `link` has no `elev_m` profile. Always an array |
 | `warnings` | Human-readable notes, for example missing terrain tiles. Always an array |
-| `truncated` | `true` when the grid holds more repeaters and rooms than the planner reads for one job (300): the farthest from the site are left out of `links` |
+| `truncated` | `true` when the grid holds more repeaters and rooms than the planner reads for one job (300) and the farthest one kept is still within `range_km`, so a repeater in range may be missing from `links`. `false` when the cut only dropped nodes beyond `range_km` (the corners of the square grid) |
 
 ### Error codes
 
