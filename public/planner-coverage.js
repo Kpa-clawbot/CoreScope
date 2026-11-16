@@ -262,6 +262,11 @@
         L.polyline([[state.site.lat, state.site.lon], [l.lat, l.lon]], {
           className: 'mc-pl-cov-link mc-pl-cov-link-' + cls, interactive: false
         }).addTo(linkLayer);
+        // Recolour the repeater's dot by its link class; not interactive, so
+        // the planner's node tooltip and click underneath keep working.
+        L.circleMarker([l.lat, l.lon], {
+          radius: 6, weight: 2, className: 'mc-pl-cov-node mc-pl-cov-node-' + cls, interactive: false
+        }).addTo(linkLayer);
       });
     }
     function renderResults() {

@@ -287,6 +287,8 @@ test('layer switch repaints without another fetch', async () => {
   t.calls[0].d.resolve(result());
   await flush();
   assert.strictEqual(t.m.log.overlays.length, 1);
+  const dots = () => t.m.log.shapes.filter((s) => s.kind === 'circle' && /mc-pl-cov-node/.test(s.opts.className));
+  assert.strictEqual(dots().length, 0, 'users layer recolours no repeater dots');
   fireLayer(t.panel, 'repeaters');
   assert.strictEqual(t.calls.length, 1, 'no new fetch');
   assert.strictEqual(t.m.log.overlays.length, 2, 'repainted');
@@ -297,6 +299,10 @@ test('layer switch repaints without another fetch', async () => {
   const lines = t.m.log.shapes.filter((s) => s.kind === 'line');
   assert.strictEqual(lines.length, 1, 'repeaters layer draws the link line');
   assert(/mc-pl-cov-link-3/.test(lines[0].opts.className), lines[0].opts.className);
+  assert.strictEqual(dots().length, 1, 'the linked repeater gets a dot in its class colour');
+  assert(/mc-pl-cov-node-3/.test(dots()[0].opts.className), dots()[0].opts.className);
+  assert.strictEqual(JSON.stringify(dots()[0].a), "[51.1,5.2]");
+  assert.strictEqual(dots()[0].opts.interactive, false, 'planner node tooltip and click stay usable');
   assert.strictEqual(t.hash[t.hash.length - 1].layer, 'repeaters');
   t.inst.unmount();
 });
