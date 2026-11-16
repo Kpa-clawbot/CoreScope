@@ -4476,7 +4476,7 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
 // #2309: exercise the real side-panel renderer, not a copied formatter.
 console.log('\n=== nodes.js: preview metadata (#2309) ===');
 {
-  function renderPreview(overrides, relayActiveMs, now) {
+  function renderPreview(overrides, relayActiveMs, now, healthData = { stats: {} }) {
     const ctx = makeNodesSandbox();
     if (relayActiveMs !== undefined) ctx.HEALTH_THRESHOLDS.relayActiveMs = relayActiveMs;
     if (now !== undefined) ctx.Date = class extends Date { static now() { return now; } };
@@ -4488,7 +4488,7 @@ console.log('\n=== nodes.js: preview metadata (#2309) ===');
       last_seen: '2020-01-01T00:00:00Z', hash_size: 2, ...overrides,
     };
     const panel = { innerHTML: '', querySelector: () => null };
-    ctx.window.testRenderNodeDetail(panel, { node, recentAdverts: [], healthData: { stats: {} } });
+    ctx.window.testRenderNodeDetail(panel, { node, recentAdverts: [], healthData });
     const value = label => {
       const match = panel.innerHTML.match(new RegExp('<dt[^>]*>' + label + '(?: <span[\\s\\S]*?</span>)?</dt><dd[^>]*>([\\s\\S]*?)</dd>'));
       return match ? match[1] : null;
@@ -4537,6 +4537,46 @@ console.log('\n=== nodes.js: preview metadata (#2309) ===');
     assert.match(value('Last Relayed') || '', /never observed as relay hop/);
     assert.match(value('Last Relayed'), /— relays\/hr, 0 relays\/24h/);
     assert.doesNotMatch(value('Last Relayed'), /alive|actively relaying/i);
+  });
+  test('node counts group exact numbers and numeric strings without compact rounding', () => {
+    for (const asInput of [n => n, String]) {
+      const { value, html } = renderPreview({
+        relay_count_1h: asInput(34255), relay_count_24h: asInput(1234567),
+      }, undefined, undefined, {
+        stats: { totalTransmissions: asInput(12345), totalPackets: 2, packetsToday: asInput(1234) },
+        observers: [{ observer_name: 'Count fixture', packetCount: asInput(34255) }],
+      });
+      assert.ok(html.includes('</button></dt><dd>' + (12345).toLocaleString() + '</dd>'), 'Total Packets must group the preferred transmission count');
+      assert.strictEqual(value('Packets Today'), (1234).toLocaleString());
+      assert.ok(html.includes((34255).toLocaleString() + ' pkts'), 'observer packet count must be grouped');
+      assert.ok(value('Last Relayed').includes((34255).toLocaleString() + ' relays/hr, ' + (1234567).toLocaleString() + ' relays/24h'));
+    }
+  });
+  test('count formatting retains zero, small counts and existing packet fallbacks', () => {
+    for (const raw of [0, '0', -0, '-0']) {
+      const { value } = renderPreview({ relay_count_1h: raw, relay_count_24h: 7 });
+      assert.ok(value('Last Relayed').includes('0 relays/hr, 7 relays/24h'));
+      assert.ok(!value('Last Relayed').includes('-0 relays/hr'), 'negative zero must retain its previous zero display');
+    }
+    for (const [node, stats, want] of [
+      [{}, {}, '0'],
+      [{ advert_count: 7 }, {}, '7'],
+      [{ advert_count: 9 }, { totalTransmissions: 0, totalPackets: 7 }, '7'],
+      [{ advert_count: 9 }, { totalTransmissions: 0, totalPackets: 0 }, '9'],
+      [{ advert_count: 9 }, { totalTransmissions: '0', totalPackets: 7 }, '0'],
+    ]) {
+      const { value, html } = renderPreview(node, undefined, undefined, { stats });
+      assert.ok(html.includes('</button></dt><dd>' + want + '</dd>'), 'existing Total Packets fallback must remain ' + want);
+      assert.strictEqual(value('Packets Today'), '0');
+    }
+  });
+  test('invalid and unsafe relay counts remain missing rather than becoming rounded counts', () => {
+    for (const raw of [undefined, null, '', ' ', 'bad', Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, true, {}]) {
+      const { value } = renderPreview({ relay_count_1h: raw, relay_count_24h: 0 });
+      assert.ok(value('Last Relayed').includes('— relays/hr, 0 relays/24h'), String(raw));
+    }
+    const { value } = renderPreview({ relay_count_1h: Number.MAX_SAFE_INTEGER, relay_count_24h: '7' });
+    assert.ok(value('Last Relayed').includes(Number.MAX_SAFE_INTEGER.toLocaleString() + ' relays/hr, 7 relays/24h'));
   });
   test('certain relay evidence restores the green mark for repeaters and rooms only', () => {
     const now = Date.parse('2026-10-26T12:00:00Z');
