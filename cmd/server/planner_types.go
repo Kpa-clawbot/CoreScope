@@ -185,8 +185,11 @@ type PlannerViewshedResponse struct {
 	Cols     int                   `json:"cols"`
 	CellKm   float64               `json:"cell_km"`
 	Cells    string                `json:"cells"`
-	Links    []PlannerViewshedLink `json:"links"` // repeaters within range, nearest first
+	Links    []PlannerViewshedLink `json:"links"` // live repeaters within range, nearest first
 	Warnings []string              `json:"warnings"`
+	// Truncated: more repeaters/rooms in the view than plannerMaxNodes; the
+	// farthest from the site were left out of links.
+	Truncated bool `json:"truncated"`
 }
 
 type PlannerViewshedParams struct {

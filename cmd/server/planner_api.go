@@ -666,17 +666,18 @@ func (p *plannerService) handleViewshed(w http.ResponseWriter, r *http.Request) 
 			if err != nil {
 				return nil, err
 			}
-			nodes, _ := p.snapshotNodes(view, 0, p.now())
+			nodes, truncated := p.snapshotNodes(view, 0, p.now())
 			res := PlannerViewshedResponse{
-				Source:   p.source,
-				Params:   params,
-				BBox:     [4]float64{g.BBox.S, g.BBox.W, g.BBox.N, g.BBox.E},
-				Rows:     g.Rows,
-				Cols:     g.Cols,
-				CellKm:   g.CellKm,
-				Cells:    base64.StdEncoding.EncodeToString(g.Cells),
-				Links:    viewshedLinks(v, site, nodes, rangeKm, losParams{FreqMHz: p.freqMHz, KFactor: p.kFactor}, h, rx),
-				Warnings: []string{},
+				Source:    p.source,
+				Params:    params,
+				BBox:      [4]float64{g.BBox.S, g.BBox.W, g.BBox.N, g.BBox.E},
+				Rows:      g.Rows,
+				Cols:      g.Cols,
+				CellKm:    g.CellKm,
+				Cells:     base64.StdEncoding.EncodeToString(g.Cells),
+				Links:     viewshedLinks(v, site, nodes, rangeKm, losParams{FreqMHz: p.freqMHz, KFactor: p.kFactor}, h, rx),
+				Warnings:  []string{},
+				Truncated: truncated,
 			}
 			if w := plannerTerrainWarning(v); w != "" {
 				res.Warnings = append(res.Warnings, w)
@@ -686,8 +687,9 @@ func (p *plannerService) handleViewshed(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// viewshedLinks is the site's link to every repeater within rangeKm,
-// nearest first (then by pubkey), the site at h and the repeater at rx.
+// viewshedLinks is the site's link to every repeater within rangeKm that
+// Relay would offer (not stale, valid position), nearest first (then by
+// pubkey), the site at h and the repeater at rx.
 func viewshedLinks(v terrainView, site geoPoint, nodes []plannerNode, rangeKm float64, lp losParams, h, rx float64) []PlannerViewshedLink {
 	type near struct {
 		n *plannerNode
@@ -696,7 +698,7 @@ func viewshedLinks(v terrainView, site geoPoint, nodes []plannerNode, rangeKm fl
 	var in []near
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Role != "repeater" {
+		if n.Role != "repeater" || n.Stale || !planCoordOK(n.Lat, n.Lon) {
 			continue
 		}
 		if d := geoDistKm(site, geoPoint{Lat: n.Lat, Lon: n.Lon}); d <= rangeKm {
@@ -1080,8 +1082,11 @@ func (l plannerTileLimits) max() int { return max(l.Profile, l.Relay, l.Coverage
 //     maxLegKm + 2·plannerRelayPad(maxLegKm), with A and B in the band.
 //   - Profile: one leg's view (its pad is far below the relay corridor's)
 //     fits the relay's; longer chains may not.
-//   - Viewshed: the site ± its range, the site in the band; the largest
-//     range offered is the largest of plannerRangesKm within maxLegKm.
+//   - Viewshed: the site ± its range, the site in the band. The cap uses
+//     the largest range a request can ask for, the largest of
+//     plannerRangesKm within maxLegKm (60 km at most), not maxLegKm itself:
+//     2·maxLegKm would raise max(), and so every view's memory and the
+//     download budgets, for views no request can make.
 //
 // Profile and relay never go below plannerMinLegTiles.
 func plannerTileCaps(maxAreaKm, nodeMarginKm, maxLegKm float64) plannerTileLimits {

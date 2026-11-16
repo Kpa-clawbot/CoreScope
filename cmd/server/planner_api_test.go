@@ -1857,6 +1857,9 @@ func TestPlannerViewshedResult(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"warnings":[]`) {
 		t.Fatalf("warnings not []: %s", w.Body.String()[:200])
 	}
+	if resp.Truncated {
+		t.Fatal("truncated with a handful of nodes")
+	}
 
 	// range=10 drops Mesa (13 km); with no repeater in range links is [].
 	w = h.pollUntil(t, plannerViewshedPath+"&range=10&h=-1&rx=150", ip, http.StatusOK)
@@ -1885,5 +1888,47 @@ func TestPlannerViewshedUsesHeavyCache(t *testing.T) {
 	w := h.get(plannerViewshedPath+"&range=10", ip)
 	if w.Code != http.StatusOK || w.Body.String() != first.Body.String() || h.src.viewCount() != views {
 		t.Fatalf("second request: %d, views %d -> %d", w.Code, views, h.src.viewCount())
+	}
+}
+
+// A stale repeater in range gets no link, as Relay offers none.
+func TestPlannerViewshedSkipsStale(t *testing.T) {
+	h := newPlannerHarness(t)
+	h.data.setNodes(append(plannerTestNodes(), nodeInfo{PublicKey: "aa09", Name: "Silent", Role: "repeater",
+		Lat: 30.115, Lon: -97.085, HasGPS: true}))
+	site := geoPoint{30.11, -97.09}
+	nodes, _ := h.p.snapshotNodes(viewshedBBox(site, 10), 0, h.clk.now())
+	if i := slices.IndexFunc(nodes, func(n plannerNode) bool { return n.PubKey == "aa09" }); i < 0 || !nodes[i].Stale {
+		t.Fatalf("fixture: aa09 not selected as stale: %+v", nodes)
+	}
+	w := h.pollUntil(t, plannerViewshedPath+"&range=10", "198.51.100.122", http.StatusOK)
+	resp, _ := decodeViewshed(t, w)
+	if len(resp.Links) != 1 || resp.Links[0].PubKey != "aa01" {
+		t.Fatalf("links %+v, want only aa01", resp.Links)
+	}
+}
+
+// More repeaters in the view than plannerMaxNodes: the farthest from the
+// site are dropped and the response says so.
+func TestPlannerViewshedTruncated(t *testing.T) {
+	h := newPlannerHarness(t)
+	ns := plannerTestNodes()
+	for i := 0; i <= plannerMaxNodes; i++ {
+		ns = append(ns, nodeInfo{PublicKey: fmt.Sprintf("dd%04d", i), Name: "Row", Role: "repeater",
+			Lat: 30.112 + float64(i)*0.0001, Lon: -97.09, HasGPS: true, LastSeen: plannerTestStart})
+	}
+	h.data.setNodes(ns)
+	w := h.pollUntil(t, plannerViewshedPath+"&range=10", "198.51.100.123", http.StatusOK)
+	resp, _ := decodeViewshed(t, w)
+	keys := make([]string, len(resp.Links))
+	for i, l := range resp.Links {
+		keys[i] = l.PubKey
+	}
+	if !resp.Truncated || len(keys) == 0 || len(keys) > plannerMaxNodes {
+		t.Fatalf("truncated %v, %d links", resp.Truncated, len(keys))
+	}
+	far := fmt.Sprintf("dd%04d", plannerMaxNodes)
+	if slices.Contains(keys, far) || !slices.Contains(keys, "dd0000") || !slices.Contains(keys, "aa01") {
+		t.Fatalf("kept the farthest (%s) or dropped a near one: %v", far, keys[:5])
 	}
 }
