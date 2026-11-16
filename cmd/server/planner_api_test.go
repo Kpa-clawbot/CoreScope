@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -400,6 +401,8 @@ func (h *plannerHarness) get(path, ip string) *httptest.ResponseRecorder {
 		h.srv.handlePlannerProfile(w, req)
 	case strings.HasPrefix(path, "/api/planner/relay"):
 		h.srv.handlePlannerRelay(w, req)
+	case strings.HasPrefix(path, "/api/planner/viewshed"):
+		h.srv.handlePlannerViewshed(w, req)
 	default:
 		h.srv.handlePlannerCoverage(w, req)
 	}
@@ -1719,5 +1722,168 @@ func TestPlannerAPIMissingTerrainWarnings(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &plan)
 	if len(plan.Warnings) != 0 {
 		t.Fatalf("complete terrain coverage warnings %q", plan.Warnings)
+	}
+}
+
+// ─── /api/planner/viewshed ──────────────────────────────────────────────────
+
+// plannerViewshedPath: a site 1.4 km from Hill (aa01) and 13 km from Mesa
+// (aa02), both repeaters of plannerTestNodes.
+const plannerViewshedPath = "/api/planner/viewshed?site=30.11,-97.09"
+
+func TestPlannerViewshedDisabled404(t *testing.T) {
+	off := newPlannerService(PlannerConfig{}, nil, nil)
+	t.Cleanup(off.Close)
+	for _, srv := range []*Server{
+		{cfg: &Config{}},
+		{cfg: &Config{Planner: &PlannerConfig{Enabled: false}}, planner: off},
+		{cfg: &Config{Planner: &PlannerConfig{Enabled: true}}},
+	} {
+		h := &plannerHarness{srv: srv}
+		w := h.get(plannerViewshedPath, "198.51.100.1")
+		if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "planner disabled") {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestPlannerViewshedBadRequests(t *testing.T) {
+	cases := []struct{ name, path, want string }{
+		{"site missing", "/api/planner/viewshed?h=10", "site required"},
+		{"site lat range", "/api/planner/viewshed?site=91,0", "site must be lat,lon within range"},
+		{"site one number", "/api/planner/viewshed?site=30.1", "site must be lat,lon within range"},
+		{"unknown key", plannerViewshedPath + "&foo=1", "unknown parameter"},
+		{"duplicate key", plannerViewshedPath + "&h=5&h=6", "duplicate parameter"},
+		{"h NaN", plannerViewshedPath + "&h=NaN", "h must be a number of metres"},
+		{"rx Inf", plannerViewshedPath + "&rx=Inf", "rx must be a number of metres"},
+		{"range not offered", plannerViewshedPath + "&range=7", "range must be one of"},
+		{"no node near", "/api/planner/viewshed?site=10,10", plannerErrOutOfArea},
+		{"near hidden only", "/api/planner/viewshed?site=40.0,-80.05", plannerErrOutOfArea},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPlannerHarness(t)
+			w := h.get(tc.path, "198.51.100.1")
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), tc.want) {
+				t.Fatalf("code=%d body=%s, want 400 containing %q", w.Code, w.Body.String(), tc.want)
+			}
+			if n := h.liveJobs(); n != 0 || h.tokens("198.51.100.1") != plannerIPJobsPerMin || h.src.viewCount() != 0 {
+				t.Fatalf("a rejected request started a job (%d), took a token or read terrain", n)
+			}
+		})
+	}
+}
+
+func TestPlannerViewshedTooManyTiles(t *testing.T) {
+	h := newPlannerHarness(t)
+	h.src.set(func(f *fakeTerrain) { f.tiles = func(geoBBox) int { return h.p.tiles.Viewshed + 1 } })
+	w := h.get(plannerViewshedPath, "198.51.100.1")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), plannerErrTooManyTiles) {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if h.src.viewCount() != 0 || h.liveJobs() != 0 {
+		t.Fatalf("views %d, jobs %d", h.src.viewCount(), h.liveJobs())
+	}
+	// The cap itself is accepted.
+	h.src.set(func(f *fakeTerrain) { f.tiles = func(geoBBox) int { return h.p.tiles.Viewshed } })
+	if w := h.get(plannerViewshedPath, "198.51.100.1"); w.Code != http.StatusAccepted && w.Code != http.StatusOK {
+		t.Fatalf("at the cap: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func decodeViewshed(t *testing.T, w *httptest.ResponseRecorder) (PlannerViewshedResponse, []byte) {
+	t.Helper()
+	var resp PlannerViewshedResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("body %q: %v", w.Body.String(), err)
+	}
+	cells, err := base64.StdEncoding.DecodeString(resp.Cells)
+	if err != nil {
+		t.Fatalf("cells: %v", err)
+	}
+	return resp, cells
+}
+
+func TestPlannerViewshedResult(t *testing.T) {
+	h := newPlannerHarness(t)
+	ip := "198.51.100.120"
+	w := h.pollUntil(t, plannerViewshedPath, ip, http.StatusOK)
+	resp, cells := decodeViewshed(t, w)
+	radio, _ := (*LOSConfig)(nil).resolved()
+	site := geoPoint{30.11, -97.09}
+	want := PlannerViewshedParams{
+		Site:     geoPointJSON{Lat: site.Lat, Lon: site.Lon},
+		AntennaM: defaultPlannerNewAntennaM, RxAntennaM: defaultPlannerExistAntenna,
+		RangeKm: defaultPlannerRangeKm, FrequencyMHz: radio.FrequencyMHz, KFactor: radio.KFactor,
+		UserReach: PlannerUserReach{D50Km: defaultPlannerUserD50Km, Slope: defaultPlannerUserSlope},
+	}
+	if resp.Params != want {
+		t.Fatalf("params %+v\nwant   %+v", resp.Params, want)
+	}
+	if resp.Source != terrainDefaultSource || resp.Rows < 1 || resp.Cols < 1 || resp.Rows*resp.Cols != len(cells) {
+		t.Fatalf("source %q, %dx%d grid, %d cells", resp.Source, resp.Rows, resp.Cols, len(cells))
+	}
+	bb := viewshedBBox(site, defaultPlannerRangeKm)
+	if resp.BBox != [4]float64{bb.S, bb.W, bb.N, bb.E} || resp.CellKm != viewshedCellKm(defaultPlannerRangeKm) {
+		t.Fatalf("bbox %v cell %g, want %+v", resp.BBox, resp.CellKm, bb)
+	}
+	if h.src.lastBBox() != bb {
+		t.Fatalf("view %+v, want %+v", h.src.lastBBox(), bb)
+	}
+	if !slices.ContainsFunc(cells, func(c byte) bool { return c != 0 }) {
+		t.Fatal("every cell is no data over full terrain")
+	}
+	// Repeaters only (no room, no hidden or blacklisted node), nearest first,
+	// each link at h → rx.
+	var keys []string
+	for _, l := range resp.Links {
+		keys = append(keys, l.PubKey)
+	}
+	if !slices.Equal(keys, []string{"aa01", "aa02"}) {
+		t.Fatalf("links %v, want [aa01 aa02]", keys)
+	}
+	lp := losParams{FreqMHz: radio.FrequencyMHz, KFactor: radio.KFactor}
+	hill := geoPoint{30.10, -97.10}
+	v := fakeTerrainView{bb: bb}
+	wantLink := relayLink(v, site, hill, geoDistKm(site, hill), lp, defaultPlannerNewAntennaM, defaultPlannerExistAntenna)
+	got := resp.Links[0]
+	if got.Name != "Hill" || got.Lat != hill.Lat || got.Lon != hill.Lon || got.Link.Verdict != wantLink.Verdict ||
+		got.Link.DistanceKm != wantLink.DistanceKm || got.Link.ClearancePct != wantLink.ClearancePct {
+		t.Fatalf("link %+v\nwant %+v", got, wantLink)
+	}
+	if resp.Links[0].Link.DistanceKm >= resp.Links[1].Link.DistanceKm {
+		t.Fatalf("links not nearest first: %+v", resp.Links)
+	}
+	if !strings.Contains(w.Body.String(), `"warnings":[]`) {
+		t.Fatalf("warnings not []: %s", w.Body.String()[:200])
+	}
+
+	// range=10 drops Mesa (13 km); with no repeater in range links is [].
+	w = h.pollUntil(t, plannerViewshedPath+"&range=10&h=-1&rx=150", ip, http.StatusOK)
+	resp, _ = decodeViewshed(t, w)
+	if len(resp.Links) != 1 || resp.Links[0].PubKey != "aa01" || resp.Params.RangeKm != 10 ||
+		resp.Params.AntennaM != plannerMinAntennaM || resp.Params.RxAntennaM != plannerMaxAntennaM {
+		t.Fatalf("range 10: params %+v links %+v", resp.Params, resp.Links)
+	}
+	h.data.setNodes(append(plannerTestNodes()[2:], nodeInfo{PublicKey: "cc09", Name: "Far phone", Role: "companion",
+		Lat: 30.11, Lon: -97.09, HasGPS: true}))
+	h.p.known.Store(nil)
+	w = h.pollUntil(t, plannerViewshedPath+"&range=10", ip, http.StatusOK)
+	if !strings.Contains(w.Body.String(), `"links":[]`) {
+		t.Fatalf("links not []: %s", w.Body.String()[:200])
+	}
+}
+
+func TestPlannerViewshedUsesHeavyCache(t *testing.T) {
+	h := newPlannerHarness(t)
+	ip := "198.51.100.121"
+	first := h.pollUntil(t, plannerViewshedPath+"&range=10", ip, http.StatusOK)
+	views := h.src.viewCount()
+	if h.p.covCache.len() != 1 || h.p.cheapCache.len() != 0 {
+		t.Fatalf("cov cache %d, cheap cache %d", h.p.covCache.len(), h.p.cheapCache.len())
+	}
+	w := h.get(plannerViewshedPath+"&range=10", ip)
+	if w.Code != http.StatusOK || w.Body.String() != first.Body.String() || h.src.viewCount() != views {
+		t.Fatalf("second request: %d, views %d -> %d", w.Code, views, h.src.viewCount())
 	}
 }

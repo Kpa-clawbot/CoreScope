@@ -149,7 +149,7 @@ func logPlannerConfig(c *PlannerConfig) {
 		"maxArea=%g km, nodeMargin=%g km, maxLeg=%g km, userReach d50=%g km slope=%g)",
 		r.DefaultRangeKm, r.NewAntennaM, r.ExistingAntennaM, r.MaxAreaKm, r.NodeMarginKm, r.MaxLegKm,
 		r.UserReach.D50Km, r.UserReach.Slope)
-	log.Printf("[planner] terrain tiles per request: coverage %d, relay %d, profile %d; "+
+	log.Printf("[planner] terrain tiles per request: coverage %d, relay %d, profile %d, viewshed %d; "+
 		"one view takes up to %.0f MB (%.1f MB a tile)",
-		lim.Coverage, lim.Relay, lim.Profile, float64(lim.max())*srtmTileBytes/1e6, float64(srtmTileBytes)/1e6)
+		lim.Coverage, lim.Relay, lim.Profile, lim.Viewshed, float64(lim.max())*srtmTileBytes/1e6, float64(srtmTileBytes)/1e6)
 }

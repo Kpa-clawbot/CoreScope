@@ -39,6 +39,7 @@
 - [GET /api/elevation/profile](#get-apielevationprofile)
 - [GET /api/planner/profile](#get-apiplannerprofile)
 - [GET /api/planner/relay](#get-apiplannerrelay)
+- [GET /api/planner/viewshed](#get-apiplannerviewshed)
 - [GET /api/planner/coverage](#get-apiplannercoverage)
 - [GET /api/analytics/rf](#get-apianalyticsrf)
 - [GET /api/analytics/topology](#get-apianalyticstopology)
@@ -1542,7 +1543,7 @@ Line-of-sight profile along a chain of points, for the repeater planner at `#/to
 
 ### Common rules
 
-These rules apply to all three planner endpoints: this one, [`/api/planner/relay`](#get-apiplannerrelay) and [`/api/planner/coverage`](#get-apiplannercoverage).
+These rules apply to all planner endpoints: this one, [`/api/planner/relay`](#get-apiplannerrelay), [`/api/planner/viewshed`](#get-apiplannerviewshed) and [`/api/planner/coverage`](#get-apiplannercoverage).
 
 - **Opt-in.** Only available when `planner.enabled` is `true`. Otherwise the endpoints return `404`, and `/api/config/client` omits the `planner` block.
 - **Quantised input.** Points are rounded to 0.001°, antenna heights to 1 m, and `range` must be one of a fixed set. Coverage boxes are snapped outward to a 0.05° grid. Requests that round to the same values share one cache entry and one job.
@@ -1758,6 +1759,83 @@ Abbreviated: the `elev_m` arrays in `direct`, `leg_a` and `leg_b` are truncated 
 ```json
 { "error": "too_long" }
 ```
+
+### Response `404`
+
+```json
+{ "error": "planner disabled" }
+```
+
+---
+
+## GET /api/planner/viewshed
+
+Theoretical reach of one candidate repeater site, for the planner's Coverage tab. The server profiles the site to every cell of a grid around it and returns two classes per cell, plus the site's link to each known repeater within range. Common rules and the job protocol are described under [`/api/planner/profile`](#get-apiplannerprofile). A viewshed job shares the coverage endpoint's compute slot, queue limit and result cache.
+
+### Query Parameters
+
+| Param   | Type   | Default                         | Description |
+|---------|--------|---------------------------------|-------------|
+| `site`  | string | -                               | **Required.** The site as `lat,lon`. Must be within 50 km of a known node |
+| `h`     | number | `planner.newAntennaM` (10)      | Antenna height at the site, metres. Rounded to 1 m and clamped to 1 to 100 |
+| `rx`    | number | `planner.existingAntennaM` (5)  | Antenna height of the other repeater, for the Repeaters class and the links. Same limits as `h` |
+| `range` | number | `planner.defaultRangeKm` (30)   | Radius in km of the grid and of the link list. One of `10,15,20,30,40,50,60`, up to `planner.maxLegKm` |
+
+### Response `200`
+
+```json
+{
+  "source": "SRTM (AWS Open Data)",
+  "params": {
+    "site": {"lat": 30.11, "lon": -97.09},
+    "antenna_m": 10,
+    "rx_antenna_m": 5,
+    "range_km": 30,
+    "frequency_mhz": 910.525,
+    "k_factor": 1.333,
+    "user_reach": {"d50Km": 2.7, "slope": 0.3}
+  },
+  "bbox": [29.8402, -97.4027, 30.3798, -96.7773],
+  "rows": 301,
+  "cols": 301,
+  "cell_km": 0.2,
+  "cells": "AAAAQkJDQ0RE...",
+  "links": [
+    {
+      "pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "name": "Example Hilltop",
+      "lat": 30.1,
+      "lon": -97.1,
+      "link": {"distance_km": 1.43, "clearance_pct": 212.4, "verdict": "clear", "worst_km": 0.7, "obstruction_m": -14.2, "elev_m": [212.0, "..."]}
+    }
+  ],
+  "warnings": []
+}
+```
+
+Abbreviated: `cells` and the `elev_m` arrays are truncated for readability.
+
+| Field | Description |
+|-------|-------------|
+| `source` | Terrain attribution |
+| `params` | The quantised inputs the result was computed with, the radio settings and the users reach curve (`planner.userReach`) |
+| `bbox` | `[s, w, n, e]` of the grid in degrees: the site ± `range_km` |
+| `rows`, `cols` | Grid size. Cell (r, c) is centred in the r-th of `rows` equal latitude bands from the north and the c-th of `cols` equal longitude bands from the west |
+| `cell_km` | Nominal cell size: 0.2 km, or `range_km / 150` above 30 km |
+| `cells` | Base64 of `rows × cols` bytes, row 0 north, row-major. Low nibble: Users class 1 to 5 from the handheld reach curve `P(d) = 1 / (1 + exp((ln d - ln d50) / slope))` (1: P below 0.10, 2: below 0.25, 3: below 0.50, 4: below 0.75, 5: 0.75 or more), two classes lower (at least 1) where a 1.5 m receiver is in deep terrain shadow. High nibble: Repeaters class for a receiver at `rx`: 1 `blocked`, 2 `marginal`, 3 `clear60`, 4 `clear`. A nibble of 0 means no data: outside `range_km`, or no terrain at the cell, the site or the path between |
+| `links` | Known repeaters within `range_km` (rooms excluded), nearest first. Each carries `pubkey`, `name`, `lat`, `lon` and a `link` object (see [`/api/planner/relay`](#get-apiplannerrelay)) for the site at `h` to the repeater at `rx`. Always an array |
+| `warnings` | Human-readable notes, for example missing terrain tiles. Always an array |
+
+### Error codes
+
+| Message or code | Cause |
+|-----------------|-------|
+| `site required` | Site missing |
+| `site must be lat,lon within range` | Site malformed or out of range |
+| `h must be a number of metres`, `rx ...` | Height is not a number |
+| `range must be one of 10,15,20,30,40,50,60` | Range not in the allowed set. The message lists the values allowed up to `planner.maxLegKm` |
+| `out_of_area` | The site is not within 50 km of a known node |
+| `too_many_tiles` | The grid needs more 1° terrain tiles than the server loads for one request. Any site within latitudes -56 to 60 at any offered range fits |
 
 ### Response `404`
 

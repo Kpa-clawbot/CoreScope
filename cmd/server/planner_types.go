@@ -174,6 +174,41 @@ type PlannerRelayParams struct {
 	KFactor          float64 `json:"k_factor"`
 }
 
+// PlannerViewshedResponse — /api/planner/viewshed. Cells is the base64 of
+// Rows×Cols bytes over BBox (s, w, n, e), row 0 north, row-major; each byte
+// is users | repeaters<<4, a nibble of 0 meaning no data (viewshedGrid).
+type PlannerViewshedResponse struct {
+	Source   string                `json:"source"`
+	Params   PlannerViewshedParams `json:"params"`
+	BBox     [4]float64            `json:"bbox"`
+	Rows     int                   `json:"rows"`
+	Cols     int                   `json:"cols"`
+	CellKm   float64               `json:"cell_km"`
+	Cells    string                `json:"cells"`
+	Links    []PlannerViewshedLink `json:"links"` // repeaters within range, nearest first
+	Warnings []string              `json:"warnings"`
+}
+
+type PlannerViewshedParams struct {
+	Site         geoPointJSON     `json:"site"`
+	AntennaM     float64          `json:"antenna_m"`
+	RxAntennaM   float64          `json:"rx_antenna_m"`
+	RangeKm      float64          `json:"range_km"`
+	FrequencyMHz float64          `json:"frequency_mhz"`
+	KFactor      float64          `json:"k_factor"`
+	UserReach    PlannerUserReach `json:"user_reach"`
+}
+
+// PlannerViewshedLink: the site → repeater link, site at AntennaM and the
+// repeater at RxAntennaM.
+type PlannerViewshedLink struct {
+	PubKey string      `json:"pubkey"`
+	Name   string      `json:"name"`
+	Lat    float64     `json:"lat"`
+	Lon    float64     `json:"lon"`
+	Link   PlannerLink `json:"link"`
+}
+
 // PlannerRelayOption: BottleneckPct = min(LegA, LegB).ClearancePct. Options
 // are ranked by bottleneck, then total distance. Up to 5 per list; LegA/LegB
 // carry ElevM so the UI can draw both profiles without another request.
