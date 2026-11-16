@@ -31,6 +31,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 const vm   = require('vm');
 const fs   = require('fs');
 const path = require('path');
@@ -95,6 +96,7 @@ function makeSandbox(opts) {
   ctx.window.document = ctx.document;
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   ctx.setTheme = (t) => { theme = t; };
   ctx.listeners = listeners;
   ctx.fire = (type, ev) => { (listeners[type] || []).forEach(fn => fn(ev)); };
