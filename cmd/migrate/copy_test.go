@@ -930,6 +930,7 @@ func TestPostgresForeignSchemaSequenceRefused(t *testing.T) {
 	}
 
 	code, out := run(t, "copy", "-from", srcURL, "-to", pgURL)
+	wantFail(t, code, out, "no CoreScope schema_version", "Refusing to create anything")
 
 	var lastValue int64
 	var isCalled bool
@@ -960,7 +961,61 @@ func TestPostgresForeignSchemaSequenceRefused(t *testing.T) {
 	if name != "source node" || count(t, src, "nodes") != 1 {
 		t.Error("source rows were modified")
 	}
-	wantFail(t, code, out, "no CoreScope schema_version", "Refusing to create anything")
+}
+
+func TestPostgresForeignSchemaVersionWithoutTablePrivileges(t *testing.T) {
+	pg, pgURL := pgTarget(t)
+	if err := pgschema.Apply(t.Context(), pg, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	to, err := parseDBRef(pgURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pg.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var schemaName, originalRole string
+	if err := conn.QueryRowContext(t.Context(), `SELECT current_schema(), current_user`).Scan(&schemaName, &originalRole); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := conn.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	// The schema name is random; the role and its grant exist only in this transaction.
+	role := schemaName + "_usage"
+	mustExec(t, tx, `CREATE ROLE `+dbx.QuoteIdent(role)+` NOLOGIN`)
+	mustExec(t, tx, `GRANT USAGE ON SCHEMA `+dbx.QuoteIdent(schemaName)+` TO `+dbx.QuoteIdent(role))
+	mustExec(t, tx, `SET LOCAL ROLE `+dbx.QuoteIdent(role))
+
+	var currentRole string
+	var listed, exists bool
+	if err := tx.QueryRow(`SELECT current_user,
+		EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'schema_version'),
+		to_regclass('schema_version') IS NOT NULL`).Scan(&currentRole, &listed, &exists); err != nil {
+		t.Fatal(err)
+	}
+	if currentRole != role || listed || !exists {
+		t.Fatalf("restricted role = %q, information_schema lists version = %t, relation exists = %t; want %q, false, true", currentRole, listed, exists, role)
+	}
+	if err := refuseForeignSchema(t.Context(), tx, to); err != nil {
+		t.Errorf("existing CoreScope schema misclassified for a role without table privileges: %v", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	var roleExists bool
+	if err := conn.QueryRowContext(t.Context(), `SELECT current_user, EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ?)`, role).Scan(&currentRole, &roleExists); err != nil {
+		t.Fatal(err)
+	}
+	if currentRole != originalRole || roleExists {
+		t.Errorf("rollback left session role %q (want %q), temporary role exists = %t", currentRole, originalRole, roleExists)
+	}
 }
 
 // A server started straight after a copy (CI's E2E job, or before the first
