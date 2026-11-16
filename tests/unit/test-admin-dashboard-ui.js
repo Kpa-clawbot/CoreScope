@@ -4,6 +4,7 @@
  * test-user-management-ui.js). */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
@@ -71,6 +72,7 @@ function loadTab(files, hash, routes, extra) {
   }, extra || {});
   ctx.window = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   [].concat(files).forEach((f) => vm.runInContext(src(f), ctx));
   return { ctx, dom, els: dom.els, loc, replaced, calls, bodies, timers };
 }
@@ -433,6 +435,7 @@ function loadShell(hash, opts) {
     registerPage(n, m) { pages[n] = m; }, addEventListener(t, fn) { listeners[t] = fn; } }, mods);
   ctx.window = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(src('public/admin.js'), ctx);
   return { t: ctx.CSAdmin._test, page: pages.admin, app: { innerHTML: '' }, loc, replaced, mods, els: dom.els,
     fire(detail) { me.current = detail; if (listeners['cs-auth-changed']) listeners['cs-auth-changed']({ detail }); } };

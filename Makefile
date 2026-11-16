@@ -15,6 +15,8 @@
 #   make crossbuild               # linux/amd64 + linux/arm64, static, into dist/
 #   make test / vet / fmt-check   # across all modules
 #   make docker-build             # multi-arch image via buildx
+#   make web API_BASE=… AUTH=…    # the UI alone, for a static host, into dist/web
+#   make dev-split                # UI on :8788 calling the API on :3000 cross-origin
 
 GO                ?= $(shell command -v go)
 GIT_VERSION       ?= $(shell git describe --tags --match "v*" 2>/dev/null || echo unknown)
@@ -59,12 +61,12 @@ DOCKER_IMAGE      ?= ghcr.io/kpa-clawbot/corescope
 DOCKER_TAG        ?= $(GIT_VERSION)
 DOCKER_PLATFORMS  ?= linux/amd64,linux/arm64
 
-.PHONY: all build crossbuild test vet fmt-check tidy clean docker-build docker-push help
+.PHONY: all build crossbuild test vet fmt-check tidy clean web dev-split docker-build docker-push help
 
 all: build
 
 help:
-	@echo "targets: build crossbuild test vet fmt-check tidy clean docker-build docker-push"
+	@echo "targets: build crossbuild test vet fmt-check tidy clean web dev-split docker-build docker-push"
 	@echo "         build-{$(shell echo $(CMDS) | tr ' ' ',')}"
 
 # -- host builds ---------------------------------------------------------------
@@ -118,6 +120,35 @@ tidy:
 
 clean:
 	rm -rf $(DIST)
+
+# -- static frontend ------------------------------------------------------------
+#
+# web packages public/ into dist/web for a static host or a CDN. It reads
+# API_BASE, AUTH, CHANNEL, CLASSIC_URL and COMMIT; see scripts/static/build.sh.
+# The Go binaries share dist/, which is why the UI gets a folder of its own.
+web:
+	bash scripts/static/build.sh
+
+# dev-split runs the UI the way a static host serves it: the anonymous
+# build on :8788 calling an API-only server on :3000 cross-origin, with no
+# proxy. The server change is the one env var, exactly as in production.
+# DEV_SPLIT_DB=path/to.db picks the data (default: the E2E fixture); it runs on a
+# migrated copy in dist/, so the original is never touched.
+DEV_SPLIT_DB          ?= test-fixtures/e2e-fixture.db
+DEV_SPLIT_API_PORT    ?= 3000
+DEV_SPLIT_STATIC_PORT ?= 8788
+
+dev-split: build-server build-migrate
+	cp $(DEV_SPLIT_DB) $(DIST)/dev-split.db
+	$(DIST)/corescope-migrate -db $(DIST)/dev-split.db
+	CHANNEL=dev COMMIT=dev AUTH=false \
+		API_BASE=http://localhost:$(DEV_SPLIT_API_PORT) CLASSIC_URL=http://localhost:$(DEV_SPLIT_API_PORT) \
+		bash scripts/static/build.sh
+	@echo "UI: http://localhost:$(DEV_SPLIT_STATIC_PORT)  API: http://localhost:$(DEV_SPLIT_API_PORT)  (Ctrl-C stops both)"
+	@trap 'kill 0' INT TERM EXIT; \
+	CORS_ALLOWED_ORIGINS=http://localhost:$(DEV_SPLIT_STATIC_PORT) \
+		$(DIST)/corescope-server -port $(DEV_SPLIT_API_PORT) -db $(DIST)/dev-split.db -public /nonexistent & \
+	node scripts/dev-static.mjs --root $(DIST)/web --port $(DEV_SPLIT_STATIC_PORT)
 
 # -- docker --------------------------------------------------------------------
 

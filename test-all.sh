@@ -20,7 +20,10 @@ node tests/unit/test-admin-dashboard-ui.js
 node tests/unit/test-aging.js
 node tests/unit/test-analytics-channels-integration.js
 node tests/unit/test-anl1-tooltip-render.js
+node tests/unit/test-anonymous-mode.js
+node tests/unit/test-api-base.js
 node tests/unit/test-area-filter.js
+node tests/unit/test-beta-ui.js
 node tests/unit/test-channel-color-picker.js
 node tests/unit/test-channel-colors.js
 node tests/unit/test-channel-decrypt-ecb.js
@@ -48,11 +51,14 @@ node tests/unit/test-compare-overlap.js
 node tests/unit/test-confidence-indicator.js
 node tests/unit/test-coverage-gate.js
 node tests/unit/test-customizer-v2.js
+node tests/unit/test-dev-static.js
 node tests/unit/test-dockerfile-buildplatform.js
 node tests/unit/test-drag-manager.js
 node tests/unit/test-e2e-coverage.js
 node tests/unit/test-direct-rf-heard-by.js
 node tests/unit/test-embed-mode-1369.js
+node tests/unit/test-static-build.js
+node tests/unit/test-web-container.js
 node tests/unit/test-theme-url-param-2236.js
 node tests/unit/test-fetch-all-nodes-pagination.js
 node tests/unit/test-fluid-scaffolding.js

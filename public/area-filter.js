@@ -30,7 +30,7 @@
   async function fetchAreas() {
     if (_loaded) return _areas;
     try {
-      var data = await fetch('/api/config/areas').then(function (r) { return r.json(); });
+      var data = await CSApi.fetch('/api/config/areas').then(function (r) { return r.json(); });
       _areas = Array.isArray(data) ? data : [];
       _loaded = true;
       if (_selected && !_areas.some(function (a) { return a.key === _selected; })) {

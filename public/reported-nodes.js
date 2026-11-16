@@ -14,7 +14,7 @@
   // failed request, yields an empty list so callers never break on it.
   function load() {
     if (cache && Date.now() - cache.at < TTL_MS) return cache.promise;
-    var p = fetch('/api/nodes/reported')
+    var p = CSApi.fetch('/api/nodes/reported')
       .then(function (r) { return r.ok ? r.json() : { nodes: [] }; })
       .then(function (j) { return { nodes: (j && j.nodes) || [], method: (j && j.method) || null }; })
       .catch(function () { return { nodes: [], method: null }; });

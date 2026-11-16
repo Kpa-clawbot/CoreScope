@@ -19,6 +19,7 @@
 'use strict';
 
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -48,6 +49,7 @@ function sliceVersionFns() {
 function load(fetchImpl) {
   const sandbox = { fetch: fetchImpl, console };
   vm.createContext(sandbox);
+  loadApiBase(sandbox);
   vm.runInContext(sliceVersionFns() + '\nthis.fillVersion = fillVersion;', sandbox);
   return sandbox.fillVersion;
 }

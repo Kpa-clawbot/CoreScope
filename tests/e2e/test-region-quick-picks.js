@@ -13,6 +13,9 @@ const { JSDOM } = require('jsdom');
 const byCode = (a, b) => a.localeCompare(b);
 
 const SRC = fs.readFileSync(REPO_ROOT + '/public/region-filter.js', 'utf8');
+// region-filter.js fetches through window.CSApi, as in the browser, where
+// deployment.js and api-base.js load first.
+const API_SRC = ['deployment.js', 'api-base.js'].map((f) => fs.readFileSync(REPO_ROOT + '/public/' + f, 'utf8'));
 let passed = 0, failed = 0;
 async function test(name, fn) {
   try { await fn(); passed++; console.log('  ✓ ' + name); }
@@ -38,6 +41,7 @@ async function setup(regions, picks, opts) {
     }
     return { json: async () => regions };
   };
+  API_SRC.forEach((src) => w.eval(src));
   w.eval(SRC);
   const rf = w.RegionFilter;
   const calls = [];

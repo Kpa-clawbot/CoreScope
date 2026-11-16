@@ -21,6 +21,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 const vm = require('vm');
 const fs = require('fs');
 const path = require('path');
@@ -57,6 +58,7 @@ function makeSandbox(theme) {
   ctx.window.document = ctx.document;
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   const src = fs.readFileSync(path.join(REPO_ROOT, 'public', 'roles.js'), 'utf8');
   vm.runInContext(src, ctx, { filename: 'public/roles.js' });
   // Mirror window.* back so bare-name refs inside roles.js (TILE_DARK etc.) resolve.

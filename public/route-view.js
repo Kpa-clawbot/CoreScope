@@ -99,9 +99,9 @@
       return Promise.resolve(cached);
     }
     return Promise.all([
-      fetch('/api/nodes/' + pk).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
-      fetch('/api/nodes/' + pk + '/analytics?window=24h').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
-      fetch('/api/nodes/' + pk + '/paths?limit=20').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+      CSApi.fetch('/api/nodes/' + pk).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+      CSApi.fetch('/api/nodes/' + pk + '/analytics?window=24h').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+      CSApi.fetch('/api/nodes/' + pk + '/paths?limit=20').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
     ]).then(function (out) {
       var result = { detail: out[0], analytics: out[1], paths: out[2] };
       // Evict oldest entry (Map preserves insertion order) before adding.
