@@ -35,6 +35,7 @@ const vm   = require('vm');
 const fs   = require('fs');
 const path = require('path');
 const assert = require('assert');
+const { loadApiBase } = require('./api-base-sandbox');
 
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -95,6 +96,7 @@ function makeSandbox(opts) {
   ctx.window.document = ctx.document;
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   ctx.setTheme = (t) => { theme = t; };
   ctx.listeners = listeners;
   ctx.fire = (type, ev) => { (listeners[type] || []).forEach(fn => fn(ev)); };
