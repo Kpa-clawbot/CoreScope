@@ -48,6 +48,8 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/config/theme":              {Summary: "Get theme configuration", Description: "Returns color maps, CSS variables, and theme defaults.", Tag: "config"},
 		"GET /api/config/map":                {Summary: "Get map configuration", Tag: "config"},
 		"GET /api/config/geo-filter":         {Summary: "Get geo-filter configuration", Tag: "config"},
+		"GET /api/config/areas":              {Summary: "List configured areas", Description: "Returns an array of configured area keys and labels with a non-empty label. Labels are not trimmed and keys are not filtered by prefix. Returns an empty array when no entries qualify. Result order is unspecified. Public endpoint with no query parameters.", Tag: "config", Response: schemaRef("ConfigAreasResponse")},
+		"GET /api/config/areas/polygons":     {Summary: "Get configured area geometry", Description: "Returns an array of all configured areas, including unlabeled entries, with their raw polygon and bounding-box fields. Empty polygons and unset bounds are omitted; zero bounds are included. Each bound is independently optional, and polygons may coexist with bounds. Returns an empty array when no areas are configured. Result order is unspecified. Public endpoint with no query parameters.", Tag: "config", Response: schemaRef("ConfigAreaPolygonsResponse")},
 
 		// Admin / system
 		"GET /api/health":      {Summary: "Health check", Description: "Returns server health, uptime, and memory stats.", Tag: "admin"},
@@ -266,6 +268,8 @@ type openAPISchema struct {
 	Nullable             bool                     `json:"nullable,omitempty"`
 	Enum                 []string                 `json:"enum,omitempty"`
 	Items                *openAPISchema           `json:"items,omitempty"`
+	MinItems             int                      `json:"minItems,omitempty"`
+	MaxItems             int                      `json:"maxItems,omitempty"`
 	Properties           map[string]openAPISchema `json:"properties,omitempty"`
 	Required             []string                 `json:"required,omitempty"`
 	AdditionalProperties *openAPISchema           `json:"additionalProperties,omitempty"`
@@ -298,6 +302,35 @@ func componentSchemas() map[string]interface{} {
 		return m
 	}
 	return map[string]interface{}{
+		"ConfigAreasResponse": openAPISchema{
+			Type: "array", Items: &openAPISchema{
+				Type: "object", Required: []string{"key", "label"},
+				Properties: map[string]openAPISchema{
+					"key":   {Type: "string", Description: "Area configuration map key, preserved verbatim."},
+					"label": {Type: "string", Description: "Non-empty configured display label, preserved verbatim."},
+				},
+			},
+		},
+		"ConfigAreaPolygonsResponse": openAPISchema{
+			Type: "array", Items: &openAPISchema{
+				Type: "object", Required: []string{"key", "label"},
+				Properties: map[string]openAPISchema{
+					"key":   {Type: "string", Description: "Area configuration map key, preserved verbatim."},
+					"label": {Type: "string", Description: "Configured display label; may be empty."},
+					"polygon": {
+						Type: "array", MinItems: 1, Description: "Configured coordinates, unchanged; omitted when empty. The endpoint does not validate polygon geometry.",
+						Items: &openAPISchema{
+							Type: "array", MinItems: 2, MaxItems: 2, Description: "[latitude, longitude] in degrees.",
+							Items: &openAPISchema{Type: "number"},
+						},
+					},
+					"latMin": {Type: "number", Description: "Configured minimum latitude in degrees. Omitted when unset; included when set to zero."},
+					"latMax": {Type: "number", Description: "Configured maximum latitude in degrees. Omitted when unset; included when set to zero."},
+					"lonMin": {Type: "number", Description: "Configured minimum longitude in degrees. Omitted when unset; included when set to zero."},
+					"lonMax": {Type: "number", Description: "Configured maximum longitude in degrees. Omitted when unset; included when set to zero."},
+				},
+			},
+		},
 		"ReadinessResponse": openAPISchema{
 			Type: "object", Required: []string{"ready", "loadedTx", "loadedObs", "from_pubkey_backfill"},
 			Properties: map[string]openAPISchema{
