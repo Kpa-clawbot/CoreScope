@@ -412,7 +412,9 @@ func (h *plannerHarness) get(path, ip string) *httptest.ResponseRecorder {
 // pollUntil re-polls path until its status is want, failing after 5 s.
 func (h *plannerHarness) pollUntil(t *testing.T, path, ip string, want int) *httptest.ResponseRecorder {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// A full 30 km viewshed takes ~2 s locally but over 5 s on a CI runner
+	// with coverage on; the deadline only bounds a job that never finishes.
+	deadline := time.Now().Add(60 * time.Second)
 	for {
 		w := h.get(path, ip)
 		if w.Code == want {
