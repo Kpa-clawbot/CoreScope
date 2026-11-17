@@ -47,11 +47,12 @@ func TestOpenAPIAnalyticsRolesDocumentation(t *testing.T) {
 	schemas := asMap(t, asMap(t, spec["components"], "components")["schemas"], "schemas")
 	schema := asMap(t, schemas["RoleAnalyticsResponse"], "RoleAnalyticsResponse")
 	props := asMap(t, schema["properties"], "response properties")
+	totalNodes := asMap(t, props["totalNodes"], "totalNodes")
 	required, _ := schema["required"].([]interface{})
 	if schema["type"] != "object" || len(props) != 2 || len(required) != 2 ||
 		!slices.Contains(required, interface{}("totalNodes")) || !slices.Contains(required, interface{}("roles")) ||
-		asMap(t, props["totalNodes"], "totalNodes")["type"] != "integer" {
-		t.Errorf("expected required totalNodes integer and roles array: %v", schema)
+		totalNodes["type"] != "integer" || totalNodes["nullable"] == true {
+		t.Errorf("expected required non-null totalNodes integer and roles array: %v", schema)
 	}
 	roles := asMap(t, props["roles"], "roles")
 	if roles["type"] != "array" || roles["nullable"] == true {
@@ -79,6 +80,7 @@ func TestOpenAPIAnalyticsRolesDocumentation(t *testing.T) {
 
 func TestAnalyticsRolesDocumentedContract(t *testing.T) {
 	db := setupTestDB(t)
+	defer db.Close()
 	cfg := &Config{APIKey: "test-roles-key", Areas: map[string]AreaEntry{
 		"inside": {Polygon: [][2]float64{{0, 0}, {0, 2}, {2, 2}, {2, 0}}},
 	}}
@@ -99,17 +101,18 @@ func TestAnalyticsRolesDocumentedContract(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("roles response = %+v, want %+v", got, want)
 		}
-		var wire struct {
-			TotalNodes json.RawMessage              `json:"totalNodes"`
-			Roles      []map[string]json.RawMessage `json:"roles"`
-		}
+		var wire map[string]json.RawMessage
 		if err := json.Unmarshal(w.Body.Bytes(), &wire); err != nil {
 			t.Fatal(err)
 		}
-		if len(wire.TotalNodes) == 0 || wire.Roles == nil {
-			t.Errorf("totalNodes and a non-null roles array are always present: %s", w.Body.String())
+		if count, ok := wire["totalNodes"]; !ok || string(count) == "null" {
+			t.Errorf("totalNodes must be present with an exact key and a non-null integer: %s", w.Body.String())
 		}
-		for _, row := range wire.Roles {
+		var rows []map[string]json.RawMessage
+		if err := json.Unmarshal(wire["roles"], &rows); err != nil || rows == nil {
+			t.Fatalf("roles must be present with an exact key and a non-null array: %s (decode error: %v)", w.Body.String(), err)
+		}
+		for _, row := range rows {
 			for field := range roleStatsDocumentedTypes {
 				if value, ok := row[field]; !ok || string(value) == "null" {
 					t.Errorf("RoleStats must emit non-null %s, including zero values: %v", field, row)
