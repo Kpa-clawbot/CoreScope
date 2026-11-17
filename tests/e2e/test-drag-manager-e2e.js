@@ -44,6 +44,26 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     ]);
   }
 
+  async function dragFromHeader(panelId, offsetX, offsetY, steps = 1) {
+    const panel = page.locator('#' + panelId);
+    // The buttons sit at the edges. Hover waits for a stable, hittable header center.
+    await panel.locator('.panel-header').hover();
+    await page.mouse.down();
+    try {
+      const press = await panel.evaluate(el => {
+        const manager = window._liveDragMgr;
+        return {
+          accepted: manager.state === 'PENDING' && manager.activePanel === el,
+          x: manager.startX, y: manager.startY,
+        };
+      });
+      assert(press.accepted, '#' + panelId + ' did not accept the pointer press');
+      await page.mouse.move(press.x + offsetX, press.y + offsetY, { steps });
+    } finally {
+      await page.mouse.up();
+    }
+  }
+
   console.log(`\n=== #1297 B4 drag-manager E2E against ${BASE} ===`);
 
   await step('navigate to /live', async () => {
@@ -63,17 +83,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('pointer drag on #liveFeed transitions panel into free-form mode', async () => {
-    // Locate the panel-header rect
-    const headerBox = await page.$eval('#liveFeed .panel-header', el => {
-      const r = el.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    });
-
     // Real mouse drag — outside the dead zone (5px)
-    await page.mouse.move(headerBox.x, headerBox.y);
-    await page.mouse.down();
-    await page.mouse.move(headerBox.x + 120, headerBox.y + 80, { steps: 8 });
-    await page.mouse.up();
+    await dragFromHeader('liveFeed', 120, 80, 8);
 
     const state = await page.$eval('#liveFeed', el => ({
       dragged: el.dataset.dragged,
@@ -121,14 +132,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.evaluate(() => localStorage.removeItem('panel-drag-liveLegend'));
     await reloadLivePanel('liveLegend');
 
-    const headerBox = await page.$eval('#liveLegend .panel-header', el => {
-      const r = el.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    });
-    await page.mouse.move(headerBox.x, headerBox.y);
-    await page.mouse.down();
-    await page.mouse.move(headerBox.x + 2, headerBox.y + 2); // inside DEAD_ZONE (5px)
-    await page.mouse.up();
+    await dragFromHeader('liveLegend', 2, 2); // inside DEAD_ZONE (5px)
 
     const raw = await page.evaluate(() => localStorage.getItem('panel-drag-liveLegend'));
     assert(raw === null, 'dead-zone click should NOT persist a position, got: ' + raw);
