@@ -243,6 +243,35 @@ test('paint: users layer colours each cell from its nibble; code 0 stays transpa
   t.inst.unmount();
 });
 
+test('mercatorRowMap: each canvas row takes the grid row under its Mercator centre', () => {
+  const merc = (lat) => Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+  const S = 50.46, N = 51.54, rows = 300;   // about 60 km either side of 51° N
+  const map = Array.from(I.mercatorRowMap(S, N, rows));
+  assert.strictEqual(map.length, rows);
+  assert.strictEqual(map[0], 0);
+  assert.strictEqual(map[rows - 1], rows - 1);
+  for (let j = 0; j < rows; j++) {
+    const y = merc(N) + (j + 0.5) / rows * (merc(S) - merc(N));
+    const lat = Math.atan(Math.sinh(y)) * 180 / Math.PI;
+    assert.strictEqual(map[j], Math.floor((N - lat) / (N - S) * rows), 'row ' + j);
+    if (j) assert(map[j] >= map[j - 1], 'rows stay in order');
+  }
+  assert(map.some((r, j) => r !== j), 'at 60 km the mapping is not the identity');
+});
+
+test('paint: canvas rows follow Mercator, not equal latitude bands', async () => {
+  // 4 bands of 20° from 80° N to the equator. Spaced evenly in Mercator, the
+  // canvas row centres fall at about 76°, 65°, 46° and 17° N.
+  const t = mountWith({ site: '51,5' });
+  t.calls[0].d.resolve(result({ bbox: [0, 0, 80, 1], rows: 4, cols: 1, cells: Buffer.from([0x05, 0x04, 0x03, 0x02]).toString('base64') }));
+  await flush();
+  const img = t.m.log.images[0];
+  assert.strictEqual(img.height, 4);
+  const px = (i) => Array.from(img.data.slice(i * 4, i * 4 + 4));
+  assert.deepStrictEqual([px(0), px(1), px(2), px(3)], [RGB.green, RGB.green, RGB.lime, RGB.orange]);
+  t.inst.unmount();
+});
+
 test('users legend has no <10% swatch', () => {
   const html = I.legendHtml('users', { rx: 5 }, CFG);
   assert(html.indexOf('< 10%') < 0, html);

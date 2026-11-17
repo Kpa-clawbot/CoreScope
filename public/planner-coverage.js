@@ -51,6 +51,19 @@
     for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     return out;
   }
+  // L.imageOverlay stretches its image linearly in Web Mercator y, while the
+  // grid's rows are equal latitude bands (north first). For each of rows
+  // canvas rows spaced evenly in Mercator between s and n, the grid row whose
+  // band holds the canvas row's centre latitude.
+  function mercY(lat) { return Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)); }
+  function mercatorRowMap(s, n, rows) {
+    var yN = mercY(n), yS = mercY(s), out = new Array(rows);
+    for (var j = 0; j < rows; j++) {
+      var lat = (2 * Math.atan(Math.exp(yN + (j + 0.5) / rows * (yS - yN))) - Math.PI / 2) * 180 / Math.PI;
+      out[j] = Math.min(rows - 1, Math.max(0, Math.floor((n - lat) / (n - s) * rows)));
+    }
+    return out;
+  }
   function cellCode(b, layer) { return layer === 'repeaters' ? (b >> 4) & 15 : b & 15; }
   function colorVarFor(layer, code) {
     if (!(code >= LAYER_MIN[layer] && code <= LAYERS[layer])) return null;
@@ -246,10 +259,14 @@
       var rgba = theme.colors.map(function (c) { return c ? Array.prototype.slice.call(rgbaOf(g, c)) : null; });
       g.clearRect(0, 0, 1, 1);
       var img = g.createImageData(cols, rows), px = img.data;
-      for (var i = 0; i < rows * cols; i++) {
-        var c = rgba[cellCode(cells[i], state.layer)];
-        if (!c) continue;
-        px[i * 4] = c[0]; px[i * 4 + 1] = c[1]; px[i * 4 + 2] = c[2]; px[i * 4 + 3] = c[3];
+      var srcRow = mercatorRowMap(b[0], b[2], rows);
+      for (var j = 0; j < rows; j++) {
+        for (var k = 0; k < cols; k++) {
+          var c = rgba[cellCode(cells[srcRow[j] * cols + k], state.layer)];
+          if (!c) continue;
+          var o = (j * cols + k) * 4;
+          px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = c[3];
+        }
       }
       g.putImageData(img, 0, 0);
       L.imageOverlay(canvas.toDataURL(), [[b[0], b[1]], [b[2], b[3]]], {
@@ -419,6 +436,7 @@
     mount: mount,
     _internals: {
       decodeCells: decodeCells,
+      mercatorRowMap: mercatorRowMap,
       cellCode: cellCode,
       colorVarFor: colorVarFor,
       parseCoverageParams: parseCoverageParams,
