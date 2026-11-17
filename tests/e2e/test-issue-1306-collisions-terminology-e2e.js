@@ -144,17 +144,15 @@ async function assertHashView(page, bytes, collisionData) {
   {
     const key = 'AB12' + '0'.repeat(60), otherKey = 'AB34' + '0'.repeat(60);
     const nodes = [key, otherKey].map(public_key => ({ public_key, role: 'repeater' }));
-    const region = Object.keys(await (await page.request.get(BASE + '/api/config/regions')).json())[0];
-    assert(region, 'Fixture needs a selectable region');
-    const pattern = '**/api/nodes?*';
+    const region = 'QZZ', regionsPattern = '**/api/config/regions', pattern = '**/api/nodes?*';
     let empty = false, emptyRequests = 0;
-    await page.route(pattern, async route => {
-      if (new URL(route.request().url()).searchParams.get('region') !== region) return route.continue();
-      const response = await route.fetch(), json = await response.json();
-      if (empty) emptyRequests++;
-      await route.fulfill({ response, json: { ...json, nodes: empty ? [] : nodes, total: empty ? 0 : 2, has_more: false } });
-    });
     try {
+      await page.route(regionsPattern, route => route.fulfill({ status: 200, json: { [region]: 'Fixture region' } }));
+      await page.route(pattern, route => {
+        if (new URL(route.request().url()).searchParams.get('region') !== region) return route.continue();
+        if (empty) emptyRequests++;
+        return route.fulfill({ status: 200, json: { nodes: empty ? [] : nodes, total: empty ? 0 : 2, counts: {}, has_more: false } });
+      });
       for (const width of [1400, 390]) {
         empty = false;
         await page.setViewportSize({ width, height: width === 390 ? 844 : 1200 });
@@ -170,15 +168,17 @@ async function assertHashView(page, bytes, collisionData) {
           assert(await links.count() === 1 && await links.getAttribute('href') === '#/nodes/' + otherKey,
             'Full-key positive control must link only to the other AB repeater');
           const text = await messages.allTextContents();
-          assert(text.length === 2 && text.every(t => t === 'No matches among loaded repeaters (excluding the entered key).'),
-            'Self-only tiers must describe the excluded key; got: ' + text.join(' | '));
+          assert(text.length === 2 && text.every(t => t === 'The entered key is the only match among loaded repeaters.'),
+            'Self-only tiers must identify the actual match; got: ' + text.join(' | '));
         });
-        await step(`#1710: ${width}px absent full key uses presence-neutral empty wording`, async () => {
-          await input.fill('CD' + '0'.repeat(62)); await check.click();
-          const text = await messages.allTextContents();
-          assert(text.length === 3 && text.every(t => t === 'No matches among loaded repeaters (excluding the entered key).'),
-            'Absent-key tiers must not claim the inspected key is loaded; got: ' + text.join(' | '));
-        });
+        for (const [label, value] of [['absent full key', 'CD' + '0'.repeat(62)], ['partial input', 'CD000000']]) {
+          await step(`#1710: ${width}px ${label} uses plain no-match wording`, async () => {
+            await input.fill(value); await check.click();
+            const text = await messages.allTextContents();
+            assert(text.length === 3 && text.every(t => t === 'No matches among loaded repeaters.'),
+              'Unmatched input must not imply an excluded key; got: ' + text.join(' | '));
+          });
+        }
         await step(`#1710: ${width}px manual no-match prefix scopes its empty result`, async () => {
           await input.fill('CD'); await check.click();
           const text = await messages.textContent();
@@ -197,6 +197,7 @@ async function assertHashView(page, bytes, collisionData) {
       }
     } finally {
       await page.unroute(pattern);
+      await page.unroute(regionsPattern);
       await page.evaluate(() => localStorage.removeItem('meshcore-region-filter'));
       await page.setViewportSize({ width: 1400, height: 1200 });
     }
