@@ -412,9 +412,9 @@ func (h *plannerHarness) get(path, ip string) *httptest.ResponseRecorder {
 // pollUntil re-polls path until its status is want, failing after 5 s.
 func (h *plannerHarness) pollUntil(t *testing.T, path, ip string, want int) *httptest.ResponseRecorder {
 	t.Helper()
-	// A full 30 km viewshed takes ~2 s locally but over 5 s on a CI runner
-	// with coverage on; the deadline only bounds a job that never finishes.
-	deadline := time.Now().Add(60 * time.Second)
+	// Past plannerComputeTimeout, so a slow runner ends in the job's own
+	// timeout rather than in a poll that gave up early.
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		w := h.get(path, ip)
 		if w.Code == want {
@@ -1733,6 +1733,13 @@ func TestPlannerAPIMissingTerrainWarnings(t *testing.T) {
 // (aa02), both repeaters of plannerTestNodes.
 const plannerViewshedPath = "/api/planner/viewshed?site=30.11,-97.09"
 
+// plannerViewshedResultPath computes a full grid at 15 km, which still holds
+// Hill and Mesa: a 30 km grid has 4 times the cells and passed the 20 s job
+// timeout on a CI runner with coverage on.
+const plannerViewshedResultPath = plannerViewshedPath + "&range=15"
+
+const plannerViewshedResultKm = 15
+
 func TestPlannerViewshedDisabled404(t *testing.T) {
 	off := newPlannerService(PlannerConfig{}, nil, nil)
 	t.Cleanup(off.Close)
@@ -1809,14 +1816,14 @@ func decodeViewshed(t *testing.T, w *httptest.ResponseRecorder) (PlannerViewshed
 func TestPlannerViewshedResult(t *testing.T) {
 	h := newPlannerHarness(t)
 	ip := "198.51.100.120"
-	w := h.pollUntil(t, plannerViewshedPath, ip, http.StatusOK)
+	w := h.pollUntil(t, plannerViewshedResultPath, ip, http.StatusOK)
 	resp, cells := decodeViewshed(t, w)
 	radio, _ := (*LOSConfig)(nil).resolved()
 	site := geoPoint{30.11, -97.09}
 	want := PlannerViewshedParams{
 		Site:     geoPointJSON{Lat: site.Lat, Lon: site.Lon},
 		AntennaM: defaultPlannerNewAntennaM, RxAntennaM: defaultPlannerExistAntenna,
-		RangeKm: defaultPlannerRangeKm, FrequencyMHz: radio.FrequencyMHz, KFactor: radio.KFactor,
+		RangeKm: plannerViewshedResultKm, FrequencyMHz: radio.FrequencyMHz, KFactor: radio.KFactor,
 		UserReach: PlannerUserReach{D50Km: defaultPlannerUserD50Km, Slope: defaultPlannerUserSlope},
 	}
 	if resp.Params != want {
@@ -1825,8 +1832,8 @@ func TestPlannerViewshedResult(t *testing.T) {
 	if resp.Source != terrainDefaultSource || resp.Rows < 1 || resp.Cols < 1 || resp.Rows*resp.Cols != len(cells) {
 		t.Fatalf("source %q, %dx%d grid, %d cells", resp.Source, resp.Rows, resp.Cols, len(cells))
 	}
-	bb := viewshedBBox(site, defaultPlannerRangeKm)
-	if resp.BBox != [4]float64{bb.S, bb.W, bb.N, bb.E} || resp.CellKm != viewshedCellKm(defaultPlannerRangeKm) {
+	bb := viewshedBBox(site, plannerViewshedResultKm)
+	if resp.BBox != [4]float64{bb.S, bb.W, bb.N, bb.E} || resp.CellKm != viewshedCellKm(plannerViewshedResultKm) {
 		t.Fatalf("bbox %v cell %g, want %+v", resp.BBox, resp.CellKm, bb)
 	}
 	if h.src.lastBBox() != bb {
@@ -1961,7 +1968,7 @@ func TestViewshedTruncatedRule(t *testing.T) {
 func TestPlannerViewshedLinksCarryNoElevProfile(t *testing.T) {
 	h := newPlannerHarness(t)
 	h.data.setNodes(plannerTestNodes())
-	w := h.pollUntil(t, plannerViewshedPath, "198.51.100.123", http.StatusOK)
+	w := h.pollUntil(t, plannerViewshedResultPath, "198.51.100.123", http.StatusOK)
 	resp, _ := decodeViewshed(t, w)
 	if len(resp.Links) == 0 {
 		t.Fatal("no links")
@@ -1985,7 +1992,7 @@ func TestPlannerViewshedLinksSkipRepeaterAtSite(t *testing.T) {
 		nodeInfo{PublicKey: "ee0002", Name: "Near90m", Role: "repeater", Lat: 30.1108, Lon: -97.09, HasGPS: true, LastSeen: plannerTestStart},
 		nodeInfo{PublicKey: "ee0003", Name: "At200m", Role: "repeater", Lat: 30.1118, Lon: -97.09, HasGPS: true, LastSeen: plannerTestStart})
 	h.data.setNodes(ns)
-	w := h.pollUntil(t, plannerViewshedPath, "198.51.100.123", http.StatusOK)
+	w := h.pollUntil(t, plannerViewshedResultPath, "198.51.100.123", http.StatusOK)
 	resp, _ := decodeViewshed(t, w)
 	got := map[string]bool{}
 	for _, l := range resp.Links {
