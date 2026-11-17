@@ -383,6 +383,9 @@
       const sizes = Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : [];
       value += ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + escapeHtml(sizes.join(', ')) + '-byte"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>varies</span>';
     }
+    if (size === 1 && n.role === 'repeater' && /^[0-9a-f]{64}$/i.test(key)) {
+      value += ' <a href="' + escapeHtml('#/analytics?tab=prefix-tool&prefix=' + encodeURIComponent(key)) + '" style="color:var(--link-color)">Inspect in Prefix Tool</a>';
+    }
     return renderNodeMetric('Hash Prefix', value, table);
   }
 
