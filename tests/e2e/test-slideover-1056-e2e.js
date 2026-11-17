@@ -82,6 +82,20 @@ const PAGES = [
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.locator(p.rowSel).first().locator('td').first().click();
       await page.waitForSelector('.slide-over-panel');
+      if (p.name === 'observers') {
+        await page.locator('#obsTitle').waitFor();
+        // Let the detail route's focus frame run while the preview is open.
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+      }
+    }
+
+    async function checkDismissal() {
+      await page.locator('.slide-over-panel').waitFor({ state: 'hidden' });
+      if (p.name !== 'observers') return;
+      // Sample after the close handler and its focus-restoration frame.
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      const focused = await page.evaluate(() => document.activeElement.id || document.activeElement.tagName);
+      assert(focused === 'obsTitle', 'observer dismissal must focus the detail heading, got ' + focused);
     }
 
     await step(`${tag}: page renders + first row exists`, async () => {
@@ -103,6 +117,14 @@ const PAGES = [
       await page.waitForFunction((rowSel) => {
         return document.querySelector(rowSel) !== null;
       }, p.rowSel, { timeout: 30000 });
+    });
+
+    if (p.name === 'observers') await step(`${tag}: keyboard preview returns focus to its list row`, async () => {
+      const row = page.locator(p.rowSel).first();
+      await row.press('Enter');
+      await page.locator('.slide-over-panel .slide-over-close').waitFor();
+      await page.keyboard.press('Escape');
+      assert(await row.evaluate(el => document.activeElement === el), 'Escape must return focus to the list row');
     });
 
     await step(`${tag}: clicking row opens slide-over with backdrop`, async () => {
@@ -272,7 +294,7 @@ const PAGES = [
 
     await step(`${tag}: Escape closes slide-over`, async () => {
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(200);
+      await checkDismissal();
       const info = await page.evaluate(() => {
         function isShown(el) {
           if (!el) return false;
@@ -296,7 +318,7 @@ const PAGES = [
       await reopenPanel();
       // Hit the scrim over the navigation, outside the right-anchored panel.
       await pointerClick(page, '.slide-over-backdrop', touch, { x: 10, y: 20 });
-      await page.waitForTimeout(200);
+      await checkDismissal();
       const gone = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
         if (!panel || panel.hidden) return true;
@@ -309,7 +331,7 @@ const PAGES = [
     await step(`${tag}: X button closes slide-over`, async () => {
       await reopenPanel();
       await pointerClick(page, '.slide-over-panel .slide-over-close', touch);
-      await page.waitForTimeout(200);
+      await checkDismissal();
       const gone = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
         if (!panel || panel.hidden) return true;
@@ -321,7 +343,6 @@ const PAGES = [
 
     if (p.name === 'observers') await step(`${tag}: leaving preview focuses the new page heading`, async () => {
       await reopenPanel();
-      await page.locator('#obsTitle').waitFor({ state: 'attached' });
       await page.evaluate(() => { location.hash = '#/tools'; });
       await page.locator('.tools-landing').waitFor();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
