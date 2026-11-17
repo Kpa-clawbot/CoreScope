@@ -4575,6 +4575,41 @@ console.log('\n=== nodes.js: preview metadata (#2309) ===');
       assert.strictEqual(renderPreview({ hash_size: size }).value('Hash Prefix'), 'Unknown');
     }
   });
+  for (const size of [1, '1']) {
+    test('one-byte repeater prefix links its full key to Prefix Tool (' + typeof size + ')', () => {
+      const key = 'aBcDeF01'.repeat(8);
+      const value = renderPreview({ public_key: key, hash_size: size }).value('Hash Prefix');
+      assert.match(value, /<code[^>]*>AB<\/code> \(1-byte\)/);
+      const link = value.match(/<a\b[^>]*href="([^"]+)"[^>]*>Inspect in Prefix Tool<\/a>/);
+      assert.ok(link, 'known one-byte repeater must offer Inspect in Prefix Tool');
+      assert.strictEqual(link[1], '#/analytics?tab=prefix-tool&amp;prefix=' + key);
+      assert.doesNotMatch(value, /collision|other nodes/i, 'navigation must not assert a collision');
+    });
+  }
+  test('Prefix Tool action requires a known one-byte size and a repeater', () => {
+    for (const size of [undefined, null, '', ' ', 'bad', '<img src=x>', false, true, {}, [], NaN, Infinity, -1, 0, 1.5, 2, '2', 3, 4]) {
+      assert.doesNotMatch(renderPreview({ hash_size: size }).value('Hash Prefix'), /<a\b|Inspect in Prefix Tool/, 'size=' + String(size));
+    }
+    for (const role of [undefined, '', 'room', 'companion', 'sensor', 'Repeater', 'unknown']) {
+      assert.doesNotMatch(renderPreview({ role, hash_size: 1 }).value('Hash Prefix'), /<a\b|Inspect in Prefix Tool/, 'role=' + String(role));
+    }
+  });
+  test('Prefix Tool action rejects incomplete and non-hex public keys', () => {
+    for (const key of ['', 'ab', 'ab'.repeat(31), 'a'.repeat(63), 'a'.repeat(65), 'g'.repeat(64), 'ab'.repeat(31) + '"><']) {
+      const value = renderPreview({ public_key: key, hash_size: 1 }).value('Hash Prefix');
+      assert.doesNotMatch(value, /<a\b|Inspect in Prefix Tool/, 'key=' + key);
+    }
+    assert.match(renderPreview({ public_key: '<"' + 'a'.repeat(62), hash_size: 1 }).value('Hash Prefix'), /&lt;&quot;<\/code> \(1-byte\)/);
+  });
+  test('one-byte inspection link preserves the escaped variation marker', () => {
+    const bad = '"><img src=x onerror="bad()">';
+    const value = renderPreview({ hash_size: 1, hash_size_inconsistent: true, hash_sizes_seen: [1, bad] }).value('Hash Prefix');
+    assert.match(value, /<code[^>]*>AB<\/code> \(1-byte\)/);
+    assert.match(value, /title="Seen: 1, &quot;&gt;&lt;img src=x onerror=&quot;bad\(\)&quot;&gt;-byte"/);
+    assert.match(value, /<\/svg>varies<\/span>/);
+    assert.doesNotMatch(value, /<img/);
+    assert.match(value, />Inspect in Prefix Tool<\/a>/);
+  });
   test('relay counts and hash-size tooltip text cannot inject markup', () => {
     const bad = '"><img src=x onerror="bad()">';
     const { value } = renderPreview({ relay_count_1h: bad, hash_size_inconsistent: true, hash_sizes_seen: [1, bad] });
