@@ -538,7 +538,17 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     var sk = obsSkewMap[o.id];
     var skewLine = (sk && sk.samples) ? renderSkewBadge(observerSkewSeverity(sk.offsetSec), sk.offsetSec) + ' (' + sk.samples + ' samples)' : '—';
     var pkts = sparkBar(o.packetsLastHour || 0, Math.max(1, o.packetsLastHour || 1));
-    var content = window.SlideOver.open({ title: (o.name || o.id) });
+    var content = window.SlideOver.open({
+      title: o.name || o.id,
+      onClose: function () {
+        // A row click loads this detail route behind the preview, replacing the opener.
+        if (location.hash !== hashHref) return;
+        var heading = document.getElementById('obsTitle');
+        if (!heading) return;
+        heading.tabIndex = -1;
+        heading.focus({ preventScroll: true });
+      }
+    });
     var naiveChipHTML = window.ObserversNaiveChip.render(o);
     content.innerHTML =
       (naiveChipHTML ? '<div style="margin-bottom:10px">' + naiveChipHTML + ' <span class="text-muted">Clock is naive — per-packet timing clamped to ingest time. Clears itself 24h after the last skew event.</span></div>' : '') +
