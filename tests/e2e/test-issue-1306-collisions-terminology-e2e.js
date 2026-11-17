@@ -304,10 +304,12 @@ async function assertHashView(page, bytes, collisionData) {
   for (const region of Object.keys(regions)) {
     const nodes = await prefixRepeaters(page, '&region=' + encodeURIComponent(region));
     const keys = new Set(nodes.map(n => n.public_key.toUpperCase()));
-    const excluded = repeaters.find(n => !keys.has(n.public_key.toUpperCase()));
+    const prefixes = new Set(nodes.map(n => n.public_key.slice(0, 2).toUpperCase()));
+    const excluded = repeaters.find(n => !keys.has(n.public_key.toUpperCase()) &&
+      prefixes.has(n.public_key.slice(0, 2).toUpperCase()));
     if (nodes.length && excluded) { population = { region, nodes, excluded }; break; }
   }
-  assert(population, 'Fixture needs a nonempty region that excludes a real repeater');
+  assert(population, 'Fixture needs an excluded real repeater sharing a one-byte prefix with a loaded repeater');
   const missingKey = population.excluded.public_key.toLowerCase();
   const presentKey = population.nodes[0].public_key.toLowerCase();
   const regionQuery = '&region=' + encodeURIComponent(population.region);
@@ -332,6 +334,9 @@ async function assertHashView(page, bytes, collisionData) {
       const derived = await page.locator('#ptCheckerResults > p code').allTextContents();
       assert(JSON.stringify(derived) === JSON.stringify([2, 4, 6].map(n => missingKey.slice(0, n).toUpperCase())),
         'Full key must retain all three derived prefixes');
+      const oneByteMatches = await page.locator('#ptCheckerResults > div:not([role="alert"])').first().locator('a.analytics-link').count();
+      assert(oneByteMatches > 0, 'Excluded full key must show a loaded one-byte match; got: ' + oneByteMatches);
+      console.log(`    ${width}px excluded full key: ${oneByteMatches} loaded one-byte match(es)`);
       await assertPrefixMatches(page, missingKey, population.nodes);
       const message = await page.locator('#ptCheckerResults > p').textContent();
       assert(/not present among the loaded repeaters/i.test(message) && !/not yet in the network/i.test(message),
