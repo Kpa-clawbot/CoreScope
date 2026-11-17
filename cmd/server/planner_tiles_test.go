@@ -76,8 +76,9 @@ var plannerTestSizes = []struct{ area, margin, leg float64 }{
 func TestPlannerTileCapsDefaults(t *testing.T) {
 	got := plannerTileCaps(defaultPlannerMaxAreaKm, defaultPlannerNodeMarginKm, defaultPlannerMaxLegKm)
 	// 100 km box + 30 km margin = 160 km; 100 km leg + 2×30 km pad = 160 km:
-	// 3 × 4 tiles at the north edge of the SRTM band.
-	if want := (plannerTileLimits{Profile: 12, Relay: 12, Coverage: 12}); got != want {
+	// 3 × 4 tiles at the north edge of the SRTM band; a viewshed at the
+	// largest range (60 km) spans 120 km: 3 × 4 too.
+	if want := (plannerTileLimits{Profile: 12, Relay: 12, Coverage: 12, Viewshed: 12}); got != want {
 		t.Fatalf("caps %+v, want %+v", got, want)
 	}
 	if got.max() != 12 {
@@ -106,8 +107,8 @@ func TestPlannerTileCapsFromConfig(t *testing.T) {
 		t.Fatalf("warnings %q", warns)
 	}
 	// 300 km: 2.7° (4 tiles) by 6.1° at 60.5° (8 tiles); 150 + 2×45 km:
-	// 2.2° (4) by 4.4° (6).
-	want := plannerTileLimits{Profile: 24, Relay: 24, Coverage: 28}
+	// 2.2° (4) by 4.4° (6); the viewshed stays at its 60 km range's 12.
+	want := plannerTileLimits{Profile: 24, Relay: 24, Coverage: 28, Viewshed: 12}
 	if got := r.tileLimits(); got != want {
 		t.Fatalf("caps %+v, want %+v", got, want)
 	}
@@ -563,5 +564,38 @@ func TestPlannerLargestViewLoadsCold(t *testing.T) {
 	}
 	if u.total() != 40 || !s.Resident(view) {
 		t.Fatalf("%d downloads, resident %v", u.total(), s.Resident(view))
+	}
+}
+
+// The viewshed view is the site ± its range; the largest range offered is
+// the largest of plannerRangesKm within maxLegKm, so that sets the cap.
+func TestPlannerTileCapsViewshed(t *testing.T) {
+	band := math.Max(plannerCoverageMaxLat, -plannerCoverageMinLat)
+	worst := func(rangeKm float64) int {
+		return plannerWorstCaseTiles(2*rangeKm, band+rangeKm/plannerKmPerDeg)
+	}
+	if got, want := plannerTileCaps(100, 30, 100).Viewshed, worst(60); got != want {
+		t.Fatalf("maxLeg 100: viewshed cap %d, want %d (60 km range)", got, want)
+	}
+	if got, want := plannerTileCaps(100, 30, 10).Viewshed, worst(10); got != want {
+		t.Fatalf("maxLeg 10: viewshed cap %d, want %d", got, want)
+	}
+	if small, big := plannerTileCaps(100, 30, 10).Viewshed, plannerTileCaps(100, 30, 60).Viewshed; small >= big {
+		t.Fatalf("cap does not grow with maxLegKm: %d at 10 km, %d at 60 km", small, big)
+	}
+	// Every viewshed view at the largest range, with the site in the band,
+	// fits the cap.
+	for _, sz := range plannerTestSizes {
+		caps := plannerTileCaps(sz.area, sz.margin, sz.leg)
+		r := PlannerConfig{MaxLegKm: sz.leg}.rangesKm()
+		rangeKm := r[len(r)-1]
+		for lat := plannerCoverageMinLat; lat <= plannerCoverageMaxLat; lat += 0.5 {
+			for off := 0.0; off < 1; off += 0.1 {
+				view := viewshedBBox(geoPoint{lat, 20 + off}, rangeKm)
+				if n := plannerTestTiles(view); n > caps.Viewshed {
+					t.Fatalf("%+v: site %g,%g: %d tiles, cap %d", sz, lat, 20+off, n, caps.Viewshed)
+				}
+			}
+		}
 	}
 }
