@@ -43,6 +43,7 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/account/companions", s.withUser(s.handleCompanionList)).Methods("GET")
 	r.HandleFunc("/api/account/companions", s.withUser(s.handleCompanionLink)).Methods("POST")
 	r.HandleFunc("/api/account/companions/{pubkey}", s.withUser(s.handleCompanionDelete)).Methods("DELETE")
+	s.registerRepeaterRoutes(r)
 	r.HandleFunc("/api/account/export", s.withUser(s.handleAccountExport)).Methods("GET")
 	r.HandleFunc("/api/admin/users", s.withAdmin(s.handleAdminUsers)).Methods("GET")
 	r.HandleFunc("/api/admin/users/{id}", s.withAdmin(s.handleAdminUserDetail)).Methods("GET")

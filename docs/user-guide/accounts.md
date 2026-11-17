@@ -328,6 +328,24 @@ coverage counts as the owner's (*My coverage* on the coverage page). Links are p
   everything from RX builds without account support: upgrade the RX clients first. See
   [Client RX Coverage, Linked companions only](../client-rx-coverage.md#linked-companions-only-optional).
 
+### Repeater info
+
+With user management on, a repeater's node page has a *Repeater info* section: antenna height,
+antenna gain, status (active, maintenance, decommissioned), power (mains, battery, solar) and
+free notes (500 characters). There is no separate switch: it is on whenever `userManagement` is
+enabled.
+
+- **Who may edit:** a repeater nobody claimed can be edited by any logged-in active user. Once
+  it has claimers, only its active claimers can. Admins can always edit. An unchanged save
+  writes nothing.
+- **Public names:** the display names of the claimers, and of the user who made the last edit,
+  are shown to every visitor. Email addresses never are. Claims of a disabled user are kept
+  but hidden and do not count, so a repeater whose only claimer is disabled is open again.
+- **Audit log:** edits are recorded as `repeater.edit` (with the old and new value of each
+  changed field), claims as `repeater.claim` and `repeater.unclaim`.
+- **Removing a claim:** *Admin, Users*, open the user, *Remove* next to the claim. Admins use
+  this when a claimer left or claimed a repeater that is not theirs.
+
 ### Observer MQTT logins (optional)
 
 `userManagement.observerLogins` lets every user request a personal MQTT login for their observers,
@@ -464,6 +482,11 @@ version N is newer than this binary supports"): run that version or newer. Delet
   not a node to monitor. The app shows
   under *Devices* as "CoreDrive RX – <device name>"; *Log out* there signs the app out.
   *Unlink* removes the link; the coverage it already collected stays on the map. On the coverage page, *My coverage* shows only what your linked companions heard.
+- **Repeater info:** on a repeater's page, *Repeater info* shows what the community knows
+  about it. *Claim this repeater* says you operate it; after that only you (and the other
+  claimers and admins) can edit it. An unclaimed repeater can be edited by any logged-in
+  user. Your display name is public next to your claims and edits, your email address is
+  not. *Unclaim* removes your claim.
 - **Never synced:** channel keys and decrypted messages, the API key, panel and column
   sizes, collapsed panels and map positions. They stay in the browser where you set them.
 - **Logging out** asks whether to keep your settings on this device (the default) or

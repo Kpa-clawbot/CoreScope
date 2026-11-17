@@ -239,3 +239,33 @@ func TestAccountExportManualActivation(t *testing.T) {
 		t.Fatalf("activation mail = %+v", activate)
 	}
 }
+
+func TestAccountExportRepeaterClaims(t *testing.T) {
+	f := repeaterFixture(t)
+	alice := f.registerAndActivate(t, "alice@example.org", "Alice", pw)
+	w := f.do("GET", "/api/account/export", nil, as(alice))
+	expectStatus(t, w, 200)
+	if !strings.Contains(w.Body.String(), `"repeaterClaims":[]`) {
+		t.Fatalf("no claims should export as []: %s", w.Body.String())
+	}
+	expectStatus(t, f.do("POST", repPath(rpkA, "claim"), nil, as(alice)), 200)
+	w = f.do("GET", "/api/account/export", nil, as(alice))
+	expectStatus(t, w, 200)
+	x := decode[accountExport](t, w)
+	if len(x.RepeaterClaims) != 1 || x.RepeaterClaims[0].Pubkey != rpkA || x.RepeaterClaims[0].ClaimedAt == "" {
+		t.Fatalf("repeaterClaims = %+v", x.RepeaterClaims)
+	}
+	f2 := repeaterFixture(t, "admin@example.org")
+	admin := f2.registerAndActivate(t, "admin@example.org", "Admin", pw)
+	bob := f2.registerAndActivate(t, "bob@example.org", "Bob", pw)
+	expectStatus(t, f2.do("POST", repPath(rpkA, "claim"), nil, as(bob)), 200)
+	expectStatus(t, f2.do("POST", userPath(bob.me.ID, "/disable"), nil, as(admin)), 200)
+	expectStatus(t, f2.do("POST", userPath(bob.me.ID, "/enable"), nil, as(admin)), 200)
+	bob = f2.login(t, "bob@example.org", pw)
+	w = f2.do("GET", "/api/account/export", nil, as(bob))
+	expectStatus(t, w, 200)
+	x = decode[accountExport](t, w)
+	if len(x.RepeaterClaims) != 1 || x.RepeaterClaims[0].Pubkey != rpkA {
+		t.Fatalf("claims after disable and enable = %+v", x.RepeaterClaims)
+	}
+}
