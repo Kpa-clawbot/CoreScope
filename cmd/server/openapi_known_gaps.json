@@ -6,8 +6,6 @@
     "/api/admin/prune-geo-filter/status",
     "/api/analytics/relay-airtime-share",
     "/api/analytics/roles",
-    "/api/config/areas",
-    "/api/config/areas/polygons",
     "/api/docs",
     "/api/dropped-packets",
     "/api/nodes/{pubkey}/reach",
