@@ -1065,20 +1065,30 @@ func newPlanLinkEval(ctx context.Context, v terrainView, freqMHz, kFactor float6
 // (outside the view, or a tile without data: never read as 0 m) or ctx was
 // cancelled (e.err is then set).
 func (e *planLinkEval) clearance(a, b geoPoint, distKm, ha, hb, floor float64) (float64, bool) {
+	worst, _, ok := e.clearanceWalk(a, b, distKm, ha, hb, floor, 0, false)
+	return worst, ok
+}
+
+// clearanceWalk is the walk behind clearance. With two it also returns
+// worst2, the worst clearance of the same path with the receiver hb2 metres
+// above ground, from the same samples: the elevation lookups and the
+// great-circle trigonometry, which dominate, are paid once. floor applies to
+// hb only, so a caller that wants worst2 over every sample passes −Inf.
+func (e *planLinkEval) clearanceWalk(a, b geoPoint, distKm, ha, hb, floor, hb2 float64, two bool) (worst, worst2 float64, ok bool) {
 	if e.err != nil {
-		return 0, false
+		return 0, 0, false
 	}
 	if e.profiles%planCtxEvery == 0 {
 		if err := e.ctx.Err(); err != nil {
 			e.err = err
-			return 0, false
+			return 0, 0, false
 		}
 	}
 	e.profiles++
 	eA, okA := e.v.ElevationAt(a.Lat, a.Lon)
 	eB, okB := e.v.ElevationAt(b.Lat, b.Lon)
 	if !okA || !okB || !losFinite(eA) || !losFinite(eB) {
-		return 0, false
+		return 0, 0, false
 	}
 	n := planProfileSamples(distKm)
 	arc := newPlanArc(a, b, distKm)
@@ -1090,8 +1100,8 @@ func (e *planLinkEval) clearance(a, b geoPoint, distKm, ha, hb, floor float64) (
 	// invariants are hoisted.
 	last := float64(n - 1)
 	fDen := D * e.freq / 1000
-	yA, yB := eA+ha, eB+hb
-	worst := math.Inf(1)
+	yA, yB, yB2 := eA+ha, eB+hb, eB+hb2
+	worst, worst2 = math.Inf(1), math.Inf(1)
 	for s := planStride0; s >= 1; s /= 2 {
 		i, step := s, 2*s // odd multiples of s: the points the coarser passes skipped
 		if s == planStride0 {
@@ -1102,20 +1112,25 @@ func (e *planLinkEval) clearance(a, b geoPoint, distKm, ha, hb, floor float64) (
 			lat, lon := arc.at(t)
 			el, ok := e.v.ElevationAt(lat, lon)
 			if !ok || !losFinite(el) {
-				return 0, false
+				return 0, 0, false
 			}
 			d := t * D
 			tm := el + d*(D-d)/e.bulgeDen*1000
-			los := yA + (yB-yA)*t
 			f1 := 17.32 * math.Sqrt(math.Max(d*(D-d), 1e-9)/fDen)
+			if two {
+				if c := (yA + (yB2-yA)*t - tm) / f1; c < worst2 {
+					worst2 = c
+				}
+			}
+			los := yA + (yB-yA)*t
 			if c := (los - tm) / f1; c < worst {
 				if worst = c; worst < floor {
-					return worst, false
+					return worst, worst2, false
 				}
 			}
 		}
 	}
-	return worst, true
+	return worst, worst2, true
 }
 
 // planArc is greatCircleSamples for one point at a time: the same formula

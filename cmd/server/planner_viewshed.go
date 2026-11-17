@@ -99,60 +99,14 @@ func viewshedWorkers() int { return max(1, min(4, runtime.GOMAXPROCS(0)/2)) }
 // the worst first-Fresnel clearance with the receiver hbR above ground
 // (floor −Inf, every sample: crOK=false means no terrain on the path, or ctx
 // cancelled with e.err set), and whether the worst clearance with the
-// receiver hbU is below shadowFloor. Both walks visit the same samples and
-// use e.clearance's arithmetic in its operand order, so each result equals
-// that of its own e.clearance call; the elevation lookups and great-circle
-// trigonometry, which dominate, are paid once.
+// receiver hbU is below shadowFloor. Each result equals that of its own
+// e.clearance call.
 func (e *planLinkEval) clearancePair(a, b geoPoint, distKm, ha, hbR, hbU, shadowFloor float64) (cr float64, crOK, shadow bool) {
-	if e.err != nil {
+	cr, cu, ok := e.clearanceWalk(a, b, distKm, ha, hbR, math.Inf(-1), hbU, true)
+	if !ok {
 		return 0, false, false
 	}
-	if e.profiles%planCtxEvery == 0 {
-		if err := e.ctx.Err(); err != nil {
-			e.err = err
-			return 0, false, false
-		}
-	}
-	e.profiles++
-	eA, okA := e.v.ElevationAt(a.Lat, a.Lon)
-	eB, okB := e.v.ElevationAt(b.Lat, b.Lon)
-	if !okA || !okB || !losFinite(eA) || !losFinite(eB) {
-		return 0, false, false
-	}
-	n := planProfileSamples(distKm)
-	arc := newPlanArc(a, b, distKm)
-	D := distKm
-	if !losFinite(D) || D < 0.001 {
-		D = 0.001
-	}
-	last := float64(n - 1)
-	fDen := D * e.freq / 1000
-	yA, yBR, yBU := eA+ha, eB+hbR, eB+hbU
-	worstR, worstU := math.Inf(1), math.Inf(1)
-	for s := planStride0; s >= 1; s /= 2 {
-		i, step := s, 2*s
-		if s == planStride0 {
-			step = s
-		}
-		for ; i <= n-2; i += step {
-			t := float64(i) / last
-			lat, lon := arc.at(t)
-			el, ok := e.v.ElevationAt(lat, lon)
-			if !ok || !losFinite(el) {
-				return 0, false, false
-			}
-			d := t * D
-			tm := el + d*(D-d)/e.bulgeDen*1000
-			f1 := 17.32 * math.Sqrt(math.Max(d*(D-d), 1e-9)/fDen)
-			if c := (yA + (yBR-yA)*t - tm) / f1; c < worstR {
-				worstR = c
-			}
-			if c := (yA + (yBU-yA)*t - tm) / f1; c < worstU {
-				worstU = c
-			}
-		}
-	}
-	return worstR, true, worstU < shadowFloor
+	return cr, true, cu < shadowFloor
 }
 
 // computeViewshed profiles site→cell for every cell in range: two
