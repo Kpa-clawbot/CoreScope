@@ -34,6 +34,16 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   page.setDefaultTimeout(10000);
   page.on('pageerror', (e) => console.error('[pageerror]', e.message));
 
+  async function reloadLivePanel(panelId) {
+    await page.reload({ waitUntil: 'load' });
+    // Live registers the panels and restores their positions in the same turn
+    // that it publishes the manager. The headers are visible earlier.
+    await Promise.all([
+      page.waitForSelector('#' + panelId + ' .panel-header', { timeout: 8000 }),
+      page.waitForFunction(() => !!window._liveDragMgr, null, { timeout: 8000 }),
+    ]);
+  }
+
   console.log(`\n=== #1297 B4 drag-manager E2E against ${BASE} ===`);
 
   await step('navigate to /live', async () => {
@@ -44,8 +54,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         try { localStorage.removeItem('panel-drag-' + id); } catch (_) {}
       });
     });
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('#liveFeed .panel-header', { timeout: 8000 });
+    await reloadLivePanel('liveFeed');
   });
 
   await step('DragManager is initialized', async () => {
@@ -65,7 +74,6 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.mouse.down();
     await page.mouse.move(headerBox.x + 120, headerBox.y + 80, { steps: 8 });
     await page.mouse.up();
-    await page.waitForTimeout(200);
 
     const state = await page.$eval('#liveFeed', el => ({
       dragged: el.dataset.dragged,
@@ -92,9 +100,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     const savedRaw = await page.evaluate(() => localStorage.getItem('panel-drag-liveFeed'));
     const saved = JSON.parse(savedRaw);
 
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('#liveFeed .panel-header', { timeout: 8000 });
-    await page.waitForTimeout(500); // restorePositions runs after init
+    await reloadLivePanel('liveFeed');
 
     const restored = await page.$eval('#liveFeed', el => ({
       dragged: el.dataset.dragged,
@@ -113,8 +119,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   await step('click without movement (within dead zone) does NOT engage drag', async () => {
     // Use a fresh panel to avoid prior state
     await page.evaluate(() => localStorage.removeItem('panel-drag-liveLegend'));
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('#liveLegend .panel-header', { timeout: 8000 });
+    await reloadLivePanel('liveLegend');
 
     const headerBox = await page.$eval('#liveLegend .panel-header', el => {
       const r = el.getBoundingClientRect();
@@ -124,7 +129,6 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.mouse.down();
     await page.mouse.move(headerBox.x + 2, headerBox.y + 2); // inside DEAD_ZONE (5px)
     await page.mouse.up();
-    await page.waitForTimeout(200);
 
     const raw = await page.evaluate(() => localStorage.getItem('panel-drag-liveLegend'));
     assert(raw === null, 'dead-zone click should NOT persist a position, got: ' + raw);
