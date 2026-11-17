@@ -94,7 +94,18 @@
       }
       html += '</li>';
     });
-    html += '</ol><h4>Audit</h4><ol>';
+    html += '</ol><h4>Repeater claims</h4>';
+    var claims = d.repeaterClaims || [];
+    if (!claims.length) html += '<p class="account-hint">No repeater claims.</p>';
+    else {
+      html += '<ol>';
+      claims.forEach(function (c) {
+        html += '<li><a href="#/nodes/' + escapeHtml(c.pubkey) + '">' + escapeHtml(String(c.pubkey).slice(0, 12)) + '</a>, claimed ' + escapeHtml(fmt(c.claimedAt)) +
+          ' <button type="button" class="account-btn account-btn-secondary" data-act="unclaim" data-id="' + escapeHtml(String(d.user.id)) + '" data-pubkey="' + escapeHtml(c.pubkey) + '">Remove</button></li>';
+      });
+      html += '</ol>';
+    }
+    html += '<h4>Audit</h4><ol>';
     (d.audit || []).forEach(function (a) {
       html += '<li>' + escapeHtml(fmt(a.at)) + ': ' + escapeHtml(a.action) +
         (a.actorUserId != null ? ' by #' + escapeHtml(String(a.actorUserId)) : '') + '</li>';
@@ -151,7 +162,8 @@
     activate: 'Activate this account without mail confirmation? The address will stay unverified.',
     disable: 'Disable this account? The user is logged out everywhere.',
     delete: 'Delete this account permanently?',
-    demote: 'Remove admin rights from this user?'
+    demote: 'Remove admin rights from this user?',
+    unclaim: 'Remove this repeater claim? The user then loses edit rights on that repeater.'
   };
   var endpoints = {
     activate: ['POST', '/activate'], resend: ['POST', '/resend-activation'], disable: ['POST', '/disable'],
@@ -173,12 +185,17 @@
       if (opener) opener.focus();
       return;
     }
+    if (confirmText[act] && !confirm(confirmText[act])) return;
     if (act === 'refresh') {
       CSAuth.request('POST', '/api/admin/users/' + encodeURIComponent(id) + '/mail/' + encodeURIComponent(btn.getAttribute('data-mail')) + '/refresh')
         .then(function (r) { say(r.ok ? 'Mail status refreshed.' : CSAuth.errText(r), r.ok); load(); }).catch(netErr);
       return;
     }
-    if (confirmText[act] && !confirm(confirmText[act])) return;
+    if (act === 'unclaim') {
+      CSAuth.request('DELETE', '/api/admin/repeaters/' + encodeURIComponent(btn.getAttribute('data-pubkey')) + '/claims/' + encodeURIComponent(id))
+        .then(function (r) { say(r.ok ? 'Claim removed.' : CSAuth.errText(r), r.ok); return showDetail(id); }).catch(netErr);
+      return;
+    }
     var ep = endpoints[act];
     CSAuth.request(ep[0], '/api/admin/users/' + encodeURIComponent(id) + ep[1], ep[2]).then(function (r) {
       say(r.ok ? 'Done.' : CSAuth.errText(r), r.ok);
