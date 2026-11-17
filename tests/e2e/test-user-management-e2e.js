@@ -653,13 +653,25 @@ async function until(fn, label) {
   userB.setDefaultTimeout(8000);
   userB.on('pageerror', (e) => console.error('[pageerror userB]', e.message));
 
-  await step('repeater info: user A saves height, status and notes; HTML shows as text', async () => {
+  await step('repeater info: user A saves height, status and notes; the open form survives a re-render; HTML shows as text', async () => {
     await registerAndActivate(userA, 'ri-a@e2e.test', 'Repeater A');
     await openRepeater(userA);
     await userA.click(riSel + ' [data-ri-edit]');
     await userA.fill(riSel + ' [name="heightM"]', '25');
     await userA.selectOption(riSel + ' [name="status"]', 'maintenance');
     await userA.fill(riSel + ' [name="notes"]', '<b>x</b>');
+    // A theme change re-renders the whole node page (theme-refresh); the open
+    // form must come back with what was typed, not fall back to read mode.
+    await userA.evaluate((sel) => {
+      document.querySelector(sel + ' [name="notes"]').dataset.beforeRefresh = '1';
+      window.dispatchEvent(new Event('theme-changed'));
+    }, riSel);
+    await userA.waitForFunction((sel) => {
+      const n = document.querySelector(sel + ' [name="notes"]');
+      return n && !n.dataset.beforeRefresh;
+    }, riSel);
+    const kept = await userA.evaluate((sel) => ['heightM', 'status', 'notes'].map((n) => document.querySelector(sel + ' [name="' + n + '"]').value), riSel);
+    assert(JSON.stringify(kept) === JSON.stringify(['25', 'maintenance', '<b>x</b>']), 'form lost input on re-render: ' + JSON.stringify(kept));
     await userA.click(riSel + ' [data-ri-save]');
     await userA.waitForSelector(riSel + ' .repeater-info-list');
     const t = await riText(userA);

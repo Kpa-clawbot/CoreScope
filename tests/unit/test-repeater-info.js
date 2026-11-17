@@ -39,11 +39,14 @@ function load(opts) {
     },
     errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); },
   };
-  const ctx = { CSAuth, console, escapeHtml: loadEscapeHtml(), location: { hash: opts.hash || '' } };
+  const listeners = {};
+  const ctx = { CSAuth, console, escapeHtml: loadEscapeHtml(), location: { hash: opts.hash || '' },
+    addEventListener(t, fn) { (listeners[t] = listeners[t] || []).push(fn); } };
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(src('public/repeater-info.js'), ctx);
-  return { R: ctx.CSRepeaterInfo, calls, auth: CSAuth };
+  const fire = (t) => (listeners[t] || []).forEach((fn) => fn({}));
+  return { R: ctx.CSRepeaterInfo, calls, auth: CSAuth, fire };
 }
 
 const INFO = (o) => Object.assign({ pubkey: PK, heightM: null, gainDbi: 0, status: null, power: null,
@@ -126,10 +129,10 @@ test('mount fetches, renders and shows', async () => {
 });
 
 // click-driven flows: the fake el captures the click handler.
-function mountFlow(opts) {
+function mountFlow(opts, shared) {
   opts = opts || {};
-  const l = load(opts);
-  const el = { innerHTML: '', hidden: true, handlers: {}, msg: { textContent: '' }, form: {} };
+  const l = shared || load(opts);
+  const el = { id: opts.id || 'node-repeater-info', innerHTML: '', hidden: true, handlers: {}, msg: { textContent: '' }, form: {} };
   el.addEventListener = (t, fn) => { el.handlers[t] = fn; };
   el.querySelector = (sel) => (sel === '[data-ri-msg]' ? el.msg : sel === '[data-ri-form]' ? fakeForm(opts.form || {}) : null);
   el.scrollIntoView = () => {};
@@ -220,6 +223,46 @@ test('empty height is unknown and still sent', async () => {
   await tick();
   assert.strictEqual(f.l.calls[1].method, 'PUT');
   assert.strictEqual(f.l.calls[1].body.heightM, null);
+});
+// The node page re-renders on theme-refresh (and so mounts a fresh element);
+// an open edit form must come back with what the user typed.
+test('a re-mount brings back an open edit form with the typed values', async () => {
+  const opts = { info: INFO({ canEdit: true, heightM: 5 }), form: { heightM: '25', gainDbi: '3', status: 'maintenance', power: 'solar', notes: 'typed note' } };
+  const a = mountFlow(opts);
+  await a.l.R.mount(a.el, { public_key: PK, role: 'repeater' });
+  a.click('data-ri-edit');
+  a.el.handlers.input({});
+  const b = mountFlow(opts, a.l);
+  await b.l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+  assert(b.el.innerHTML.includes('data-ri-form'), 'form not restored: ' + b.el.innerHTML);
+  assert(b.el.innerHTML.includes('value="25"') && b.el.innerHTML.includes('typed note'), b.el.innerHTML);
+  assert(b.el.innerHTML.includes('<option value="maintenance" selected>'), b.el.innerHTML);
+});
+test('no draft after Cancel, a save, a hashchange, another repeater or lost edit rights', async () => {
+  const opts = { info: INFO({ canEdit: true }), form: { heightM: '25', gainDbi: '0', status: '', power: '', notes: 'x' } };
+  const remountShowsForm = async (l, o, pk) => {
+    const b = mountFlow(o || opts, l);
+    await l.R.mount(b.el, { public_key: pk || PK, role: 'repeater' });
+    return b.el.innerHTML.includes('data-ri-form');
+  };
+  const open = async (l) => {
+    const a = mountFlow(opts, l);
+    await l.R.mount(a.el, { public_key: PK, role: 'repeater' });
+    a.click('data-ri-edit');
+    a.el.handlers.input({});
+    return a;
+  };
+  let l = load(opts); let a = await open(l); a.click('data-ri-cancel');
+  assert(!(await remountShowsForm(l)), 'Cancel kept the draft');
+  l = load(opts); a = await open(l); a.click('data-ri-save'); await tick();
+  assert(!(await remountShowsForm(l)), 'a save kept the draft');
+  l = load(opts); await open(l); l.fire('hashchange');
+  assert(!(await remountShowsForm(l)), 'hashchange kept the draft');
+  l = load(opts); await open(l);
+  assert(!(await remountShowsForm(l, null, 'cd'.repeat(32))), 'draft shown on another repeater');
+  l = load(opts); await open(l);
+  l.auth.request = () => Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: false }) });
+  assert(!(await remountShowsForm(l)), 'draft shown without edit rights');
 });
 test('anonymous visitor sees one login hint, a logged-in user does not', () => {
   const anon = load({ user: null }).R._test.viewHtml(INFO(), null);
