@@ -138,32 +138,32 @@ func TestPostgresRaceRateLimit(t *testing.T) {
 	}
 }
 
-// A v8 users.db gains rate_limits on open, keeping its data.
-func TestMigrationV9AddsRateLimits(t *testing.T) {
+// A v9 users.db (v3.18.0) gains rate_limits on open, keeping its data.
+func TestMigrationV10AddsRateLimits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stmts := []string{`CREATE TABLE schema_version (version INTEGER NOT NULL)`, `INSERT INTO schema_version (version) VALUES (8)`}
-	for _, m := range migrations[:8] {
+	stmts := []string{`CREATE TABLE schema_version (version INTEGER NOT NULL)`, `INSERT INTO schema_version (version) VALUES (9)`}
+	for _, m := range migrations[:9] {
 		stmts = append(stmts, m...)
 	}
 	stmts = append(stmts, `INSERT INTO users (email, display_name, password_hash, created_at) VALUES ('old@example.org', 'Old', 'x', 1)`)
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
-			t.Fatalf("build v8 db: %v", err)
+			t.Fatalf("build v9 db: %v", err)
 		}
 	}
 	db.Close()
 
 	st, err := Open(path)
 	if err != nil {
-		t.Fatalf("Open v8 db: %v", err)
+		t.Fatalf("Open v9 db: %v", err)
 	}
 	defer st.Close()
-	if v, err := st.SchemaVersion(); err != nil || v != 9 {
-		t.Fatalf("SchemaVersion = %d, %v; want 9", v, err)
+	if v, err := st.SchemaVersion(); err != nil || v != 10 {
+		t.Fatalf("SchemaVersion = %d, %v; want 10", v, err)
 	}
 	if ok, err := st.RateLimitHit(context.Background(), "k", time.Minute, 1, time.Unix(0, 0)); err != nil || !ok {
 		t.Fatalf("RateLimitHit on migrated db = %v, %v", ok, err)

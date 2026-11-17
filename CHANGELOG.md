@@ -31,7 +31,22 @@
 ### Changed
 - `GET /api/perf` `sqlite` block gains `engine` (`"sqlite"` or `"postgres"`). On Postgres `dbSizeMB` is the database size, `rows` are planner estimates, and the WAL and freelist figures are 0. The Perf page labels the card and hides the WAL and freelist rows accordingly.
 - On Postgres, `GET /api/perf/sqlite` answers 404 and `GET /api/backup` answers 501 (use `pg_dump`).
+- `users.db` migrates to schema v10 with user accounts on (a `rate_limits` table, shared by several server replicas for the account rate limits and notification claims). A v3.18.x binary refuses it afterwards, so keep the pre-upgrade copy for a rollback.
 - CI runs the Go tests and every E2E shard against both SQLite and Postgres, and a new musl job tests the static build.
+
+## [3.18.0] - 2026-11-17
+
+See [docs/release-notes/v3.18.0.md](docs/release-notes/v3.18.0.md) for the full notes. 11 commits since v3.17.0: 5 fix, 3 feat, 1 test, 1 refactor, 1 docs.
+
+### Highlights
+- **`users.db` migrates to schema v9 with user accounts on** (#2415) - a v3.17.x binary refuses it afterwards, so keep the pre-upgrade copy for a rollback.
+- **The UI's live feed connects to `/ws` instead of `/`** (#2383) - a reverse proxy that forwards WebSocket upgrades only on `/` must forward `/ws` too.
+- **Radio line of sight on packet routes and a repeater planner** (#2391) - SRTM terrain, in memory only. Opt-in (`los`, `planner`).
+- **Repeater info and claims** (#2415, #2416, #2417) - height, gain, power, status and notes per repeater, edited by registered users. Needs user accounts.
+- **Three ways to deploy the UI** (#2383) - all-in-one as today, a separate web container, or a static host against a server on another origin.
+- **Memory after eviction** (#2327) and **map tile overrides on every page** (#2386).
+
+No manual migration step.
 
 ## [3.17.0] - 2026-11-11
 

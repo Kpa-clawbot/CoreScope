@@ -1014,6 +1014,8 @@
           ${rfOn() ? `<tr><td title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</td><td data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</td></tr>` : ''}
         </table>
 
+        <div class="node-full-card" id="node-repeater-info" hidden></div>
+
         <div class="node-full-card" id="node-packets">
           ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
           <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete. An observed empty direct path cannot prove an origin-local send or RF distance.">Recent Adverts (${validPackets.length})</h4>
@@ -1092,6 +1094,7 @@
 
         <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
       if (window.CSNotify) window.CSNotify.mount(document.getElementById('nodeNotifySlotFull'), n.public_key);
+      if (window.CSRepeaterInfo) window.CSRepeaterInfo.mount(document.getElementById('node-repeater-info'), n);
 
       // Map
       if (hasLoc) {
@@ -2126,6 +2129,8 @@
           </dl>
         </div>
 
+        <div class="node-detail-section" id="node-repeater-info-pane" hidden></div>
+
         <div class="node-detail-section">
           ${(() => { const validPackets = adverts.filter(a => a.hash && a.timestamp); return `
           <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete. An observed empty direct path cannot prove an origin-local send or RF distance.">Recent Adverts (${validPackets.length})</h4>
@@ -2185,6 +2190,7 @@
         <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
       </div>`;
     if (window.CSNotify) window.CSNotify.mount(document.getElementById('nodeNotifySlot'), n.public_key);
+    if (window.CSRepeaterInfo) window.CSRepeaterInfo.mount(document.getElementById('node-repeater-info-pane'), n);
 
     // Init map
     if (hasLoc) {

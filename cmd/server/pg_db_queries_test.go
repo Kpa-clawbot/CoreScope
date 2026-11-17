@@ -389,6 +389,14 @@ func TestPgDBNodeQueries(t *testing.T) {
 	t.Run("GetNodeByPubkey", func(t *testing.T) {
 		same(t, d, "GetNodeByPubkey", false, func(db *DB) (map[string]any, error) { return db.GetNodeByPubkey(pgqPkA) })
 	})
+	t.Run("RepeaterKnown", func(t *testing.T) {
+		for _, pk := range []string{pgqPkA, pgqPkB, "nope"} {
+			same(t, d, "RepeaterKnown "+pk, true, func(db *DB) ([2]bool, error) {
+				found, isRep, err := db.RepeaterKnown(pk)
+				return [2]bool{found, isRep}, err
+			})
+		}
+	})
 	t.Run("GetNodeLocations", func(t *testing.T) {
 		same(t, d, "GetNodeLocations", false, func(db *DB) (map[string]map[string]any, error) { return db.GetNodeLocations(), nil })
 		same(t, d, "GetNodeLocationsByKeys", false, func(db *DB) (map[string]map[string]any, error) {

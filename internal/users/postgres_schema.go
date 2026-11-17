@@ -162,7 +162,26 @@ var pgBaseline = []string{
 // pgBaselineVersion+i to pgBaselineVersion+i+1, the same step as
 // migrations[pgBaselineVersion+i] on SQLite. Forward-only, like migrations.
 var pgMigrations = [][]string{
-	{ // v9: rate_limits
+	{ // v9: repeater_claims, repeater_info
+		`CREATE TABLE repeater_claims (
+			pubkey TEXT COLLATE "C" NOT NULL,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			claimed_at BIGINT NOT NULL,
+			PRIMARY KEY (pubkey, user_id)
+		)`,
+		`CREATE INDEX repeater_claims_user ON repeater_claims(user_id)`,
+		`CREATE TABLE repeater_info (
+			pubkey TEXT COLLATE "C" PRIMARY KEY,
+			height_m DOUBLE PRECISION,
+			gain_dbi DOUBLE PRECISION NOT NULL DEFAULT 0,
+			status TEXT COLLATE "C" CHECK (status IN ('active','maintenance','decommissioned')),
+			power TEXT COLLATE "C" CHECK (power IN ('mains','battery','solar')),
+			notes TEXT COLLATE "C" NOT NULL DEFAULT '',
+			updated_at BIGINT NOT NULL,
+			updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL
+		)`,
+	},
+	{ // v10: rate_limits
 		`CREATE TABLE rate_limits (
 			key TEXT COLLATE "C" NOT NULL,
 			window_start BIGINT NOT NULL,
