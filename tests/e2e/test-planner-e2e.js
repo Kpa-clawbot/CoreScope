@@ -143,7 +143,7 @@ function viewshedBody() {
   for (let i = 0; i < b.length; i++) b[i] = ((i % 5) + 1) | (((i % 4) + 1) << 4);
   return {
     source: 'e2e-stub',
-    params: { site: { lat: 30.3, lon: -97.9 }, antenna_m: 10, rx_antenna_m: 5, range_km: 30, frequency_mhz: 910.525, k_factor: 1.3333, user_reach: { d50Km: 2.7, slope: 0.3 } },
+    params: { site: { lat: 30.3, lon: -97.9 }, antenna_m: 10, rx_antenna_m: 5, range_km: 30, frequency_mhz: 910.525, k_factor: 1.3333, user_reach: { d50_km: 2.7, slope: 0.3 } },
     bbox: [30.2, -98.0, 30.4, -97.8], rows, cols, cell_km: 5, cells: b.toString('base64'),
     links: [
       { pubkey: 'aa'.repeat(32), name: 'Cov Alpha', lat: 30.25, lon: -97.95, link: { distance_km: 7, clearance_pct: 90, verdict: 'clear', worst_km: 3, obstruction_m: 0 } },

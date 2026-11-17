@@ -1824,10 +1824,14 @@ func TestPlannerViewshedResult(t *testing.T) {
 		Site:     geoPointJSON{Lat: site.Lat, Lon: site.Lon},
 		AntennaM: defaultPlannerNewAntennaM, RxAntennaM: defaultPlannerExistAntenna,
 		RangeKm: plannerViewshedResultKm, FrequencyMHz: radio.FrequencyMHz, KFactor: radio.KFactor,
-		UserReach: PlannerUserReach{D50Km: defaultPlannerUserD50Km, Slope: defaultPlannerUserSlope},
+		UserReach: PlannerViewshedUserReach{D50Km: defaultPlannerUserD50Km, Slope: defaultPlannerUserSlope},
 	}
 	if resp.Params != want {
 		t.Fatalf("params %+v\nwant   %+v", resp.Params, want)
+	}
+	// snake_case like the rest of the response, not the config's d50Km.
+	if wantJSON := `"user_reach":{"d50_km":2.7,"slope":0.3}`; !strings.Contains(w.Body.String(), wantJSON) {
+		t.Fatalf("body lacks %s", wantJSON)
 	}
 	if resp.Source != terrainDefaultSource || resp.Rows < 1 || resp.Cols < 1 || resp.Rows*resp.Cols != len(cells) {
 		t.Fatalf("source %q, %dx%d grid, %d cells", resp.Source, resp.Rows, resp.Cols, len(cells))

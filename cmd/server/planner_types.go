@@ -193,13 +193,20 @@ type PlannerViewshedResponse struct {
 }
 
 type PlannerViewshedParams struct {
-	Site         geoPointJSON     `json:"site"`
-	AntennaM     float64          `json:"antenna_m"`
-	RxAntennaM   float64          `json:"rx_antenna_m"`
-	RangeKm      float64          `json:"range_km"`
-	FrequencyMHz float64          `json:"frequency_mhz"`
-	KFactor      float64          `json:"k_factor"`
-	UserReach    PlannerUserReach `json:"user_reach"`
+	Site         geoPointJSON             `json:"site"`
+	AntennaM     float64                  `json:"antenna_m"`
+	RxAntennaM   float64                  `json:"rx_antenna_m"`
+	RangeKm      float64                  `json:"range_km"`
+	FrequencyMHz float64                  `json:"frequency_mhz"`
+	KFactor      float64                  `json:"k_factor"`
+	UserReach    PlannerViewshedUserReach `json:"user_reach"`
+}
+
+// PlannerViewshedUserReach is PlannerUserReach as the viewshed response
+// reports it, in the response's snake_case.
+type PlannerViewshedUserReach struct {
+	D50Km float64 `json:"d50_km"`
+	Slope float64 `json:"slope"`
 }
 
 // PlannerViewshedLink: the site → repeater link, site at AntennaM and the

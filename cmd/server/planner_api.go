@@ -649,7 +649,7 @@ func (p *plannerService) handleViewshed(w http.ResponseWriter, r *http.Request) 
 		RangeKm:      rangeKm,
 		FrequencyMHz: p.freqMHz,
 		KFactor:      p.kFactor,
-		UserReach:    reach,
+		UserReach:    PlannerViewshedUserReach{D50Km: reach.D50Km, Slope: reach.Slope},
 	}
 	_, fp := known.scan(view, 0, 0)
 	key := fmt.Sprintf("%s|%d,%d|%g,%g|%g|%g,%g|%s|%s", plannerViewshed,

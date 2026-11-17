@@ -1793,7 +1793,7 @@ Theoretical reach of one candidate repeater site, for the planner's Coverage tab
     "range_km": 30,
     "frequency_mhz": 910.525,
     "k_factor": 1.333,
-    "user_reach": {"d50Km": 2.7, "slope": 0.3}
+    "user_reach": {"d50_km": 2.7, "slope": 0.3}
   },
   "bbox": [29.8402, -97.4027, 30.3798, -96.7773],
   "rows": 301,
