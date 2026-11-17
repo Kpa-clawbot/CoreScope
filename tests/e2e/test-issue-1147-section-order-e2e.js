@@ -71,6 +71,8 @@ async function previewMetadata(browser) {
     { label: 'certain-room', role: 'room', last_certain_relay: relayed, last_heard: relayed, expectActive: true },
     { label: 'expired-certain', role: 'repeater', last_certain_relay: new Date(Date.now() - 3 * 3600000).toISOString(), relay_active: true },
     { label: 'invalid-certain', role: 'room', last_certain_relay: 'not-a-date', relay_active: true },
+    { label: 'large-counts', role: 'repeater', advert_count: '12345', relay_count_1h: 34255, relay_count_24h: '1234567' },
+    { label: 'unsafe-count', role: 'repeater', advert_count: null, relay_count_1h: Number.MAX_SAFE_INTEGER + 1, relay_count_24h: 0 },
   ].map((c, i) => ({ public_key: (i + 1).toString(16).repeat(64), name: 'Preview ' + c.label,
     advert_count: 1, first_seen: '2020-01-01T00:00:00Z', last_seen: '2020-01-02T00:00:00Z', hash_size: '2', ...c }));
   const byKey = new Map(cases.map(n => [n.public_key, n]));
@@ -80,7 +82,7 @@ async function previewMetadata(browser) {
     { name: 'tablet', width: 800, root: '.slide-over-content dl', ready: '.slide-over-content dl' },
   ];
   for (const theme of ['light', 'dark']) for (const layout of layouts) {
-    const ctx = await browser.newContext({ viewport: { width: layout.width, height: 1000 } });
+    const ctx = await browser.newContext({ locale: 'en-US', viewport: { width: layout.width, height: 1000 } });
     await ctx.addInitScript(theme => {
       localStorage.setItem('meshcore-theme', theme);
       localStorage.setItem('meshcore-user-level', 'experienced');
@@ -167,6 +169,18 @@ async function previewMetadata(browser) {
               if (layout.name !== 'tablet') assert((await p.locator(layout.ready).first().innerText()).includes('Uncertain'), 'ambiguous relay must leave status uncertain');
             } else if (n.last_certain_relay && Number.isFinite(Date.parse(n.last_certain_relay))) assert(relay.text.includes('no attributed non-advert relay'), 'certain forwarded adverts must not be called never observed');
             else assert(relay.text.includes('never observed as relay hop'), 'missing relay timestamp changed meaning');
+          }
+          if (n.label === 'large-counts') {
+            assert(relay.text.includes('34,255 relays/hr, 1,234,567 relays/24h'), 'relay counts must retain exact grouped values');
+            if (layout.name === 'tablet') assert(fields.Adverts.text === '12,345', 'tablet Adverts must group numeric strings');
+            if (process.env.SCREENSHOT_DIR) {
+              fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+              await root.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `node-counts-${layout.name}-${theme}.png`) });
+            }
+          }
+          if (n.label === 'unsafe-count') {
+            assert(relay.text.includes('— relays/hr, 0 relays/24h'), 'unsafe relay count must remain missing and zero must remain zero');
+            if (layout.name === 'tablet') assert(fields.Adverts.text === '—', 'missing tablet Adverts must stay missing');
           }
           if (n.label === 'escaped') {
             assert(hash.variation === 'Seen: 1, ' + bad + '-byte', 'hash tooltip must preserve escaped text');
