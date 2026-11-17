@@ -538,15 +538,21 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     var sk = obsSkewMap[o.id];
     var skewLine = (sk && sk.samples) ? renderSkewBadge(observerSkewSeverity(sk.offsetSec), sk.offsetSec) + ' (' + sk.samples + ' samples)' : '—';
     var pkts = sparkBar(o.packetsLastHour || 0, Math.max(1, o.packetsLastHour || 1));
+    var restorePage;
     var content = window.SlideOver.open({
       title: o.name || o.id,
-      onClose: function () {
-        // A row click loads this detail route behind the preview, replacing the opener.
-        if (location.hash !== hashHref) return;
-        var heading = document.getElementById('obsTitle');
-        if (!heading) return;
-        heading.tabIndex = -1;
-        heading.focus({ preventScroll: true });
+      restoreFocus: function () {
+        // Pin the controller's deferred retries to the observer visit visible at dismissal.
+        if (restorePage === undefined) {
+          restorePage = document.querySelector('#app > .observers-page, #app > .observer-detail-page');
+        }
+        if (!restorePage || !restorePage.isConnected) return document.activeElement;
+        var table = document.getElementById('obsTable');
+        var row = table && table.querySelector('tr[data-observer-id="' + CSS.escape(id) + '"]');
+        if (row) return row;
+        var heading = restorePage.querySelector('.page-header h2');
+        if (heading) heading.tabIndex = -1;
+        return heading;
       }
     });
     var naiveChipHTML = window.ObserversNaiveChip.render(o);
