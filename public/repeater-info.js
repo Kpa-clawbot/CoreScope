@@ -102,6 +102,21 @@
     return '';
   }
 
+  // drafts keeps an open edit form per section slot (element id) across a
+  // re-render of the node page, which mounts a fresh element (theme-refresh
+  // does that). At most one entry per slot; any navigation drops them all.
+  var drafts = {};
+  if (window.addEventListener) window.addEventListener('hashchange', function () { drafts = {}; });
+
+  function rawForm(root) {
+    var out = {};
+    ['heightM', 'gainDbi', 'status', 'power', 'notes'].forEach(function (n) {
+      var c = root.querySelector('[name="' + n + '"]');
+      out[n] = c ? String(c.value) : '';
+    });
+    return out;
+  }
+
   function say(el, text) {
     var m = el.querySelector('[data-ri-msg]');
     if (m) m.textContent = text;
@@ -111,13 +126,21 @@
     if (!el || !node || node.role !== 'repeater') return Promise.resolve();
     var auth = window.CSAuth;
     if (!auth) return Promise.resolve();
-    var base = '/api/repeaters/' + encodeURIComponent(String(node.public_key || '').toLowerCase());
+    var pk = String(node.public_key || '').toLowerCase();
+    var base = '/api/repeaters/' + encodeURIComponent(pk);
+    var slot = el.id || '';
     var info = null;
 
-    function show(mode) {
+    function keep() {
+      var form = el.querySelector('[data-ri-form]');
+      if (form) drafts[slot] = { pk: pk, values: rawForm(form) };
+    }
+    function show(mode, values) {
       var user = auth.user();
+      if (mode !== 'edit') delete drafts[slot];
       el.innerHTML = '<h4>Repeater info</h4>' +
-        (mode === 'edit' ? formHtml(info) : mode === 'confirm' ? confirmHtml() : viewHtml(info, user));
+        (mode === 'edit' ? formHtml(values || info) : mode === 'confirm' ? confirmHtml() : viewHtml(info, user));
+      if (mode === 'edit' && !values) keep();
     }
     var busy = false;
     function send(btn, method, path, body, done) {
@@ -152,6 +175,8 @@
         }
       });
       el.addEventListener('submit', function (ev) { ev.preventDefault(); });
+      el.addEventListener('input', keep);
+      el.addEventListener('change', keep);
     }
 
     return Promise.resolve(auth.ready()).then(function () {
@@ -160,7 +185,9 @@
       return auth.request('GET', base + '/info').then(function (r) {
         if (!r.ok) return;
         info = r.data;
-        show('view');
+        var d = drafts[slot];
+        if (d && d.pk === pk && info.canEdit) show('edit', d.values);
+        else show('view');
         el.hidden = false;
         var hash = String(window.location.hash || '');
         if (hash.indexOf('section=node-repeater-info') !== -1 && el.scrollIntoView) el.scrollIntoView();
