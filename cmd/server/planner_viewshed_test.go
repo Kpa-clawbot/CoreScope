@@ -53,13 +53,18 @@ func viewshedCellCenter(g viewshedGrid, r, c int) geoPoint {
 func mustViewshed(t testing.TB, v terrainView, p viewshedParams) viewshedGrid {
 	t.Helper()
 	g, err := computeViewshed(context.Background(), v, p, nil)
+	checkViewshedGrid(t, g, err)
+	return g
+}
+
+func checkViewshedGrid(t testing.TB, g viewshedGrid, err error) {
+	t.Helper()
 	if err != nil {
 		t.Fatalf("computeViewshed: %v", err)
 	}
 	if len(g.Cells) != g.Rows*g.Cols || g.Rows == 0 || g.Cols == 0 {
 		t.Fatalf("grid %dx%d with %d cells", g.Rows, g.Cols, len(g.Cells))
 	}
-	return g
 }
 
 func TestUserReachP(t *testing.T) {
@@ -333,10 +338,14 @@ func TestViewshedMissingTerrainIsNoData(t *testing.T) {
 }
 
 func TestViewshedMissingSiteIsAllNoData(t *testing.T) {
-	p := viewshedTestParams(10)
+	// A missing site still allocates the largest offered grid.
+	p := viewshedTestParams(60)
 	v := fakeTerrainView{bb: plannerExpandBBox(viewshedBBox(p.Site, p.RangeKm), 1),
 		missing: map[[2]int]bool{{30, -98}: true}}
 	g := mustViewshed(t, v, p)
+	if g.Rows > 305 || g.Cols > 305 {
+		t.Fatalf("60 km grid %dx%d exceeds ~300x300", g.Rows, g.Cols)
+	}
 	for i, b := range g.Cells {
 		if b != 0 {
 			t.Fatalf("cell %d = %#x with the site on missing terrain", i, b)
@@ -690,24 +699,45 @@ func countingElevations(t testing.TB, p viewshedParams) int64 {
 	return v.n.Load()
 }
 
-// TestViewshedWorkCount logs the work a run does (go test -v).
+func measureViewshedWork(t testing.TB, rangeKm float64) (reference, singlePass int64) {
+	t.Helper()
+	p := viewshedTestParams(rangeKm)
+	v := &countView{terrainView: flatTerrainView{elevM: 50}}
+	g, err := computeViewshedN(context.Background(), v, p, 1, nil)
+	checkViewshedGrid(t, g, err)
+	cells := 0
+	for _, b := range g.Cells {
+		if b != 0 {
+			cells++
+		}
+	}
+	if cells == 0 {
+		t.Fatal("flat terrain produced no cells in range")
+	}
+	reference, singlePass = countingElevations(t, p), v.n.Load()
+	t.Logf("%gkm: grid %dx%d, cell %.3f km, %d cells in range; ElevationAt calls: reference %d, single pass %d",
+		rangeKm, g.Rows, g.Cols, g.CellKm, cells, reference, singlePass)
+	return reference, singlePass
+}
+
 func TestViewshedWorkCount(t *testing.T) {
-	for _, rng := range []float64{30, 60} {
-		p := viewshedTestParams(rng)
-		g := mustViewshed(t, flatTerrainView{elevM: 50}, p)
-		cells := 0
-		for _, b := range g.Cells {
-			if b != 0 {
-				cells++
+	reference, singlePass := measureViewshedWork(t, 5)
+	// Both implementations look up the site once before walking the cells.
+	if singlePass <= 1 || singlePass-1 > (reference-1)/2 {
+		t.Fatalf("elevation lookups: reference %d, single pass %d; want at most half the path lookups", reference, singlePass)
+	}
+}
+
+// Run the full diagnostic with go test -run '^$' -bench '^BenchmarkViewshedWorkCount$' -benchtime=1x.
+func BenchmarkViewshedWorkCount(b *testing.B) {
+	for _, rangeKm := range []float64{30, 60} {
+		b.Run(fmt.Sprintf("%gkm", rangeKm), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				reference, singlePass := measureViewshedWork(b, rangeKm)
+				b.ReportMetric(float64(reference), "reference-lookups/op")
+				b.ReportMetric(float64(singlePass), "single-pass-lookups/op")
 			}
-		}
-		ref := countingElevations(t, p)
-		cv := &countView{terrainView: flatTerrainView{elevM: 50}}
-		if _, err := computeViewshedN(context.Background(), cv, p, 1, nil); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("%gkm: grid %dx%d, cell %.3f km, %d cells in range; ElevationAt calls: reference %d, single pass %d",
-			rng, g.Rows, g.Cols, g.CellKm, cells, ref, cv.n.Load())
+		})
 	}
 }
 
