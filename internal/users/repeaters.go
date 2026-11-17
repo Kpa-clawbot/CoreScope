@@ -164,8 +164,9 @@ func (s *Store) ListRepeaterInfo() ([]RepeaterInfo, error) {
 	return out, rows.Err()
 }
 
-// SaveRepeaterInfo validates and upserts the row. prev is the row before the
-// write (nil if there was none), for the audit diff.
+// SaveRepeaterInfo validates and upserts the row. It returns the row the write
+// replaced (nil if there was none), read in the same transaction, for the
+// audit diff.
 func (s *Store) SaveRepeaterInfo(userID int64, pubkey string, e RepeaterEdit) (*RepeaterInfo, error) {
 	pk, err := NormalizePubkey(pubkey)
 	if err != nil {

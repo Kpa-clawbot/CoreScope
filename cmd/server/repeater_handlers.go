@@ -2,8 +2,10 @@ package main
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"sort"
+	"strconv"
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/users"
@@ -35,9 +37,12 @@ type repeaterInfoListJSON struct {
 func (s *Server) registerRepeaterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/repeaters/info", s.handleRepeaterInfoList).Methods("GET")
 	r.HandleFunc("/api/repeaters/{pubkey}/info", s.handleRepeaterInfoGet).Methods("GET")
+	r.HandleFunc("/api/repeaters/{pubkey}/info", s.withUser(s.handleRepeaterInfoPut)).Methods("PUT")
+	r.HandleFunc("/api/repeaters/{pubkey}/claim", s.withUser(s.handleRepeaterClaim)).Methods("POST")
+	r.HandleFunc("/api/repeaters/{pubkey}/claim", s.withUser(s.handleRepeaterUnclaim)).Methods("DELETE")
 }
 
-func strPtr(s string) *string {
+func stringPtrOrNil(s string) *string {
 	if s == "" {
 		return nil
 	}
@@ -60,13 +65,13 @@ func repeaterInfoBase(pk string, info *users.RepeaterInfo, claims []users.Repeat
 	}
 	out.HeightM = info.HeightM
 	out.GainDBi = info.GainDBi
-	out.Status = strPtr(info.Status)
-	out.Power = strPtr(info.Power)
+	out.Status = stringPtrOrNil(info.Status)
+	out.Power = stringPtrOrNil(info.Power)
 	out.Notes = info.Notes
 	t := rfc3339(info.UpdatedAt)
 	out.UpdatedAt = &t
 	if info.UpdatedBy != nil {
-		out.UpdatedBy = strPtr(info.UpdatedByName)
+		out.UpdatedBy = stringPtrOrNil(info.UpdatedByName)
 	}
 	return out
 }
@@ -111,6 +116,7 @@ func (s *Server) handleRepeaterInfoGet(w http.ResponseWriter, r *http.Request) {
 	u, _ := s.auth.currentUser(w, r)
 	out, err := s.repeaterInfoFor(pk, u)
 	if err != nil {
+		log.Printf("[users] repeater info %s: %v", pk, err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -141,4 +147,179 @@ func (s *Server) handleRepeaterInfoList(w http.ResponseWriter, r *http.Request) 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Pubkey < out[j].Pubkey })
 	writeJSON(w, repeaterInfoListJSON{Repeaters: out})
+}
+
+type repeaterEditRequest struct {
+	HeightM *float64 `json:"heightM"`
+	GainDBi *float64 `json:"gainDbi"` // nil = 0
+	Status  string   `json:"status"`
+	Power   string   `json:"power"`
+	Notes   string   `json:"notes"`
+}
+
+func fmtFloat(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+
+func fmtHeight(h *float64) string {
+	if h == nil {
+		return ""
+	}
+	return fmtFloat(*h)
+}
+
+// repeaterEditDiff lists the changed fields as <field>.old / <field>.new
+// audit details. prev nil means no row before: the zero values.
+func repeaterEditDiff(prev *users.RepeaterInfo, next users.RepeaterEdit) map[string]string {
+	var old users.RepeaterInfo
+	if prev != nil {
+		old = *prev
+	}
+	out := map[string]string{}
+	add := func(field, o, n string) {
+		if o != n {
+			out[field+".old"], out[field+".new"] = o, n
+		}
+	}
+	add("height_m", fmtHeight(old.HeightM), fmtHeight(next.HeightM))
+	add("gain_dbi", fmtFloat(old.GainDBi), fmtFloat(next.GainDBi))
+	add("status", old.Status, next.Status)
+	add("power", old.Power, next.Power)
+	add("notes", old.Notes, next.Notes)
+	return out
+}
+
+// repeaterTarget applies the per-user rate limit and normalises the pubkey;
+// with needKnown it also requires a known repeater in the analyzer DB. ok
+// false means the error answer is already written.
+func (s *Server) repeaterTarget(w http.ResponseWriter, r *http.Request, u *users.User, needKnown bool) (string, bool) {
+	if !s.auth.allow(w, r, s.auth.repeater, "user:"+strconv.FormatInt(u.ID, 10)) {
+		return "", false
+	}
+	pk, err := users.NormalizePubkey(mux.Vars(r)["pubkey"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "pubkey must be 64 hex characters")
+		return "", false
+	}
+	if !needKnown {
+		return pk, true
+	}
+	found, isRep, err := s.db.RepeaterKnown(pk)
+	switch {
+	case err != nil:
+		log.Printf("[users] repeater lookup %s: %v", pk, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+	case !found:
+		writeError(w, http.StatusNotFound, "unknown node")
+	case !isRep:
+		writeError(w, http.StatusBadRequest, "not a repeater")
+	default:
+		return pk, true
+	}
+	return "", false
+}
+
+func (s *Server) writeRepeaterInfo(w http.ResponseWriter, pk string, u *users.User) {
+	out, err := s.repeaterInfoFor(pk, u)
+	if err != nil {
+		log.Printf("[users] repeater info %s: %v", pk, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, out)
+}
+
+func (s *Server) handleRepeaterInfoPut(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
+	pk, ok := s.repeaterTarget(w, r, u, true)
+	if !ok {
+		return
+	}
+	var req repeaterEditRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	can, err := s.auth.st.CanEditRepeater(u, pk)
+	if err != nil {
+		log.Printf("[users] repeater permission %s: %v", pk, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !can {
+		writeError(w, http.StatusForbidden, "only this repeater's maintainers can edit it")
+		return
+	}
+	edit := users.RepeaterEdit{HeightM: req.HeightM, Status: req.Status, Power: req.Power, Notes: req.Notes}
+	if req.GainDBi != nil {
+		edit.GainDBi = *req.GainDBi
+	}
+	edit, err = users.ValidateRepeaterEdit(edit)
+	if writeValidation(w, err) {
+		return
+	}
+	if err != nil {
+		log.Printf("[users] validate repeater edit %s: %v", pk, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	cur, err := s.auth.st.GetRepeaterInfo(pk)
+	if errors.Is(err, users.ErrNotFound) {
+		cur, err = nil, nil
+	}
+	if err != nil {
+		log.Printf("[users] read repeater info %s: %v", pk, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	// An unchanged body writes nothing: updated_at and updated_by stay. The
+	// early read only decides that; the audit diff comes from the row the
+	// save replaced.
+	if len(repeaterEditDiff(cur, edit)) > 0 {
+		prev, err := s.auth.st.SaveRepeaterInfo(u.ID, pk, edit)
+		if err != nil {
+			if writeValidation(w, err) {
+				return
+			}
+			log.Printf("[users] save repeater info %s: %v", pk, err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		diff := repeaterEditDiff(prev, edit)
+		diff["pubkey"] = pk
+		s.auth.auditAsync(idPtr(u.ID), "repeater.edit", nil, diff)
+	}
+	s.writeRepeaterInfo(w, pk, u)
+}
+
+func (s *Server) handleRepeaterClaim(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
+	pk, ok := s.repeaterTarget(w, r, u, true)
+	if !ok {
+		return
+	}
+	added, err := s.auth.st.ClaimRepeater(u.ID, pk)
+	if err != nil {
+		log.Printf("[users] claim repeater %s: %v", pk, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if added {
+		s.auth.auditAsync(idPtr(u.ID), "repeater.claim", idPtr(u.ID), map[string]string{"pubkey": pk})
+	}
+	s.writeRepeaterInfo(w, pk, u)
+}
+
+func (s *Server) handleRepeaterUnclaim(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
+	pk, ok := s.repeaterTarget(w, r, u, false)
+	if !ok {
+		return
+	}
+	err := s.auth.st.UnclaimRepeater(u.ID, pk)
+	if errors.Is(err, users.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "you have not claimed this repeater")
+		return
+	}
+	if err != nil {
+		log.Printf("[users] unclaim repeater %s: %v", pk, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	s.auth.auditAsync(idPtr(u.ID), "repeater.unclaim", idPtr(u.ID), map[string]string{"pubkey": pk})
+	s.writeRepeaterInfo(w, pk, u)
 }
