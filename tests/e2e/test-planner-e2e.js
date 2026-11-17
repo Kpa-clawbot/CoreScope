@@ -58,7 +58,8 @@ async function stubJob(page, pattern, seq) {
     rec.urls.push(route.request().url());
     const e = seq[i];
     if (e.gate) await e.gate;
-    await route.fulfill(e.fulfill);
+    // fulfill may be a function of the request URL, for answers that echo it.
+    await route.fulfill(typeof e.fulfill === 'function' ? e.fulfill(route.request().url()) : e.fulfill);
   });
   return rec;
 }
@@ -136,14 +137,17 @@ function areaBody() {
   };
 }
 
-// 4x4 grid, row 0 north; byte = users | repeaters << 4.
-function viewshedBody() {
+// 4x4 grid, row 0 north; byte = users | repeaters << 4. params.site echoes
+// the requested site rounded to 0.001°, as the server does.
+function viewshedBody(url) {
+  const req = url ? new URL(url).searchParams.get('site') : null;
+  const [lat, lon] = req ? req.split(',').map((v) => Math.round(Number(v) * 1000) / 1000) : [30.3, -97.9];
   const rows = 4, cols = 4;
   const b = Buffer.alloc(rows * cols);
   for (let i = 0; i < b.length; i++) b[i] = ((i % 5) + 1) | (((i % 4) + 1) << 4);
   return {
     source: 'e2e-stub',
-    params: { site: { lat: 30.3, lon: -97.9 }, antenna_m: 10, rx_antenna_m: 5, range_km: 30, frequency_mhz: 910.525, k_factor: 1.3333, user_reach: { d50_km: 2.7, slope: 0.3 } },
+    params: { site: { lat, lon }, antenna_m: 10, rx_antenna_m: 5, range_km: 30, frequency_mhz: 910.525, k_factor: 1.3333, user_reach: { d50_km: 2.7, slope: 0.3 } },
     bbox: [30.2, -98.0, 30.4, -97.8], rows, cols, cell_km: 5, cells: b.toString('base64'),
     links: [
       { pubkey: 'aa'.repeat(32), name: 'Cov Alpha', lat: 30.25, lon: -97.95, link: { distance_km: 7, clearance_pct: 90, verdict: 'clear', worst_km: 3, obstruction_m: 0 } },
@@ -364,7 +368,7 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
   // ── Coverage ──
   {
     const page = await newPage(true);
-    const vs = await stubJob(page, '**/api/planner/viewshed*', [job202(), { fulfill: json(200, viewshedBody()) }]);
+    const vs = await stubJob(page, '**/api/planner/viewshed*', [job202(), { fulfill: (url) => json(200, viewshedBody(url)) }]);
     await openPlanner(page, '?mode=coverage');
     const overlays = () => page.locator('img.leaflet-image-layer').count();
 
@@ -420,7 +424,7 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
       const m = hash.match(/[?&]site=([^&]+)/);
       assert(m, 'no site in hash: ' + hash);
       const p2 = await newPage(true);
-      const vs2 = await stubJob(p2, '**/api/planner/viewshed*', [{ fulfill: json(200, viewshedBody()) }]);
+      const vs2 = await stubJob(p2, '**/api/planner/viewshed*', [{ fulfill: (url) => json(200, viewshedBody(url)) }]);
       await openPlanner(p2, '?mode=coverage&site=' + m[1] + '&layer=repeaters');
       await p2.waitForSelector('img.leaflet-image-layer');
       await p2.waitForTimeout(300);

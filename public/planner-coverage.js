@@ -30,6 +30,9 @@
   var OUTDATED_NOTE = 'Outdated, press Compute coverage.';
   var DISCLAIMER = 'An estimate from a terrain model (SRTM ~90 m) and a measured reach curve, not a survey.';
   var PANE = 'mc-pl-cov';
+  // The last result URL the map was fitted to, across mounts: coming back to
+  // the tab with the same inputs keeps the user's pan and zoom.
+  var lastFitUrl = null;
 
   /* ---------- pure helpers ---------- */
 
@@ -223,10 +226,17 @@
     function pushHash() { ctx.setParams(stateToHash(state)); }
 
     /* --- map --- */
+    // The site the shown result was computed for (the server rounds it to
+    // 0.001°), or where the user placed it while there is no current result.
+    function shownSite() {
+      var s = data && !outdated && data.params && data.params.site;
+      return s && isFinite(s.lat) && isFinite(s.lon) ? s : state.site;
+    }
     function drawSite() {
       siteLayer.clearLayers();
-      if (!state.site) return;
-      L.circleMarker([state.site.lat, state.site.lon], { radius: 8, className: 'mc-pl-cov-site', interactive: false }).addTo(siteLayer);
+      var s = shownSite();
+      if (!s) return;
+      L.circleMarker([s.lat, s.lon], { radius: 8, className: 'mc-pl-cov-site', interactive: false }).addTo(siteLayer);
     }
     function readColors(layer) {
       var cs = getComputedStyle(document.documentElement);
@@ -275,7 +285,8 @@
     }
     function drawLinks() {
       linkLayer.clearLayers();
-      if (!data || outdated || !state.site || state.layer !== 'repeaters') return;
+      var site = shownSite();
+      if (!data || outdated || !site || state.layer !== 'repeaters') return;
       (data.links || []).forEach(function (l) {
         var k = l.link || {};
         var cls = linkClass(k);
@@ -283,7 +294,7 @@
         // Blocked links get only the red dot: a line per blocked repeater
         // buries the useful ones.
         if (cls > 1) {
-          L.polyline([[state.site.lat, state.site.lon], [l.lat, l.lon]], {
+          L.polyline([[site.lat, site.lon], [l.lat, l.lon]], {
             className: 'mc-pl-cov-link mc-pl-cov-link-' + cls, interactive: false
           }).addTo(linkLayer);
         }
@@ -300,9 +311,11 @@
         html += ctx.warningsHtml ? ctx.warningsHtml(data.warnings) : '';
         if (state.layer === 'repeaters') html += linksHtml(data, esc);
       }
-      f('results').innerHTML = html;
+      var list = f('results');
+      list.innerHTML = html;
+      list.className = data && outdated ? 'is-outdated' : '';
     }
-    function repaint() { paint(); drawLinks(); renderResults(); }
+    function repaint() { paint(); drawSite(); drawLinks(); renderResults(); }
 
     /* --- run --- */
     function setProgress(st, frac) { f('progress').innerHTML = st === null ? '' : ctx.progressHtml(st, frac); }
@@ -349,7 +362,10 @@
         outdated = buildViewshedUrl(state) !== ranUrl;
         syncControls();
         repaint();
-        if (opts && opts.fit && map.fitBounds && d.bbox) map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]], { animate: false });
+        if (opts && opts.fit && url !== lastFitUrl && map.fitBounds && d.bbox) {
+          lastFitUrl = url;
+          map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]], { animate: false });
+        }
       }, function (err) {
         if (myRun !== runId || dead) return;
         if (err && err.name === 'AbortError') return;
