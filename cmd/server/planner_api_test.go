@@ -1940,9 +1940,6 @@ func TestPlannerViewshedTruncatedOnlyWhenInRangeLost(t *testing.T) {
 	if len(resp.Links) != 1 || resp.Links[0].PubKey != "aa01" {
 		t.Fatalf("links %+v, want only aa01", resp.Links)
 	}
-	if len(resp.Links) != 1 {
-		t.Fatalf("links %+v", resp.Links)
-	}
 	if resp.Truncated {
 		t.Fatal("truncated set although only nodes beyond range were dropped")
 	}
