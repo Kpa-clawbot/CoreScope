@@ -128,7 +128,11 @@ const PAGES = [
     });
 
     await step(`${tag}: clicking row opens slide-over with backdrop`, async () => {
-      if (p.name === 'observers') await page.evaluate(() => {
+      if (p.name === 'observers') await page.evaluate(selector => {
+        // A virtual row click leaves DOM focus on the previous control.
+        const previous = document.querySelector(selector);
+        previous.focus();
+        if (document.activeElement !== previous) throw new Error('could not focus ' + selector);
         const init = pages['observer-detail'].init;
         const requestFrame = window.requestAnimationFrame;
         pages['observer-detail'].init = function (...args) {
@@ -145,7 +149,7 @@ const PAGES = [
             return 0;
           };
         };
-      });
+      }, width === 800 ? '#searchToggle' : '.nav-brand');
       // Click the first body row — prefer one with a data-action attribute
       // (packets) or any row otherwise.
       const diag = await page.evaluate(({sel, rowSel}) => {
@@ -340,6 +344,34 @@ const PAGES = [
       });
       assert(gone, 'slide-over still visible after X click');
     });
+
+    if (p.name === 'observers' && width === 800 && theme === 'light') {
+      await step(`${tag}: Back to the list then Escape focuses the remounted opener row`, async () => {
+        await reopenPanel();
+        const opener = await page.evaluate(() => location.hash);
+        await page.goBack();
+        await page.locator(p.rowSel).first().waitFor();
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        assert(await page.locator('.slide-over-panel').isVisible(), 'Back to the list must keep the preview open');
+        await page.keyboard.press('Escape');
+        await page.locator('.slide-over-panel').waitFor({ state: 'hidden' });
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        const focused = await page.evaluate(() => document.activeElement.matches('#obsTable tbody tr')
+          ? document.activeElement.dataset.value : document.activeElement.tagName);
+        assert(focused === opener, 'Back then Escape must focus the remounted observer row, got ' + focused);
+      });
+
+      await step(`${tag}: Escape focuses the current observer after a same-section route change`, async () => {
+        await reopenPanel();
+        const other = await page.locator('#obsCompareWithPicker option:not([value=""])').first().getAttribute('value');
+        await page.goto(BASE + '/#/observers/' + encodeURIComponent(other) + '?theme=' + theme);
+        await page.locator('.observer-detail-page a[href="#/nodes/' + encodeURIComponent(other.toLowerCase()) + '"]').waitFor();
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        assert(await page.locator('.slide-over-panel').isVisible(), 'changing observers must keep the preview open');
+        await page.keyboard.press('Escape');
+        await checkDismissal();
+      });
+    }
 
     if (p.name === 'observers') await step(`${tag}: leaving preview focuses the new page heading`, async () => {
       await reopenPanel();
