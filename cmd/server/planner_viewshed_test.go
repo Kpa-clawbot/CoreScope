@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"sort"
+	"sync/atomic"
 	"testing"
 )
 
@@ -383,18 +386,368 @@ func TestViewshedReportsProgress(t *testing.T) {
 	}
 }
 
-func benchmarkViewshed(b *testing.B, rangeKm float64) {
+// computeViewshedRef is the original single-goroutine, two-walk
+// computeViewshed, kept as the oracle the optimised one must match byte for
+// byte. computeViewshed profiles site→cell for every cell in range: two
+// clearance walks per cell (receiver at RxM for Repeaters, at
+// viewshedUserRxM for the Users shadow test). progress gets the fraction of
+// rows done. Errors: ctx.Err() only.
+func computeViewshedRef(ctx context.Context, v terrainView, p viewshedParams, progress func(float64)) (viewshedGrid, error) {
+	cellKm := viewshedCellKm(p.RangeKm)
+	bb := viewshedBBox(p.Site, p.RangeKm)
+	cosLat := math.Cos(p.Site.Lat * math.Pi / 180)
+	rows := max(1, int(math.Ceil((bb.N-bb.S)*plannerKmPerDeg/cellKm)))
+	cols := max(1, int(math.Ceil((bb.E-bb.W)*plannerKmPerDeg*cosLat/cellKm)))
+	g := viewshedGrid{BBox: bb, Rows: rows, Cols: cols, CellKm: cellKm, Cells: make([]byte, rows*cols)}
+	if err := ctx.Err(); err != nil {
+		return viewshedGrid{}, err
+	}
+	if _, ok := v.ElevationAt(p.Site.Lat, p.Site.Lon); !ok {
+		return g, nil // no terrain at the site: every cell is no data
+	}
+	e := newPlanLinkEval(ctx, v, p.FreqMHz, p.KFactor)
+	dLat := (bb.N - bb.S) / float64(rows)
+	dLon := (bb.E - bb.W) / float64(cols)
+	for r := 0; r < rows; r++ {
+		lat := bb.N - (float64(r)+0.5)*dLat
+		for c := 0; c < cols; c++ {
+			cell := geoPoint{Lat: lat, Lon: bb.W + (float64(c)+0.5)*dLon}
+			d := geoDistKm(p.Site, cell)
+			if d > p.RangeKm {
+				continue
+			}
+			cr, ok := e.clearance(p.Site, cell, d, p.SiteM, p.RxM, math.Inf(-1))
+			if !ok {
+				continue // no terrain on the path (or ctx cancelled: checked below)
+			}
+			users := userReachClass(userReachP(d, p.Reach))
+			// Same path as above, so terrain is present; the walk stops at
+			// the first sample below the shadow threshold.
+			if cu, ok := e.clearance(p.Site, cell, d, p.SiteM, viewshedUserRxM, viewshedShadowClearance); !ok && cu < viewshedShadowClearance {
+				if users > viewshedShadowDrop {
+					users -= viewshedShadowDrop
+				} else {
+					users = 1
+				}
+			}
+			g.Cells[r*cols+c] = users | repeaterClass(cr)<<4
+		}
+		if e.err != nil {
+			return viewshedGrid{}, e.err
+		}
+		if progress != nil {
+			progress(float64(r+1) / float64(rows))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return viewshedGrid{}, err
+	}
+	return g, nil
+}
+
+// roughSRTMView is a real srtmView (bilinear lookups over int16 tiles) over
+// bb (relief scaled by scale: 1 rough, 0.1 gentle), with deterministic hills and a few sharp ridges, so the paths see
+// shadow, partial blockage and clear ground.
+func roughSRTMView(bb geoBBox, scale float64) *srtmView {
+	sp, _ := srtmSpanOf(bb)
+	v := &srtmView{span: sp, grids: make([][]int16, sp.count())}
+	for i := range v.grids {
+		k := sp.key(i)
+		g := make([]int16, srtmSide*srtmSide)
+		for r := 0; r < srtmSide; r++ {
+			lat := float64(k.lat+1) - float64(r)/srtmCells
+			for c := 0; c < srtmSide; c++ {
+				lon := float64(k.lon) + float64(c)/srtmCells
+				e := 300 + scale*(120*math.Sin(lat*37)*math.Cos(lon*29)+60*math.Sin(lat*151+lon*113))
+				if math.Mod(lon*40, 1) < 0.08 { // N-S ridges ~2 km wide every ~2.5 km
+					e += 90 * scale
+				}
+				g[r*srtmSide+c] = int16(e)
+			}
+		}
+		v.grids[i] = g
+	}
+	return v
+}
+
+// viewshedEquivalenceCases are the terrains and parameters the optimised
+// code is compared with computeViewshedRef on.
+func viewshedEquivalenceCases() []struct {
+	name string
+	v    terrainView
+	p    viewshedParams
+} {
+	var cs []struct {
+		name string
+		v    terrainView
+		p    viewshedParams
+	}
+	sites := []geoPoint{viewshedTestSite, {Lat: 45.2, Lon: 7.1}, {Lat: -33.9, Lon: 151.2}}
+	for _, site := range sites {
+		for _, rng := range []float64{3, 12, 30} {
+			if rng == 30 && site != viewshedTestSite {
+				continue // the slow case once is enough
+			}
+			p := viewshedTestParams(rng)
+			p.Site = site
+			bb := plannerExpandBBox(viewshedBBox(site, rng), 1)
+			ridge := ridgeTerrainView{baseM: 100, ridgeM: 80, west: site.Lon + 0.05, east: site.Lon + 0.07}
+			cs = append(cs,
+				struct {
+					name string
+					v    terrainView
+					p    viewshedParams
+				}{fmt.Sprintf("fake/%.1f,%.1f/%gkm", site.Lat, site.Lon, rng), fakeTerrainView{bb: bb}, p},
+				struct {
+					name string
+					v    terrainView
+					p    viewshedParams
+				}{fmt.Sprintf("flat/%.1f,%.1f/%gkm", site.Lat, site.Lon, rng), flatTerrainView{elevM: 50}, p},
+				struct {
+					name string
+					v    terrainView
+					p    viewshedParams
+				}{fmt.Sprintf("ridge/%.1f,%.1f/%gkm", site.Lat, site.Lon, rng), ridgeTerrainView{ridge.baseM, ridge.ridgeM, ridge.west, ridge.east}, p},
+			)
+		}
+	}
+	return cs
+}
+
+func TestViewshedMatchesReference(t *testing.T) {
+	check := func(name string, v terrainView, p viewshedParams) {
+		want, err := computeViewshedRef(context.Background(), v, p, nil)
+		if err != nil {
+			t.Fatalf("%s: ref: %v", name, err)
+		}
+		for _, workers := range []int{1, 3, 7} {
+			got, err := computeViewshedN(context.Background(), v, p, workers, nil)
+			if err != nil {
+				t.Fatalf("%s: workers=%d: %v", name, workers, err)
+			}
+			if got.Rows != want.Rows || got.Cols != want.Cols || got.BBox != want.BBox || got.CellKm != want.CellKm ||
+				!bytes.Equal(got.Cells, want.Cells) {
+				diff := 0
+				for i := range want.Cells {
+					if got.Cells[i] != want.Cells[i] {
+						diff++
+					}
+				}
+				t.Fatalf("%s: workers=%d: %d of %d cells differ from the reference", name, workers, diff, len(want.Cells))
+			}
+		}
+	}
+	for _, c := range viewshedEquivalenceCases() {
+		check(c.name, c.v, c.p)
+	}
+	// Real tile lookups with ridges and shadow, and a tile without data.
+	for _, rng := range []float64{8, 20} {
+		p := viewshedTestParams(rng)
+		bb := viewshedBBox(p.Site, rng)
+		v := roughSRTMView(bb, 1)
+		check(fmt.Sprintf("srtm/%gkm", rng), v, p)
+		holed := &srtmView{span: v.span, grids: append([][]int16(nil), v.grids...)}
+		holed.grids[0] = nil
+		check(fmt.Sprintf("srtm-hole/%gkm", rng), holed, p)
+	}
+	check("missing-tile", fakeTerrainView{bb: plannerExpandBBox(viewshedBBox(viewshedTestSite, 30), 1),
+		missing: map[[2]int]bool{{31, -98}: true}}, viewshedTestParams(30))
+}
+
+// TestViewshedRoughTerrainHasEveryClass guards the equivalence test above:
+// it is only worth something if the terrain exercises shadow and every
+// Repeaters class.
+func TestViewshedRoughTerrainHasEveryClass(t *testing.T) {
+	p := viewshedTestParams(25)
+	g := mustViewshed(t, roughSRTMView(viewshedBBox(p.Site, p.RangeKm), 1), p)
+	var rep [4]int
+	for _, b := range g.Cells {
+		rep[b>>4]++
+	}
+	if rep[1] == 0 || rep[2] == 0 || rep[3] == 0 {
+		t.Fatalf("repeater class counts %v: terrain too tame", rep)
+	}
+}
+
+// TestClearancePairMatchesClearance pins clearancePair to the two
+// e.clearance calls it replaces, sample for sample, on rough terrain.
+func TestClearancePairMatchesClearance(t *testing.T) {
+	p := viewshedTestParams(40)
+	v := roughSRTMView(viewshedBBox(p.Site, p.RangeKm), 1)
+	rng := rand.New(rand.NewSource(1))
+	e := newPlanLinkEval(context.Background(), v, p.FreqMHz, p.KFactor)
+	ref := newPlanLinkEval(context.Background(), v, p.FreqMHz, p.KFactor)
+	for i := 0; i < 400; i++ {
+		b := geoPoint{Lat: p.Site.Lat + (rng.Float64()-0.5)*0.6, Lon: p.Site.Lon + (rng.Float64()-0.5)*0.6}
+		d := geoDistKm(p.Site, b)
+		cr, ok, shadow := e.clearancePair(p.Site, b, d, p.SiteM, p.RxM, viewshedUserRxM, viewshedShadowClearance)
+		wantCr, wantOK := ref.clearance(p.Site, b, d, p.SiteM, p.RxM, math.Inf(-1))
+		cu, uok := ref.clearance(p.Site, b, d, p.SiteM, viewshedUserRxM, viewshedShadowClearance)
+		wantShadow := !uok && cu < viewshedShadowClearance
+		if ok != wantOK || (ok && math.Float64bits(cr) != math.Float64bits(wantCr)) || shadow != wantShadow {
+			t.Fatalf("b=%v d=%.2f: pair (%v,%v,%v) want (%v,%v,%v)", b, d, cr, ok, shadow, wantCr, wantOK, wantShadow)
+		}
+	}
+}
+
+func TestViewshedParallelProgress(t *testing.T) {
+	for _, workers := range []int{2, 4} {
+		var last float64
+		calls := 0
+		_, err := computeViewshedN(context.Background(), flatTerrainView{elevM: 50}, viewshedTestParams(10), workers,
+			func(f float64) { // would race under -race if not serialised
+				if f < last {
+					t.Errorf("workers=%d: progress went back from %v to %v", workers, last, f)
+				}
+				last = f
+				calls++
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calls == 0 || last != 1 {
+			t.Errorf("workers=%d: %d calls, last %v; want calls ending at exactly 1", workers, calls, last)
+		}
+	}
+}
+
+// cancelAfterView cancels its context after n lookups.
+type cancelAfterView struct {
+	terrainView
+	n      int64
+	seen   atomic.Int64
+	cancel context.CancelFunc
+}
+
+func (v *cancelAfterView) ElevationAt(lat, lon float64) (float64, bool) {
+	if v.seen.Add(1) == v.n {
+		v.cancel()
+	}
+	return v.terrainView.ElevationAt(lat, lon)
+}
+
+func TestViewshedParallelCancelsPromptly(t *testing.T) {
+	p := viewshedTestParams(12)
+	total := countingElevations(t, p)
+	for _, workers := range []int{1, 4} {
+		ctx, cancel := context.WithCancel(context.Background())
+		v := &cancelAfterView{terrainView: flatTerrainView{elevM: 50}, n: 1000, cancel: cancel}
+		_, err := computeViewshedN(ctx, v, p, workers, nil)
+		cancel()
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("workers=%d: err = %v, want context.Canceled", workers, err)
+		}
+		// Each worker may finish its current 16-cell ctx window plus its row.
+		if got := v.seen.Load(); got > total/20 {
+			t.Errorf("workers=%d: %d lookups after cancel at 1000 (full run %d): not prompt", workers, got, total)
+		}
+	}
+}
+
+// A panic in a worker must surface on the caller's goroutine, where the job
+// runner recovers it, not kill the process.
+func TestViewshedWorkerPanicReachesCaller(t *testing.T) {
+	// The site lookup in computeViewshedN is on the caller; let it pass.
+	v := &panicAfterView{terrainView: flatTerrainView{elevM: 50}, after: 1}
+	defer func() {
+		if r := recover(); r != "boom" {
+			t.Fatalf("recovered %v, want boom", r)
+		}
+	}()
+	_, _ = computeViewshedN(context.Background(), v, viewshedTestParams(10), 4, nil)
+	t.Fatal("no panic")
+}
+
+type panicAfterView struct {
+	terrainView
+	after int64
+	seen  atomic.Int64
+}
+
+func (v *panicAfterView) ElevationAt(lat, lon float64) (float64, bool) {
+	if v.seen.Add(1) > v.after {
+		panic("boom")
+	}
+	return v.terrainView.ElevationAt(lat, lon)
+}
+
+// countView counts ElevationAt calls.
+type countView struct {
+	terrainView
+	n atomic.Int64
+}
+
+func (v *countView) ElevationAt(lat, lon float64) (float64, bool) {
+	v.n.Add(1)
+	return v.terrainView.ElevationAt(lat, lon)
+}
+
+func countingElevations(t testing.TB, p viewshedParams) int64 {
+	v := &countView{terrainView: flatTerrainView{elevM: 50}}
+	if _, err := computeViewshedRef(context.Background(), v, p, nil); err != nil {
+		t.Fatal(err)
+	}
+	return v.n.Load()
+}
+
+// TestViewshedWorkCount logs the work a run does (go test -v).
+func TestViewshedWorkCount(t *testing.T) {
+	for _, rng := range []float64{30, 60} {
+		p := viewshedTestParams(rng)
+		g := mustViewshed(t, flatTerrainView{elevM: 50}, p)
+		cells := 0
+		for _, b := range g.Cells {
+			if b != 0 {
+				cells++
+			}
+		}
+		ref := countingElevations(t, p)
+		cv := &countView{terrainView: flatTerrainView{elevM: 50}}
+		if _, err := computeViewshedN(context.Background(), cv, p, 1, nil); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%gkm: grid %dx%d, cell %.3f km, %d cells in range; ElevationAt calls: reference %d, single pass %d",
+			rng, g.Rows, g.Cols, g.CellKm, cells, ref, cv.n.Load())
+	}
+}
+
+func benchmarkViewshed(b *testing.B, rangeKm float64, relief float64, workers int) {
 	p := viewshedTestParams(rangeKm)
-	v := fakeTerrainView{bb: plannerExpandBBox(viewshedBBox(p.Site, p.RangeKm), 1)}
+	var v terrainView = fakeTerrainView{bb: plannerExpandBBox(viewshedBBox(p.Site, p.RangeKm), 1)}
+	if relief > 0 {
+		v = roughSRTMView(viewshedBBox(p.Site, p.RangeKm), relief)
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := computeViewshed(context.Background(), v, p, nil); err != nil {
+		var err error
+		if workers == 0 {
+			_, err = computeViewshedRef(context.Background(), v, p, nil)
+		} else {
+			_, err = computeViewshedN(context.Background(), v, p, workers, nil)
+		}
+		if err != nil {
 			b.Fatal(err)
 		}
 	}
 }
 
-func BenchmarkViewshed30km(b *testing.B) { benchmarkViewshed(b, 30) }
+func BenchmarkViewshed30km(b *testing.B) { benchmarkViewshed(b, 30, 0, viewshedWorkers()) }
 
 // BenchmarkViewshedMaxLeg: the largest range the planner offers (60 km).
-func BenchmarkViewshedMaxLeg(b *testing.B) { benchmarkViewshed(b, 60) }
+func BenchmarkViewshedMaxLeg(b *testing.B) { benchmarkViewshed(b, 60, 0, viewshedWorkers()) }
+
+// BenchmarkViewshedVariants: workers=0 is the reference implementation.
+// fake is the plane fakeTerrainView; srtm and srtm-gentle are real tile
+// lookups over rough and gentle relief.
+func BenchmarkViewshedVariants(b *testing.B) {
+	for _, rangeKm := range []float64{30, 60} {
+		for _, terrain := range []struct {
+			name   string
+			relief float64
+		}{{"fake", 0}, {"srtm", 1}, {"srtm-gentle", 0.1}} {
+			for _, w := range []int{0, 1, 2, 4, 6} {
+				b.Run(fmt.Sprintf("%gkm/%s/w%d", rangeKm, terrain.name, w), func(b *testing.B) { benchmarkViewshed(b, rangeKm, terrain.relief, w) })
+			}
+		}
+	}
+}
