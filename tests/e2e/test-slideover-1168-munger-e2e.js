@@ -132,6 +132,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     // fall back to the default 15-minute window.
     await page.goto(BASE + '/#/packets?timeWindow=180', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#pktTable tbody tr[data-action]', { timeout: 8000 });
+    const packetListTitle = await page.title();
 
     await step('hashchange: packet cleanup preserves the destination and title', async () => {
       // A generic SlideOver has no packet onClose callback and misses #2380.
@@ -209,6 +210,62 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
           'manual dismissal must restore the originating row: ' + JSON.stringify(after));
       });
     }
+
+    await page.setViewportSize({ width: 800, height: 900 });
+    const { packets } = await (await page.request.get(BASE + '/api/packets?limit=20')).json();
+    const packet = packets.find(p => p.hash && p.hash !== p.hash.toUpperCase());
+    assert(packet, 'fixture needs a packet whose hash has a letter');
+    const other = packets.find(p => p.hash && p.hash !== packet.hash);
+    assert(other, 'fixture needs a second distinct packet');
+
+    // Keep the real detail lookup for every alias. Single-observation fixtures
+    // need a second row to exercise the observation link in the preview.
+    await page.route(new RegExp('/api/packets/(' + packet.id + '|' + packet.hash + ')$', 'i'), async route => {
+      const response = await route.fetch();
+      const detail = await response.json();
+      if (detail.observations.length === 1) {
+        const first = detail.observations[0];
+        detail.observations.push({ ...first, id: first.id + 1 });
+        detail.observation_count = 2;
+      }
+      await route.fulfill({ response, json: detail });
+    });
+
+    const keys = [['numeric ID', packet.id], ['uppercase hash', packet.hash.toUpperCase()], ['lowercase hash', packet.hash]];
+    for (const [kind, key] of keys) {
+      await step(kind + ' preview returns to the list on Escape after selecting an observation', async () => {
+        await page.goto(BASE + '/#/packets/' + key);
+        const row = page.locator('.slide-over-panel .detail-obs-row').nth(1);
+        const obsId = await row.getAttribute('data-obs-id');
+        const historyLength = await page.evaluate(() => history.length);
+        await row.click();
+        const selected = new URL(page.url()).hash;
+        const [path, query] = selected.split('?');
+        assert(path === '#/packets/' + packet.hash && new URLSearchParams(query).get('obs') === obsId,
+          'selected observation must have its canonical packet URL: ' + selected);
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.slide-over-panel', { state: 'detached' });
+        const after = await page.evaluate(() => ({ hash: location.hash, title: document.title, length: history.length }));
+        assert(after.hash === '#/packets' && after.title === packetListTitle && after.length === historyLength,
+          'Escape must restore the packet list and title without adding history: ' + JSON.stringify(after));
+      });
+    }
+
+    await step('Back from an open packet preview preserves the other packet detail', async () => {
+      const detailFor = hash => page.locator('.slide-over-panel .copy-link-btn[data-packet-hash="' + hash + '"]');
+      await page.goto(BASE + '/#/packets/' + other.hash);
+      await detailFor(other.hash).waitFor();
+      const previous = new URL(page.url()).hash;
+      const title = await page.title();
+      assert(previous.split('?')[0] === '#/packets/' + other.hash, 'expected the other packet URL: ' + previous);
+      await page.goto(BASE + '/#/packets/' + packet.hash);
+      await detailFor(packet.hash).waitFor();
+      await page.goBack();
+      await detailFor(other.hash).waitFor();
+      const after = new URL(page.url()).hash;
+      assert(after === previous && await page.title() === title,
+        'Back must retain the previous packet URL and title: ' + after);
+    });
 
     await ctx.close();
   }
