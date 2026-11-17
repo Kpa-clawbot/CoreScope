@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -355,4 +356,59 @@ func TestRepeaterUnclaimBadPubkey(t *testing.T) {
 	f := repeaterFixture(t)
 	alice := f.registerAndActivate(t, "alice@example.org", "Alice", pw)
 	expectStatus(t, f.do("DELETE", "/api/repeaters/xyz/claim", nil, as(alice)), 400)
+}
+
+func adminClaimPath(pk string, uid int64) string {
+	return "/api/admin/repeaters/" + pk + "/claims/" + strconv.FormatInt(uid, 10)
+}
+
+func TestAdminRemoveRepeaterClaim(t *testing.T) {
+	f := repeaterFixture(t, "admin@example.org")
+	admin := f.registerAndActivate(t, "admin@example.org", "Admin", pw)
+	alice := f.registerAndActivate(t, "alice@example.org", "Alice", pw)
+	bob := f.registerAndActivate(t, "bob@example.org", "Bob", pw)
+	expectStatus(t, f.do("POST", repPath(rpkA, "claim"), nil, as(alice)), 200)
+
+	expectStatus(t, f.do("DELETE", adminClaimPath(rpkA, alice.me.ID), nil, as(bob)), 403)
+	if cs, _ := f.st.RepeaterClaimsByUser(alice.me.ID); len(cs) != 1 {
+		t.Fatalf("claim removed by a non-admin: %+v", cs)
+	}
+	expectStatus(t, f.do("DELETE", adminClaimPath(rpkA, alice.me.ID), nil, as(admin)), 204)
+	if cs, _ := f.st.RepeaterClaimsByUser(alice.me.ID); len(cs) != 0 {
+		t.Fatalf("claim still there: %+v", cs)
+	}
+	rows := auditOf(t, f, alice.me.ID, "repeater.unclaim")
+	if len(rows) != 1 || rows[0].Detail["pubkey"] != rpkA || rows[0].Detail["by"] != "admin" ||
+		rows[0].ActorUserID == nil || *rows[0].ActorUserID != admin.me.ID {
+		t.Fatalf("audit = %+v", rows)
+	}
+	expectStatus(t, f.do("DELETE", adminClaimPath(rpkA, alice.me.ID), nil, as(admin)), 404)
+	expectStatus(t, f.do("DELETE", adminClaimPath("zz", alice.me.ID), nil, as(admin)), 400)
+	expectStatus(t, f.do("DELETE", "/api/admin/repeaters/"+rpkA+"/claims/abc", nil, as(admin)), 400)
+}
+
+func TestAdminUserDetailRepeaterClaims(t *testing.T) {
+	f := repeaterFixture(t, "admin@example.org")
+	admin := f.registerAndActivate(t, "admin@example.org", "Admin", pw)
+	alice := f.registerAndActivate(t, "alice@example.org", "Alice", pw)
+	expectStatus(t, f.do("POST", repPath(rpkA, "claim"), nil, as(alice)), 200)
+
+	w := f.do("GET", "/api/admin/users/"+strconv.FormatInt(alice.me.ID, 10), nil, as(admin))
+	expectStatus(t, w, 200)
+	d := decode[adminUserDetailJSON](t, w)
+	if len(d.RepeaterClaims) != 1 || d.RepeaterClaims[0].Pubkey != rpkA || d.RepeaterClaims[0].ClaimedAt == "" {
+		t.Fatalf("repeaterClaims = %+v", d.RepeaterClaims)
+	}
+	w = f.do("GET", "/api/admin/users/"+strconv.FormatInt(admin.me.ID, 10), nil, as(admin))
+	expectStatus(t, w, 200)
+	if !strings.Contains(w.Body.String(), `"repeaterClaims":[]`) {
+		t.Fatalf("no claims should be []: %s", w.Body.String())
+	}
+	expectStatus(t, f.do("POST", userPath(alice.me.ID, "/disable"), nil, as(admin)), 200)
+	w = f.do("GET", "/api/admin/users/"+strconv.FormatInt(alice.me.ID, 10), nil, as(admin))
+	expectStatus(t, w, 200)
+	d = decode[adminUserDetailJSON](t, w)
+	if len(d.RepeaterClaims) != 1 || d.RepeaterClaims[0].Pubkey != rpkA {
+		t.Fatalf("claims of a disabled user = %+v", d.RepeaterClaims)
+	}
 }

@@ -897,7 +897,7 @@ function loadAdmin(hash, routes, opts) {
   };
   const ctx = { window: { CSAuth }, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String,
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } },
-    confirm() { return true; }, debounce: (opts && opts.debounce) || function (fn) { return fn; },
+    confirm: (opts && opts.confirm) || function () { return true; }, debounce: (opts && opts.debounce) || function (fn) { return fn; },
     escapeHtml: loadEscapeHtml(), console };
   vm.createContext(ctx);
   loadApiBase(ctx);
@@ -946,6 +946,19 @@ test('row and detail rendering escape every dynamic field', () => {
     audit: [{ at: p, action: p, actorUserId: p }] });
   assert(det.indexOf('<img') === -1 && det.indexOf('<i>') === -1, 'raw markup in detail: ' + det);
   assert(det.indexOf('&lt;img src=x onerror=alert(1)&gt;') !== -1);
+});
+
+test('detail lists repeater claims escaped, with a Remove button, or an empty note', () => {
+  const env = adminEnv();
+  const p = '<img src=x onerror=alert(1)>';
+  const pk = 'aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11';
+  const det = env.t.detailHtml({ user: { id: 4, displayName: 'A', email: 'a@x' }, sessions: [], mail: [], audit: [],
+    repeaterClaims: [{ pubkey: pk, claimedAt: p }, { pubkey: p, claimedAt: p }] });
+  assert(det.indexOf('<img') === -1, 'raw markup in claims: ' + det);
+  assert(det.indexOf('href="#/nodes/' + pk + '"') !== -1);
+  assert(det.indexOf('data-act="unclaim" data-id="4" data-pubkey="' + pk + '"') !== -1);
+  const none = env.t.detailHtml({ user: { id: 4, displayName: 'A', email: 'a@x' }, sessions: [], mail: [], audit: [], repeaterClaims: [] });
+  assert(none.indexOf('No repeater claims.') !== -1 && none.indexOf('data-act="unclaim"') === -1);
 });
 
 test('deep link: filters, bouncing and detail id round-trip through the hash', () => {
@@ -1020,6 +1033,26 @@ test('demoting yourself refreshes the session and leaves the page', async () => 
   await tick();
   assert.strictEqual(env.refreshed(), 1);
   assert.strictEqual(env.loc.hash, '#/account');
+});
+
+test('removing a repeater claim asks for confirmation first', async () => {
+  const PKX = 'aa'.repeat(32);
+  const click = (env) => env.els.umPage.handlers.click({ target: { closest: () => ({ getAttribute: (a) => ({ 'data-act': 'unclaim', 'data-id': '7', 'data-pubkey': PKX })[a] }) } });
+  const asked = [];
+  const no = loadAdmin('#/admin?tab=users', () => OK([]), { confirm: (t) => { asked.push(t); return false; } });
+  no.um.mount(no.app);
+  await tick();
+  click(no);
+  await tick();
+  assert.strictEqual(asked.length, 1);
+  assert(/repeater claim/.test(asked[0]));
+  assert(!no.calls.some((c) => c.method === 'DELETE'), 'declined confirm must not delete');
+  const yes = loadAdmin('#/admin?tab=users', () => OK([]), { confirm: () => true });
+  yes.um.mount(yes.app);
+  await tick();
+  click(yes);
+  await tick();
+  assert(yes.calls.some((c) => c.method === 'DELETE' && c.p === '/api/admin/repeaters/' + PKX + '/claims/7'));
 });
 
 test('readHash accepts only numeric ids and known status and role values', () => {

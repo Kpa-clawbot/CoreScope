@@ -16,6 +16,21 @@ type repeaterClaimerJSON struct {
 	ClaimedAt   string `json:"claimedAt"`
 }
 
+// repeaterClaimRefJSON is one claim as seen from the claiming user (admin
+// detail, account export).
+type repeaterClaimRefJSON struct {
+	Pubkey    string `json:"pubkey"`
+	ClaimedAt string `json:"claimedAt"`
+}
+
+func claimRefsJSON(claims []users.RepeaterClaim) []repeaterClaimRefJSON {
+	out := make([]repeaterClaimRefJSON, 0, len(claims))
+	for _, c := range claims {
+		out = append(out, repeaterClaimRefJSON{Pubkey: c.Pubkey, ClaimedAt: rfc3339(c.ClaimedAt)})
+	}
+	return out
+}
+
 type repeaterInfoJSON struct {
 	Pubkey      string                `json:"pubkey"`
 	HeightM     *float64              `json:"heightM"`
@@ -40,6 +55,7 @@ func (s *Server) registerRepeaterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/repeaters/{pubkey}/info", s.withUser(s.handleRepeaterInfoPut)).Methods("PUT")
 	r.HandleFunc("/api/repeaters/{pubkey}/claim", s.withUser(s.handleRepeaterClaim)).Methods("POST")
 	r.HandleFunc("/api/repeaters/{pubkey}/claim", s.withUser(s.handleRepeaterUnclaim)).Methods("DELETE")
+	r.HandleFunc("/api/admin/repeaters/{pubkey}/claims/{userId}", s.withAdmin(s.handleAdminRepeaterUnclaim)).Methods("DELETE")
 }
 
 func stringPtrOrNil(s string) *string {
@@ -322,4 +338,29 @@ func (s *Server) handleRepeaterUnclaim(w http.ResponseWriter, r *http.Request, u
 	}
 	s.auth.auditAsync(idPtr(u.ID), "repeater.unclaim", idPtr(u.ID), map[string]string{"pubkey": pk})
 	s.writeRepeaterInfo(w, pk, u)
+}
+
+func (s *Server) handleAdminRepeaterUnclaim(w http.ResponseWriter, r *http.Request, admin *users.User, _ *users.Session) {
+	pk, err := users.NormalizePubkey(mux.Vars(r)["pubkey"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "pubkey must be 64 hex characters")
+		return
+	}
+	uid, err := strconv.ParseInt(mux.Vars(r)["userId"], 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	err = s.auth.st.UnclaimRepeater(uid, pk)
+	if errors.Is(err, users.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "no such claim")
+		return
+	}
+	if err != nil {
+		log.Printf("[users] admin unclaim repeater %s for user #%d: %v", pk, uid, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	s.auth.auditAsync(idPtr(admin.ID), "repeater.unclaim", idPtr(uid), map[string]string{"pubkey": pk, "by": "admin"})
+	w.WriteHeader(http.StatusNoContent)
 }

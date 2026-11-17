@@ -23,6 +23,7 @@
     ['user.mail.refresh', 'Mail status refreshed'],
     ['user.export', 'Data exports'],
     ['user.backup', 'users.db downloads'],
+    ['repeater.*', 'Repeater info'],
     ['proposal.*', 'Channel proposals'],
     ['notify.*', 'Notification settings']
   ];
