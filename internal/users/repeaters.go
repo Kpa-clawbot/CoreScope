@@ -72,7 +72,11 @@ func ValidateRepeaterEdit(e RepeaterEdit) (RepeaterEdit, error) {
 		}
 		return r
 	}, n)
-	n = strings.TrimSpace(n)
+	lines := strings.Split(n, "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " ")
+	}
+	n = strings.TrimSpace(strings.Join(lines, "\n"))
 	for strings.Contains(n, "\n\n\n") {
 		n = strings.ReplaceAll(n, "\n\n\n", "\n\n")
 	}

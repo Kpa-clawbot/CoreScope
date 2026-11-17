@@ -668,6 +668,11 @@ async function until(fn, label) {
     assert(t.indexOf('<b>x</b>') !== -1, 'notes not literal: ' + t);
     assert(t.indexOf('Last edited by Repeater A') !== -1, 'editor missing: ' + t);
     assert((await userA.locator(riSel + ' .repeater-info-notes b').count()) === 0, 'notes rendered as markup');
+    const notesBox = await userA.locator(riSel + ' .repeater-info-notes').evaluate(function (n) {
+      var cs = getComputedStyle(n);
+      return { maxHeight: cs.maxHeight, overflowY: cs.overflowY };
+    });
+    assert(notesBox.maxHeight !== 'none' && notesBox.overflowY === 'auto', 'long notes are not capped: ' + JSON.stringify(notesBox));
   });
 
   await step('repeater info: A claims after the confirm and the button turns into Unclaim', async () => {

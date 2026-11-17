@@ -59,6 +59,16 @@ func TestValidateRepeaterEdit(t *testing.T) {
 				t.Fatalf("notes = %q", g.Notes)
 			}
 		}},
+		{"notes whitespace-only lines count as blank", RepeaterEdit{Notes: "a\n \n\t\n   \nb"}, false, func(t *testing.T, g RepeaterEdit) {
+			if g.Notes != "a\n\nb" {
+				t.Fatalf("notes = %q", g.Notes)
+			}
+		}},
+		{"notes trailing spaces dropped per line", RepeaterEdit{Notes: "a  \n  b"}, false, func(t *testing.T, g RepeaterEdit) {
+			if g.Notes != "a\n  b" {
+				t.Fatalf("notes = %q", g.Notes)
+			}
+		}},
 		{"notes single newline kept", RepeaterEdit{Notes: "a\nb"}, false, func(t *testing.T, g RepeaterEdit) {
 			if g.Notes != "a\nb" {
 				t.Fatalf("notes = %q", g.Notes)
