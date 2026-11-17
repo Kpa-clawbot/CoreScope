@@ -245,6 +245,11 @@ func routeDescriptions() map[string]routeMeta {
 		// Channels
 		"GET /api/channels":                 {Summary: "List channels", Description: "Returns known mesh channels with message counts. With userManagement.channelProposals.enabled the response also carries approvedChannels: the approved hashtag channel names, oldest approval first, at most maxApproved, listed also before they have traffic.", Tag: "channels"},
 		"GET /api/channels/{hash}/messages": {Summary: "Get channel messages", Description: "Returns messages for a specific channel.", Tag: "channels"},
+		"GET /api/known-channels": {
+			Summary: "Get the community channel catalogue", Tag: "channels", Response: schemaRef("KnownChannelsResponse"),
+			Description: "Returns the cached community channel catalogue without waiting for an upstream fetch. Catalogue entries do not establish observed traffic or successful decryption. An unavailable cache (including disabled fetching) returns 200 with empty entries, an empty source and the zero fetchedAt timestamp. Failed refreshes retain the last successful snapshot. Result order is unspecified. Cache-Control: public, max-age=30 without a snapshot; public, max-age=300 with a snapshot, including an empty catalogue.",
+			QueryParams: []paramMeta{{Name: "region", Type: "string", Description: "Single catalogue region label (not the IATA observer filter), matched by a case-insensitive comparison after trimming whitespace. Omitted or blank returns all entries. Unknown values return an empty entries array; comma-separated values are not expanded."}},
+		},
 
 		// Observers
 		"GET /api/observers":                 {Summary: "List observers", Description: "Returns all known packet observers/gateways. neighbors_report_at (when the latest /neighbors report arrived) and neighbors_count (how many neighbors it named) are present for observers that ever sent one (#2270).", Tag: "observers"},
@@ -493,6 +498,25 @@ func componentSchemas() map[string]interface{} {
 				"node":               str("The queried node's public key."),
 				"neighbors":          map[string]interface{}{"type": "array", "items": schemaRef("NeighborEntry")},
 				"total_observations": map[string]interface{}{"type": "integer"},
+			},
+		},
+		"KnownChannelsResponse": openAPISchema{
+			Type: "object", Required: []string{"fetchedAt", "source", "entries"},
+			Properties: map[string]openAPISchema{
+				"fetchedAt":   {Type: "string", Description: "Server fetch timestamp in RFC3339 form; 0001-01-01T00:00:00Z when no snapshot is available."},
+				"source":      {Type: "string", Description: "Catalogue source URL; empty when no snapshot is available."},
+				"generatedAt": {Type: "string", Description: "Upstream generation value, copied verbatim without timestamp validation; omitted when empty."},
+				"license":     {Type: "string", Description: "Upstream license text, copied verbatim; omitted when empty."},
+				"entries": {Type: "array", Description: "Catalogue entries for the selected region, or all entries without a filter. An empty catalogue, unavailable cache or unmatched region yields an empty array.", Items: &openAPISchema{
+					Type: "object", Required: []string{"channel", "region"},
+					Properties: map[string]openAPISchema{
+						"channel":     {Type: "string", Description: "Upstream channel name with surrounding whitespace trimmed. Empty names are skipped; a # prefix is preserved when supplied."},
+						"region":      {Type: "string", Description: "Upstream region label, trimmed and lowercased. May be empty or an arbitrary label; no country-code validation is applied."},
+						"description": {Type: "string", Description: "Upstream description, copied verbatim; omitted when empty."},
+						"key":         {Type: "string", Description: "Upstream channel key, copied verbatim without format validation; omitted when empty."},
+						"regionName":  {Type: "string", Description: "Upstream display name for the region, copied verbatim; omitted when empty."},
+					},
+				}},
 			},
 		},
 	}
