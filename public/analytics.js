@@ -4111,7 +4111,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
               ${severityBadge(count)}
             </div>
             ${count === 0
-              ? `<div class="text-muted" style="font-size:0.85em">No matches among loaded repeaters${isFullKey ? ' (excluding the entered key)' : ''}.</div>`
+              ? `<div class="text-muted" style="font-size:0.85em">${matches.length ? 'The entered key is the only match among loaded repeaters.' : 'No matches among loaded repeaters.'}</div>`
               : `<div style="font-size:0.85em;max-height:140px;overflow-y:auto">${colliders.map(nodeEntry).join('')}</div>`}
           </div>`;
       });
