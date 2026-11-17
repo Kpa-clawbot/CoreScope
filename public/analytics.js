@@ -3795,7 +3795,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const nodes = allNodes.filter(n => n.role === 'repeater');
 
     if (nodes.length === 0) {
-      el.innerHTML = `<div class="analytics-card"><p class="text-muted">No repeaters in the network yet. Any prefix is available!</p></div>`;
+      el.innerHTML = `<div class="analytics-card"><p class="text-muted">No repeaters loaded for the current view.</p></div>`;
       return;
     }
 
@@ -4111,7 +4111,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
               ${severityBadge(count)}
             </div>
             ${count === 0
-              ? '<div class="text-muted" style="font-size:0.85em">No existing nodes use this prefix.</div>'
+              ? `<div class="text-muted" style="font-size:0.85em">No matches among loaded repeaters${isFullKey ? ' (excluding the entered key)' : ''}.</div>`
               : `<div style="font-size:0.85em;max-height:140px;overflow-y:auto">${colliders.map(nodeEntry).join('')}</div>`}
           </div>`;
       });
