@@ -21,6 +21,15 @@ import (
 // It lives in the ingestor because it writes: the server holds a mode=ro
 // handle (#1283) and its copy of this pass could never commit. The server
 // reads the _async_migrations row to answer /api/stats.hashMigrationComplete.
+//
+// A server that loaded these rows before the pass keeps them as they were
+// until it restarts: the old hashes, the merged duplicates, and survivors
+// without the observations they gained. That is deliberate. tx_rewrite_feed
+// cannot carry a merge (its rows cascade away with the deleted duplicate, and
+// the server's tail refreshes decoded_json and scope_name only), and removing
+// a transmission from every in-memory index is hot-path code this one-time
+// pass over pre-#787 rows does not justify. The summary line tells the
+// operator to restart instead.
 
 // contentHashMigrationName is the _async_migrations row the server reads.
 const contentHashMigrationName = "content_hash_payload_bits_v1"
@@ -118,10 +127,23 @@ func (s *Store) migrateContentHashes(ctx context.Context, batchSize int, maxID i
 		// Let a queued ingest writer take the lock before the next batch.
 		runtime.Gosched()
 	}
-	if rewritten > 0 || merged > 0 {
-		log.Printf("[hash-migrate] rewrote %d content hashes, merged %d duplicate transmissions", rewritten, merged)
+	if msg := contentHashMigrationSummary(rewritten, merged); msg != "" {
+		log.Print(msg)
 	}
 	return rewritten, merged, nil
+}
+
+// contentHashMigrationSummary is the log line for a pass that changed rows, or
+// "" for one that changed nothing. It tells the operator to restart servers,
+// because nothing else brings a running server's memory up to date (see the
+// file comment).
+func contentHashMigrationSummary(rewritten, merged int) string {
+	if rewritten == 0 && merged == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[hash-migrate] rewrote %d content hashes, merged %d duplicate transmissions. "+
+		"A server that was already running keeps the old hashes and the merged duplicates in memory: "+
+		"restart servers to pick up the change", rewritten, merged)
 }
 
 // readStaleContentHashes scans the next batch of transmissions after cursor,
