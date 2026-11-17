@@ -65,7 +65,7 @@ test('notes render as text, never markup', () => {
   assert(h.includes('&lt;img'), h);
   assert(!h.includes('<img'), h);
   assert(h.includes('repeater-info-notes'));
-  assert(src('public/style.css').includes('.repeater-info-notes { white-space: pre-wrap; }'));
+  assert(src('public/style.css').includes('.repeater-info-notes { white-space: pre-wrap; max-height: 12em; overflow-y: auto; }'));
 });
 test('display names are escaped', () => {
   const h = T.viewHtml(INFO({ claimers: [{ displayName: XSS }] }), USER);
