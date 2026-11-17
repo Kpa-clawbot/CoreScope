@@ -444,10 +444,10 @@
     if (status === 'active') {
       // #2260: no "Last relayed" here. last_relayed also counts 1-byte prefix
       // matches of other repeaters; the certain relays are in last heard.
-      explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'unknown');
+      explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampHtml(lastHeardTime) : 'unknown');
     } else if (status === 'uncertain') {
-      explanation = 'Last certainly heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'never') +
-        ' \u2014 its shared hop prefix was last in a path ' + renderNodeTimestampText(n.last_relayed) + ', possibly another node';
+      explanation = 'Last certainly heard ' + (lastHeardTime ? renderNodeTimestampHtml(lastHeardTime) : 'never') +
+        ' \u2014 its shared hop prefix was last in a path ' + renderNodeTimestampHtml(n.last_relayed) + ', possibly another node';
     } else {
       const ageDays = Math.floor(statusAge / 86400000);
       const ageHours = Math.floor(statusAge / 3600000);

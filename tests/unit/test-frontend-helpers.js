@@ -482,6 +482,54 @@ console.log('\n=== nodes.js: getStatusTooltip / getStatusInfo (extracted) ===');
     });
   }
 
+  // #1154: exercise the real timestamp formatter in each status explanation.
+  const timestampCtx = makeNodesSandbox();
+  timestampCtx.Date = class extends Date { static now() { return Date.parse('2025-06-10T12:00:00Z'); } };
+  timestampCtx.localStorage.setItem('meshcore-timestamp-mode', 'ago');
+  timestampCtx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+  timestampCtx.localStorage.setItem('meshcore-timestamp-format', 'iso');
+  const statusInfo = timestampCtx.window._nodesGetStatusInfo;
+  const timestampSpans = html => Array.from(html.matchAll(/<span class="timestamp-text" title="([^"]*)">([^<]*)<\/span>/g), m => [m[1], m[2]]);
+  const certain = '2025-06-10T11:55:00Z', old = '2025-06-06T12:00:00Z', relayed = '2025-06-10T11:59:00Z';
+
+  test('active status explanation retains the newest certain timestamp and exact tooltip (#1154)', () => {
+    const info = statusInfo({ role: 'repeater', _lastHeard: old, last_heard: certain, last_seen: old, last_relayed: relayed });
+    assert.strictEqual(info.status, 'active');
+    assert.ok(info.statusLabel.includes('Active'));
+    assert.strictEqual(info.lastHeardMs, Date.parse(certain));
+    assert.strictEqual(info.explanation.replace(/<[^>]*>/g, ''), 'Last heard 5m ago');
+    assert.deepStrictEqual(timestampSpans(info.explanation), [['2025-06-10 11:55:00', '5m ago']]);
+  });
+
+  test('uncertain status explanation retains separate certain and attributed timestamps (#1154)', () => {
+    const info = statusInfo({ role: 'repeater', last_heard: old, last_relayed: relayed });
+    assert.strictEqual(info.status, 'uncertain');
+    assert.ok(info.statusLabel.includes('Uncertain'));
+    assert.strictEqual(info.lastHeardMs, Date.parse(old));
+    assert.strictEqual(info.explanation.replace(/<[^>]*>/g, ''),
+      'Last certainly heard 4d ago — its shared hop prefix was last in a path 1m ago, possibly another node');
+    assert.deepStrictEqual(timestampSpans(info.explanation), [
+      ['2025-06-06 12:00:00', '4d ago'], ['2025-06-10 11:59:00', '1m ago'],
+    ]);
+  });
+
+  test('uncertain status without certain activity keeps never and only the attributed timestamp (#1154)', () => {
+    const info = statusInfo({ role: 'room', last_seen: null, last_heard: 'invalid', last_relayed: relayed });
+    assert.strictEqual(info.status, 'uncertain');
+    assert.strictEqual(info.lastHeardMs, 0);
+    assert.strictEqual(info.explanation.replace(/<[^>]*>/g, ''),
+      'Last certainly heard never — its shared hop prefix was last in a path 1m ago, possibly another node');
+    assert.deepStrictEqual(timestampSpans(info.explanation), [['2025-06-10 11:59:00', '1m ago']]);
+  });
+
+  test('status explanation preserves the future clock warning and original date (#1154)', () => {
+    const info = statusInfo({ role: 'repeater', last_heard: '2025-06-10T12:05:00Z', last_relayed: relayed });
+    assert.strictEqual(info.status, 'active');
+    assert.deepStrictEqual(timestampSpans(info.explanation), [['in 5m', '2025-06-10 12:05:00']]);
+    assert.strictEqual((info.explanation.match(/class="timestamp-future-icon"/g) || []).length, 1);
+    assert.ok(info.explanation.includes('Timestamp is in the future — node clock may be skewed'));
+  });
+
   if (ex.renderNodeBadges) {
     test('renderNodeBadges includes role', () => {
       const html = ex.renderNodeBadges({ role: 'repeater', public_key: 'abcdef1234', last_heard: new Date().toISOString() }, '#ff0000');
