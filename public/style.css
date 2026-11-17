@@ -5967,7 +5967,7 @@ body.embed #app.app-fixed {
 /* Repeater info section (node detail views) */
 #node-repeater-info, #node-repeater-info-pane { font-size: 13px; }
 .repeater-info-list { margin: 0 0 8px; }
-.repeater-info-notes { white-space: pre-wrap; }
+.repeater-info-notes { white-space: pre-wrap; max-height: 12em; overflow-y: auto; }
 .repeater-info-row { display: flex; gap: 8px; padding: 2px 0; }
 .repeater-info-row dt { flex: 0 0 120px; color: var(--text-muted); }
 .repeater-info-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }

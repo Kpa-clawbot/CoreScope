@@ -142,11 +142,13 @@ func (s *Server) handleRepeaterInfoGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRepeaterInfoList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.auth.st.ListRepeaterInfo()
 	if err != nil {
+		log.Printf("[users] list repeater info: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	claims, err := s.auth.st.AllRepeaterClaims()
 	if err != nil {
+		log.Printf("[users] list repeater claims: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
