@@ -3493,11 +3493,9 @@
     selectedId = id;
     selectedObservationId = obsRowId || null;
     const obsParam = selectedObservationId ? `?obs=${selectedObservationId}` : '';
-    if (hash) {
-      history.replaceState(null, '', `#/packets/${hash}${obsParam}`);
-    } else {
-      history.replaceState(null, '', `#/packets/${id}${obsParam}`);
-    }
+    const openingRoute = `#/packets/${hash || id}`;
+    let canonicalRoute;
+    history.replaceState(null, '', openingRoute + obsParam);
     updatePacketsUrl();
     renderTableRows();
     const isMobileNow = window.innerWidth <= 640;
@@ -3529,8 +3527,9 @@
               || document.querySelector('#pktTable tbody tr[data-id="' + esc + '"]');
         },
         onClose: function () {
-          // Only closing this preview returns to the list; keep any new route.
-          if (location.hash.split('?')[0] === '#/packets/' + (hash || id)) {
+          // Observation links use the resolved packet hash even when opened by an alias.
+          const route = location.hash.split('?')[0];
+          if (route === openingRoute || route === canonicalRoute) {
             history.replaceState(null, '', '#/packets');
             if (window.setRouteTitle) window.setRouteTitle('packets');
           }
@@ -3574,6 +3573,7 @@
       const data = prefetchedData || await api(hash ? `/packets/${hash}` : `/packets/${id}`);
       // Resolve path hops for detail view
       const pkt = data.packet;
+      canonicalRoute = `#/packets/${pkt.hash || pkt.id}`;
       try {
         await resolveHopsForPackets([pkt]);
       } catch {}
