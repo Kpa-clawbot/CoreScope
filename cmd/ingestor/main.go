@@ -197,13 +197,9 @@ func main() {
 				topics = []string{"meshcore/#"}
 			}
 			for _, t := range topics {
-				token := c.Subscribe(t, 0, nil)
-				token.Wait()
-				if token.Error() != nil {
-					log.Printf("MQTT [%s] subscribe error for %s: %v", tag, t, token.Error())
-				} else {
-					log.Printf("MQTT [%s] subscribed to %s", tag, t)
-				}
+				// Checks SUBACK return codes and retries rejected
+				// subscriptions (see subscribe_retry.go).
+				subscribeWithRetry(c, tag, t)
 			}
 		})
 
