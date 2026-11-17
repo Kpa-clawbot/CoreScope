@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -285,5 +287,26 @@ func TestContentHashMigrationScheduledOnOpen(t *testing.T) {
 	}
 	if got := txHash(t, store, fresh); got != "afterboot0000000" {
 		t.Errorf("row inserted after boot was touched: %s", got)
+	}
+}
+
+// A running server cannot follow this pass (no feed carries a hash change or a
+// merge), so the summary must send the operator to restart it. A pass that
+// changed nothing must stay silent: it runs on every boot.
+func TestContentHashMigrationSummary(t *testing.T) {
+	if got := contentHashMigrationSummary(0, 0); got != "" {
+		t.Errorf("no-op pass logged %q, want nothing", got)
+	}
+	for _, c := range []struct{ rewritten, merged int }{{3, 0}, {0, 2}, {3, 2}} {
+		got := contentHashMigrationSummary(c.rewritten, c.merged)
+		for _, want := range []string{
+			fmt.Sprintf("rewrote %d content hashes", c.rewritten),
+			fmt.Sprintf("merged %d duplicate transmissions", c.merged),
+			"restart servers",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("summary(%d, %d) = %q, missing %q", c.rewritten, c.merged, got, want)
+			}
+		}
 	}
 }
