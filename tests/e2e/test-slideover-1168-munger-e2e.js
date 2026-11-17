@@ -231,8 +231,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       await route.fulfill({ response, json: detail });
     });
 
-    const keys = [['numeric ID', packet.id], ['uppercase hash', packet.hash.toUpperCase()], ['lowercase hash', packet.hash]];
-    for (const [kind, key] of keys) {
+    const aliases = [['numeric ID', packet.id], ['uppercase hash', packet.hash.toUpperCase()]];
+    for (const [kind, key] of [...aliases, ['lowercase hash', packet.hash]]) {
       await step(kind + ' preview returns to the list on Escape after selecting an observation', async () => {
         await page.goto(BASE + '/#/packets/' + key);
         const row = page.locator('.slide-over-panel .detail-obs-row').nth(1);
@@ -251,8 +251,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       });
     }
 
+    const detailFor = hash => page.locator('.slide-over-panel .copy-link-btn[data-packet-hash="' + hash + '"]');
     await step('Back from an open packet preview preserves the other packet detail', async () => {
-      const detailFor = hash => page.locator('.slide-over-panel .copy-link-btn[data-packet-hash="' + hash + '"]');
       await page.goto(BASE + '/#/packets/' + other.hash);
       await detailFor(other.hash).waitFor();
       const previous = new URL(page.url()).hash;
@@ -266,6 +266,43 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       assert(after === previous && await page.title() === title,
         'Back must retain the previous packet URL and title: ' + after);
     });
+
+    for (const [kind, key] of [...aliases, ['different packet', other.hash]]) {
+      await step('Back from ' + kind + ' restores the bookmarked observation', async () => {
+        await page.goto(BASE + '/#/home');
+        await page.locator('.slide-over-panel').waitFor({ state: 'detached' });
+        await page.goto(BASE + '/#/packets/' + packet.hash);
+        const second = page.locator('.slide-over-panel .detail-obs-row').nth(1);
+        const obs = await second.getAttribute('data-obs-id');
+        await second.click();
+        await page.locator('.slide-over-panel .observation-current[data-obs-id="' + obs + '"]').waitFor();
+        const previous = new URL(page.url()).hash;
+        const title = await page.title();
+
+        // Aliases render the same packet. Wait for each old detail element
+        // to detach so the checks read the replacement preview.
+        const original = await detailFor(packet.hash).elementHandle();
+        await page.goto(BASE + '/#/packets/' + key);
+        await original.waitForElementState('hidden');
+        const away = await detailFor(key === other.hash ? other.hash : packet.hash).elementHandle();
+        const historyLength = await page.evaluate(() => history.length);
+        await page.goBack();
+        await away.waitForElementState('hidden');
+        await page.evaluate(() => {
+          window.__copiedPacketLink = null;
+          navigator.clipboard.writeText = async text => { window.__copiedPacketLink = new URL(text).hash; };
+        });
+        await detailFor(packet.hash).click();
+        const after = await page.evaluate(() => ({
+          hash: location.hash, title: document.title, length: history.length,
+          obs: document.querySelector('.slide-over-panel .observation-current')?.dataset.obsId,
+          copied: window.__copiedPacketLink,
+        }));
+        assert(after.hash === previous && after.title === title && after.length === historyLength &&
+          after.obs === obs && after.copied === '#/packets/' + packet.hash + '?obs=' + obs,
+          'Back must restore the URL, title, selected observation and copy link: ' + JSON.stringify(after));
+      });
+    }
 
     await ctx.close();
   }
