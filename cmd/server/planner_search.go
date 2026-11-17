@@ -894,7 +894,7 @@ func runRelaySearch(ctx context.Context, v terrainView, nodes []plannerNode, p P
 
 	lp := losParams{FreqMHz: p.FrequencyMHz, KFactor: p.KFactor}
 	resp := PlannerRelayResponse{
-		Direct:   relayLink(v, a, b, D, lp, p.AntennaAM, p.AntennaBM),
+		Direct:   relayLink(v, a, b, D, lp, p.AntennaAM, p.AntennaBM, true),
 		Existing: relayOptions(v, nodes, existing, a, b, lp, p, "existing", p.ExistingAntennaM),
 		Open:     relayOptions(v, nodes, open, a, b, lp, p, "open", p.RelayAntennaM),
 		Params:   p,
@@ -985,24 +985,24 @@ func relayUsable(list []relayCand) []relayCand {
 	return slices.DeleteFunc(list, func(c relayCand) bool { return c.pct < 0 })
 }
 
-// relayLink is a reported leg: the shared LOS summary with its profile. A
-// leg with a sample that has no terrain is not measured: Error no_terrain,
-// no verdict and no profile, never a verdict read from 0 m.
-func relayLink(v terrainView, a, b geoPoint, d float64, lp losParams, ha, hb float64) PlannerLink {
+// relayLink is a reported leg: the shared LOS summary, with its profile when
+// withElev. A leg with a sample that has no terrain is not measured: Error
+// no_terrain, no verdict and no profile, never a verdict read from 0 m.
+func relayLink(v terrainView, a, b geoPoint, d float64, lp losParams, ha, hb float64, withElev bool) PlannerLink {
 	lp.AntennaAM, lp.AntennaBM = ha, hb
 	elev, ok := sampleTerrainProfile(v, a, b, planProfileSamples(d))
 	if !ok {
 		return PlannerLink{DistanceKm: losRound(math.Max(d, 0), 1000), Error: plannerErrNoTerrain}
 	}
-	return linkFromProfile(elev, d, lp, true)
+	return linkFromProfile(elev, d, lp, withElev)
 }
 
 func relayOptions(v terrainView, nodes []plannerNode, list []relayCand, a, b geoPoint, lp losParams,
 	p PlannerRelayParams, kind string, hR float64) []PlannerRelayOption {
 	out := make([]PlannerRelayOption, 0, len(list))
 	for _, c := range list {
-		legA := relayLink(v, a, c.pt, c.dA, lp, p.AntennaAM, hR)
-		legB := relayLink(v, c.pt, b, c.dB, lp, hR, p.AntennaBM)
+		legA := relayLink(v, a, c.pt, c.dA, lp, p.AntennaAM, hR, true)
+		legB := relayLink(v, c.pt, b, c.dB, lp, hR, p.AntennaBM, true)
 		if legA.Error != "" || legB.Error != "" {
 			// The search measured both legs, so only an interior sample an
 			// ulp across the edge of a tile without data gets here (planArc
@@ -1065,20 +1065,30 @@ func newPlanLinkEval(ctx context.Context, v terrainView, freqMHz, kFactor float6
 // (outside the view, or a tile without data: never read as 0 m) or ctx was
 // cancelled (e.err is then set).
 func (e *planLinkEval) clearance(a, b geoPoint, distKm, ha, hb, floor float64) (float64, bool) {
+	worst, _, ok := e.clearanceWalk(a, b, distKm, ha, hb, floor, 0, false)
+	return worst, ok
+}
+
+// clearanceWalk is the walk behind clearance. With two it also returns
+// worst2, the worst clearance of the same path with the receiver hb2 metres
+// above ground, from the same samples: the elevation lookups and the
+// great-circle trigonometry, which dominate, are paid once. floor applies to
+// hb only, so a caller that wants worst2 over every sample passes −Inf.
+func (e *planLinkEval) clearanceWalk(a, b geoPoint, distKm, ha, hb, floor, hb2 float64, two bool) (worst, worst2 float64, ok bool) {
 	if e.err != nil {
-		return 0, false
+		return 0, 0, false
 	}
 	if e.profiles%planCtxEvery == 0 {
 		if err := e.ctx.Err(); err != nil {
 			e.err = err
-			return 0, false
+			return 0, 0, false
 		}
 	}
 	e.profiles++
 	eA, okA := e.v.ElevationAt(a.Lat, a.Lon)
 	eB, okB := e.v.ElevationAt(b.Lat, b.Lon)
 	if !okA || !okB || !losFinite(eA) || !losFinite(eB) {
-		return 0, false
+		return 0, 0, false
 	}
 	n := planProfileSamples(distKm)
 	arc := newPlanArc(a, b, distKm)
@@ -1090,8 +1100,8 @@ func (e *planLinkEval) clearance(a, b geoPoint, distKm, ha, hb, floor float64) (
 	// invariants are hoisted.
 	last := float64(n - 1)
 	fDen := D * e.freq / 1000
-	yA, yB := eA+ha, eB+hb
-	worst := math.Inf(1)
+	yA, yB, yB2 := eA+ha, eB+hb, eB+hb2
+	worst, worst2 = math.Inf(1), math.Inf(1)
 	for s := planStride0; s >= 1; s /= 2 {
 		i, step := s, 2*s // odd multiples of s: the points the coarser passes skipped
 		if s == planStride0 {
@@ -1102,20 +1112,25 @@ func (e *planLinkEval) clearance(a, b geoPoint, distKm, ha, hb, floor float64) (
 			lat, lon := arc.at(t)
 			el, ok := e.v.ElevationAt(lat, lon)
 			if !ok || !losFinite(el) {
-				return 0, false
+				return 0, 0, false
 			}
 			d := t * D
 			tm := el + d*(D-d)/e.bulgeDen*1000
-			los := yA + (yB-yA)*t
 			f1 := 17.32 * math.Sqrt(math.Max(d*(D-d), 1e-9)/fDen)
+			if two {
+				if c := (yA + (yB2-yA)*t - tm) / f1; c < worst2 {
+					worst2 = c
+				}
+			}
+			los := yA + (yB-yA)*t
 			if c := (los - tm) / f1; c < worst {
 				if worst = c; worst < floor {
-					return worst, false
+					return worst, worst2, false
 				}
 			}
 		}
 	}
-	return worst, true
+	return worst, worst2, true
 }
 
 // planArc is greatCircleSamples for one point at a time: the same formula

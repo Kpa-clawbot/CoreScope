@@ -98,6 +98,7 @@ node tests/unit/test-route-view-ux-hints.js
 node tests/unit/test-route-los.js
 node tests/unit/test-planner-los-vectors.js
 node tests/unit/test-planner-area.js
+node tests/unit/test-planner-coverage.js
 node tests/unit/test-planner.js
 node tests/unit/test-issue-1418-edge-weights.js
 node tests/unit/test-issue-1418-polish-review.js

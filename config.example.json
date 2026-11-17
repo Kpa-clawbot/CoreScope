@@ -386,14 +386,15 @@
     "kFactor": 1.333
   },
   "planner": {
-    "_comment": "Repeater planner at #/tools/planner (line of sight between points, best relay site, backbone site suggestions for an area). OPT-IN. Terrain comes from the terrain block (SRTM tiles shared with route LOS). Size limits: maxAreaKm is the largest coverage box side (20-250), nodeMarginKm how far outside the box repeaters still count (10-60), maxLegKm the longest profile/relay leg (10-200). Raise them for sparse regions; the terrain one request may load grows with them (the startup log prints the tile counts and memory). defaultRangeKm must be one of 10,15,20,30,40,50,60 and at most maxLegKm. Antenna heights are the defaults viewers can change. Frequency and k-factor come from the los block (set los.frequencyMhz even if route LOS stays off).",
+    "_comment": "Repeater planner at #/tools/planner (line of sight between points, best relay site, backbone site suggestions for an area). OPT-IN. Terrain comes from the terrain block (SRTM tiles shared with route LOS). Size limits: maxAreaKm is the largest coverage box side (20-250), nodeMarginKm how far outside the box repeaters still count (10-60), maxLegKm the longest profile/relay leg (10-200). Raise them for sparse regions; the terrain one request may load grows with them (the startup log prints the tile counts and memory). defaultRangeKm must be one of 10,15,20,30,40,50,60 and at most maxLegKm. Antenna heights are the defaults viewers can change. Frequency and k-factor come from the los block (set los.frequencyMhz even if route LOS stays off). userReach: the Users layer of the Coverage tab, P(heard) = 1/(1+exp((ln d - ln d50Km)/slope)) for a handheld at 1.5 m; defaults fitted on 41 Belgian repeaters against drive-test receptions (2026-10); set your own if you have measurements.",
     "enabled": false,
     "defaultRangeKm": 30,
     "newAntennaM": 10,
     "existingAntennaM": 5,
     "maxAreaKm": 100,
     "nodeMarginKm": 30,
-    "maxLegKm": 100
+    "maxLegKm": 100,
+    "userReach": { "d50Km": 2.7, "slope": 0.30 }
   },
   "terrain": {
     "_comment": "SRTM terrain shared by route line-of-sight (los) and the repeater planner, so both read the same tiles and give a leg the same verdict. Used only while los.enabled or planner.enabled is true. 1° tiles (~5.6 MB each) are fetched on demand into server memory only (no disk, no DB); downloads are budgeted at 20 tiles/min, 200/h for both features together. tileUrl: base of an SRTM skadi tile tree (<tileUrl>/N30/N30W098.hgt.gz), https without a query; the default is AWS Open Data. tileCacheTiles caps resident tiles (~2.9 MB each), 4-200; the cache never holds fewer than the largest single load of an enabled feature (16 tiles for route LOS, 12 for the planner at its default sizes), so a smaller value is raised at startup.",
