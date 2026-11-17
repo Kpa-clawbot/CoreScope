@@ -140,9 +140,11 @@
         '<label class="mc-pa-check"><input type="radio" name="mc-pl-cov-layer" data-f="layer" value="repeaters"> Repeaters</label>' +
       '</fieldset>' +
       '<div data-f="rxWrap">' + height('rx', 'Repeaters at (m)') + '</div>' +
-      '<button type="button" class="btn mc-pa-primary" data-act="run">Compute coverage</button>' +
-      '<div data-f="progress"></div>' +
-      '<div data-f="outdated"></div>' +
+      '<div class="mc-pl-cov-actions">' +
+        '<button type="button" class="btn mc-pa-primary" data-act="run">Compute coverage</button>' +
+        '<div data-f="progress"></div>' +
+        '<div data-f="outdated"></div>' +
+      '</div>' +
       '<div data-f="error"></div>' +
       '<div data-f="legend"></div>' +
       '<div data-f="results"></div>' +

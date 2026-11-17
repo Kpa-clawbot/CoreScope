@@ -27,3 +27,10 @@
 .leaflet-overlay-pane path.mc-pl-cov-node-1 { fill: var(--pl-cov-rep-1); }
 .leaflet-overlay-pane path.mc-pl-cov-node-2 { fill: var(--pl-cov-rep-2); }
 .leaflet-overlay-pane path.mc-pl-cov-node-3 { fill: var(--pl-cov-rep-3); }
+
+.mc-pl-cov-actions { display: flex; flex-direction: column; gap: 12px; }
+/* The phone bottom sheet shows about 300 px of the panel: keep Compute and
+   the outdated note in view while the inputs above it are edited. */
+@media (max-width: 767px) {
+  .mc-pl-cov-actions { position: sticky; bottom: 0; z-index: 1; padding: 8px 0; background: var(--surface-1); }
+}
