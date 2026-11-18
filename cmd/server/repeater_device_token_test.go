@@ -307,3 +307,29 @@ func TestRepeaterCookieWriteStillNeedsCSRF(t *testing.T) {
 		t.Fatalf("claims = %+v", c)
 	}
 }
+
+// My account, Devices tells an app token's scopes apart from CoreDrive RX.
+func TestAccountSessionsListScopes(t *testing.T) {
+	f := newAuthFixture(t)
+	alice := f.registerAndActivate(t, "alice@example.org", "Alice", pw)
+	f.deviceToken(t, "alice@example.org", pw, "RX")
+	f.scopedToken(t, "alice@example.org", "iPhone", deviceScopeRepeaterClaim, deviceScopeRepeaterEdit)
+	w := f.do("GET", "/api/account/sessions", nil, as(alice))
+	expectStatus(t, w, http.StatusOK)
+	got := map[string][]string{}
+	for _, s := range decode[[]sessionJSON](t, w) {
+		got[s.Kind+":"+s.Label] = s.Scopes
+	}
+	if s, ok := got["web:"]; !ok || s != nil {
+		t.Errorf("web session scopes = %v (present %v), want none", s, ok)
+	}
+	if s := got["device:RX"]; !slices.Equal(s, []string{deviceScopeRX}) {
+		t.Errorf("RX scopes = %v", s)
+	}
+	if s := got["device:iPhone"]; !slices.Equal(s, []string{deviceScopeRepeaterClaim, deviceScopeRepeaterEdit}) {
+		t.Errorf("app scopes = %v", s)
+	}
+	if strings.Contains(w.Body.String(), `"scopes":null`) {
+		t.Errorf("web session has a null scopes field: %s", w.Body.String())
+	}
+}
