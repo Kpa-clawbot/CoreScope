@@ -55,6 +55,7 @@ func (s *Server) registerRepeaterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/repeaters/{pubkey}/info", s.withUser(s.handleRepeaterInfoPut)).Methods("PUT")
 	r.HandleFunc("/api/repeaters/{pubkey}/claim", s.withUser(s.handleRepeaterClaim)).Methods("POST")
 	r.HandleFunc("/api/repeaters/{pubkey}/claim", s.withUser(s.handleRepeaterUnclaim)).Methods("DELETE")
+	r.HandleFunc("/api/account/repeaters", s.withUser(s.handleMyRepeaters)).Methods("GET")
 	r.HandleFunc("/api/admin/repeaters/{pubkey}/claims/{userId}", s.withAdmin(s.handleAdminRepeaterUnclaim)).Methods("DELETE")
 }
 

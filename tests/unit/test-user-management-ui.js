@@ -426,6 +426,38 @@ test('device tokens render as CoreDrive RX with a marker and keep their logout b
   assert(h.indexOf('data-sess="2"') !== -1 && h.indexOf('data-sess="3"') !== -1, 'device rows lost their logout button');
 });
 
+test('my repeaters: silent ones first, escaped, with status, co-maintainers and Unclaim', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const recent = new Date(Date.now() - 3600 * 1000).toISOString();
+  const old = new Date(Date.now() - 10 * 86400 * 1000).toISOString();
+  const pkOk = 'aa'.repeat(32), pkOld = 'bb'.repeat(32), pkGone = 'cc'.repeat(32), pkNever = 'dd'.repeat(32);
+  const h = env.t.myRepeatersHtml([
+    { pubkey: pkOk, name: 'Hill <b>', known: true, role: 'repeater', claimedAt: '2026-11-01T00:00:00Z', lastHeard: recent, status: 'active', comaintainers: ['Bob', '<i>Eve</i>'] },
+    { pubkey: pkOld, name: 'Tower', known: true, role: 'repeater', claimedAt: '2026-11-01T00:00:00Z', lastHeard: old, status: null, comaintainers: [] },
+    { pubkey: pkNever, name: '', known: true, role: 'repeater', claimedAt: '2026-11-01T00:00:00Z', lastHeard: null, status: null, comaintainers: [] },
+    { pubkey: pkGone, name: '', known: false, role: '', claimedAt: '2026-11-01T00:00:00Z', lastHeard: null, status: null, comaintainers: [] }]);
+  assert(h.indexOf('<b>') === -1 && h.indexOf('<i>') === -1, 'raw tag: ' + h);
+  const order = (h.match(/data-pubkey="([0-9a-f]+)"/g) || []).map(x => x.slice(13, 15));
+  assert.deepStrictEqual(order, ['cc', 'bb', 'dd', 'aa'], 'gone, then silent (input order), then heard: ' + order);
+  assert(h.indexOf('data-health="gone"') !== -1 && h.indexOf('no longer in the database') !== -1, 'departed row: ' + h);
+  assert(h.indexOf('data-pubkey="' + pkOld + '" data-health="stale"') !== -1 && h.indexOf('silent, last heard') !== -1, 'stale row: ' + h);
+  assert(h.indexOf('never heard') !== -1, 'never-heard row: ' + h);
+  assert(h.indexOf('data-pubkey="' + pkOk + '" data-health="active"') !== -1 && h.indexOf('um-status-active') !== -1, 'heard row: ' + h);
+  assert(h.indexOf('href="#/nodes/' + pkOk + '"') !== -1 && h.indexOf('Hill &lt;b&gt;') !== -1, 'node link: ' + h);
+  assert(h.indexOf('>' + pkNever.slice(0, 12) + '…</a>') !== -1, 'unnamed row does not fall back to the short pubkey: ' + h);
+  assert(h.indexOf('status active') !== -1 && (h.match(/no details yet/g) || []).length === 3, 'status lines: ' + h);
+  assert(h.indexOf('also maintained by Bob, &lt;i&gt;Eve&lt;/i&gt;') !== -1, 'co-maintainers: ' + h);
+  assert.strictEqual((h.match(/data-unclaim=/g) || []).length, 4, 'every row has Unclaim');
+});
+
+test('my repeaters empty state explains how to claim', () => {
+  const env = loadAccount('#/account', () => ({}));
+  for (const list of [[], null, undefined]) {
+    const h = env.t.myRepeatersHtml(list);
+    assert(h.indexOf('id="myRepEmpty"') !== -1 && h.indexOf('Claim') !== -1 && h.indexOf('data-unclaim') === -1, h);
+  }
+});
+
 test('companions list escapes fields, shortens the pubkey and says never without a reception', () => {
   const env = loadAccount('#/account', () => ({}));
   const pk = 'ab'.repeat(32);

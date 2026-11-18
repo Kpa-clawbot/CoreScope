@@ -343,6 +343,10 @@ enabled.
   but hidden and do not count, so a repeater whose only claimer is disabled is open again.
 - **Audit log:** edits are recorded as `repeater.edit` (with the old and new value of each
   changed field), claims as `repeater.claim` and `repeater.unclaim`.
+- **My repeaters:** *My account, My repeaters* lists the repeaters you claimed, silent ones
+  first: when each was last heard (by the same rule as the node pages), its saved status, who
+  else maintains it, and an *Unclaim* button. A repeater that left the analyzer database stays
+  listed until you unclaim it. Deep link: `#/account?section=repeaters`.
 - **Removing a claim:** *Admin, Users*, open the user, *Remove* next to the claim. Admins use
   this when a claimer left or claimed a repeater that is not theirs.
 
