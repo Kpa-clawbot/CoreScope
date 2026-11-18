@@ -113,8 +113,8 @@ jobs:
   # introduce a data race here, and paying for the check on every PR is what
   # gets a check switched off again.
   #
-  # The server has -race in its own step already; this closes the same gap for
-  # the ingestor, which carries an atomic.Pointer snapshot (the region key
+  # The server runs -race in the server-race-shard jobs; this closes the same
+  # gap for the ingestor, which carries an atomic.Pointer snapshot (the region key
   # set) whose safety is an argument until something checks it.
   race-test:
     name: "🏁 Race detector (ingestor)"
@@ -184,19 +184,26 @@ jobs:
           awk -v n="$RACE_SHARDS" -v k="$SHARD" 'NR % n == k % n' "$RUNNER_TEMP/all-tests" > "$RUNNER_TEMP/shard-tests"
           echo "shard $SHARD/$RACE_SHARDS: $(wc -l < "$RUNNER_TEMP/shard-tests") of $(wc -l < "$RUNNER_TEMP/all-tests") tests"
           [ -s "$RUNNER_TEMP/shard-tests" ] || { echo "::error::shard $SHARD has no tests"; exit 1; }
-          "$bin" -test.count=1 -test.timeout 20m -test.run "^($(paste -sd'|' "$RUNNER_TEMP/shard-tests"))\$"
+          "$bin" -test.count=1 -test.timeout 20m -test.paniconexit0 -test.run "^($(paste -sd'|' "$RUNNER_TEMP/shard-tests"))\$"
 
+  # The gate also runs on a tag whose images were already published, where
+  # the shards skip because that :edge commit passed them on master. It then
+  # passes, so release-artifacts can require it on every tag run.
   server-race:
     name: "🏁 Race detector (server)"
     needs: [server-race-shard, changes]
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
+    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' }}
     steps:
       - name: Require every shard to have passed
         run: |
           result="${{ needs['server-race-shard'].result }}"
-          echo "server-race-shard: $result"
-          [ "$result" = success ] || { echo "::error::server race shards did not all pass (result: $result)"; exit 1; }
+          published="${{ startsWith(github.ref, 'refs/tags/v') && inputs.images_published }}"
+          echo "server-race-shard: $result (tag with published images: $published)"
+          if [ "$result" = success ]; then exit 0; fi
+          if [ "$result" = skipped ] && [ "$published" = true ]; then exit 0; fi
+          echo "::error::server race shards did not all pass (result: $result)"
+          exit 1
 
   # ───────────────────────────────────────────────────────────────
   # 1. Go Build & Test
@@ -1199,7 +1206,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   release-artifacts:
     name: "📦 Release Artifacts"
-    needs: [go-test, changes]
+    needs: [go-test, server-race, changes]
     runs-on: ubuntu-latest
     permissions:
       contents: write

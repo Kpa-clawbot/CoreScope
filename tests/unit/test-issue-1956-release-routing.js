@@ -235,7 +235,8 @@ for (const [name, edge] of [['matching', 'a'.repeat(40)], ['missing', null], ['m
   const jobs = route(context(undefined, undefined, { images_published: matching }));
   assert.equal(jobs['release-artifacts'].result, 'success', `${name}: release artifacts must run`);
   assert.equal(jobs['go-test'].result, 'success', `${name}: release still requires Go validation`);
-  for (const job of ['server-race-shard', 'server-race', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish']) assert.equal(jobs[job].result, matching ? 'skipped' : 'success', `${name}: ${job}`);
+  assert.equal(jobs['server-race'].result, 'success', `${name}: the server race gate passes, so release artifacts can require it`);
+  for (const job of ['server-race-shard', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish']) assert.equal(jobs[job].result, matching ? 'skipped' : 'success', `${name}: ${job}`);
   assert.equal(jobs.deploy.result, 'skipped');
   assert.equal(jobs.publish.result, 'skipped');
   console.log(`PASS ${name} edge: one artifact dispatch, correct image route`);
@@ -286,6 +287,8 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   assert.equal(noRace['build-and-publish'].result, 'success', `${event}: a skipped race-test must not block`);
 }
 assert.equal(route(context(), 'go-test')['release-artifacts'].result, 'skipped', 'failed Go validation must block release');
+assert.equal(route(context(), 'server-race-shard')['release-artifacts'].result, 'skipped', 'a failed server race shard must block release');
+assert.ok(value(block(deploy, 'release-artifacts', 2), 'needs', 4).includes('server-race'), 'release artifacts require the server race gate');
 const dispatchInput = block(deploy, 'images_published', 6);
 assert.equal(value(dispatchInput, 'type', 8), 'boolean', 'dispatch flag must retain boolean semantics');
 assert.equal(value(dispatchInput, 'default', 8), 'false', 'manual and fallback dispatches must build images by default');
