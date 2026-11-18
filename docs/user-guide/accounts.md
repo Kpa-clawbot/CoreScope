@@ -305,7 +305,8 @@ With user management on, a user logs in from the CoreDrive RX app with their ema
 RX then holds a **device token** instead of a cookie: it shows under *My account, Devices* as
 "CoreDrive RX – <device name>", lasts 90 days from its last use, and *Log out* there revokes it.
 The token is limited to the account routes RX needs (`/api/auth/me`, `/api/auth/logout`,
-`/api/account/settings`, `/api/account/companions*`); anything else answers 403.
+`/api/account/settings`, `/api/account/companions*`); anything else answers 403. Other apps can
+ask for other scopes instead (see *Repeater info, Mobile apps*).
 
 RX then links the companion it is connected to: the companion signs a server challenge with its
 own key, so only whoever holds the device can link it. The newest proof wins: a companion that
@@ -351,6 +352,11 @@ enabled.
   longer in the database until you unclaim it. Deep link: `#/account?section=repeaters`.
 - **Removing a claim:** *Admin, Users*, open the user, *Remove* next to the claim. Admins use
   this when a claimer left or claimed a repeater that is not theirs.
+- **Mobile apps:** an app logs in at `POST /api/auth/device-token` like CoreDrive RX, but asks
+  for the scopes it needs: `repeater:claim` to claim a repeater and remove its own claim,
+  `repeater:edit` to edit details (still only where the account may edit, as above). The token
+  shows under *My account, Devices*, and its claims and edits are recorded with `via: device`.
+  Admin claim removal stays in the browser. There is no separate switch.
 
 ### Observer MQTT logins (optional)
 

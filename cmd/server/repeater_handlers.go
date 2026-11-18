@@ -130,7 +130,10 @@ func (s *Server) handleRepeaterInfoGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "pubkey must be 64 hex characters")
 		return
 	}
-	u, _ := s.auth.currentUser(w, r)
+	u, _, ok := s.optionalUser(w, r)
+	if !ok {
+		return
+	}
 	out, err := s.repeaterInfoFor(pk, u)
 	if err != nil {
 		log.Printf("[users] repeater info %s: %v", pk, err)
@@ -206,6 +209,15 @@ func repeaterEditDiff(prev *users.RepeaterInfo, next users.RepeaterEdit) map[str
 	return out
 }
 
+// withVia marks an audit detail written through a device token, so admins can
+// tell app writes from browser ones.
+func withVia(detail map[string]string, sess *users.Session) map[string]string {
+	if sess != nil && sess.Kind == users.SessionKindDevice {
+		detail["via"] = "device"
+	}
+	return detail
+}
+
 // repeaterTarget applies the per-user rate limit and normalises the pubkey;
 // with needKnown it also requires a known repeater in the analyzer DB. ok
 // false means the error answer is already written.
@@ -246,7 +258,7 @@ func (s *Server) writeRepeaterInfo(w http.ResponseWriter, pk string, u *users.Us
 	writeJSON(w, out)
 }
 
-func (s *Server) handleRepeaterInfoPut(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
+func (s *Server) handleRepeaterInfoPut(w http.ResponseWriter, r *http.Request, u *users.User, sess *users.Session) {
 	pk, ok := s.repeaterTarget(w, r, u, true)
 	if !ok {
 		return
@@ -302,12 +314,12 @@ func (s *Server) handleRepeaterInfoPut(w http.ResponseWriter, r *http.Request, u
 		}
 		diff := repeaterEditDiff(prev, edit)
 		diff["pubkey"] = pk
-		s.auth.auditAsync(idPtr(u.ID), "repeater.edit", nil, diff)
+		s.auth.auditAsync(idPtr(u.ID), "repeater.edit", nil, withVia(diff, sess))
 	}
 	s.writeRepeaterInfo(w, pk, u)
 }
 
-func (s *Server) handleRepeaterClaim(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
+func (s *Server) handleRepeaterClaim(w http.ResponseWriter, r *http.Request, u *users.User, sess *users.Session) {
 	pk, ok := s.repeaterTarget(w, r, u, true)
 	if !ok {
 		return
@@ -319,12 +331,12 @@ func (s *Server) handleRepeaterClaim(w http.ResponseWriter, r *http.Request, u *
 		return
 	}
 	if added {
-		s.auth.auditAsync(idPtr(u.ID), "repeater.claim", idPtr(u.ID), map[string]string{"pubkey": pk})
+		s.auth.auditAsync(idPtr(u.ID), "repeater.claim", idPtr(u.ID), withVia(map[string]string{"pubkey": pk}, sess))
 	}
 	s.writeRepeaterInfo(w, pk, u)
 }
 
-func (s *Server) handleRepeaterUnclaim(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
+func (s *Server) handleRepeaterUnclaim(w http.ResponseWriter, r *http.Request, u *users.User, sess *users.Session) {
 	pk, ok := s.repeaterTarget(w, r, u, false)
 	if !ok {
 		return
@@ -339,7 +351,7 @@ func (s *Server) handleRepeaterUnclaim(w http.ResponseWriter, r *http.Request, u
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	s.auth.auditAsync(idPtr(u.ID), "repeater.unclaim", idPtr(u.ID), map[string]string{"pubkey": pk})
+	s.auth.auditAsync(idPtr(u.ID), "repeater.unclaim", idPtr(u.ID), withVia(map[string]string{"pubkey": pk}, sess))
 	s.writeRepeaterInfo(w, pk, u)
 }
 

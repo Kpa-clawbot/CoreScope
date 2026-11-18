@@ -37,6 +37,8 @@ type deviceTokenRequest struct {
 	Email      string `json:"email"`
 	Password   string `json:"password"`
 	DeviceName string `json:"deviceName"`
+	// Scopes the token asks for; omitted means ["rx"] (CoreDrive RX).
+	Scopes []string `json:"scopes"`
 }
 
 type deviceTokenUser struct {
@@ -48,6 +50,7 @@ type deviceTokenResponse struct {
 	Token     string          `json:"token"`
 	ExpiresAt string          `json:"expiresAt"`
 	User      deviceTokenUser `json:"user"`
+	Scopes    []string        `json:"scopes"`
 }
 
 type companionChallengeRequest struct {
