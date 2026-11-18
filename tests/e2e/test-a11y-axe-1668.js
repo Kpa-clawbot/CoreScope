@@ -416,6 +416,84 @@ async function runRoute(page, route, theme, rules, AxeBuilder) {
   return result;
 }
 
+// runCombo checks every route for one (viewport, theme) pair in its own
+// browser context. It returns the cells and log lines instead of printing,
+// so several pairs can run at the same time.
+async function runCombo(browser, vp, theme, routesToRun, allowlist, AxeBuilder) {
+  const cells = [];
+  const lines = [];
+  const log = (line) => lines.push(line);
+  // One context per (viewport, theme) — keeps init-script localStorage stable.
+  const context = await browser.newContext({ viewport: { width: vp.w, height: vp.h } });
+  await context.addInitScript((t) => {
+    try {
+      localStorage.setItem('meshcore-theme', t);
+      localStorage.setItem('live-controls-expanded', 'true');
+      localStorage.setItem('meshcore-time-window', '525600');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (_) {}
+  }, theme);
+  try {
+    for (const route of routesToRun) {
+      const page = await context.newPage();
+      let raw = 0, suppressed = 0, net = 0;
+      const violationsDetail = [];
+      try {
+        const result = await runRoute(page, route, theme, vp.rules, AxeBuilder);
+        for (const v of result.violations) {
+          if (!vp.rules.includes(v.id)) continue; // narrow safeguard
+          for (const node of v.nodes) {
+            raw++;
+            const m = matchViolation(route, v.id, node, allowlist);
+            if (m.allowed && !m.overflow) {
+              suppressed++;
+            } else if (m.allowed && m.overflow) {
+              // #1706 finding 1: count_max breached → unbounded growth.
+              // Fail the gate so the allowlist re-trips CI for a human review.
+              net++;
+              violationsDetail.push({
+                rule: v.id,
+                selector: node.target,
+                overflow: `count_max=${m.entry.count_max} exceeded (matched=${m.entry._matchCount}) for pattern=${m.entry.selector_pattern} issue=#${m.entry.issue}`,
+              });
+            } else {
+              net++;
+              violationsDetail.push({
+                rule: v.id,
+                selector: node.target,
+                html: node.html && node.html.slice(0, 200),
+                message: node.failureSummary,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        // Probe errors should NOT silently pass — treat as a hard failure
+        // so route regressions (server 500, hash route 404, JS crash) surface.
+        net = 1;
+        violationsDetail.push({ probeError: err.message });
+      }
+
+      const cell = { vp: vp.name, route, theme, raw, suppressed, net };
+      cells.push(cell);
+      const verdict = net === 0 ? '✅' : '❌';
+      log(`  ${verdict} ${vp.name.padEnd(7)} ${theme.padEnd(5)} ${route.padEnd(34)} raw=${raw} suppressed=${suppressed} net=${net}`);
+      if (net > 0) {
+        for (const d of violationsDetail) {
+          log(`     - ${JSON.stringify(d).slice(0, 500)}`);
+        }
+        const safe = `${vp.name}_${theme}_${route.replace(/[^a-z0-9]+/gi, '_')}`;
+        const shot = path.join(SHOT_DIR, `${safe}.png`);
+        try { await page.screenshot({ path: shot, fullPage: false }); } catch (_) {}
+      }
+      await page.close();
+    }
+  } finally {
+    await context.close();
+  }
+  return { cells, lines };
+}
+
 async function main() {
   const { chromium } = require('playwright');
   const { AxeBuilder } = require('@axe-core/playwright');
@@ -439,82 +517,30 @@ async function main() {
   const vpTotals = {};
   for (const vp of VIEWPORTS) vpTotals[vp.name] = { raw: 0, suppressed: 0, net: 0 };
 
+  // The (viewport, theme) combinations run at the same time, each in its
+  // own context, so their fixed render waits overlap. Each one buffers its
+  // log lines; they print afterwards in the order of the sequential loop.
+  const combos = [];
+  for (const vp of VIEWPORTS) for (const theme of THEMES) combos.push({ vp, theme });
   try {
-    for (const vp of VIEWPORTS) {
-      console.log(`\n--- viewport ${vp.name} ${vp.w}x${vp.h} rules=${vp.rules.length} ---`);
-      for (const theme of THEMES) {
-        // One context per (viewport, theme) — keeps init-script localStorage stable.
-        const context = await browser.newContext({ viewport: { width: vp.w, height: vp.h } });
-        await context.addInitScript((t) => {
-          try {
-            localStorage.setItem('meshcore-theme', t);
-            localStorage.setItem('live-controls-expanded', 'true');
-            localStorage.setItem('meshcore-time-window', '525600');
-            document.documentElement.setAttribute('data-theme', t);
-          } catch (_) {}
-        }, theme);
-
-        for (const route of routesToRun) {
-          const page = await context.newPage();
-          let raw = 0, suppressed = 0, net = 0;
-          const violationsDetail = [];
-          try {
-            const result = await runRoute(page, route, theme, vp.rules, AxeBuilder);
-            for (const v of result.violations) {
-              if (!vp.rules.includes(v.id)) continue; // narrow safeguard
-              for (const node of v.nodes) {
-                raw++;
-                const m = matchViolation(route, v.id, node, allowlist);
-                if (m.allowed && !m.overflow) {
-                  suppressed++;
-                } else if (m.allowed && m.overflow) {
-                  // #1706 finding 1: count_max breached → unbounded growth.
-                  // Fail the gate so the allowlist re-trips CI for a human review.
-                  net++;
-                  violationsDetail.push({
-                    rule: v.id,
-                    selector: node.target,
-                    overflow: `count_max=${m.entry.count_max} exceeded (matched=${m.entry._matchCount}) for pattern=${m.entry.selector_pattern} issue=#${m.entry.issue}`,
-                  });
-                } else {
-                  net++;
-                  violationsDetail.push({
-                    rule: v.id,
-                    selector: node.target,
-                    html: node.html && node.html.slice(0, 200),
-                    message: node.failureSummary,
-                  });
-                }
-              }
-            }
-          } catch (err) {
-            // Probe errors should NOT silently pass — treat as a hard failure
-            // so route regressions (server 500, hash route 404, JS crash) surface.
-            net = 1;
-            violationsDetail.push({ probeError: err.message });
-          }
-
-          const cell = { vp: vp.name, route, theme, raw, suppressed, net };
-          summary.push(cell);
-          totalNet += net;
-          vpTotals[vp.name].raw += raw;
-          vpTotals[vp.name].suppressed += suppressed;
-          vpTotals[vp.name].net += net;
-          const verdict = net === 0 ? '✅' : '❌';
-          console.log(`  ${verdict} ${vp.name.padEnd(7)} ${theme.padEnd(5)} ${route.padEnd(34)} raw=${raw} suppressed=${suppressed} net=${net}`);
-          if (net > 0) {
-            for (const d of violationsDetail) {
-              console.log(`     - ${JSON.stringify(d).slice(0, 500)}`);
-            }
-            const safe = `${vp.name}_${theme}_${route.replace(/[^a-z0-9]+/gi, '_')}`;
-            const shot = path.join(SHOT_DIR, `${safe}.png`);
-            try { await page.screenshot({ path: shot, fullPage: false }); } catch (_) {}
-          }
-          await page.close();
-        }
-        await context.close();
+    const results = await Promise.all(combos.map(({ vp, theme }) =>
+      runCombo(browser, vp, theme, routesToRun, allowlist, AxeBuilder)));
+    let lastVp = null;
+    results.forEach((r, i) => {
+      const { vp } = combos[i];
+      if (vp !== lastVp) {
+        console.log(`\n--- viewport ${vp.name} ${vp.w}x${vp.h} rules=${vp.rules.length} ---`);
+        lastVp = vp;
       }
-    }
+      for (const line of r.lines) console.log(line);
+      for (const cell of r.cells) {
+        summary.push(cell);
+        totalNet += cell.net;
+        vpTotals[vp.name].raw += cell.raw;
+        vpTotals[vp.name].suppressed += cell.suppressed;
+        vpTotals[vp.name].net += cell.net;
+      }
+    });
   } finally {
     await browser.close();
   }
