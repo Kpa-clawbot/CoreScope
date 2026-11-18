@@ -16,10 +16,17 @@
  *      the 15 s load-timeout path followed by a successful pick
  *   c  rapid toggling: 30-60 picker/theme/overlay/Auto actions, 0-120 ms apart
  *   d  hillshade under fast zoom/pan with slow terrarium tiles, navigate away
- *      mid-burst; JS heap after forced GC per iteration
+ *      mid-burst; JS heap after forced GC per iteration: total growth
+ *      after iteration 0 <= 10 MB, and <= 3 MB over the second half of the
+ *      run (>= 10 iterations). Never traced: tracing retains page heap.
  *   e  two tabs: overlay/provider changes mirror through 'storage', no loops
  *   f  navigation churn over map, live, planner, node detail, node reach,
- *      home (cycles = clamp(ITER * 2.5, 5, 50))
+ *      home (cycles = clamp(ITER * 2.5, 5, 50)). A visit to the route the
+ *      page is already on rebuilds nothing, so a basemap picked on the last
+ *      visit is still expected.
+ *
+ * The planner is opt-in: when /api/config/client has no `planner` block (the
+ * CI fixture server), planner steps navigate to #/map instead.
  *
  * Invariants after every iteration: no page errors / console errors; one
  * layers control, one live auto tile group and one overlay pane per picker
@@ -34,8 +41,8 @@
  *   MAP_STRESS_ITER   iterations per scenario (default 2; 20 for the gate)
  *   MAP_STRESS_SEED   integer or string (default 20261118)
  *   MAP_STRESS_ONLY   'a,c' or 'c:7' (scenario[:iteration])
- *   MAP_STRESS_TRACE  directory: record a Playwright trace per iteration and
- *                     keep it when the iteration fails
+ *   MAP_STRESS_TRACE  directory: record a Playwright trace per scenario
+ *                     (except d) and keep it when the scenario fails
  *   CHROMIUM_PATH     optional browser binary
  * Results: test-results/map-perf/stress/<seed>.json
  *
@@ -484,9 +491,13 @@ const IGNORED_CONSOLE = [
   /net::ERR_BLOCKED_BY_CLIENT/,
 ];
 
-async function openContext(browser, label) {
+// opts.trace === false: never trace this context. Playwright tracing with
+// snapshots retains page heap (~0.75 MB per navigation), so a context whose
+// heap is measured must not be traced.
+async function openContext(browser, label, opts) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
-  if (TRACE_DIR) await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+  context.__tracing = !!TRACE_DIR && !(opts && opts.trace === false);
+  if (context.__tracing) await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
   context.__label = label;
   context.__stubbed = false;
   return context;
@@ -519,7 +530,7 @@ async function openPage(context, opts) {
 }
 
 async function closeContext(context, failed, name) {
-  if (TRACE_DIR) {
+  if (context.__tracing) {
     try {
       if (failed) {
         fs.mkdirSync(TRACE_DIR, { recursive: true });
@@ -537,10 +548,27 @@ async function closeContext(context, failed, name) {
 const PICKER_ROUTES = ['#/map', '#/live', '#/tools/planner'];
 
 async function gotoFirst(page, route) {
+  route = effectiveRoute(route);
   await page.goto(`${BASE}/${route}`, { waitUntil: 'domcontentloaded' });
 }
+// The planner is opt-in (planner.enabled): /api/config/client carries a
+// `planner` block only when it is on (the CI fixture server has it off). When
+// it is off, planner steps go to the map page instead; the seeded action
+// sequence is the same either way.
+let PLANNER = true;
+const PLANNER_ROUTE = '#/tools/planner';
+async function detectPlanner() {
+  const r = await fetch(BASE + '/api/config/client', { signal: AbortSignal.timeout(30000) });
+  if (!r.ok) throw new Error('/api/config/client ' + r.status);
+  const cfg = await r.json();
+  PLANNER = !!(cfg && cfg.planner);
+  if (!PLANNER) results.notes.push('planner disabled on this server: planner steps use #/map');
+}
+function effectiveRoute(route) {
+  return (!PLANNER && route === PLANNER_ROUTE) ? '#/map' : route;
+}
 async function hashNav(page, route) {
-  await page.evaluate((h) => { location.hash = h; }, route);
+  await page.evaluate((h) => { location.hash = h; }, effectiveRoute(route));
 }
 /** Wait for a picker surface: exactly one picker map with its control. */
 async function waitPicker(page, timeout) {
@@ -960,7 +988,7 @@ async function scenarioD(browser) {
   const start = Date.now();
   // One page across iterations so the heap can be compared.
   const rng0 = makeRng('d', 'page');
-  const context = await openContext(browser, 'd');
+  const context = await openContext(browser, 'd', { trace: false });
   const page = await openPage(context, { preset: { theme: rng0.pick(['light', 'dark']), provider: 'auto', overlays: ['hillshade'] } });
   let terrHits = 0;
   await page.route(/\/terrarium\/\d+\/\d+\/\d+/, async (route) => {
@@ -1060,6 +1088,21 @@ async function scenarioD(browser) {
     console.log(`  ❌ d heap growth ${(growth / MB).toFixed(1)} MB`);
     anyFail = true;
   }
+  // Steady state: caches fill in the first iterations (a ~5 MB step), then
+  // the heap must level off. A leak of ~0.3 MB per page visit (master's
+  // map-page leak before the teardown fixes) shows here even when the total
+  // stays under the limit above. Needs >= 10 iterations.
+  if (heap.length >= 10) {
+    const half = heap.slice(Math.floor(heap.length / 2));
+    const lateGrowth = half[half.length - 1] - half[0];
+    sc.details.heapLateGrowthMB = +(lateGrowth / MB).toFixed(2);
+    if (lateGrowth > 3 * MB) {
+      sc.failed++;
+      sc.failures.push({ iteration: 'heap', problems: [`heap still growing in the second half: ${(lateGrowth / MB).toFixed(1)} MB over ${half.length} iterations (limit 3 MB): ${sc.details.heapMB.join(', ')}`] });
+      console.log(`  ❌ d heap late growth ${(lateGrowth / MB).toFixed(1)} MB`);
+      anyFail = true;
+    }
+  }
   await closeContext(context, anyFail, 'd');
   sc.durationMs = Date.now() - start;
 }
@@ -1150,9 +1193,9 @@ async function scenarioF(browser) {
   const pagesDef = [
     { key: 'map', route: '#/map', picker: true },
     { key: 'live', route: '#/live', picker: true },
-    { key: 'planner', route: '#/tools/planner', picker: true },
+    { key: 'planner', route: PLANNER_ROUTE, picker: true },
     { key: 'home', route: '#/home', picker: false },
-  ];
+  ].filter(p => PLANNER || p.key !== 'planner');
   if (nodes.node) pagesDef.push({ key: 'node-detail', route: '#/nodes/' + encodeURIComponent(nodes.node.public_key), picker: false, map: true });
   else results.notes.push('f: no located node; node detail skipped');
   if (nodes.repeater) pagesDef.push({ key: 'node-reach', route: '#/nodes/' + encodeURIComponent(nodes.repeater.public_key) + '/reach', picker: false, map: true });
@@ -1171,10 +1214,14 @@ async function scenarioF(browser) {
   const baseline = {};
   const KEYS = ['listeners', 'maps', 'pickers', 'controls', 'overlayPanes', 'autoLive', 'nodeTileRecs'];
 
+  // A visit to the route the page is already on fires no hashchange: the map
+  // and its picker survive, and so does a basemap picked on the last visit.
+  let lastExplicit = null;
   async function visit(def, cyc) {
     const probs = [];
+    const sameRoute = (await page.evaluate(() => location.hash)) === effectiveRoute(def.route);
     await hashNav(page, def.route);
-    let explicit = null;
+    let explicit = (sameRoute && def.picker) ? lastExplicit : null;
     if (def.picker) {
       await waitPicker(page);
       if (rng.chance(0.25)) {
@@ -1204,6 +1251,7 @@ async function scenarioF(browser) {
         return dark ? window.MC_setDarkTileProvider(id) : window.MC_setLightTileProvider(id);
       }, rng.next());
     }
+    lastExplicit = explicit;
     const intent = def.picker ? { mode: explicit ? 'explicit' : 'auto', id: explicit, overlays, pickers: 1 } : { pickers: 0 };
     const r = await settleCheck(page, intent, { minMs: 300, maxMs: 5000 });
     probs.push(...r.problems.map(p => `${def.key}: ${p}`));
@@ -1268,6 +1316,8 @@ async function run() {
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
   });
   try {
+    await detectPlanner();
+    console.log(`planner ${PLANNER ? 'enabled' : 'disabled (planner steps use #/map)'}`);
     const table = [['a', scenarioA], ['b', scenarioB], ['c', scenarioC], ['d', scenarioD], ['e', scenarioE], ['f', scenarioF]];
     for (const [k, fn] of table) {
       if (ONLY && !ONLY[k] && !(k === 'b' && ONLY['b-timeout'])) continue;
@@ -1286,7 +1336,7 @@ async function run() {
     console.log(`  ${k.padEnd(10)} ${s.failed ? 'FAIL' : 'pass'}  iterations=${s.iterations} passed=${s.passed} failed=${s.failed} ${(s.durationMs / 1000).toFixed(1)} s`);
   }
   console.log(`  max listeners ${JSON.stringify(results.maxima.listeners)}  max live GL ${results.maxima.glLive}`);
-  if (results.scenarios.d) console.log(`  heap growth (d) ${results.scenarios.d.details.heapGrowthMB} MB`);
+  if (results.scenarios.d) console.log(`  heap growth (d) ${results.scenarios.d.details.heapGrowthMB} MB, second half ${results.scenarios.d.details.heapLateGrowthMB != null ? results.scenarios.d.details.heapLateGrowthMB + ' MB' : 'n/a (< 10 iterations)'}`);
   console.log(`  total ${(results.durationMs / 1000).toFixed(1)} s`);
   results.passed = passed;
   results.failed = failed;

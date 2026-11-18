@@ -641,7 +641,8 @@ async function installCollectors(page) {
 
 /**
  * Wait until every visible .leaflet-tile (and every MapLibre map, when one
- * exists) has loaded or failed, stable across two polls, with ≥1 visible tile.
+ * exists) has loaded or failed, stable across two polls, with ≥minTiles
+ * visible tiles (default 1) or a MapLibre canvas.
  * Returns { loaded, failed, pending, visible, ms, timedOut, lastLoadMs }.
  */
 async function waitForTiles(page, o) {
@@ -657,7 +658,9 @@ async function waitForTiles(page, o) {
         const loaded = v.filter(el => el.classList.contains('leaflet-tile-loaded')).length;
         return { visible: v.length, loaded: loaded, failed: 0, pending: v.length - loaded };
       })();
-      const ok = s.visible >= min && s.pending === 0;
+      // A MapLibre basemap draws into a canvas, not .leaflet-tile elements;
+      // its tile loading is already counted in s.pending (glPending).
+      const ok = (s.visible >= min || s.maplibreCanvases > 0) && s.pending === 0;
       window.__mcTileStable = ok ? (window.__mcTileStable || 0) + 1 : 0;
       return window.__mcTileStable >= 2;
     }, minTiles, { timeout: timeout, polling: 100 });

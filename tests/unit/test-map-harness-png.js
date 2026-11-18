@@ -200,5 +200,52 @@ test('extraHosts rows take precedence over the built-in table', () => {
   assert.strictEqual(C('https://tile.openstreetmap.org/1/0/0.png', { extraHosts: [{ key: 'osm-test', kind: 'raster', test: /openstreetmap\.org/ }] }).key, 'osm-test');
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed) process.exit(1);
+// waitForTiles against a fake Playwright page: the predicate runs in Node
+// with a fake window.__mcHarness whose tileState() the test controls.
+function fakePage() {
+  return {
+    async waitForFunction(fn, arg, opts) {
+      const t0 = Date.now();
+      for (;;) {
+        if (fn(arg)) return true;
+        if (Date.now() - t0 > opts.timeout) throw new Error('Timeout ' + opts.timeout + 'ms exceeded.');
+        await new Promise(r => setTimeout(r, 5));
+      }
+    },
+    async evaluate(fn) { return fn(); },
+  };
+}
+async function withWindow(state, fn) {
+  const prev = global.window;
+  global.window = { __mcHarness: { tileState: () => Object.assign({}, state) } };
+  try { return await fn(); } finally { global.window = prev; }
+}
+async function atest(name, fn) {
+  try { await fn(); passed++; console.log(`  ✅ ${name}`); }
+  catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
+}
+
+(async () => {
+  await atest('waitForTiles settles on a loaded vector basemap (canvas, no .leaflet-tile)', async () => {
+    const st = { visible: 0, loaded: 0, failed: 0, pending: 0, maplibreCanvases: 1, maplibreMaps: 1 };
+    const r = await withWindow(st, () => H.waitForTiles(fakePage(), { timeout: 300 }));
+    assert.strictEqual(r.timedOut, false, 'vector map with nothing pending must not wait for the timeout');
+  });
+  await atest('waitForTiles still waits while a vector basemap has tiles pending', async () => {
+    const st = { visible: 0, loaded: 0, failed: 0, pending: 1, maplibreCanvases: 1, maplibreMaps: 1 };
+    const r = await withWindow(st, () => H.waitForTiles(fakePage(), { timeout: 150 }));
+    assert.strictEqual(r.timedOut, true);
+  });
+  await atest('waitForTiles without a vector map still requires a visible raster tile', async () => {
+    const st = { visible: 0, loaded: 0, failed: 0, pending: 0, maplibreCanvases: 0, maplibreMaps: 0 };
+    const r = await withWindow(st, () => H.waitForTiles(fakePage(), { timeout: 150 }));
+    assert.strictEqual(r.timedOut, true);
+  });
+  await atest('waitForTiles settles on loaded raster tiles', async () => {
+    const st = { visible: 6, loaded: 6, failed: 0, pending: 0, maplibreCanvases: 0, maplibreMaps: 0 };
+    const r = await withWindow(st, () => H.waitForTiles(fakePage(), { timeout: 300 }));
+    assert.strictEqual(r.timedOut, false);
+  });
+  console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed) process.exit(1);
+})();
