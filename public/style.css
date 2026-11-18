@@ -280,6 +280,18 @@
   --status-amber: #f59e0b;
   --status-amber-light: #fef3c7;
   --status-amber-text: #92400e;
+  /* Planner Coverage tab: Users layer orange (10-25%) to green (>=75%), <10%
+     unpainted; Repeaters layer blocked (dots only), slightly blocked, line of
+     sight on the status red, amber and green hues. */
+  --pl-cov-user-2: var(--palette-amber-600);
+  --pl-cov-user-3: var(--palette-amber-400);
+  --pl-cov-user-4: var(--palette-green-400);
+  --pl-cov-user-5: var(--palette-green-600);
+  --pl-cov-rep-1: var(--status-red);
+  --pl-cov-rep-2: var(--status-amber);
+  --pl-cov-rep-3: var(--status-green);
+  --pl-cov-opacity: 0.5;
+  --pl-cov-opacity-outdated: 0.2;
   /* #1719 — `--skew-badge-no-clock-bg` carries the muted "no clock data"
      badge background (was --text-muted which renders #d1d5db in dark
      theme → #fff text = 1.47:1, BLOCKER × 137 on clock-health). Pinned
@@ -419,6 +431,15 @@
     --status-amber: #f59e0b;
     --status-amber-light: #422006;
     --status-amber-text: #fcd34d;
+    --pl-cov-user-2: var(--palette-amber-500);
+    --pl-cov-user-3: var(--palette-amber-300);
+    --pl-cov-user-4: var(--palette-green-300);
+    --pl-cov-user-5: var(--palette-green-500);
+    --pl-cov-rep-1: var(--status-red);
+    --pl-cov-rep-2: var(--status-amber);
+    --pl-cov-rep-3: var(--palette-green-300);
+    --pl-cov-opacity: 0.55;
+    --pl-cov-opacity-outdated: 0.25;
     --path-inspector-speculative: #f59e0b;
     /* #1715 — dark-theme role swatch overrides. Light values (palette-700)
      * fail 4.5:1 on the dark analytics card-bg #1a1a2e (e.g. #dc2626 →
@@ -490,6 +511,15 @@
   --status-amber: #f59e0b;
   --status-amber-light: #422006;
   --status-amber-text: #fcd34d;
+  --pl-cov-user-2: var(--palette-amber-500);
+  --pl-cov-user-3: var(--palette-amber-300);
+  --pl-cov-user-4: var(--palette-green-300);
+  --pl-cov-user-5: var(--palette-green-500);
+  --pl-cov-rep-1: var(--status-red);
+  --pl-cov-rep-2: var(--status-amber);
+  --pl-cov-rep-3: var(--palette-green-300);
+  --pl-cov-opacity: 0.55;
+  --pl-cov-opacity-outdated: 0.25;
   --status-info: #60a5fa;
   /* #1715 — dark-theme role swatch overrides (mirrors the media-query
    * block above). Palette-400/500 shades clear WCAG AA on #1a1a2e. */
@@ -5963,3 +5993,21 @@ body.embed #app.app-fixed {
 .reported-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .reported-links .btn-primary { text-decoration: none; padding: 4px 10px; font-size: 12px; }
 .reported-table td { white-space: normal; }
+
+/* Repeater info section (node detail views) */
+#node-repeater-info, #node-repeater-info-pane { font-size: 13px; }
+.repeater-info-list { margin: 0 0 8px; }
+.repeater-info-notes { white-space: pre-wrap; max-height: 12em; overflow-y: auto; }
+.repeater-info-row { display: flex; gap: 8px; padding: 2px 0; }
+.repeater-info-row dt { flex: 0 0 120px; color: var(--text-muted); }
+.repeater-info-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.repeater-info-form label { display: block; margin-bottom: 8px; color: var(--text-muted); }
+.repeater-info-form input, .repeater-info-form select, .repeater-info-form textarea {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 2px;
+  background: var(--input-bg, var(--card-bg)); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;
+}
+.repeater-info-notice, .repeater-info-msg { color: var(--text-muted); font-size: 12px; }
+.repeater-info-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+/* Global .btn-primary is white on --accent (2.75:1); same fix as .account-btn-primary. */
+.repeater-info-actions .btn-primary { background: var(--accent-strong); color: var(--text-on-accent); }
+.repeater-info-actions .btn-primary:hover { background: var(--palette-blue-700); }

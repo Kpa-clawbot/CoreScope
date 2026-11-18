@@ -12,7 +12,7 @@ package main
 // token, plus one token per tile download its terrain view would start from
 // the terrain budget it shares with route LOS, and the server a global
 // token; cache hits and polls of a live job are free. Compute is kept away
-// from the live app by slot semaphores (coverage 1, relay + profile 2), caps
+// from the live app by slot semaphores (coverage + viewshed 1, relay + profile 2), caps
 // on live and queued jobs, per-stage timeouts, and cancellation of any job
 // nobody has polled for plannerAbandonAfter.
 //
@@ -36,8 +36,10 @@ package main
 //     a response, a geo check or a cache key.
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -108,6 +110,7 @@ const (
 	plannerProfile  = "profile"
 	plannerRelay    = "relay"
 	plannerCoverage = "coverage"
+	plannerViewshed = "viewshed"
 )
 
 // 400 codes the UI matches on (leg errors use the first three too).
@@ -348,6 +351,13 @@ func (s *Server) handlePlannerCoverage(w http.ResponseWriter, r *http.Request) {
 	s.planner.handleCoverage(w, r)
 }
 
+func (s *Server) handlePlannerViewshed(w http.ResponseWriter, r *http.Request) {
+	if s.plannerDisabled(w) {
+		return
+	}
+	s.planner.handleViewshed(w, r)
+}
+
 // ─── /api/planner/profile ───────────────────────────────────────────────────
 
 func (p *plannerService) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -586,6 +596,149 @@ func plannerRelayPad(dKm float64) float64 {
 func plannerRelayView(a, b geoPoint) geoBBox {
 	ends := plannerBBoxAdd(geoBBox{S: a.Lat, W: a.Lon, N: a.Lat, E: a.Lon}, b)
 	return plannerExpandBBox(ends, plannerRelayPad(geoDistKm(a, b)))
+}
+
+// ─── /api/planner/viewshed ──────────────────────────────────────────────────
+
+func (p *plannerService) handleViewshed(w http.ResponseWriter, r *http.Request) {
+	q, rej := plannerParseQuery(r.URL.RawQuery, "site", "h", "rx", "range")
+	if rej != nil {
+		rej.write(w)
+		return
+	}
+	raw, ok := q["site"]
+	if !ok {
+		plannerBadRequest(w, "site required")
+		return
+	}
+	site, ok := plannerParsePoint(raw)
+	if !ok {
+		plannerBadRequest(w, "site must be lat,lon within range")
+		return
+	}
+	h, ok := plannerOptHeight(q, "h", p.cfg.NewAntennaM)
+	if !ok {
+		plannerBadRequest(w, "h must be a number of metres")
+		return
+	}
+	rx, ok := plannerOptHeight(q, "rx", p.cfg.ExistingAntennaM)
+	if !ok {
+		plannerBadRequest(w, "rx must be a number of metres")
+		return
+	}
+	rangeKm, ok := plannerOptRange(q, p.cfg.DefaultRangeKm, p.cfg.rangesKm())
+	if !ok {
+		plannerBadRequest(w, plannerRangeMsg(p.cfg.rangesKm()))
+		return
+	}
+	known := p.knownSet()
+	if !known.near(site) {
+		plannerBadRequest(w, plannerErrOutOfArea)
+		return
+	}
+	view := viewshedBBox(site, rangeKm)
+	if p.src.TileCount(view) > p.tiles.Viewshed {
+		plannerBadRequest(w, plannerErrTooManyTiles)
+		return
+	}
+	reach := *p.cfg.UserReach
+	params := PlannerViewshedParams{
+		Site:         geoPointJSON{Lat: site.Lat, Lon: site.Lon},
+		AntennaM:     h,
+		RxAntennaM:   rx,
+		RangeKm:      rangeKm,
+		FrequencyMHz: p.freqMHz,
+		KFactor:      p.kFactor,
+		UserReach:    PlannerViewshedUserReach{D50Km: reach.D50Km, Slope: reach.Slope},
+	}
+	_, fp := known.scan(view, 0, 0)
+	key := fmt.Sprintf("%s|%d,%d|%g,%g|%g|%g,%g|%s|%s", plannerViewshed,
+		plannerMilli(site.Lat), plannerMilli(site.Lon), h, rx, rangeKm, reach.D50Km, reach.Slope, fp, known.gen)
+	p.serve(w, r, plannerJobSpec{
+		endpoint: plannerViewshed,
+		key:      key,
+		view:     view,
+		compute: func(ctx context.Context, v terrainView, progress func(float64)) (any, error) {
+			g, err := computeViewshed(ctx, v, viewshedParams{
+				Site: site, SiteM: h, RxM: rx, RangeKm: rangeKm,
+				FreqMHz: p.freqMHz, KFactor: p.kFactor, Reach: reach,
+			}, progress)
+			if err != nil {
+				return nil, err
+			}
+			nodes, truncated := p.snapshotNodes(view, 0, p.now())
+			res := PlannerViewshedResponse{
+				Source:    p.source,
+				Params:    params,
+				BBox:      [4]float64{g.BBox.S, g.BBox.W, g.BBox.N, g.BBox.E},
+				Rows:      g.Rows,
+				Cols:      g.Cols,
+				CellKm:    g.CellKm,
+				Cells:     base64.StdEncoding.EncodeToString(g.Cells),
+				Links:     viewshedLinks(v, site, nodes, rangeKm, losParams{FreqMHz: p.freqMHz, KFactor: p.kFactor}, h, rx),
+				Warnings:  []string{},
+				Truncated: viewshedTruncated(site, nodes, rangeKm, truncated),
+			}
+			if w := plannerTerrainWarning(v); w != "" {
+				res.Warnings = append(res.Warnings, w)
+			}
+			return res, nil
+		},
+	})
+}
+
+// viewshedTruncated reports a node-cap cut that may have cost a link. The cap
+// keeps the nodes nearest the site, so everything dropped lies at least as far
+// as the farthest kept one: when that is already beyond rangeKm (the square
+// view's corners), no in-range repeater was lost.
+func viewshedTruncated(site geoPoint, kept []plannerNode, rangeKm float64, capped bool) bool {
+	if !capped {
+		return false
+	}
+	var farthest float64
+	for i := range kept {
+		farthest = max(farthest, geoDistKm(site, geoPoint{Lat: kept[i].Lat, Lon: kept[i].Lon}))
+	}
+	return farthest <= rangeKm
+}
+
+// viewshedSelfKm: a repeater this close to the site is the site itself (a
+// candidate placed on an existing repeater), not a link to list.
+const viewshedSelfKm = 0.1
+
+// viewshedLinks is the site's link to every repeater within rangeKm that
+// Relay would offer (not stale, valid position), nearest first (then by
+// pubkey), the site at h and the repeater at rx.
+func viewshedLinks(v terrainView, site geoPoint, nodes []plannerNode, rangeKm float64, lp losParams, h, rx float64) []PlannerViewshedLink {
+	type near struct {
+		n *plannerNode
+		d float64
+	}
+	var in []near
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Role != "repeater" || n.Stale || !planCoordOK(n.Lat, n.Lon) {
+			continue
+		}
+		if d := geoDistKm(site, geoPoint{Lat: n.Lat, Lon: n.Lon}); d >= viewshedSelfKm && d <= rangeKm {
+			in = append(in, near{n, d})
+		}
+	}
+	slices.SortFunc(in, func(a, b near) int {
+		if c := cmp.Compare(a.d, b.d); c != 0 {
+			return c
+		}
+		return strings.Compare(a.n.PubKey, b.n.PubKey)
+	})
+	out := make([]PlannerViewshedLink, len(in))
+	for i, e := range in {
+		pt := geoPoint{Lat: e.n.Lat, Lon: e.n.Lon}
+		out[i] = PlannerViewshedLink{
+			PubKey: e.n.PubKey, Name: e.n.Name, Lat: e.n.Lat, Lon: e.n.Lon,
+			Link: relayLink(v, site, pt, e.d, lp, h, rx, false),
+		}
+	}
+	return out
 }
 
 // ─── /api/planner/coverage ──────────────────────────────────────────────────
@@ -930,11 +1083,11 @@ func plannerNonNil[T any](s []T) []T {
 // limits accept anywhere in the SRTM latitude band, so such a request is
 // never refused for its tiles. A view over its cap (a profile chain of many
 // long legs, a leg beyond the band) is too_many_tiles.
-type plannerTileLimits struct{ Profile, Relay, Coverage int }
+type plannerTileLimits struct{ Profile, Relay, Coverage, Viewshed int }
 
 // max is the most tiles one view may need: what the terrain source accepts
 // in one View.
-func (l plannerTileLimits) max() int { return max(l.Profile, l.Relay, l.Coverage) }
+func (l plannerTileLimits) max() int { return max(l.Profile, l.Relay, l.Coverage, l.Viewshed) }
 
 // plannerTileCaps derives the caps from the size limits.
 //
@@ -948,6 +1101,11 @@ func (l plannerTileLimits) max() int { return max(l.Profile, l.Relay, l.Coverage
 //     maxLegKm + 2·plannerRelayPad(maxLegKm), with A and B in the band.
 //   - Profile: one leg's view (its pad is far below the relay corridor's)
 //     fits the relay's; longer chains may not.
+//   - Viewshed: the site ± its range, the site in the band. The cap uses
+//     the largest range a request can ask for, the largest of
+//     plannerRangesKm within maxLegKm (60 km at most), not maxLegKm itself:
+//     2·maxLegKm would raise max(), and so every view's memory and the
+//     download budgets, for views no request can make.
 //
 // Profile and relay never go below plannerMinLegTiles.
 func plannerTileCaps(maxAreaKm, nodeMarginKm, maxLegKm float64) plannerTileLimits {
@@ -956,7 +1114,10 @@ func plannerTileCaps(maxAreaKm, nodeMarginKm, maxLegKm float64) plannerTileLimit
 		band+nodeMarginKm/plannerKmPerDeg+1.0/plannerGridPerDeg)
 	pad := plannerRelayPad(maxLegKm)
 	leg := max(plannerWorstCaseTiles(maxLegKm+2*pad, band+pad/plannerKmPerDeg), plannerMinLegTiles)
-	return plannerTileLimits{Profile: leg, Relay: leg, Coverage: cov}
+	ranges := PlannerConfig{MaxLegKm: maxLegKm}.rangesKm()
+	rv := ranges[len(ranges)-1]
+	vs := plannerWorstCaseTiles(2*rv, band+rv/plannerKmPerDeg)
+	return plannerTileLimits{Profile: leg, Relay: leg, Coverage: cov, Viewshed: vs}
 }
 
 // plannerWorstCaseTiles is the most 1° SRTM tiles a view can span when it
@@ -1134,7 +1295,7 @@ type plannerJobSpec struct {
 type plannerJob struct {
 	key      string
 	endpoint string
-	heavy    bool   // coverage: its own slot and queue limit
+	heavy    bool   // coverage, viewshed: their own slot and queue limit
 	client   string // clientLogID, for the log line only; never the IP
 	ctx      context.Context
 	cancel   context.CancelCauseFunc
@@ -1211,7 +1372,7 @@ func (p *plannerService) cacheFor(heavy bool) *plannerLRU {
 // the key's job (starting one if needed). It waits at most p.fastWait, and
 // only when the terrain is already resident.
 func (p *plannerService) serve(w http.ResponseWriter, r *http.Request, spec plannerJobSpec) {
-	heavy := spec.endpoint == plannerCoverage
+	heavy := spec.endpoint == plannerCoverage || spec.endpoint == plannerViewshed
 	now := p.now()
 	if body, ok := p.cacheFor(heavy).get(spec.key, now); ok {
 		writePlannerResult(w, body)

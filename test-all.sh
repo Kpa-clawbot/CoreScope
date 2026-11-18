@@ -98,6 +98,7 @@ node tests/unit/test-route-view-ux-hints.js
 node tests/unit/test-route-los.js
 node tests/unit/test-planner-los-vectors.js
 node tests/unit/test-planner-area.js
+node tests/unit/test-planner-coverage.js
 node tests/unit/test-planner.js
 node tests/unit/test-issue-1418-edge-weights.js
 node tests/unit/test-issue-1418-polish-review.js
@@ -203,6 +204,7 @@ node tests/unit/test-nav-drawer-version-footer.js
 node tests/unit/test-nodes-export.js
 node tests/unit/test-node-quick-actions.js
 node tests/unit/test-notifications-ui.js
+node tests/unit/test-repeater-info.js
 node tests/unit/test-observer-iata-1188.js
 node tests/unit/test-observer-menu-interactions.js
 node tests/unit/test-observer-naive-clock-1478.js

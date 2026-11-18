@@ -144,6 +144,12 @@ func (s *Server) handleAdminUserDetail(w http.ResponseWriter, r *http.Request, _
 		return
 	}
 	d.Companions = s.companionsJSON(links)
+	claims, err := a.st.RepeaterClaimsByUser(u.ID)
+	if err != nil {
+		adminStoreFail(w, "list repeater claims", u.ID, err)
+		return
+	}
+	d.RepeaterClaims = claimRefsJSON(claims)
 	mails, err := a.st.MailForUser(u.ID, 50)
 	if err != nil {
 		adminStoreFail(w, "list mail", u.ID, err)
