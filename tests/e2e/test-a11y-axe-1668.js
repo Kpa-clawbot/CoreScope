@@ -418,7 +418,10 @@ async function runRoute(page, route, theme, rules, AxeBuilder) {
 
 // runCombo checks every route for one (viewport, theme) pair in its own
 // browser context. It returns the cells and log lines instead of printing,
-// so several pairs can run at the same time.
+// so several pairs can run at the same time. A thrown error carries the
+// lines logged so far in err.lines. With an allowlist count_max shared by
+// several pairs, which cell reports the overflow depends on interleaving;
+// the total and the exit code do not.
 async function runCombo(browser, vp, theme, routesToRun, allowlist, AxeBuilder) {
   const cells = [];
   const lines = [];
@@ -488,6 +491,9 @@ async function runCombo(browser, vp, theme, routesToRun, allowlist, AxeBuilder) 
       }
       await page.close();
     }
+  } catch (err) {
+    err.lines = lines;
+    throw err;
   } finally {
     await context.close();
   }
@@ -523,15 +529,24 @@ async function main() {
   const combos = [];
   for (const vp of VIEWPORTS) for (const theme of THEMES) combos.push({ vp, theme });
   try {
-    const results = await Promise.all(combos.map(({ vp, theme }) =>
+    // allSettled, so the cells of every pair print even when one pair fails.
+    const settled = await Promise.allSettled(combos.map(({ vp, theme }) =>
       runCombo(browser, vp, theme, routesToRun, allowlist, AxeBuilder)));
     let lastVp = null;
-    results.forEach((r, i) => {
-      const { vp } = combos[i];
+    let firstError = null;
+    settled.forEach((s, i) => {
+      const { vp, theme } = combos[i];
       if (vp !== lastVp) {
         console.log(`\n--- viewport ${vp.name} ${vp.w}x${vp.h} rules=${vp.rules.length} ---`);
         lastVp = vp;
       }
+      if (s.status === 'rejected') {
+        for (const line of (s.reason && s.reason.lines) || []) console.log(line);
+        console.log(`  ❌ ${vp.name.padEnd(7)} ${theme.padEnd(5)} pair failed: ${s.reason && s.reason.message}`);
+        if (!firstError) firstError = s.reason;
+        return;
+      }
+      const r = s.value;
       for (const line of r.lines) console.log(line);
       for (const cell of r.cells) {
         summary.push(cell);
@@ -541,6 +556,7 @@ async function main() {
         vpTotals[vp.name].net += cell.net;
       }
     });
+    if (firstError) throw firstError;
   } finally {
     await browser.close();
   }
