@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const { pathToFileURL } = require('url');
 
 let passed = 0, failed = 0;
 let chain = Promise.resolve();
@@ -30,7 +31,7 @@ function get(port, p, method) {
 }
 
 (async () => {
-  const mod = await import(path.join(__dirname, '..', '..', 'scripts', 'dev-static.mjs'));
+  const mod = await import(pathToFileURL(path.join(__dirname, '..', '..', 'scripts', 'dev-static.mjs')).href);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-static-'));
   fs.writeFileSync(path.join(root, 'index.html'), '<!doctype html><p>ui</p>');
   fs.mkdirSync(path.join(root, 'icons'));

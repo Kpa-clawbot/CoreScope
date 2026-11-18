@@ -45,6 +45,15 @@ type PlannerConfig struct {
 	NodeMarginKm float64 `json:"nodeMarginKm"`
 	// MaxLegKm: profile/relay A→B leg, 10-200. Ranges above it are not offered.
 	MaxLegKm float64 `json:"maxLegKm"`
+	// UserReach: the Users layer of the Coverage tab. Non-nil after resolved().
+	UserReach *PlannerUserReach `json:"userReach,omitempty"`
+}
+
+// PlannerUserReach is the handheld reach curve
+// P(heard) = 1/(1+exp((ln d - ln D50Km)/Slope)).
+type PlannerUserReach struct {
+	D50Km float64 `json:"d50Km"` // distance with P = 0.5, 0.2-50
+	Slope float64 `json:"slope"` // 0.05-2
 }
 
 const (
@@ -54,14 +63,18 @@ const (
 	defaultPlannerMaxAreaKm    = 100.0
 	defaultPlannerNodeMarginKm = 30.0
 	defaultPlannerMaxLegKm     = 100.0
+	defaultPlannerUserD50Km    = 2.7
+	defaultPlannerUserSlope    = 0.30
 
 	// Valid ranges of the size limits; outside them resolved() uses the default.
 	plannerAreaKmMin, plannerAreaKmMax = 20.0, 250.0
 	// The margin minimum is plannerAreaNodeKm: the "a repeater is near the box"
 	// check reaches that far, so a smaller margin could start a plan with no
 	// nodes in it.
-	plannerMarginKmMin, plannerMarginKmMax = 10.0, 60.0
-	plannerLegKmMin, plannerLegKmMax       = 10.0, 200.0
+	plannerMarginKmMin, plannerMarginKmMax   = 10.0, 60.0
+	plannerLegKmMin, plannerLegKmMax         = 10.0, 200.0
+	plannerUserD50KmMin, plannerUserD50KmMax = 0.2, 50.0
+	plannerUserSlopeMin, plannerUserSlopeMax = 0.05, 2.0
 
 	plannerMaxPoints    = 16   // profile: points per request
 	plannerMaxSites     = 10   // coverage: max suggested sites
@@ -80,18 +93,19 @@ var plannerRangesKm = []float64{10, 15, 20, 30, 40, 50, 60}
 
 // PlannerClientConfig is /api/config/client "planner"; present only when enabled.
 type PlannerClientConfig struct {
-	DefaultRangeKm   float64   `json:"defaultRangeKm"`
-	RangesKm         []float64 `json:"rangesKm"`
-	NewAntennaM      float64   `json:"newAntennaM"`
-	ExistingAntennaM float64   `json:"existingAntennaM"`
-	FrequencyMHz     float64   `json:"frequencyMhz"`
-	KFactor          float64   `json:"kFactor"`
-	MaxPoints        int       `json:"maxPoints"`
-	MaxLegKm         float64   `json:"maxLegKm"`
-	MaxAreaKm        float64   `json:"maxAreaKm"`
-	NodeMarginKm     float64   `json:"nodeMarginKm"`
-	MaxSites         int       `json:"maxSites"`
-	MinClearance     float64   `json:"minClearance"`
+	DefaultRangeKm   float64          `json:"defaultRangeKm"`
+	RangesKm         []float64        `json:"rangesKm"`
+	NewAntennaM      float64          `json:"newAntennaM"`
+	ExistingAntennaM float64          `json:"existingAntennaM"`
+	FrequencyMHz     float64          `json:"frequencyMhz"`
+	KFactor          float64          `json:"kFactor"`
+	MaxPoints        int              `json:"maxPoints"`
+	MaxLegKm         float64          `json:"maxLegKm"`
+	MaxAreaKm        float64          `json:"maxAreaKm"`
+	NodeMarginKm     float64          `json:"nodeMarginKm"`
+	MaxSites         int              `json:"maxSites"`
+	MinClearance     float64          `json:"minClearance"`
+	UserReach        PlannerUserReach `json:"userReach"`
 }
 
 // ─── Wire types ────────────────────────────────────────────────────────────
@@ -158,6 +172,51 @@ type PlannerRelayParams struct {
 	RangeKm          float64 `json:"range_km"`
 	FrequencyMHz     float64 `json:"frequency_mhz"`
 	KFactor          float64 `json:"k_factor"`
+}
+
+// PlannerViewshedResponse — /api/planner/viewshed. Cells is the base64 of
+// Rows×Cols bytes over BBox (s, w, n, e), row 0 north, row-major; each byte
+// is users | repeaters<<4, a nibble of 0 meaning no data (viewshedGrid).
+type PlannerViewshedResponse struct {
+	Source   string                `json:"source"`
+	Params   PlannerViewshedParams `json:"params"`
+	BBox     [4]float64            `json:"bbox"`
+	Rows     int                   `json:"rows"`
+	Cols     int                   `json:"cols"`
+	CellKm   float64               `json:"cell_km"`
+	Cells    string                `json:"cells"`
+	Links    []PlannerViewshedLink `json:"links"` // live repeaters within range, nearest first
+	Warnings []string              `json:"warnings"`
+	// Truncated: more repeaters/rooms in the view than plannerMaxNodes; the
+	// farthest from the site were left out of links.
+	Truncated bool `json:"truncated"`
+}
+
+type PlannerViewshedParams struct {
+	Site         geoPointJSON             `json:"site"`
+	AntennaM     float64                  `json:"antenna_m"`
+	RxAntennaM   float64                  `json:"rx_antenna_m"`
+	RangeKm      float64                  `json:"range_km"`
+	FrequencyMHz float64                  `json:"frequency_mhz"`
+	KFactor      float64                  `json:"k_factor"`
+	UserReach    PlannerViewshedUserReach `json:"user_reach"`
+}
+
+// PlannerViewshedUserReach is PlannerUserReach as the viewshed response
+// reports it, in the response's snake_case.
+type PlannerViewshedUserReach struct {
+	D50Km float64 `json:"d50_km"`
+	Slope float64 `json:"slope"`
+}
+
+// PlannerViewshedLink: the site → repeater link, site at AntennaM and the
+// repeater at RxAntennaM.
+type PlannerViewshedLink struct {
+	PubKey string      `json:"pubkey"`
+	Name   string      `json:"name"`
+	Lat    float64     `json:"lat"`
+	Lon    float64     `json:"lon"`
+	Link   PlannerLink `json:"link"`
 }
 
 // PlannerRelayOption: BottleneckPct = min(LegA, LegB).ClearancePct. Options

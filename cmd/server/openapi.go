@@ -48,6 +48,8 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/config/theme":              {Summary: "Get theme configuration", Description: "Returns color maps, CSS variables, and theme defaults.", Tag: "config"},
 		"GET /api/config/map":                {Summary: "Get map configuration", Tag: "config"},
 		"GET /api/config/geo-filter":         {Summary: "Get geo-filter configuration", Tag: "config"},
+		"GET /api/config/areas":              {Summary: "List configured areas", Description: "Returns an array of configured area keys and labels with a non-empty label. Labels are not trimmed and keys are not filtered by prefix. Returns an empty array when no entries qualify. Result order is unspecified. Public endpoint with no query parameters.", Tag: "config", Response: schemaRef("ConfigAreasResponse")},
+		"GET /api/config/areas/polygons":     {Summary: "Get configured area geometry", Description: "Returns an array of all configured areas, including unlabeled entries, with their raw polygon and bounding-box fields. Empty polygons and unset bounds are omitted; zero bounds are included. Each bound is independently optional, and polygons may coexist with bounds. Returns an empty array when no areas are configured. Result order is unspecified. Public endpoint with no query parameters.", Tag: "config", Response: schemaRef("ConfigAreaPolygonsResponse")},
 
 		// Admin / system
 		"GET /api/health":      {Summary: "Health check", Description: "Returns server health, uptime, and memory stats.", Tag: "admin"},
@@ -245,6 +247,11 @@ func routeDescriptions() map[string]routeMeta {
 		// Channels
 		"GET /api/channels":                 {Summary: "List channels", Description: "Returns known mesh channels with message counts. With userManagement.channelProposals.enabled the response also carries approvedChannels: the approved hashtag channel names, oldest approval first, at most maxApproved, listed also before they have traffic.", Tag: "channels"},
 		"GET /api/channels/{hash}/messages": {Summary: "Get channel messages", Description: "Returns messages for a specific channel.", Tag: "channels"},
+		"GET /api/known-channels": {
+			Summary: "Get the community channel catalogue", Tag: "channels", Response: schemaRef("KnownChannelsResponse"),
+			Description: "Returns the cached community channel catalogue without waiting for an upstream fetch. Catalogue entries do not establish observed traffic or successful decryption. An unavailable cache (including disabled fetching) returns 200 with empty entries, an empty source and the zero fetchedAt timestamp. Failed refreshes retain the last successful snapshot. Result order is unspecified. Cache-Control: public, max-age=30 without a snapshot; public, max-age=300 with a snapshot, including an empty catalogue.",
+			QueryParams: []paramMeta{{Name: "region", Type: "string", Description: "Single catalogue region label (not the IATA observer filter), matched by a case-insensitive comparison after trimming whitespace. Omitted or blank returns all entries. Unknown values return an empty entries array; comma-separated values are not expanded."}},
+		},
 
 		// Observers
 		"GET /api/observers":                 {Summary: "List observers", Description: "Returns all known packet observers/gateways. neighbors_report_at (when the latest /neighbors report arrived) and neighbors_count (how many neighbors it named) are present for observers that ever sent one (#2270).", Tag: "observers"},
@@ -260,6 +267,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/traces/{hash}":     {Summary: "Get packet traces", Description: "Returns all observer sightings for a packet hash.", Tag: "packets"},
 		"GET /api/planner/profile":   {Summary: "Terrain profiles for a multi-point LOS chain", Description: "Opt-in (config planner.enabled). pts is a flat comma list of 2-16 points near the mesh; legs[i] is pts[i] to pts[i+1] with distance_km and elev_m (SRTM terrain, ~90 m spacing) or error too_long|out_of_area|no_terrain. 202 + {state,progress,retry_after_s} while terrain loads: re-poll the same URL.", Tag: "map"},
 		"GET /api/planner/relay":     {Summary: "Best relay site between two points", Description: "Opt-in (config planner.enabled). Direct A-B link plus ranked relay options among known repeaters and open terrain in the corridor, each with both legs' clearance and profiles. 202 while computing: re-poll the same URL.", Tag: "map"},
+		"GET /api/planner/viewshed":  {Summary: "Theoretical reach of one candidate repeater site", Description: "Opt-in (config planner.enabled). For site=lat,lon (near a known node) at h metres (default planner.newAntennaM) within range km (one of the planner's ranges, default planner.defaultRangeKm): a grid of cells over bbox [s,w,n,e], row 0 north, row-major, base64 in cells, one byte per cell: low nibble the Users class 1-5 (handheld reach curve planner.userReach, lowered in deep terrain shadow), high nibble the Repeaters class 1-3 (blocked below -20% first-Fresnel clearance, slightly blocked -20% to 0%, line of sight 0% or more, for a receiver at rx metres, default planner.existingAntennaM), 0 for no data. links lists the known repeaters within range (rooms, stale repeaters and repeaters within 100 m of the site excluded), nearest first, with the site-to-repeater link at h and rx (no elev_m profile). truncated is true only when the 300-node cap may have dropped a repeater within range. 202 while computing: re-poll the same URL.", Tag: "map"},
 		"GET /api/planner/coverage":  {Summary: "Repeater backbone plan for an area", Description: "Opt-in (config planner.enabled). For bbox s,w,n,e (each side at most config planner.maxAreaKm, 100 km by default, settable from 20 to 250; must contain known repeaters) suggests up to sites=N new repeater sites, greedily minimising backbone components, then single points of failure, then maximising repeaters reached. 202 while computing: re-poll the same URL.", Tag: "map"},
 		"GET /api/elevation/profile": {Summary: "Terrain elevation along route legs", Description: "Opt-in (config los.enabled). Query pts is a flat comma list lat1,lon1,lat2,lon2,... of 2-16 points; legs[i] is pts[i] to pts[i+1] with distance_km (great-circle) and elev_m, terrain heights in metres evenly spaced along the great circle (about one per 90 m, 64-600, as /api/planner/profile samples a leg), or error too_long (leg over 300 km), unknown_point (endpoint is not a known node), too_many_tiles (the request would load more than 16 terrain tiles), upstream (a terrain tile could not be loaded; retry later) or no_terrain (no terrain data there). Terrain is the planner's SRTM tiles (config terrain block), held in memory; source names it for attribution. Every point must be a known node position. 202 with {state, progress, retry_after_s} while tiles download: re-poll the same URL. 404 when disabled, 400 on bad pts, 429 with Retry-After when the request would start more tile downloads than the client's per-IP allowance.", Tag: "map"},
 		"GET /api/rf-params":         {Summary: "LoRa RF parameters per node", Description: "Opt-in (config rfParams.nodesUrl, issue #1268). Frequency, SF, bandwidth and coding rate the MeshCore map holds for the nodes this instance knows, keyed by lower-case pubkey, limited to adverts within rfParams.maxAgeDays (default 7). Also returns the named presets and fetched_at, the time of the last successful map fetch (null before the first one), and deviations: the nodes whose frequency, SF or bandwidth differs from a setting that more than half of the nodes within rfParams.compareRadiusKm (default 50) on the same band share, the node itself counted, with that majority and the counts. Frequencies within a quarter of the bandwidth count as the same channel. enabled is false when the feature is off.", Tag: "nodes"},
@@ -276,6 +284,8 @@ type openAPISchema struct {
 	Nullable             bool                     `json:"nullable,omitempty"`
 	Enum                 []string                 `json:"enum,omitempty"`
 	Items                *openAPISchema           `json:"items,omitempty"`
+	MinItems             int                      `json:"minItems,omitempty"`
+	MaxItems             int                      `json:"maxItems,omitempty"`
 	Properties           map[string]openAPISchema `json:"properties,omitempty"`
 	Required             []string                 `json:"required,omitempty"`
 	AdditionalProperties *openAPISchema           `json:"additionalProperties,omitempty"`
@@ -308,6 +318,35 @@ func componentSchemas() map[string]interface{} {
 		return m
 	}
 	return map[string]interface{}{
+		"ConfigAreasResponse": openAPISchema{
+			Type: "array", Items: &openAPISchema{
+				Type: "object", Required: []string{"key", "label"},
+				Properties: map[string]openAPISchema{
+					"key":   {Type: "string", Description: "Area configuration map key, preserved verbatim."},
+					"label": {Type: "string", Description: "Non-empty configured display label, preserved verbatim."},
+				},
+			},
+		},
+		"ConfigAreaPolygonsResponse": openAPISchema{
+			Type: "array", Items: &openAPISchema{
+				Type: "object", Required: []string{"key", "label"},
+				Properties: map[string]openAPISchema{
+					"key":   {Type: "string", Description: "Area configuration map key, preserved verbatim."},
+					"label": {Type: "string", Description: "Configured display label; may be empty."},
+					"polygon": {
+						Type: "array", MinItems: 1, Description: "Configured coordinates, unchanged; omitted when empty. The endpoint does not validate polygon geometry.",
+						Items: &openAPISchema{
+							Type: "array", MinItems: 2, MaxItems: 2, Description: "[latitude, longitude] in degrees.",
+							Items: &openAPISchema{Type: "number"},
+						},
+					},
+					"latMin": {Type: "number", Description: "Configured minimum latitude in degrees. Omitted when unset; included when set to zero."},
+					"latMax": {Type: "number", Description: "Configured maximum latitude in degrees. Omitted when unset; included when set to zero."},
+					"lonMin": {Type: "number", Description: "Configured minimum longitude in degrees. Omitted when unset; included when set to zero."},
+					"lonMax": {Type: "number", Description: "Configured maximum longitude in degrees. Omitted when unset; included when set to zero."},
+				},
+			},
+		},
 		"ReadinessResponse": openAPISchema{
 			Type: "object", Required: []string{"ready", "loadedTx", "loadedObs", "from_pubkey_backfill"},
 			Properties: map[string]openAPISchema{
@@ -492,6 +531,25 @@ func componentSchemas() map[string]interface{} {
 				"node":               str("The queried node's public key."),
 				"neighbors":          map[string]interface{}{"type": "array", "items": schemaRef("NeighborEntry")},
 				"total_observations": map[string]interface{}{"type": "integer"},
+			},
+		},
+		"KnownChannelsResponse": openAPISchema{
+			Type: "object", Required: []string{"fetchedAt", "source", "entries"},
+			Properties: map[string]openAPISchema{
+				"fetchedAt":   {Type: "string", Description: "Server fetch timestamp in RFC3339 form; 0001-01-01T00:00:00Z when no snapshot is available."},
+				"source":      {Type: "string", Description: "Catalogue source URL; empty when no snapshot is available."},
+				"generatedAt": {Type: "string", Description: "Upstream generation value, copied verbatim without timestamp validation; omitted when empty."},
+				"license":     {Type: "string", Description: "Upstream license text, copied verbatim; omitted when empty."},
+				"entries": {Type: "array", Description: "Catalogue entries for the selected region, or all entries without a filter. An empty catalogue, unavailable cache or unmatched region yields an empty array.", Items: &openAPISchema{
+					Type: "object", Required: []string{"channel", "region"},
+					Properties: map[string]openAPISchema{
+						"channel":     {Type: "string", Description: "Upstream channel name with surrounding whitespace trimmed. Empty names are skipped; a # prefix is preserved when supplied."},
+						"region":      {Type: "string", Description: "Upstream region label, trimmed and lowercased. May be empty or an arbitrary label; no country-code validation is applied."},
+						"description": {Type: "string", Description: "Upstream description, copied verbatim; omitted when empty."},
+						"key":         {Type: "string", Description: "Upstream channel key, copied verbatim without format validation; omitted when empty."},
+						"regionName":  {Type: "string", Description: "Upstream display name for the region, copied verbatim; omitted when empty."},
+					},
+				}},
 			},
 		},
 	}
