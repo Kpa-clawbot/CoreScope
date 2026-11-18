@@ -17,6 +17,7 @@
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
 
+  let _liveAutoTiles = null; // MC_attachAutoTiles handle for the basemap
   let map, wsHandler, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer, clickablePathsLayer;
   // New animation canvas
   let animCanvas, animCtx;
@@ -1545,53 +1546,12 @@
     }
     _rebindDPRListener();
 
-    const isDark = window.MC_isDarkTheme();
-    // #1420 — multi-provider dark-tile picker. Light mode unchanged (live page).
-    let _liveDarkRefLayer = null;
-    // Single shared registry resolver (map-tile-providers.js loads before this
-    // file; there is deliberately no second fallback body here — AGENTS.md DRY).
-    function _liveResolveTile(dark) {
-      const r = window.MC_resolveTile(!!dark);
-      return { url: r.url, attribution: r.attribution, refUrl: r.refUrl, maxZoom: r.maxZoom };
-    }
-    const liveAutoLayerGroup = L.layerGroup().addTo(map);
-
-    function _liveSyncDarkTiles(dark) {
-      const r = _liveResolveTile(dark);
-      tileLayer.setUrl(r.url);
-      if (tileLayer.options) tileLayer.options.attribution = r.attribution;
-      if (dark && r.refUrl) {
-        if (!_liveDarkRefLayer) {
-          _liveDarkRefLayer = L.tileLayer(r.refUrl, { maxZoom: 19, attribution: r.attribution }).addTo(liveAutoLayerGroup);
-        } else {
-          _liveDarkRefLayer.setUrl(r.refUrl);
-          if (!liveAutoLayerGroup.hasLayer(_liveDarkRefLayer)) _liveDarkRefLayer.addTo(liveAutoLayerGroup);
-        }
-      } else if (_liveDarkRefLayer) {
-        liveAutoLayerGroup.removeLayer(_liveDarkRefLayer);
-        _liveDarkRefLayer = null;
-      }
-      if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
-      // #1420 parity with map.js — refresh visible attribution credit after provider swap.
-      // Make sure the map is loaded before trying to update the ui
-      if (map && map.attributionControl) {
-        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) {}
-      }
-    }
-    const _liveInitTile = _liveResolveTile(isDark);
-    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: _liveInitTile.maxZoom || 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
-    if (isDark && _liveInitTile.refUrl) {
-      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: _liveInitTile.maxZoom || 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
-    }
-    if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
-  
     // Add Zoom Control
     L.control.zoom({ position: 'topright' }).addTo(map);
 
-    // Add Layer Control, passing 'topright' to put it on the right
-    if (typeof window.MC_createLayerControl === 'function') {
-      window.MC_createLayerControl(map, liveAutoLayerGroup, 'topright');
-    }
+    // Shared theme-synced basemap; the provider picker goes on the right,
+    // after the zoom control.
+    _liveAutoTiles = window.MC_attachAutoTiles(map, { controlPosition: 'topright' });
 
     // Add custom Leaflet Control for Fullscreen
     const LiveFullscreenControl = L.Control.extend({
@@ -1634,18 +1594,6 @@
     map.addControl(new LiveSettingsControl());
 
 
-
-    // Swap tiles when theme changes
-    const _themeObs = new MutationObserver(function () {
-      _liveSyncDarkTiles(window.MC_isDarkTheme());
-    });
-    _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    // #1420 — re-render on customizer change.
-    window.addEventListener('mc-tile-provider-changed', function (e) {
-      const dark = window.MC_isDarkTheme();
-      if (e && e.detail && e.detail.type && e.detail.type !== (dark ? 'dark' : 'light')) return;
-      _liveSyncDarkTiles(dark);
-    });
 
     // #1485 — animations + trails need their own pane above markerPane.
     // PR #1334 moved node markers from L.circleMarker (overlayPane @ 400)
@@ -4635,6 +4583,7 @@
       RegionFilter.offChange(regionFilterChangeHandler);
       regionFilterChangeHandler = null;
     }
+    if (_liveAutoTiles) { _liveAutoTiles.destroy(); _liveAutoTiles = null; }
     if (map) { map.remove(); map = null; }
     if (_onResize) {
       window.removeEventListener('resize', _onResize);

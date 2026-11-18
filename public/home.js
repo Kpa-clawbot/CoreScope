@@ -516,7 +516,15 @@
         const mapEl = document.getElementById('healthMap');
         if (mapEl) {
           miniMap = L.map(mapEl, { zoomControl: false, attributionControl: false }).setView([node.lat, node.lon], 12);
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(miniMap);
+          // Follow the provider pick for the current theme; plain OSM if the
+          // shared tile module is absent.
+          const tileR = (typeof window.MC_resolveTile === 'function' && typeof window.MC_buildTileLayer === 'function')
+            ? window.MC_resolveTile(typeof window.MC_isDarkTheme === 'function' ? window.MC_isDarkTheme() : false) : null;
+          (tileR ? window.MC_buildTileLayer(tileR, { raster: true }) : L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')).addTo(miniMap);
+          try {
+            const pane = tileR && tileR.invertFilter && miniMap.getPane('tilePane');
+            if (pane) pane.style.filter = tileR.invertFilter;
+          } catch (_e) {}
           L.marker([node.lat, node.lon]).addTo(miniMap);
           setTimeout(() => miniMap.invalidateSize(), 100);
         }

@@ -3,6 +3,7 @@
 
 (function () {
   let map = null;
+  let autoTiles = null; // MC_attachAutoTiles handle for the basemap
   let routeLayer = null;
   let markerLayer = null;
   // Estimated positions of repeaters known only from their reported name
@@ -666,65 +667,8 @@
     // If navigated with ?node=PUBKEY, highlight that node after markers load
     targetNodeKey = urlParams.get('node') || null;
 
-    const isDark = window.MC_isDarkTheme();
-    // #1420 — multi-provider dark-tile picker. Light mode unchanged (map page).
-    let _darkRefLayer = null;  // Esri-only: labels overlay
-    // Single shared registry resolver (map-tile-providers.js loads before this
-    // file; there is deliberately no second fallback body here — AGENTS.md DRY).
-    function _resolveTileUrl(dark) {
-      const r = window.MC_resolveTile(!!dark);
-      return { url: r.url, attribution: r.attribution, refUrl: r.refUrl, maxZoom: r.maxZoom };
-    }
-    const autoLayerGroup = L.layerGroup().addTo(map);
-    
-    function _syncDarkTiles(dark) {
-      const r = _resolveTileUrl(dark);
-      tileLayer.setUrl(r.url);
-      if (tileLayer.options) tileLayer.options.attribution = r.attribution;
-      // Esri reference (labels) overlay: add when needed, remove otherwise.
-      if (dark && r.refUrl) {
-        if (!_darkRefLayer) {
-          _darkRefLayer = L.tileLayer(r.refUrl, { maxZoom: 19, attribution: r.attribution }).addTo(autoLayerGroup);
-        } else {
-          _darkRefLayer.setUrl(r.refUrl);
-          if (!autoLayerGroup.hasLayer(_darkRefLayer)) _darkRefLayer.addTo(autoLayerGroup);
-        }
-      } else if (_darkRefLayer) {
-        autoLayerGroup.removeLayer(_darkRefLayer);
-        _darkRefLayer = null;
-      }
-      if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
-      // Make sure the map is loaded before trying to update the ui
-      if (map && map.attributionControl) {
-        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) {}
-      }
-    }
-    const _initTile = _resolveTileUrl(isDark);
-    const tileLayer = L.tileLayer(_initTile.url, {
-      attribution: _initTile.attribution,
-      maxZoom: _initTile.maxZoom || 19,
-    }).addTo(autoLayerGroup);
-    if (isDark && _initTile.refUrl) {
-      _darkRefLayer = L.tileLayer(_initTile.refUrl, { maxZoom: _initTile.maxZoom || 19, attribution: _initTile.attribution }).addTo(autoLayerGroup);
-    }
-    if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
-    
-    // Add Layer Control, passing 'topleft' to put it on the left
-    if (typeof window.MC_createLayerControl === 'function') {
-      window.MC_createLayerControl(map, autoLayerGroup, 'topleft');
-    }
-
-    const _mapThemeObs = new MutationObserver(function () {
-      const dark = window.MC_isDarkTheme();
-      _syncDarkTiles(dark);
-    });
-    _mapThemeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    // #1420 — re-render when the user picks a different dark provider in the customizer.
-    window.addEventListener('mc-tile-provider-changed', function (e) {
-      const dark = window.MC_isDarkTheme();
-      if (e && e.detail && e.detail.type && e.detail.type !== (dark ? 'dark' : 'light')) return;
-      _syncDarkTiles(dark);
-    });
+    // Shared theme-synced basemap + provider picker (map-tile-providers.js).
+    autoTiles = window.MC_attachAutoTiles(map, { controlPosition: 'topleft' });
 
     // #1689 r1 (adv #4): live re-render when the customizer "hide 1-byte
     // path hops" toggle flips. Before this listener the toggle only took

@@ -170,16 +170,34 @@
     function makeApply(rec) {
       return function () {
         var r = resolve();
+        // Skip the rebuild (a visible tile flash) when nothing that shapes the
+        // basemap changed; the pane filter below is still re-applied.
+        var sig = [r.id, r.url, r.refUrl, r.format, r.invertFilter, r.maxZoom, r.maxNativeZoom,
+          Array.isArray(r.subdomains) ? r.subdomains.join('') : r.subdomains, r.attribution].join('\u0001');
+        if (rec.layer && rec.last === sig) {
+          try {
+            var keepPane = map.getPane && map.getPane('tilePane');
+            if (keepPane) keepPane.style.filter = r.invertFilter || '';
+          } catch (_e) {}
+          return rec.layer;
+        }
         if (rec.layer) { try { map.removeLayer(rec.layer); } catch (_e) {} rec.layer = null; }
-        if (rec.refLayer) { try { map.removeLayer(rec.refLayer); } catch (_e) {} rec.refLayer = null; }
+        rec.last = sig;
         try {
-          rec.layer = L.tileLayer(r.url, { maxZoom: r.maxZoom || 18, attribution: r.attribution || '© OpenStreetMap contributors' }).addTo(map);
-          // Esri 2-layer provider: labels come as a separate reference tileset
-          // stacked on the base layer.
-          if (r.refUrl) {
-            rec.refLayer = L.tileLayer(r.refUrl, { maxZoom: r.maxZoom || 18, attribution: r.attribution || '© OpenStreetMap contributors' }).addTo(map);
+          // Shared builder: one layer (a layerGroup when the provider has an
+          // Esri refUrl labels tileset). Plain L.tileLayer only when
+          // map-tile-providers.js failed to load.
+          if (typeof window.MC_buildTileLayer === 'function') {
+            rec.layer = window.MC_buildTileLayer(r, { raster: true }).addTo(map);
+          } else {
+            var topts = { maxZoom: r.maxZoom || 18, attribution: r.attribution || '© OpenStreetMap contributors' };
+            rec.layer = L.tileLayer(r.url, topts);
+            if (r.refUrl && typeof L.layerGroup === 'function') {
+              rec.layer = L.layerGroup([rec.layer, L.tileLayer(r.refUrl, topts)]);
+            }
+            rec.layer.addTo(map);
           }
-        } catch (_e) { return rec.layer; }
+        } catch (_e) { rec.last = null; return rec.layer; }
         // Apply the invert CSS filter to the tile pane when the provider needs
         // it (dark-inverted light styles like positron-dark / carto-voyager-dark).
         try {
@@ -206,7 +224,7 @@
       st.maps = kept;
     }
 
-    var rec = { map: map, layer: null, refLayer: null, apply: null };
+    var rec = { map: map, layer: null, last: null, apply: null };
     rec.apply = makeApply(rec);
     pruneStaleRecords();
     // Re-registering the same map (rx-coverage re-init) replaces its record
@@ -217,7 +235,6 @@
         if (st.maps[i].map === map) {
           var prev = st.maps.splice(i, 1)[0];
           if (prev.layer) { try { map.removeLayer(prev.layer); } catch (_e) {} }
-          if (prev.refLayer) { try { map.removeLayer(prev.refLayer); } catch (_e) {} }
           break;
         }
       }
@@ -242,7 +259,6 @@
         if (st.maps[i].map === m) {
           var gone = st.maps.splice(i, 1)[0];
           if (gone.layer) { try { m.removeLayer(gone.layer); } catch (_e) {} }
-          if (gone.refLayer) { try { m.removeLayer(gone.refLayer); } catch (_e) {} }
           break;
         }
       }

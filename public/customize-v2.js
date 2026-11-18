@@ -1647,14 +1647,32 @@
   // Persists per-browser via MC_setDarkTileProvider; map.js / live.js
   // listen for `mc-tile-provider-changed` and swap tiles live.
   
+  // Light basemap for the geofilter preview maps (they preview marker colours
+  // on a light map): the operator's light provider via the shared builder,
+  // else the literal Carto light URL.
+  function _geoPreviewTiles() {
+    if (typeof window.MC_resolveTile === 'function' && typeof window.MC_buildTileLayer === 'function') {
+      return window.MC_buildTileLayer(window.MC_resolveTile(false), { raster: true });
+    }
+    return L.tileLayer(window.MC_tileUrlById
+      ? window.MC_tileUrlById('carto-light', 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png')
+      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
+    });
+  }
+
   function _renderTileProviderSelector() {
     var reg = (typeof window !== 'undefined') && window.MC_TILE_PROVIDERS;
     if (!reg) return '';
     var activeDark = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
     var activeLight = (typeof window.MC_getLightTileProvider === 'function') ? window.MC_getLightTileProvider() : 'carto-light';
     
-    var darkIds = Object.keys(reg).filter(function(id) { return reg[id].type === 'dark'; });
-    var lightIds = Object.keys(reg).filter(function(id) { return reg[id].type === 'light'; });
+    // 'any' (theme-neutral, e.g. satellite) entries are valid for both
+    // themes: listed after the theme's own entries.
+    var idsOfType = function(t) { return Object.keys(reg).filter(function(id) { return reg[id].type === t; }); };
+    var anyIds = idsOfType('any');
+    var darkIds = idsOfType('dark').concat(anyIds);
+    var lightIds = idsOfType('light').concat(anyIds);
     
     var hasMultipleDark = darkIds.length > 1;
     var hasMultipleLight = lightIds.length > 1;
@@ -1849,11 +1867,7 @@
     var modalClosingLine = null;
 
     _gfModalMap = L.map(mapDiv, { zoomControl: true });
-    L.tileLayer(window.MC_tileUrlById
-      ? window.MC_tileUrlById('carto-light', 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png')
-      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
-    }).addTo(_gfModalMap);
+    _geoPreviewTiles().addTo(_gfModalMap);
 
     function renderModal() {
       if (modalPolygon) { _gfModalMap.removeLayer(modalPolygon); modalPolygon = null; }
@@ -2114,11 +2128,7 @@
     if (!mapEl || typeof L === 'undefined') return;
 
     _gfMap = L.map(mapEl, { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false });
-    L.tileLayer(window.MC_tileUrlById
-      ? window.MC_tileUrlById('carto-light', 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png')
-      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
-    }).addTo(_gfMap);
+    _geoPreviewTiles().addTo(_gfMap);
 
     if (!_gfLoaded) {
       api('/config/geo-filter', { ttl: 0 }).then(function (gf) {
