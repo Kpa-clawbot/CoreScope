@@ -76,7 +76,7 @@ async function run() {
     await test(`#2131 packet count help${interaction ? ' ' + interaction : ''} in ${view}`, async () => {
       const height = interaction === 'scroll edges' ? 600 : (width < 640 ? 667 : 900);
       const fixtureContext = await browser.newContext({
-        viewport: { width, height }, hasTouch: width < 640,
+        viewport: { width, height }, hasTouch: width < 640, locale: 'en-US',
       });
       const fixturePage = await fixtureContext.newPage();
       await fixturePage.addInitScript(() => {
@@ -110,7 +110,7 @@ async function run() {
           .filter({ hasText: 'Total Packets' });
         await label.waitFor();
         const count = await label.evaluate(el => el.nextElementSibling.innerText.trim());
-        assert(count === (full ? '233 (seen 12278×)' : '233'), `Packet counts changed: ${count}`);
+        assert(count === (full ? '233 (seen 12,278×)' : '233'), `Packet counts changed: ${count}`);
 
         const help = label.getByRole('button', { name: 'Total Packets help', exact: true });
         assert(await help.count() === 1, `Total Packets help is missing in ${view}`);

@@ -390,6 +390,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/elevation/profile", s.handleElevationProfile).Methods("GET")
 	r.HandleFunc("/api/planner/profile", s.handlePlannerProfile).Methods("GET")
 	r.HandleFunc("/api/planner/relay", s.handlePlannerRelay).Methods("GET")
+	r.HandleFunc("/api/planner/viewshed", s.handlePlannerViewshed).Methods("GET")
 	r.HandleFunc("/api/planner/coverage", s.handlePlannerCoverage).Methods("GET")
 	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")

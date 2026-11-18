@@ -627,6 +627,134 @@ async function until(fn, label) {
     assert((await off.locator('[data-notify-toggle]').count()) === 0, 'toggle shown while the feature is off');
   });
 
+  let rpk = null;
+  const riSel = '#node-repeater-info';
+  const riText = (pg) => pg.innerText(riSel).then((t) => t.replace(/\s+/g, ' '));
+  async function openRepeater(pg, q) {
+    await pg.goto(BASE + '/#/nodes/' + encodeURIComponent(rpk) + (q || ''));
+    await pg.waitForSelector('#node-repeater-info:not([hidden])');
+  }
+  await step('repeater info: anonymous sees No details yet. and no Edit or Claim button', async () => {
+    const body = await (await off.request.get(BASE + '/api/nodes?role=repeater&limit=1')).json();
+    assert(body.nodes && body.nodes.length, 'no repeater in the fixture');
+    rpk = body.nodes[0].public_key;
+    const anon = await (await browser.newContext()).newPage();
+    anon.setDefaultTimeout(8000);
+    await openRepeater(anon);
+    assert((await riText(anon)).indexOf('No details yet.') !== -1, 'empty text missing: ' + await riText(anon));
+    assert((await anon.locator(riSel + ' button').count()) === 0, 'button shown while logged out');
+    await anon.context().close();
+  });
+
+  const userA = await (await browser.newContext()).newPage();
+  userA.setDefaultTimeout(8000);
+  userA.on('pageerror', (e) => console.error('[pageerror userA]', e.message));
+  const userB = await (await browser.newContext()).newPage();
+  userB.setDefaultTimeout(8000);
+  userB.on('pageerror', (e) => console.error('[pageerror userB]', e.message));
+
+  await step('repeater info: user A saves height, status and notes; the open form survives a re-render; HTML shows as text', async () => {
+    await registerAndActivate(userA, 'ri-a@e2e.test', 'Repeater A');
+    await openRepeater(userA);
+    await userA.click(riSel + ' [data-ri-edit]');
+    await userA.fill(riSel + ' [name="heightM"]', '25');
+    await userA.selectOption(riSel + ' [name="status"]', 'maintenance');
+    await userA.fill(riSel + ' [name="notes"]', '<b>x</b>');
+    // A theme change re-renders the whole node page (theme-refresh); the open
+    // form must come back with what was typed, not fall back to read mode.
+    await userA.evaluate((sel) => {
+      document.querySelector(sel + ' [name="notes"]').dataset.beforeRefresh = '1';
+      window.dispatchEvent(new Event('theme-changed'));
+    }, riSel);
+    await userA.waitForFunction((sel) => {
+      const n = document.querySelector(sel + ' [name="notes"]');
+      return n && !n.dataset.beforeRefresh;
+    }, riSel);
+    const kept = await userA.evaluate((sel) => ['heightM', 'status', 'notes'].map((n) => document.querySelector(sel + ' [name="' + n + '"]').value), riSel);
+    assert(JSON.stringify(kept) === JSON.stringify(['25', 'maintenance', '<b>x</b>']), 'form lost input on re-render: ' + JSON.stringify(kept));
+    await userA.click(riSel + ' [data-ri-save]');
+    await userA.waitForSelector(riSel + ' .repeater-info-list');
+    const t = await riText(userA);
+    assert(t.indexOf('25 m') !== -1, 'height missing: ' + t);
+    assert(t.indexOf('maintenance') !== -1, 'status missing: ' + t);
+    assert(t.indexOf('<b>x</b>') !== -1, 'notes not literal: ' + t);
+    assert(t.indexOf('Last edited by Repeater A') !== -1, 'editor missing: ' + t);
+    assert((await userA.locator(riSel + ' .repeater-info-notes b').count()) === 0, 'notes rendered as markup');
+    const notesBox = await userA.locator(riSel + ' .repeater-info-notes').evaluate(function (n) {
+      var cs = getComputedStyle(n);
+      return { maxHeight: cs.maxHeight, overflowY: cs.overflowY };
+    });
+    assert(notesBox.maxHeight !== 'none' && notesBox.overflowY === 'auto', 'long notes are not capped: ' + JSON.stringify(notesBox));
+  });
+
+  await step('repeater info: A claims after the confirm and the button turns into Unclaim', async () => {
+    await userA.click(riSel + ' [data-ri-claim]');
+    await userA.click(riSel + ' [data-ri-confirm]');
+    await userA.waitForSelector(riSel + ' [data-ri-unclaim]');
+    assert((await riText(userA)).indexOf('Maintained by Repeater A') !== -1, 'maintainer missing');
+    assert((await userA.textContent(riSel + ' [data-ri-unclaim]')).trim() === 'Unclaim', 'button text');
+  });
+
+  await step('repeater info: user B sees Claim but no Edit, and a direct PUT is 403', async () => {
+    await registerAndActivate(userB, 'ri-b@e2e.test', 'Repeater B');
+    await openRepeater(userB);
+    await userB.waitForSelector(riSel + ' [data-ri-claim]');
+    assert((await userB.locator(riSel + ' [data-ri-edit]').count()) === 0, 'Edit shown to a non-maintainer');
+    const status = await userB.evaluate((pk) => window.CSAuth.request('PUT', '/api/repeaters/' + pk + '/info',
+      { heightM: 1, gainDbi: 0, status: 'active', power: '', notes: 'b' }).then((r) => r.status), rpk);
+    assert(status === 403, 'PUT by non-maintainer returned ' + status);
+  });
+
+  await step('repeater info: the section deep link scrolls the section into view', async () => {
+    const small = await (await userB.context().browser().newContext({ viewport: { width: 1280, height: 400 } })).newPage();
+    small.setDefaultTimeout(8000);
+    await small.goto(BASE + '/#/account/login');
+    await small.waitForSelector('#loginForm');
+    await small.fill('#loginEmail', 'ri-b@e2e.test');
+    await small.fill('#loginPassword', PW);
+    await small.click('#loginForm button[type="submit"]');
+    await small.waitForSelector('#profileForm');
+    const top = () => small.evaluate(() => document.getElementById('node-repeater-info').getBoundingClientRect().top);
+    await openRepeater(small);
+    await small.waitForTimeout(500);
+    const h = await small.evaluate(() => window.innerHeight);
+    const before = await top();
+    assert(before >= h, 'precondition: section already in view without the deep link (top ' + before + ', viewport ' + h + ')');
+    await small.goto(BASE + '/#/');
+    await openRepeater(small, '?section=node-repeater-info');
+    await until(async () => { const t = await top(); return t > -2 && t < h; }, 'deep link scrolls to the repeater info section');
+    // The app may scroll an inner container instead of the window: sum both.
+    assert(await small.evaluate(() => { let n = document.getElementById('node-repeater-info'), y = window.scrollY; while (n) { y += n.scrollTop || 0; n = n.parentElement; } return y; }) > 0, 'nothing scrolled');
+    await small.context().close();
+  });
+
+  await step('repeater info: axe on the section', async () => {
+    await openRepeater(userA);
+    await axeClean(userA, riSel);
+  });
+
+  await step('repeater info: the nodes side pane shows the saved details', async () => {
+    await userA.goto(BASE + '/#/nodes');
+    await userA.waitForSelector('#nodeSearch');
+    await userA.fill('#nodeSearch', rpk.slice(0, 12));
+    const row = 'tr[data-key="' + rpk + '"]';
+    await userA.waitForSelector(row);
+    await userA.click(row);
+    const pane = '#node-repeater-info-pane';
+    await userA.waitForSelector(pane + ':not([hidden]) .repeater-info-list');
+    const t = (await userA.innerText(pane)).replace(/s+/g, ' ');
+    assert(t.indexOf('25 m') !== -1, 'pane height missing: ' + t);
+  });
+
+  await step('repeater info: feature off, no repeater info section on the node page', async () => {
+    await off.goto(BASE_OFF + '/#/nodes/' + encodeURIComponent(rpk));
+    await off.waitForSelector('#nodeNotifySlotFull', { state: 'attached' });
+    await authReady(off);
+    await nodePageRendered(off);
+    const vis = await off.evaluate(() => { const e = document.getElementById('node-repeater-info'); return !!e && !e.hidden && e.offsetParent !== null; });
+    assert(!vis, 'repeater info visible while the feature is off');
+  });
+
   await browser.close();
   console.log('\n' + passed + '/' + (passed + failed) + ' tests passed');
   process.exit(failed > 0 ? 1 : 0);

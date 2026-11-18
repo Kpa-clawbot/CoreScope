@@ -32,12 +32,14 @@ assert.ok(startIdx >= 0, 'could not find the Heard By card in public/nodes.js');
 const endIdx = src.indexOf(END, startIdx);
 assert.ok(endIdx > startIdx, 'could not find the end of the Heard By card');
 const block = src.slice(startIdx, endIdx).replace(/\s+$/, '');
+// Include the real count helpers used by the isolated card templates.
+const countHelpers = src.slice(src.indexOf('  function nodeMetricNumber('), src.indexOf('  function renderLastRelayed('));
 
 // The block is one `${cond ? `...` : ''}` substitution, so wrapping it in
 // backticks turns it back into the markup the page renders.
 const renderCard = new Function(
   'observers', 'relayObserverCount', 'escapeHtml',
-  'return `' + block + '`;'
+  countHelpers + '\nreturn `' + block + '`;'
 );
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -130,7 +132,7 @@ test('both Heard By views ignore unsupported region fields and escape names', ()
   const sideEnd = src.indexOf('<div class="node-detail-section" id="panelNeighborsSection">', sideStart);
   assert.ok(sideEnd > sideStart, 'could not find the end of the side-pane Heard By card');
   const renderSideCard = new Function('observers', 'relayObserverCount', 'escapeHtml',
-    'return `' + src.slice(sideStart, sideEnd).trimEnd() + '`;');
+    countHelpers + '\nreturn `' + src.slice(sideStart, sideEnd).trimEnd() + '`;');
   // Even a stale client-supplied region must not revive an unsupported field.
   const row = { ...directRow, observer_name: '<b>Observer</b>', iata: 'unsupported-region' };
   for (const render of [renderCard, renderSideCard]) {
