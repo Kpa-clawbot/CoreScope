@@ -41,16 +41,22 @@ GO_BUILD_TAGS     ?= netgo,osusergo,sqlite_omit_load_extension
 GO_BUILD_FLAGS    ?= -trimpath
 GO_LDFLAGS_OPTIMS ?= -s -w
 
-# musl gives every non-main thread a 128 KiB stack (glibc: 8 MiB), taken from
-# the ELF PT_GNU_STACK size. cgo calls into SQLite run on the calling thread's
+# musl sizes every non-main thread's stack from the ELF PT_GNU_STACK size
+# (floor 128 KiB, cap 8 MiB). cgo calls into SQLite run on the calling thread's
 # stack, and a deep query (multiSelect recursing ~850 B per UNION ALL term)
-# overflows 128 KiB and SIGSEGVs the server. Raising the linker's stack size
-# makes musl threads default to 8 MiB (reserved address space, not resident).
-# Go rejects this flag in #cgo LDFLAGS, so it must go in -extldflags. Harmless
-# on glibc; GNU ld/lld only, so the host build applies it on Linux only.
+# overflows 128 KiB and SIGSEGVs the process.
+#   - Native musl links (`make build` / `make test` on Alpine: gcc + GNU ld)
+#     write a zero PT_GNU_STACK and get the 128 KiB floor. The flag is the fix.
+#   - zig links (crossbuild, the Dockerfile, the release job) already write
+#     16 MiB, so those binaries had 8 MiB threads without it. There the flag
+#     pins the size instead of leaving it to a linker default.
+# Reserved address space, not resident memory. Go rejects this flag in
+# #cgo LDFLAGS, so it must go in -extldflags. Harmless on glibc; GNU ld/lld
+# only, so the host build and `make test` apply it on Linux only.
 STACK_LDFLAG      ?= -Wl,-z,stack-size=8388608
 ifeq ($(GOOS),linux)
 HOST_EXTLDFLAGS   := -extldflags '$(STACK_LDFLAG)'
+HOST_TEST_LDFLAGS := -ldflags=-extldflags=$(STACK_LDFLAG)
 endif
 
 CMDS              := server ingestor decrypt migrate
@@ -117,7 +123,7 @@ $(foreach c,$(CMDS),\
 # -- checks --------------------------------------------------------------------
 
 test:
-	bash scripts/allmod.sh test -ldflags=-extldflags=$(STACK_LDFLAG) ./...
+	bash scripts/allmod.sh test $(HOST_TEST_LDFLAGS) ./...
 
 vet:
 	bash scripts/allmod.sh vet ./...
