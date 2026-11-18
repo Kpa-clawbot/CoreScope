@@ -64,7 +64,7 @@ light('gray', 'gray-openfreemap', 'Gray: OpenFreeMap Positron', 'openfreemap-pos
 dark('gray', 'gray-openfreemap', 'Gray: OpenFreeMap Dark', 'openfreemap-dark', { vector: true });
 light('topo', 'topo-cyclosm', 'Topo: CyclOSM', 'osmfr-cyclosm', { view: 'mountains' });
 light('topo', 'topo-eox-terrain', 'Topo: EOX Terrain Light', 'eox-terrain-light', { view: 'mountains' });
-light('topo', 'topo-opentopomap', 'Topo: OpenTopoMap (opt-in)', 'opentopomap', { view: 'mountains', optional: true });
+light('topo', 'topo-opentopomap', 'Topo: OpenTopoMap (opt-in)', 'opentopomap', { view: 'mountains', optional: true, enable: ['opentopomap'] });
 // Satellite is never colour-inverted; the second theme only shows the page chrome.
 for (const theme of ['light', 'dark']) {
   add('satellite', `sat-s2-2025-${theme}`, `Satellite: Sentinel-2 2025 (${theme})`, { theme, provider: 'eox-s2-2025', view: 'mountains' });
@@ -120,15 +120,24 @@ function fakeTile(z, x, y) {
     `<text x="128" y="150" text-anchor="middle" font-family="monospace" font-size="18" fill="#223">${z}/${x}/${y}</text></svg>`;
 }
 
-async function installCustom(page) {
+async function installConfig(page, e) {
   // Registered after installTileStub, so Playwright tries these routes first.
+  // e.custom adds the fake custom provider; e.enable switches on opt-in groups
+  // (e.g. opentopomap) for this screenshot only — the server config is unchanged.
   await page.context().route('**/api/config/client', async (route) => {
     const res = await route.fetch();
     const body = await res.json();
     body.map = body.map || {};
-    body.map.tiles = Object.assign({}, body.map.tiles, { custom: [CUSTOM] });
+    const tiles = Object.assign({}, body.map.tiles);
+    if (e.custom) tiles.custom = [CUSTOM];
+    if (e.enable) {
+      tiles.providers = Object.assign({}, tiles.providers);
+      for (const g of e.enable) tiles.providers[g] = Object.assign({}, tiles.providers[g], { enabled: true });
+    }
+    body.map.tiles = tiles;
     await route.fulfill({ response: res, json: body });
   });
+  if (!e.custom) return;
   await page.context().route((u) => u.pathname.startsWith(FAKE_TILE_PATH), async (route) => {
     const m = new URL(route.request().url()).pathname.slice(FAKE_TILE_PATH.length).match(/^(\d+)\/(\d+)\/(\d+)\.png$/);
     if (!m) return route.fulfill({ status: 404, body: '' });
@@ -177,7 +186,7 @@ async function capture(browser, e, views, outDir, base) {
     await MH.installCollectors(page);
     if (e.vector) await page.addInitScript(VECTOR_PROBE);
     await MH.installTileStub(page, { mode: 'live', baseUrl: base });
-    if (e.custom) await installCustom(page);
+    if (e.custom || e.enable) await installConfig(page, e);
     await MH.presetStorage(page, {
       theme: e.theme, provider: e.provider, overlays: e.overlays,
       extra: { 'map-view': JSON.stringify({ lat: v.lat, lng: v.lon, zoom: v.zoom }), 'live-controls-expanded': 'true' },
@@ -281,7 +290,12 @@ async function main() {
   const entries = [];
   try {
     for (const e of list) {
-      const rec = await capture(browser, e, views, outDir, base);
+      let rec = await capture(browser, e, views, outDir, base);
+      // Community tile servers are sometimes slow: retry a tile failure once.
+      if (rec.status === 'failed' && rec.failures.some((f) => /tile|request/.test(f))) {
+        rec = await capture(browser, e, views, outDir, base);
+        rec.retried = true;
+      }
       if (rec.file) { rec.thumb = 'thumbs/' + rec.file; await makeThumb(browser, path.join(outDir, rec.file), path.join(outDir, rec.thumb)).catch((err) => rec.failures.push('thumbnail: ' + err.message)); }
       entries.push(rec);
       console.log(`${rec.status.padEnd(7)} ${e.id.padEnd(34)}${rec.tiles ? ` tiles ${rec.tiles.loaded}/${rec.tiles.visible} failed ${rec.tiles.failed}` : ''}${rec.vectorPath ? ' ' + rec.vectorPath : ''}${rec.failures.length ? '  <- ' + rec.failures.join('; ') : ''}`);
