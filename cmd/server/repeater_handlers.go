@@ -33,6 +33,7 @@ func claimRefsJSON(claims []users.RepeaterClaim) []repeaterClaimRefJSON {
 
 type repeaterInfoJSON struct {
 	Pubkey      string                `json:"pubkey"`
+	Revision    int64                 `json:"revision"`
 	HeightM     *float64              `json:"heightM"`
 	GainDBi     float64               `json:"gainDbi"`
 	Status      *string               `json:"status"`
@@ -80,6 +81,7 @@ func repeaterInfoBase(pk string, info *users.RepeaterInfo, claims []users.Repeat
 	if info == nil {
 		return out
 	}
+	out.Revision = info.Revision
 	out.HeightM = info.HeightM
 	out.GainDBi = info.GainDBi
 	out.Status = stringPtrOrNil(info.Status)
@@ -177,6 +179,10 @@ type repeaterEditRequest struct {
 	Status  string   `json:"status"`
 	Power   string   `json:"power"`
 	Notes   string   `json:"notes"`
+	// BaseRevision makes the save conditional: it must be the stored
+	// revision (0: no details saved yet). nil saves unconditionally, as the
+	// browser editor does.
+	BaseRevision *int64 `json:"baseRevision"`
 }
 
 func fmtFloat(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
@@ -267,6 +273,10 @@ func (s *Server) handleRepeaterInfoPut(w http.ResponseWriter, r *http.Request, u
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	if req.BaseRevision != nil && *req.BaseRevision < 0 {
+		writeError(w, http.StatusBadRequest, "baseRevision must not be negative")
+		return
+	}
 	can, err := s.auth.st.CanEditRepeater(u, pk)
 	if err != nil {
 		log.Printf("[users] repeater permission %s: %v", pk, err)
@@ -299,11 +309,31 @@ func (s *Server) handleRepeaterInfoPut(w http.ResponseWriter, r *http.Request, u
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	// An unchanged body writes nothing: updated_at and updated_by stay. The
-	// early read only decides that; the audit diff comes from the row the
-	// save replaced.
+	var curRev int64
+	if cur != nil {
+		curRev = cur.Revision
+	}
+	// A conditional save from a stale base is refused even when it would
+	// change nothing: the client's copy is out of date either way.
+	if req.BaseRevision != nil && *req.BaseRevision != curRev {
+		s.writeRepeaterConflict(w, pk, u)
+		return
+	}
+	// An unchanged body writes nothing: updated_at, updated_by and the
+	// revision stay. The early read only decides that; the audit diff comes
+	// from the row the save replaced.
 	if len(repeaterEditDiff(cur, edit)) > 0 {
-		prev, err := s.auth.st.SaveRepeaterInfo(u.ID, pk, edit)
+		var prev *users.RepeaterInfo
+		if req.BaseRevision != nil {
+			prev, err = s.auth.st.SaveRepeaterInfoAt(u.ID, pk, edit, *req.BaseRevision)
+		} else {
+			prev, err = s.auth.st.SaveRepeaterInfo(u.ID, pk, edit)
+		}
+		if errors.Is(err, users.ErrRepeaterConflict) {
+			// Another save landed between the read above and this one.
+			s.writeRepeaterConflict(w, pk, u)
+			return
+		}
 		if err != nil {
 			if writeValidation(w, err) {
 				return
@@ -317,6 +347,18 @@ func (s *Server) handleRepeaterInfoPut(w http.ResponseWriter, r *http.Request, u
 		s.auth.auditAsync(idPtr(u.ID), "repeater.edit", nil, withVia(diff, sess))
 	}
 	s.writeRepeaterInfo(w, pk, u)
+}
+
+// writeRepeaterConflict answers 409 with the stored details, so the client
+// can merge and retry from their revision without another read.
+func (s *Server) writeRepeaterConflict(w http.ResponseWriter, pk string, u *users.User) {
+	out, err := s.repeaterInfoFor(pk, u)
+	if err != nil {
+		log.Printf("[users] repeater info %s: %v", pk, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSONStatus(w, http.StatusConflict, out)
 }
 
 func (s *Server) handleRepeaterClaim(w http.ResponseWriter, r *http.Request, u *users.User, sess *users.Session) {

@@ -357,6 +357,9 @@ enabled.
   `repeater:edit` to edit details (still only where the account may edit, as above). The token
   shows under *My account, Devices*, and its claims and edits are recorded with `via: device`.
   Admin claim removal stays in the browser. There is no separate switch.
+- **Edits from two places:** each save of the details counts up a `revision`. An app sends the
+  revision it started from, and if someone saved in between, CoreScope refuses the save and
+  returns the current details to merge with instead of overwriting them.
 
 ### Observer MQTT logins (optional)
 
