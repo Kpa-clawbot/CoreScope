@@ -366,7 +366,7 @@ Map tiles are configured under `map.tiles` in `config.json`. Several providers a
 
 #### How the picker works for visitors
 
-Every map page (Map, Live, Nodes, Analytics, Planner and the home mini-map) shows the same layer picker and follows the visitor's choice. **Auto** is the default: it picks the light or dark map to match the current theme, using `lightDefault` / `darkDefault`. A visitor can instead pin a specific map. Pinned maps are listed in **Street**, **Topographic** and **Satellite** groups (gray styles follow the plain ones inside each group), and a separate **Overlays** group has checkboxes for layers drawn on top of the map (place labels, hillshade). Choices are saved per browser in `localStorage`; nothing is stored on the server.
+The Map, Live and Repeater Planner pages show the layer picker. Every other map (node detail, node reach, RX coverage, the Analytics route map and the home mini-map) has no picker but follows the same choice; because those maps never load MapLibre, a vector choice shows the theme's default raster map there. **Auto** is the default: it picks the light or dark map to match the current theme, using `lightDefault` / `darkDefault`. A visitor can instead pin a specific map. Pinned maps are listed in **Street**, **Topographic** and **Satellite** groups (gray styles follow the plain ones inside each group), and a separate **Overlays** group has checkboxes for layers drawn on top of the map (place labels, hillshade). Choices are saved per browser in `localStorage`; nothing is stored on the server.
 
 #### Built-in providers
 
