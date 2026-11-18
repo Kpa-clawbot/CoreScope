@@ -501,23 +501,29 @@ func viewshedEquivalenceCases() []struct {
 			p.Site = site
 			bb := plannerExpandBBox(viewshedBBox(site, rng), 1)
 			ridge := ridgeTerrainView{baseM: 100, ridgeM: 80, west: site.Lon + 0.05, east: site.Lon + 0.07}
-			cs = append(cs,
-				struct {
-					name string
-					v    terrainView
-					p    viewshedParams
-				}{fmt.Sprintf("fake/%.1f,%.1f/%gkm", site.Lat, site.Lon, rng), fakeTerrainView{bb: bb}, p},
-				struct {
-					name string
-					v    terrainView
-					p    viewshedParams
-				}{fmt.Sprintf("flat/%.1f,%.1f/%gkm", site.Lat, site.Lon, rng), flatTerrainView{elevM: 50}, p},
-				struct {
-					name string
-					v    terrainView
-					p    viewshedParams
-				}{fmt.Sprintf("ridge/%.1f,%.1f/%gkm", site.Lat, site.Lon, rng), ridgeTerrainView{ridge.baseM, ridge.ridgeM, ridge.west, ridge.east}, p},
-			)
+			// The full-size 30 km grid costs about 3 s per terrain. Its cell
+			// size is the same 0.2 km floor as 12 km; what it adds is longer
+			// rays with more samples per profile. The ridge terrain covers
+			// those, with level ground west of the ridge and shadow east of it.
+			if rng != 30 {
+				cs = append(cs,
+					struct {
+						name string
+						v    terrainView
+						p    viewshedParams
+					}{fmt.Sprintf("fake/%.1f,%.1f/%gkm", site.Lat, site.Lon, rng), fakeTerrainView{bb: bb}, p},
+					struct {
+						name string
+						v    terrainView
+						p    viewshedParams
+					}{fmt.Sprintf("flat/%.1f,%.1f/%gkm", site.Lat, site.Lon, rng), flatTerrainView{elevM: 50}, p},
+				)
+			}
+			cs = append(cs, struct {
+				name string
+				v    terrainView
+				p    viewshedParams
+			}{fmt.Sprintf("ridge/%.1f,%.1f/%gkm", site.Lat, site.Lon, rng), ridgeTerrainView{ridge.baseM, ridge.ridgeM, ridge.west, ridge.east}, p})
 		}
 	}
 	return cs
@@ -559,8 +565,51 @@ func TestViewshedMatchesReference(t *testing.T) {
 		holed.grids[0] = nil
 		check(fmt.Sprintf("srtm-hole/%gkm", rng), holed, p)
 	}
-	check("missing-tile", fakeTerrainView{bb: plannerExpandBBox(viewshedBBox(viewshedTestSite, 30), 1),
-		missing: map[[2]int]bool{{31, -98}: true}}, viewshedTestParams(30))
+	mv, mp := viewshedMissingTileCase()
+	check("missing-tile", mv, mp)
+}
+
+// viewshedMissingTileCase puts the site 0.05 degrees (about 5.6 km) south of a
+// missing SRTM tile, so the 12 km range reaches into it.
+func viewshedMissingTileCase() (fakeTerrainView, viewshedParams) {
+	p := viewshedTestParams(12)
+	p.Site = geoPoint{Lat: 30.95, Lon: -97.5}
+	return fakeTerrainView{bb: plannerExpandBBox(viewshedBBox(p.Site, p.RangeKm), 1),
+		missing: map[[2]int]bool{{31, -98}: true}}, p
+}
+
+// TestViewshedMissingTileCaseReachesTheTile guards the missing-tile case of
+// the equivalence test: it only checks missing terrain if cells in range
+// have their endpoint on the missing tile and are NoData, while cells south
+// of it are not.
+func TestViewshedMissingTileCaseReachesTheTile(t *testing.T) {
+	v, p := viewshedMissingTileCase()
+	if missing, total := v.MissingTiles(); missing != 1 || total < 2 {
+		t.Fatalf("MissingTiles() = %d of %d, want 1 of at least 2", missing, total)
+	}
+	g := mustViewshed(t, v, p)
+	var northNoData, northData, southData int
+	for r := 0; r < g.Rows; r++ {
+		for c := 0; c < g.Cols; c++ {
+			pt := viewshedCellCenter(g, r, c)
+			if geoDistKm(p.Site, pt) > p.RangeKm*0.9 {
+				continue
+			}
+			b := g.Cells[r*g.Cols+c]
+			switch {
+			case pt.Lat > 31.001 && b == 0:
+				northNoData++
+			case pt.Lat > 31.001:
+				northData++
+			case pt.Lat < 30.999 && b != 0:
+				southData++
+			}
+		}
+	}
+	if northNoData == 0 || northData != 0 || southData == 0 {
+		t.Fatalf("north of the tile edge %d NoData / %d with data, south %d with data; want >0 / 0 / >0",
+			northNoData, northData, southData)
+	}
 }
 
 // TestViewshedRoughTerrainHasEveryClass guards the equivalence test above:
