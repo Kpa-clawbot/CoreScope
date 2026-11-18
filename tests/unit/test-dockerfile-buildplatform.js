@@ -40,5 +40,24 @@ test('no stage hard-codes a platform', () => {
   assert.deepStrictEqual(pinned, [], 'found: ' + pinned.join(' | '));
 });
 
+console.log('\n=== Dockerfile: musl thread stacks ===');
+
+// The Go regression test runs on glibc in CI and cannot fail there, so the
+// image build is what guards the flag: it must be on every link line, and the
+// build must read it back from every binary.
+test('every go build passes STACK_LDFLAG and the result is checked with readelf', () => {
+  const joined = dockerfile.replace(/\\\n/g, ' ');
+  const builds = joined.split('\n').filter((l) => /\bgo build\b/.test(l));
+  assert.strictEqual(builds.length, 3, 'expected server, ingestor and decrypt builds');
+  for (const b of builds) assert.ok(b.includes('${STACK_LDFLAG}'), 'missing STACK_LDFLAG: ' + b.trim().slice(0, 120));
+  assert.ok(/^ARG STACK_LDFLAG="-Wl,-z,stack-size=8388608"$/m.test(dockerfile), 'STACK_LDFLAG must be 8 MiB');
+  const check = joined.split('\n').find((l) => /readelf -lW/.test(l) && /GNU_STACK/.test(l));
+  assert.ok(check, 'no readelf PT_GNU_STACK check');
+  for (const bin of ['/corescope-server', '/corescope-ingestor', '/corescope-decrypt']) {
+    assert.ok(check.includes(bin), bin + ' is not checked');
+  }
+  assert.ok(check.includes('0x0*800000'), 'the check must require exactly 8 MiB');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
