@@ -689,7 +689,7 @@ jobs:
           suite 2 test-issue-748-node-analytics-coverage-e2e.js BASE_URL=$B
           suite 2 test-issue-2218-node-analytics-stale-e2e.js BASE_URL=$B
           suite 2 test-issue-661-airtime-e2e.js BASE_URL=$B
-          suite 2 test-health-status-e2e.js BASE_URL=$B
+          suite 1 test-health-status-e2e.js BASE_URL=$B
           suite 2 test-issue-1268-rf-params-e2e.js BASE_URL=$B
           suite 2 test-issue-1758-ng-filter-rerenders-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-nav-fluid-1055-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
@@ -719,7 +719,7 @@ jobs:
           suite 3 test-issue-1150-404-state-e2e.js BASE_URL=$B
           suite 2 test-issue-1146-path-link-contrast-e2e.js BASE_URL=$B
           suite 1 test-issue-1705-subpath-contrast-e2e.js CHROMIUM_REQUIRE=1
-          suite 2 test-issue-1147-section-order-e2e.js BASE_URL=$B
+          suite 1 test-issue-1147-section-order-e2e.js BASE_URL=$B
           suite 3 test-issue-1151-orphan-separators-e2e.js BASE_URL=$B
           suite 3 test-issue-1486-collapse-reopens-detail-e2e.js BASE_URL=$B
           suite 3 test-map-deeplink-path-params-e2e.js BASE_URL=$B
@@ -750,7 +750,7 @@ jobs:
           suite 3 test-issue-1236-map-mobile-e2e.js BASE_URL=$B
           suite 3 test-issue-1329-map-controls-accordion-e2e.js BASE_URL=$B
           suite 1 test-issue-1273-qr-overlay-height-e2e.js BASE_URL=$B
-          suite 3 test-issue-1281-location-row-e2e.js BASE_URL=$B
+          suite 1 test-issue-1281-location-row-e2e.js BASE_URL=$B
           suite 1 test-issue-1279-legend-p2-e2e.js BASE_URL=$B
           suite 2 test-issue-1799-label-vocab-e2e.js BASE_URL=$B
           suite 2 test-home-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
@@ -780,7 +780,7 @@ jobs:
           suite 2 test-issue-1630-reach-mobile-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-node-reach-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-issue-1640-compare-discovery-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
-          suite 3 test-observer-detail-ownership-e2e.js BASE_URL=$B
+          suite 1 test-observer-detail-ownership-e2e.js BASE_URL=$B
           suite 2 test-neighbor-map-btn-clip-e2e.js CHROMIUM_REQUIRE=1
           suite 3 test-rx-coverage-viewport-e2e.js BASE_URL=$B
           suite 1 test-rx-coverage-noise-e2e.js BASE_URL=$B
