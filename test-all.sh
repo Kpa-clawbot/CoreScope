@@ -255,6 +255,7 @@ node tests/unit/test-xss-escape-sinks.js
 node tests/unit/test-secondary-map-tile-builder.js
 node tests/unit/test-map-layer-builder.js
 node tests/unit/test-map-custom-providers.js
+node tests/unit/test-map-harness-png.js
 node tests/unit/test-map-hillshade.js
 node tests/unit/test-map-vector.js
 node tests/unit/test-map-overlays-vector.js

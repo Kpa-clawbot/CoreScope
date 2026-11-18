@@ -133,7 +133,10 @@
       "tests/e2e/test-theme-url-param-2236-e2e.js",
       "tests/e2e/test-touch-gestures-coverage-e2e.js",
       "tests/e2e/test-touch-targets.js",
-      "tests/e2e/test-user-management-e2e.js"
+      "tests/e2e/test-user-management-e2e.js",
+      "tests/e2e/test-map-providers-harness-e2e.js",
+      "tests/e2e/test-map-providers-e2e.js",
+      "tests/e2e/test-map-race-stress-e2e.js"
     ]
   },
   "domIntegration": {
