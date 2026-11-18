@@ -65,10 +65,14 @@ for (const surface of ['map', 'planner']) {
   }
 }
 
-// Map page: 50 provider switches through every registered provider of the
-// theme, heap + Leaflet layer count before/after (forced GC).
+// Map page: 50 provider switches, heap + Leaflet layer count before/after
+// (forced GC). map-switch50-<theme> cycles the theme's RASTER providers only,
+// so it compares like with like against a baseline without vector maps.
+// map-switch50-all-<theme> (candidate only) also cycles the vector ones.
 for (const theme of THEMES) {
-  SCENARIOS.push({ name: `map-switch50-${theme}`, surface: 'map', theme, provider: 'auto', switches: 50, actions: ['load', 'markers', 'tiles', 'switch', 'screenshot'] });
+  SCENARIOS.push({ name: `map-switch50-${theme}`, surface: 'map', theme, provider: 'auto', switches: 50, switchFormats: ['raster'], actions: ['load', 'markers', 'tiles', 'switch', 'screenshot'] });
+  const vec = theme === 'dark' ? 'openfreemap-dark' : 'openfreemap-liberty';
+  SCENARIOS.push({ name: `map-switch50-all-${theme}`, surface: 'map', theme, provider: 'auto', format: 'vector', switches: 50, switchFormats: ['raster', 'vector'], needs: { providers: [vec] }, actions: ['load', 'markers', 'tiles', 'switch', 'screenshot'] });
 }
 
 // Map page cold load once per registered provider (screenshot gallery +

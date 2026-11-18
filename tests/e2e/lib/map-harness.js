@@ -244,7 +244,21 @@ const _state = new WeakMap(); // BrowserContext -> { log, opts }
 
 function _newLog() { return { intercepted: [], external: [], failed: [], maplibre: [], api: [], counts: {} }; }
 const LOG_CAP = 20000;
-function _push(arr, item) { if (arr.length < LOG_CAP) arr.push(item); }
+// Credentials in tile URLs (Carto ?key=, Maptiler ?key=, access_token=...)
+// must never reach results.json, reports or logs: every logged URL and
+// error string passes through redactUrl.
+const SECRET_PARAM_RE = /([?&](?:key|api_?key|apikey|access_token|token)=)[^&#\s"']*/gi;
+function redactUrl(s) { return typeof s === 'string' ? s.replace(SECRET_PARAM_RE, '$1REDACTED') : s; }
+function _push(arr, item) {
+  if (arr.length >= LOG_CAP) return;
+  if (typeof item === 'string') item = redactUrl(item);
+  else if (item && typeof item === 'object') {
+    item = Object.assign({}, item);
+    if (item.url) item.url = redactUrl(item.url);
+    if (item.error) item.error = redactUrl(item.error);
+  }
+  arr.push(item);
+}
 
 /**
  * Route every map-tile / elevation / style request of the page's context.
@@ -807,7 +821,7 @@ async function screenshot(page, outDir, name) {
 
 module.exports = {
   TILE_HOSTS, DEFAULT_PANZOOM_PATH,
-  installTileStub, getRequestLog, classifyUrl,
+  installTileStub, getRequestLog, classifyUrl, redactUrl,
   presetStorage, setTheme, setTileProvider, listProviders,
   installCollectors, waitForTiles, waitForMarkers, waitForThemeRefresh, collectMetrics, measureHeap, layerCount,
   scriptedPanZoom, screenshot,

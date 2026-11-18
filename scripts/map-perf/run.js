@@ -321,7 +321,8 @@ const ACTIONS = {
   async switch(st) {
     const { page, sc, first } = st;
     const all = await MH.listProviders(page);
-    const ids = all.filter(p => p.type === sc.theme || p.type === 'any').map(p => p.id);
+    const formats = sc.switchFormats || ['raster'];
+    const ids = all.filter(p => (p.type === sc.theme || p.type === 'any') && formats.indexOf(p.format || 'raster') >= 0).map(p => p.id);
     if (ids.length < 2) { if (first) skip(`only ${ids.length} ${sc.theme} provider(s) registered`); throw new Error('too few providers'); }
     st.extra.providers = ids;
     const start = await page.evaluate((t) => (t === 'dark' ? window.MC_getDarkTileProvider() : window.MC_getLightTileProvider()), sc.theme);

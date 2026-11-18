@@ -215,7 +215,7 @@ async function capture(browser, e, views, outDir, base) {
     if (e.vector) rec.vectorPath = probe && probe.fallback ? 'raster-fallback' : (probe && probe.glIdleMs != null ? 'maplibre-gl' : 'maplibre-gl-no-idle');
     if (t.timedOut) rec.failures.push('tiles did not settle within 45 s');
     if (t.failed) rec.failures.push(`${t.failed} tile(s) failed to load`);
-    if (bad.length) rec.failures.push(`${bad.length} tile request(s) with HTTP >= 400 (first: ${bad[0].status} ${bad[0].url.replace(/[?&](key|apikey)=[^&]*/i, '')})`);
+    if (bad.length) rec.failures.push(`${bad.length} tile request(s) with HTTP >= 400 (first: ${bad[0].status} ${MH.redactUrl(bad[0].url)})`);
     if (log.failed.length) rec.failures.push(`${log.failed.length} request(s) failed (first: ${log.failed[0].error})`);
     if (e.vector && rec.vectorPath !== 'maplibre-gl') rec.failures.push(`vector path: ${rec.vectorPath}${probe && probe.fallbackReason ? ' (' + probe.fallbackReason + ')' : ''}`);
     if (!e.vector && log.maplibre.length) rec.failures.push('raster entry requested MapLibre');

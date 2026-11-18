@@ -200,6 +200,15 @@ test('extraHosts rows take precedence over the built-in table', () => {
   assert.strictEqual(C('https://tile.openstreetmap.org/1/0/0.png', { extraHosts: [{ key: 'osm-test', kind: 'raster', test: /openstreetmap\.org/ }] }).key, 'osm-test');
 });
 
+test('redactUrl hides credentials in tile URLs and error strings', () => {
+  assert.strictEqual(H.redactUrl('https://a.basemaps.cartocdn.com/x/1/2/3.png?key=s3cr3t'), 'https://a.basemaps.cartocdn.com/x/1/2/3.png?key=REDACTED');
+  assert.strictEqual(H.redactUrl('https://t.example/1/2/3.png?lang=en&api_key=abc&x=1'), 'https://t.example/1/2/3.png?lang=en&api_key=REDACTED&x=1');
+  assert.strictEqual(H.redactUrl('net::ERR_FAILED at https://m.example/s.json?access_token=pk.zz#f'), 'net::ERR_FAILED at https://m.example/s.json?access_token=REDACTED#f');
+  assert.strictEqual(H.redactUrl('https://tile.openstreetmap.org/1/0/0.png'), 'https://tile.openstreetmap.org/1/0/0.png');
+  assert.strictEqual(H.redactUrl('https://x.example/?monkey=1'), 'https://x.example/?monkey=1');
+  assert.strictEqual(H.redactUrl(null), null);
+});
+
 // waitForTiles against a fake Playwright page: the predicate runs in Node
 // with a fake window.__mcHarness whose tileState() the test controls.
 function fakePage() {

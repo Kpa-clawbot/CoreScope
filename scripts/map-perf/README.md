@@ -123,7 +123,7 @@ All times are ms from navigation start unless stated otherwise.
 
 ## Extending
 
-- **New provider**: nothing to do. `map-provider-<theme>` expands to one scenario per id in `window.MC_TILE_PROVIDERS`, and `map-switch50-*` cycles through all of them. If the provider uses a new tile host, add a row to `TILE_HOSTS` in `map-harness.js` so its stubs and screenshots carry a readable key. Unknown hosts are still stubbed, under the key `host:<hostname>`.
+- **New provider**: nothing to do. `map-provider-<theme>` expands to one scenario per id in `window.MC_TILE_PROVIDERS`, `map-switch50-<theme>` cycles through the theme's raster providers (comparable with a baseline that has no vector maps), and the candidate-only `map-switch50-all-<theme>` through all of them, vector included. If the provider uses a new tile host, add a row to `TILE_HOSTS` in `map-harness.js` so its stubs and screenshots carry a readable key. Unknown hosts are still stubbed, under the key `host:<hostname>`.
 - **Overlays**: add a scenario with `overlays: ['<id>']`. The runner presets `mc-tile-overlays`.
 - **Vector maps**: add a scenario with `provider: '<id>'` and `format: 'vector'`. Raster-only scenarios fail the budget if MapLibre is ever requested.
 - **New surface**: add an entry to `SURFACES` in `scenarios.js` (route, optional `prepare` hook, `unavailable` selector).
