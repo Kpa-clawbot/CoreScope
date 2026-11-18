@@ -180,7 +180,7 @@ function context(ref = 'refs/tags/v9.8.7', event = 'workflow_dispatch', inputs =
 // That is what keeps a gate red rather than skipped, which branch protection
 // would count as passing.
 function route(ctx, failedJob, ingestor = 'true') {
-  for (const name of ['changes', 'go-test', 'race-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+  for (const name of ['changes', 'go-test', 'race-test', 'server-race-shard', 'server-race', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
     const job = block(deploy, name, 2);
     assert.ok(job, `missing ${name} job`);
     const needs = value(job, 'needs', 4).replace(/[\[\]\s]/g, '').split(',').filter(Boolean);
@@ -235,7 +235,7 @@ for (const [name, edge] of [['matching', 'a'.repeat(40)], ['missing', null], ['m
   const jobs = route(context(undefined, undefined, { images_published: matching }));
   assert.equal(jobs['release-artifacts'].result, 'success', `${name}: release artifacts must run`);
   assert.equal(jobs['go-test'].result, 'success', `${name}: release still requires Go validation`);
-  for (const job of ['e2e-shard', 'e2e-test', 'image-check', 'build-and-publish']) assert.equal(jobs[job].result, matching ? 'skipped' : 'success', `${name}: ${job}`);
+  for (const job of ['server-race-shard', 'server-race', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish']) assert.equal(jobs[job].result, matching ? 'skipped' : 'success', `${name}: ${job}`);
   assert.equal(jobs.deploy.result, 'skipped');
   assert.equal(jobs.publish.result, 'skipped');
   console.log(`PASS ${name} edge: one artifact dispatch, correct image route`);
@@ -272,12 +272,13 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   // Nothing publishes unless every test job and the image check passed, and
   // the required checks go red rather than skipped (a skipped required check
   // counts as passing in branch protection).
-  for (const failed of ['go-test', 'race-test', 'e2e-shard', 'e2e-test', 'image-check']) {
+  for (const failed of ['go-test', 'race-test', 'server-race-shard', 'server-race', 'e2e-shard', 'e2e-test', 'image-check']) {
     const failedJobs = route(context(ref, event), failed);
     assert.equal(failedJobs['build-and-publish'].result, 'failure', `${event}: failed ${failed} must fail build-and-publish, not skip it`);
     assert.equal(failedJobs.publish.result, 'skipped', `${event}: failed ${failed} must not publish badges`);
   }
   assert.equal(route(context(ref, event), 'e2e-shard')['e2e-test'].result, 'failure', `${event}: a failed shard must fail the E2E gate, not skip it`);
+  assert.equal(route(context(ref, event), 'server-race-shard')['server-race'].result, 'failure', `${event}: a failed race shard must fail the server race gate, not skip it`);
   assert.equal(route(context(ref, event))['build-and-publish'].result, 'success', `${event}: all green passes the gate`);
   // race-test only runs when ingestor Go files changed; skipped is fine there.
   const noRace = route(context(ref, event), undefined, 'false');
