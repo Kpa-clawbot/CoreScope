@@ -506,5 +506,46 @@ test('node helper: unregister is idempotent and tolerates unknown maps', () => {
   assert.strictEqual(ctx.window.__mcNodeTileSync.maps.length, 0);
 });
 
-console.log(`\ntile resolver: ${passed} passed, ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);
+// ── roles.js config handler ordering ────────────────────────────────────────
+// MC_initTileRegistry(true) dispatches the fromConfig event every existing map
+// re-syncs on. The operator's legacy override and the keyed TILE_DARK/TILE_LIGHT
+// must already be in place when it fires, or maps sync once without them.
+
+async function asyncTest(name, fn) {
+  try { await fn(); passed++; console.log('  ✅ ' + name); }
+  catch (e) { failed++; console.log('  ❌ ' + name + ': ' + e.message); }
+}
+
+(async () => {
+  await asyncTest('roles.js: override + keyed constants are set before the fromConfig event fires', async () => {
+    const ctx = makeSandbox({ theme: 'dark' });
+    const cfg = {
+      tiles: { dark: 'https://tiles.operator.example/dark/{z}/{x}/{y}.png' },
+      map: { tiles: { providers: { carto: { key: 'KEY1' } } } },
+    };
+    ctx.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve(cfg) });
+    const seen = [];
+    ctx.window.dispatchEvent = (ev) => {
+      if (ev && ev.detail && ev.detail.fromConfig) {
+        seen.push({
+          override: JSON.stringify(ctx.window.MC_LEGACY_TILE_OVERRIDE || null),
+          dark: ctx.window.TILE_DARK,
+          light: ctx.window.TILE_LIGHT,
+          lightResolved: ctx.window.MC_resolveTile(false).url,
+        });
+      }
+      return true;
+    };
+    loadResolver(ctx);
+    await ctx.window.MeshConfigReady;
+    assert.strictEqual(seen.length, 1, 'one fromConfig event');
+    const at = seen[0];
+    assert.strictEqual(at.override, '{"dark":true,"light":false}', 'legacy override in place');
+    assert.strictEqual(at.dark, 'https://tiles.operator.example/dark/{z}/{x}/{y}.png', 'operator dark url in place');
+    assert.ok(/light_all.*\?key=KEY1/.test(at.light), 'keyed TILE_LIGHT in place — got ' + at.light);
+    assert.ok(/\?key=KEY1/.test(at.lightResolved), 'registry already rebuilt with the key — got ' + at.lightResolved);
+  });
+
+  console.log(`\ntile resolver: ${passed} passed, ${failed} failed`);
+  process.exit(failed === 0 ? 0 : 1);
+})();

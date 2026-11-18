@@ -252,5 +252,8 @@ node tests/unit/test-observer-neighbors.js
 node tests/unit/test-warmup-banner.js
 node tests/unit/test-ws-stale-watchdog-1074.js
 node tests/unit/test-xss-escape-sinks.js
+node tests/unit/test-map-layer-builder.js
+node tests/unit/test-map-custom-providers.js
+node tests/unit/test-map-overlays-vector.js
 
 echo "All standalone frontend suites passed"

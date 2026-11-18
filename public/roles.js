@@ -671,7 +671,10 @@
       if (cfg.map.tiles.darkUrl) window.TILE_DARK = cfg.map.tiles.darkUrl;
       if (cfg.map.tiles.lightUrl) window.TILE_LIGHT = cfg.map.tiles.lightUrl;
     }
-    if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry(true);
+    // Rebuild the registry from the new config without notifying maps yet:
+    // MC_tileUrlById below needs it (keyed Carto URLs), but maps must not
+    // re-sync before the legacy override and keyed constants are set.
+    if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry();
     // CARTO raster needs an API key now, so the bare TILE_DARK/TILE_LIGHT
     // fallbacks pick it up here — code that still reads the constants directly
     // (screens without the registry) gets keyed URLs. Registry-driven surfaces
@@ -689,6 +692,8 @@
       if (!_tOv.dark && !_tOv.darkUrl)   window.TILE_DARK  = window.MC_tileUrlById('carto-dark',  window.TILE_DARK);
       if (!_tOv.light && !_tOv.lightUrl) window.TILE_LIGHT = window.MC_tileUrlById('carto-light', window.TILE_LIGHT);
     }
+    // Now notify every map (fromConfig) with the override and constants in place.
+    if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry(true);
     if (cfg.snrThresholds) Object.assign(SNR_THRESHOLDS, cfg.snrThresholds);
     if (cfg.distThresholds) Object.assign(DIST_THRESHOLDS, cfg.distThresholds);
     if (cfg.maxHopDist != null) window.MAX_HOP_DIST = cfg.maxHopDist;
