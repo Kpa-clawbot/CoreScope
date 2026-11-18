@@ -25,6 +25,11 @@
   let topRoutesLayer = null;
   let topRoutesEdges = null; // cached neighbor-graph edges for the Important Links overlay
   let topRoutesRenderTimer = null; // debounce for the Top-N slider
+  // Bumped by init() and destroy(): an init() whose await outlives its page
+  // sees a different value and stops before touching the next page's DOM.
+  let pageGen = 0;
+  // AreaFilter subscription, removed in destroy() so visits don't accumulate listeners.
+  let _areaChangeHandler = null;
   let topRoutesAccentCache = ''; // cached --accent, invalidated on theme-refresh
   let userHasMoved = false;
   let controlsCollapsed = false;
@@ -518,6 +523,7 @@
   }
 
   async function init(container) {
+    const gen = ++pageGen;
     container.innerHTML = `
       <div id="map-wrap" style="position:relative;width:100%;height:100%;display:flex;">
         <div id="leaflet-map" style="flex:1 1 0%;height:100%;"></div>
@@ -633,6 +639,7 @@
       if (Array.isArray(mapCfg.center) && mapCfg.center.length === 2) defaultCenter = mapCfg.center;
       if (typeof mapCfg.zoom === 'number') defaultZoom = mapCfg.zoom;
     } catch {}
+    if (gen !== pageGen) return;
     let initCenter = defaultCenter;
     let initZoom = defaultZoom;
     // Check URL query params first (from packet detail links). #1709: shared
@@ -895,7 +902,8 @@
     document.getElementById('mcLastHeard').addEventListener('change', e => { filters.lastHeard = e.target.value; loadNodes(); });
 
     AreaFilter.init(document.getElementById('mapAreaFilter'));
-    AreaFilter.onChange(function () { loadNodes(); });
+    if (_areaChangeHandler) AreaFilter.offChange(_areaChangeHandler);
+    _areaChangeHandler = AreaFilter.onChange(function () { loadNodes(); });
 
     // Status filter buttons
     document.querySelectorAll('#mcStatusFilter .btn').forEach(btn => {
@@ -1042,6 +1050,8 @@
       origin = { pubkey: origin };
     }
     opts = opts || {};
+    const routeMap = map;
+    if (!routeMap) return;
     // #1689 r1 (adv #4): remember the last route-draw inputs so the
     // mc-hide-1byte-hops-changed listener can re-render in place.
     try { window.__mc_lastRouteDraw = { kind: 'single', hopKeys: hopKeys, origin: origin, opts: opts }; } catch (_e) {}
@@ -1091,6 +1101,7 @@
         console.warn('resolve-hops API call failed, falling back to local nodes scan', e);
       }
     }
+    if (map !== routeMap) return; // page left during the lookup
     // Hide default markers so only the route is visible
     if (markerLayer) map.removeLayer(markerLayer);
     if (estimatedLayer) map.removeLayer(estimatedLayer);
@@ -1313,6 +1324,8 @@
     opts = opts || {};
     if (typeof origin === 'string') origin = { pubkey: origin };
     if (!Array.isArray(paths) || paths.length === 0) return;
+    const routeMap = map;
+    if (!routeMap) return;
     // #1689 r1 (adv #4): remember last multi-path draw for live re-render
     // when the hide-1-byte-hops toggle changes.
     try { window.__mc_lastRouteDraw = { kind: 'multi', paths: paths, origin: origin, opts: opts }; } catch (_e) {}
@@ -1358,6 +1371,7 @@
         }
       } catch (e) {}
     }
+    if (map !== routeMap) return; // page left during the lookup
 
     const raw = canonicalPath.map((hop, i) => {
       const hopLower = String(hop).toLowerCase();
@@ -2074,7 +2088,8 @@
   }
 
   function renderMarkers() {
-    if (_renderingMarkers) return;
+    // A late caller (an awaited neighbor lookup, a WS reload) after destroy.
+    if (_renderingMarkers || !map) return;
     _renderingMarkers = true;
     try { _renderMarkersInner(); } finally { _renderingMarkers = false; }
   }
@@ -2465,13 +2480,37 @@
     });
   }
 
+  // markercluster's chunkedLoading adds markers in setTimeout chunks it keeps
+  // no handle for (addLayers' bound closure), and clearLayers() does not stop
+  // them. Once the map is gone the next chunk throws in this._map.getMinZoom()
+  // (_addLayer per marker, _recursivelyAddChildrenToMap after the last one).
+  // The group is thrown away with the page, so shadow those two with no-ops on
+  // this instance. Its zoom-animation queue does have a handle: drop it, its
+  // callbacks only finish an animation on a map that no longer exists.
+  function retireClusterGroup(group) {
+    if (!group) return;
+    const noop = function () {};
+    clearTimeout(group._queueTimeout);
+    group._queueTimeout = null;
+    if (group._queue) group._queue.length = 0;
+    group._addLayer = noop;
+    if (group._topClusterLevel) group._topClusterLevel._recursivelyAddChildrenToMap = noop;
+  }
+
   function destroy() {
+    pageGen++;
+    if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; }
+    if (AreaFilter.destroy) AreaFilter.destroy();
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
+    clearTimeout(_zoomResizeTimer);
+    clearTimeout(topRoutesRenderTimer);
+    if (autoTiles) { autoTiles.destroy(); autoTiles = null; }
     if (map) {
-      map.remove();
+      window.MC_safeRemoveMap(map);
       map = null;
     }
+    retireClusterGroup(clusterGroup);
     markerLayer = null;
     estimatedLayer = null;
     reported = { nodes: [], method: null };

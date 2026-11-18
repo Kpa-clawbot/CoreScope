@@ -17,8 +17,14 @@
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
 
-  let _liveAutoTiles = null; // MC_attachAutoTiles handle for the basemap
   let map, wsHandler, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer, clickablePathsLayer;
+  let _liveAutoTiles = null; // MC_attachAutoTiles handle for the basemap
+  // Bumped by init() and destroy(). Every await in init() (and loadNodes())
+  // re-checks it: navigating away mid-await used to resume on a destroyed page
+  // and call map.on() on the nulled map, or build a map in the next page's DOM.
+  let pageGen = 0;
+  // AreaFilter subscription, removed in destroy() so visits don't accumulate listeners.
+  let _areaChangeHandler = null;
   // New animation canvas
   let animCanvas, animCtx;
   let _dprMedia = null;
@@ -1242,6 +1248,7 @@
   }
 
   async function init(app) {
+    const gen = ++pageGen;
     app.innerHTML = `
       <div class="live-page">
         <div id="liveMap" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:1"></div>
@@ -1401,6 +1408,7 @@
       if (Array.isArray(mapCfg.center) && mapCfg.center.length === 2) mapCenter = mapCfg.center;
       if (typeof mapCfg.zoom === 'number') mapZoom = mapCfg.zoom;
     } catch { }
+    if (gen !== pageGen) return;
 
     // #1709: URL hash lat/lon/zoom is the highest-precedence viewport source.
     // Applied here so the very first setView() lands at the requested viewport
@@ -1614,8 +1622,10 @@
 
     injectSVGFilters();
     AreaFilter.init(document.getElementById('liveAreaFilter'));
-    AreaFilter.onChange(function () { loadNodes(); });
+    if (_areaChangeHandler) AreaFilter.offChange(_areaChangeHandler);
+    _areaChangeHandler = AreaFilter.onChange(function () { loadNodes(); });
     await loadNodes();
+    if (gen !== pageGen) return;
     // Build the heat layer only when the user wants it. It used to be built
     // unconditionally and torn down ~270 lines later, which was invisible
     // (no await in between, so no frame composited) but meant that any throw
@@ -1852,6 +1862,7 @@
     (async function () {
       try {
         const gf = await api('/config/geo-filter', { ttl: 3600 });
+        if (gen !== pageGen) return;
         if (!gf || !gf.polygon || gf.polygon.length < 3) return;
         const geoColor = cssVar('--geo-filter-color') || '#3b82f6';
         const latlngs = gf.polygon.map(function (p) { return [p[0], p[1]]; });
@@ -2672,6 +2683,8 @@
   }
 
   async function loadNodes(beforeTs) {
+    const gen = pageGen;
+    if (!map) return;
     try {
       const aqs = AreaFilter.areaQueryString();
       // #1108 — honor region selector for visible map nodes unless
@@ -2695,6 +2708,7 @@
       const { nodes: list } = await fetchAllNodes(`${beforeQs}${aqs}${rqs}`, {
         safetyCap: window.LIVE_MAP_MAX_NODES || 10000,
       });
+      if (gen !== pageGen) return;
       var now = Date.now();
       // Time-scoped reload (VCR scrub/replay): reconcile against the existing
       // markers instead of tearing the layer down. addNodeMarker() already
@@ -4538,6 +4552,9 @@
   }
 
   function destroy() {
+    pageGen++;
+    if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; }
+    if (AreaFilter.destroy) AreaFilter.destroy();
     // #1514 S3 — drain onComplete callbacks BEFORE clearing the array. Audio
     // `onHop` hooks rely on these firing exactly once per queued animation;
     // previously destroy() dropped them silently when navigating away with
@@ -4583,8 +4600,9 @@
       RegionFilter.offChange(regionFilterChangeHandler);
       regionFilterChangeHandler = null;
     }
+    if (window.RegionFilter && typeof RegionFilter.destroy === 'function') RegionFilter.destroy();
     if (_liveAutoTiles) { _liveAutoTiles.destroy(); _liveAutoTiles = null; }
-    if (map) { map.remove(); map = null; }
+    if (map) { window.MC_safeRemoveMap(map); map = null; }
     if (_onResize) {
       window.removeEventListener('resize', _onResize);
       window.removeEventListener('orientationchange', _onResize);

@@ -578,6 +578,26 @@
     return TILE_DARK;
   };
 
+  /* Tear down a Leaflet map that may still be animating. Leaflet 1.9.4's
+   * _animateZoom() schedules setTimeout(_onZoomTransitionEnd, 250) and keeps
+   * no handle, and map.remove() does not cancel it: removing the map inside
+   * that window left the callback to _move() the deleted _mapPane ("reading
+   * '_leaflet_pos'"). The callback is gated on _animatingZoom, so clearing the
+   * flag makes it a no-op. A queued _tryAnimatedZoom frame is already inert
+   * once remove() deletes _mapPane (_animateZoom checks it), and remove()
+   * itself cancels _flyToFrame, _panAnim and _resizeRequest via _stop().
+   * _sizeTimer (invalidateSize's debounced moveend) is the other unowned timer.
+   * Idempotent and null-safe; a failing remove() is logged, not thrown, since
+   * the caller is leaving the page either way. */
+  window.MC_safeRemoveMap = function (map) {
+    if (!map || map._mcRemoved) return;
+    map._mcRemoved = true;
+    map._animatingZoom = false;
+    if (map._sizeTimer) { clearTimeout(map._sizeTimer); map._sizeTimer = null; }
+    if (typeof map.off === 'function') map.off();
+    try { map.remove(); } catch (e) { console.warn('[map] remove failed:', e); }
+  };
+
 
   // ─── SNR thresholds ───
   window.SNR_THRESHOLDS = { excellent: 6, good: 0 };

@@ -944,7 +944,7 @@
       if (s.tiles) s.tiles.destroy();
       if (s.ro) s.ro.disconnect();
       if (s.roRaf) UI.caf(s.roRaf);
-      if (s.map) { s.map.off(); s.map.remove(); }
+      window.MC_safeRemoveMap(s.map);
     } catch (e) {
       console.warn('[planner] destroy:', e);
     }

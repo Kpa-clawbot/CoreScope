@@ -104,7 +104,7 @@
       // Drop the tile-sync record before Leaflet tears the map down (#review:
       // the shared onChange prune cannot see an attached container).
       try { if (window.__mcNodeTileSyncUnregister) window.__mcNodeTileSyncUnregister(detailMap); } catch (_e) {}
-      detailMap.remove();
+      window.MC_safeRemoveMap(detailMap);
       detailMap = null;
     }
   }

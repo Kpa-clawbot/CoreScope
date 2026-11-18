@@ -262,7 +262,7 @@
   function destroy() {
     clearTimeout(searchTimeout);
     if (searchAbort) { searchAbort.abort(); searchAbort = null; }
-    if (miniMap) { miniMap.remove(); miniMap = null; }
+    if (miniMap) { window.MC_safeRemoveMap(miniMap); miniMap = null; }
     if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
   }
 

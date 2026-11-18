@@ -3226,7 +3226,7 @@
     }
   }
 
-function destroy() { if (_subpathMap) { try { _subpathMap.remove(); } catch (_e) {} _subpathMap = null; } _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _loadError = null; if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; } if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; } _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _subpathMap = null; } _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _loadError = null; if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; } if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; } _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
