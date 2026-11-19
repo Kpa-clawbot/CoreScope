@@ -2786,6 +2786,14 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 }
 .mc-route-trust-message-detail { color: var(--text-muted); }
 
+/* An expanded layer picker stacks above the other map corners: Leaflet gives
+ * every corner the same z-index, so a later corner (e.g. the ducting legend
+ * bottom-left) would otherwise cover a long picker list. */
+.leaflet-top:has(.leaflet-control-layers-expanded),
+.leaflet-bottom:has(.leaflet-control-layers-expanded) {
+  z-index: 1001;
+}
+
 /* For Leaflet layer control */
 .leaflet-control-layers,
 .leaflet-control-layers-expanded {
