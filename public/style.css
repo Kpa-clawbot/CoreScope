@@ -5679,6 +5679,60 @@ body { touch-action: pan-y; }
   --mc-route-legend-border: #94a3b8;
 }
 
+/* Tropospheric ducting overlay (map-ducting.js). Fill colours per bin:
+ * lora = duct that carries 868/915 MHz LoRa, uhf = 1-3 GHz only,
+ * micro = above 3 GHz only, super = super-refraction. */
+:root {
+  --mc-duct-lora:  #d6246e;
+  --mc-duct-uhf:   #e8730c;
+  --mc-duct-micro: #e6b800;
+  --mc-duct-super: #5ab4f0;
+}
+[data-theme="dark"] {
+  --mc-duct-lora:  #ff3d8b;
+  --mc-duct-uhf:   #ff9a3c;
+  --mc-duct-micro: #ffd23f;
+  --mc-duct-super: #7cc4f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --mc-duct-lora:  #ff3d8b;
+    --mc-duct-uhf:   #ff9a3c;
+    --mc-duct-micro: #ffd23f;
+    --mc-duct-super: #7cc4f5;
+  }
+}
+.mc-duct-legend,
+.mc-duct-time {
+  background: var(--mc-route-legend-bg);
+  color: var(--mc-route-legend-fg);
+  border: 1px solid var(--mc-route-legend-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 260px;
+}
+.mc-duct-legend-title { font-weight: 600; margin-bottom: 4px; }
+.mc-duct-legend-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.mc-duct-swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--mc-route-legend-border);
+}
+.mc-duct-swatch-lora  { background: var(--mc-duct-lora); }
+.mc-duct-swatch-uhf   { background: var(--mc-duct-uhf); }
+.mc-duct-swatch-micro { background: var(--mc-duct-micro); }
+.mc-duct-swatch-super { background: var(--mc-duct-super); }
+.mc-duct-legend-status { margin: 4px 0; font-weight: 600; }
+.mc-duct-legend-note,
+.mc-duct-legend-meta { margin-top: 4px; color: var(--mc-route-legend-fg); opacity: 0.8; }
+.mc-duct-time-label { display: block; font-weight: 600; margin-bottom: 4px; }
+.mc-duct-time input[type="range"] { width: 100%; min-width: 180px; }
+.mc-duct-popup-title { font-weight: 600; margin-bottom: 2px; }
+
 .mc-route-marker-icon { background: transparent !important; border: none !important; }
 .mc-route-marker {
   position: relative;
