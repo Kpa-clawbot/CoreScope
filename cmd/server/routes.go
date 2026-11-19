@@ -574,6 +574,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		UserManagement:                 s.clientUserManagement(),
 		LOS:                            s.cfg.LOS.clientConfig(),
 		Planner:                        s.cfg.Planner.clientConfig(s.cfg.LOS),
+		Ducting:                        s.cfg.Ducting.clientConfig(),
 	})
 }
 

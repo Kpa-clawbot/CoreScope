@@ -469,6 +469,7 @@ func main() {
 	// answers 404, without planner.enabled /api/planner/* does, and with
 	// neither no terrain tile is ever fetched.
 	srv.elevation, srv.planner = newTerrainServices(cfg, srv)
+	logDuctingConfig(cfg.Ducting)
 
 	// Steady-state repeater-enrichment recomputer (issue #1262).
 	// Prewarms the bulk caches feeding handleNodes so the very first
