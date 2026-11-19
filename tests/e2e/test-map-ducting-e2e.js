@@ -135,17 +135,19 @@ async function setOverlayUi(page, on) {
   if ((await inp.isChecked()) !== on) await inp.evaluate((el) => el.click());
 }
 
-// What the page shows right now: rectangles of every live map, legend/time boxes.
+// What the page shows right now: rectangles (with their outline) and field
+// images of every live map, legend/time boxes.
 function inPageState() {
   const maps = ((window.__mcHarness && window.__mcHarness.maps) || [])
     .filter(m => m && m._container && m._container.isConnected && m._loaded);
-  const rects = [];
+  const rects = [], fields = [];
   maps.forEach((m, mi) => {
     m.eachLayer((l) => {
       if (l._mcCell) {
         const c = l._mcCell;
-        rects.push({ map: mi, lat: c.lat, lon: c.lon, fill: l.options.fillColor || null, fillOpacity: l.options.fillOpacity, stroke: !!l.options.stroke });
+        rects.push({ map: mi, lat: c.lat, lon: c.lon, stroke: !!l.options.stroke, color: l.options.stroke ? l.options.color : null, dash: l.options.stroke ? l.options.dashArray : null, fillOpacity: l.options.fillOpacity });
       }
+      if (l._mcField) fields.push({ map: mi, inDom: !!(l._image && l._image.isConnected), pane: l.options.pane });
     });
   });
   const vis = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
@@ -153,6 +155,7 @@ function inPageState() {
   return {
     maps: maps.length,
     rects,
+    fields,
     legends: q('.mc-duct-legend').length,
     times: q('.mc-duct-time').length,
     legendVisible: q('.mc-duct-legend').some(vis),
@@ -200,34 +203,99 @@ function inPageOverlaps() {
 function cssVars(page) {
   return page.evaluate(() => {
     const cs = getComputedStyle(document.documentElement);
-    const o = {};
-    ['lora', 'uhf', 'micro', 'super'].forEach(k => { o[k] = cs.getPropertyValue('--mc-duct-' + k).trim(); });
+    const o = { lora: cs.getPropertyValue('--mc-duct-lora').trim(), alpha: parseFloat(cs.getPropertyValue('--mc-duct-alpha')) };
+    for (let k = 1; k <= 8; k++) o['s' + k] = cs.getPropertyValue('--mc-duct-s' + k).trim();
     return o;
   });
 }
 
-/** What each cell should be painted at time index idx, from the server data. */
-async function expectedFills(page, data, idx) {
-  const vars = await cssVars(page);
-  const bins = await page.evaluate((arr) => arr.map(x => window.MC_ductBin(x[0], x[1])), data.cells.map(c => [c.c[idx], c.f[idx]]));
-  const op = { 2: 0.35, 3: 0.3, 4: 0.55 };
-  const out = new Map();
-  data.cells.forEach((c, i) => {
-    out.set(`${c.lat},${c.lon}`, { bin: bins[i], fill: bins[i] ? vars[bins[i]] : null, op: bins[i] ? op[c.c[idx]] : 0, cls: c.c[idx] });
-  });
-  return out;
+/**
+ * Probes the field image of the first live map at each cell centre: the
+ * canvas pixel under the centre, found with Leaflet's own projection (pixel
+ * points of the image corners and of the centre), so a field drawn with the
+ * wrong projection does not line up. For each probe also returns what the
+ * field should be at that pixel's centre (MC_ductSample at Leaflet's latlng
+ * for it) and the colour of the cell's own g. Runs in the page.
+ */
+function inPageFieldProbe(arg) {
+  const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
+  let field = null, layer = null;
+  m.eachLayer((l) => { if (l._mcField) field = l; if (l._drawField) layer = l; });
+  if (!field || !layer) return { err: 'no field image or ducting layer' };
+  const cv = field._image;
+  const ctx = cv.getContext('2d');
+  const b = field.getBounds();
+  const z = m.getZoom();   // project/unproject: unrounded, unlike latLngToLayerPoint
+  const nw = m.project(b.getNorthWest(), z), se = m.project(b.getSouthEast(), z);
+  const stops = window.MC_ductFieldStops();
+  const alpha = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--mc-duct-alpha'));
+  const grid = layer._grid, vals = window.MC_ductGridValues(grid, layer._data.cells, arg.idx);
+  return {
+    w: cv.width, h: cv.height, alpha,
+    sum: (() => { const d = ctx.getImageData(0, 0, cv.width, cv.height).data; let h = 0; for (let i = 0; i < d.length; i += 4) h = (h * 31 + d[i] * 7 + d[i + 1] * 3 + d[i + 2] + d[i + 3] * 11) % 1000000007; return h; })(),
+    probes: arg.cells.map((c) => {
+      const p = m.project([c.lat, c.lon], z);
+      const x = Math.floor((p.x - nw.x) / (se.x - nw.x) * cv.width), y = Math.floor((p.y - nw.y) / (se.y - nw.y) * cv.height);
+      const px = Array.from(ctx.getImageData(x, y, 1, 1).data);
+      const ll = m.unproject([nw.x + (x + 0.5) / cv.width * (se.x - nw.x), nw.y + (y + 0.5) / cv.height * (se.y - nw.y)], z);
+      const smp = window.MC_ductSample(grid, vals, ll.lat, ll.lng);
+      const exp = window.MC_ductFieldColor(smp.g, stops);
+      return { lat: c.lat, lon: c.lon, g: c.g, px, smp, exp: [exp[0], exp[1], exp[2], Math.round(exp[3] * alpha * smp.a * 255)], own: window.MC_ductFieldColor(c.g, stops) };
+    }),
+  };
 }
-function fillProblems(rects, exp) {
+
+// Lattice neighbours (N, S, E, W) of a cell, from the data.
+function neighbours(data, c) {
+  const st = data.stepDeg, key = (la, lo) => `${la.toFixed(4)},${lo.toFixed(4)}`;
+  const byKey = new Map(data.cells.map(x => [key(x.lat, x.lon), x]));
+  return [[st, 0], [-st, 0], [0, st], [0, -st]].map(([a, b]) => byKey.get(key(c.lat + a, c.lon + b))).filter(Boolean);
+}
+
+/**
+ * Checks the field at hour idx: duct cells coloured like their g, a normal
+ * cell (with only normal or missing neighbours) transparent, and every probed
+ * pixel equal to the field sampled at Leaflet's position of that pixel.
+ */
+async function fieldProblems(page, data, idx) {
+  const ducts = data.cells.filter(c => c.c[idx] >= 3 && c.g[idx] <= -157).slice(0, 12);
+  const calm = data.cells.filter(c => c.c[idx] === 1 && c.g[idx] > -60 && neighbours(data, c).every(n => n.c[idx] === 0 || n.g[idx] > -60)).slice(0, 6);
+  const cells = ducts.concat(calm).map(c => ({ lat: c.lat, lon: c.lon, g: c.g[idx] }));
+  const r = await page.evaluate(inPageFieldProbe, { idx, cells });
+  if (r.err) return { probs: [r.err], r };
   const probs = [];
-  rects.forEach((r) => {
-    const e = exp.get(`${r.lat},${r.lon}`);
-    if (!e) { probs.push(`rect at ${r.lat},${r.lon} has no cell`); return; }
-    if (e.bin) {
-      if (String(r.fill).toLowerCase() !== String(e.fill).toLowerCase() || Math.abs(r.fillOpacity - e.op) > 1e-9) probs.push(`${r.lat},${r.lon}: class ${e.cls} drawn ${r.fill}/${r.fillOpacity}, want ${e.fill}/${e.op}`);
-    } else if (r.fillOpacity !== 0) probs.push(`${r.lat},${r.lon}: class ${e.cls} drawn with fill opacity ${r.fillOpacity}, want 0`);
+  if (!ducts.length) probs.push(`no duct cell with g <= -157 at hour ${idx}`);
+  r.probes.forEach((p, i) => {
+    const where = `${p.lat},${p.lon} g=${p.g}`;
+    // Colour only where opaque enough: the canvas stores premultiplied alpha.
+    const bad = Math.abs(p.px[3] - p.exp[3]) > 3 || (p.exp[3] >= 64 && p.px.slice(0, 3).some((v, k) => Math.abs(v - p.exp[k]) > 4));
+    if (bad) probs.push(`${where}: pixel ${p.px} but the field there is ${p.exp}`);
+    if (i < ducts.length) {
+      if (p.px[3] < 0.8 * r.alpha * 255) probs.push(`${where}: duct centre alpha ${p.px[3]}`);
+      if (p.px.slice(0, 3).some((v, k) => Math.abs(v - p.own[k]) > 60)) probs.push(`${where}: pixel ${p.px} far from its own colour ${p.own}`);
+    } else if (p.px[3] !== 0) probs.push(`${where}: normal cell centre not transparent (${p.px})`);
   });
-  return probs;
+  return { probs, r, ducts: ducts.length, calm: calm.length };
 }
+
+// Outline problems: a dashed --mc-duct-lora outline exactly on cells where a
+// duct can carry 868/915 MHz at hour idx.
+function outlineProblems(rects, data, idx, lora) {
+  const byKey = new Map(data.cells.map(c => [`${c.lat},${c.lon}`, c]));
+  const probs = [];
+  let n = 0;
+  rects.forEach((r) => {
+    const c = byKey.get(`${r.lat},${r.lon}`);
+    if (!c) { probs.push(`rect at ${r.lat},${r.lon} has no cell`); return; }
+    const want = c.c[idx] >= 3 && c.f[idx] > 0 && c.f[idx] <= LORA_MAX_MHZ;
+    if (want) n++;
+    if (r.fillOpacity !== 0) probs.push(`${r.lat},${r.lon}: filled (${r.fillOpacity})`);
+    if (want && !(r.stroke && r.dash === '4 3' && String(r.color).toLowerCase() === String(lora).toLowerCase())) probs.push(`${r.lat},${r.lon}: LoRa duct without the dashed outline (${r.color}/${r.dash})`);
+    if (!want && r.stroke) probs.push(`${r.lat},${r.lon}: class ${c.c[idx]} f=${c.f[idx]} has an outline`);
+  });
+  return { probs, n };
+}
+
 async function setSlider(page, idx) {
   await page.evaluate((i) => {
     const s = document.querySelector('.mc-duct-time input[type=range]');
@@ -320,7 +388,7 @@ async function run() {
       assert(/ducting/i.test(await lab.textContent()), 'label text: ' + (await lab.textContent()));
       assert(!(await lab.locator('input').isChecked()), 'ducting is on by default');
       const st = await pageState(page);
-      assert(st.legends === 0 && st.times === 0 && !st.rects.length, 'legend/time/cells present with the overlay off');
+      assert(st.legends === 0 && st.times === 0 && !st.rects.length && !st.fields.length, 'legend/time/cells/field present with the overlay off');
     });
 
     await test('enabling it draws cells, with a visible, unobstructed legend and time slider', async () => {
@@ -330,8 +398,9 @@ async function run() {
       await page.waitForSelector('.mc-duct-legend', { state: 'visible' });
       const st = await pageState(page);
       assert(st.maps === 1 && st.rects.length === data.cells.length, `maps=${st.maps} rects=${st.rects.length} cells=${data.cells.length}`);
+      assert(st.fields.length === 1 && st.fields[0].inDom && st.fields[0].pane === 'mcDuctFieldPane', 'field images: ' + JSON.stringify(st.fields));
       assert(st.legends === 1 && st.times === 1 && st.legendVisible && st.timeVisible, `legends=${st.legends} times=${st.times}`);
-      assert(/lora/i.test(st.legendText) && /Updated/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 120));
+      assert(/LoRa 868\/915/.test(st.legendText) && /Super-refraction/.test(st.legendText) && /dN\/dh/.test(st.legendText) && /Updated/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 160));
       const ov = await page.evaluate(inPageOverlaps);
       assert(ov.mine === 2, 'legend and time box not both visible');
       assert(!ov.hits.length, ov.hits.join('; '));
@@ -362,33 +431,41 @@ async function run() {
       assert(!res.bad.length, 'picker covered at ' + res.bad.slice(0, 5).join('; '));
     });
 
-    await test('cell fills match the data at the current forecast hour', async () => {
+    await test('the field image matches the data at the current forecast hour, aligned with the map', async () => {
       idx0 = await page.evaluate(() => { const s = document.querySelector('.mc-duct-time input[type=range]'); return parseInt(s.value, 10); });
       assert(idx0 >= 0 && idx0 < data.times.length, 'slider index ' + idx0);
-      const exp = await expectedFills(page, data, idx0);
-      const probs = fillProblems((await pageState(page)).rects, exp);
-      assert(!probs.length, probs.slice(0, 5).join(' | '));
-      assert((await pageState(page)).rects.some(r => r.fillOpacity > 0), 'no coloured cell at all');
+      const f = await fieldProblems(page, data, idx0);
+      assert(!f.probs.length, f.probs.slice(0, 5).join(' | '));
+      assert(f.calm > 0, 'no calm cell to check for transparency');
+      const pane = await page.evaluate(() => { const p = document.querySelector('.leaflet-mcDuctField-pane'); const cs = p && getComputedStyle(p); return cs ? { z: +cs.zIndex, pe: cs.pointerEvents } : null; });
+      assert(pane && pane.z > 200 && pane.z < 400 && pane.pe === 'none', 'field pane ' + JSON.stringify(pane));
     });
 
-    await test('moving the time slider changes cell colours and the label', async () => {
-      const before = (await pageState(page)).rects.map(r => r.fill + '/' + r.fillOpacity);
+    await test('LoRa cells, and only they, have the dashed outline', async () => {
+      const o = outlineProblems((await pageState(page)).rects, data, idx0, (await cssVars(page)).lora);
+      assert(!o.probs.length, o.probs.slice(0, 5).join(' | '));
+      assert(o.n > 0, 'no LoRa duct at hour ' + idx0);
+    });
+
+    await test('moving the time slider changes the field, the outlines and the label', async () => {
+      const before = (await page.evaluate(inPageFieldProbe, { idx: idx0, cells: [] })).sum;
       const label0 = await page.locator('.mc-duct-time-label').first().textContent();
       const max = await page.evaluate(() => parseInt(document.querySelector('.mc-duct-time input[type=range]').max, 10));
       assert(max === data.times.length - 1, `slider max ${max}`);
       await setSlider(page, max);
-      const after = (await pageState(page)).rects;
-      assert(after.map(r => r.fill + '/' + r.fillOpacity).some((v, i) => v !== before[i]), 'no cell changed colour');
-      const probs = fillProblems(after, await expectedFills(page, data, max));
-      assert(!probs.length, probs.slice(0, 5).join(' | '));
+      const after = await fieldProblems(page, data, max);
+      assert(after.r.sum !== before, 'field image did not change');
+      assert(!after.probs.length, after.probs.slice(0, 5).join(' | '));
+      const o = outlineProblems((await pageState(page)).rects, data, max, (await cssVars(page)).lora);
+      assert(!o.probs.length, o.probs.slice(0, 5).join(' | '));
       assert((await page.locator('.mc-duct-time-label').first().textContent()) !== label0, 'label did not change');
+      assert((await pageState(page)).fields.length === 1, 'slider added a field image');
       await setSlider(page, idx0);
-      const back = fillProblems((await pageState(page)).rects, await expectedFills(page, data, idx0));
-      assert(!back.length, 'after moving back: ' + back.slice(0, 3).join(' | '));
+      const back = await fieldProblems(page, data, idx0);
+      assert(!back.probs.length && back.r.sum === before, 'after moving back: ' + back.probs.slice(0, 3).join(' | '));
     });
 
     async function popupFor(wantClass) {
-      const exp = await expectedFills(page, data, idx0);
       const cell = data.cells.find(c => c.c[idx0] === wantClass);
       assert(cell, `no class ${wantClass} cell at hour ${idx0}`);
       await page.evaluate((c) => {
@@ -414,7 +491,7 @@ async function run() {
         await page.mouse.click(pt.x, pt.y);
         try {
           await page.waitForSelector('.leaflet-popup .mc-duct-popup', { timeout: 2500 });
-          return { text: await page.locator('.leaflet-popup .mc-duct-popup').first().innerText(), cell, exp: exp.get(`${cell.lat},${cell.lon}`) };
+          return { text: await page.locator('.leaflet-popup .mc-duct-popup').first().innerText(), cell };
         } catch (_) { /* try the next point */ }
       }
       throw new Error(`could not open the popup of cell ${cell.lat},${cell.lon} (class ${wantClass})`);
@@ -431,24 +508,27 @@ async function run() {
       assert(/Super-refraction/.test(r.text) && /Can carry 868 MHz: no/.test(r.text) && /Lowest trapped frequency: none/.test(r.text), 'popup: ' + r.text);
     });
 
-    await test('theme toggle restyles the cells from the CSS variables', async () => {
+    await test('theme toggle redraws the field and outlines from the CSS variables', async () => {
       await page.evaluate(() => window.__mcHarness.maps.forEach(m => m.closePopup && m.closePopup()));
-      const light = (await cssVars(page)).lora;
-      const before = (await pageState(page)).rects.filter(r => r.fill).map(r => r.fill);
-      assert(before.length, 'no coloured cell');
+      const light = await cssVars(page);
+      const before = (await page.evaluate(inPageFieldProbe, { idx: idx0, cells: [] })).sum;
+      const rects0 = (await pageState(page)).rects.length;
       await MH.setTheme(page, 'dark');
-      const dark = (await cssVars(page)).lora;
-      assert(dark && dark !== light, `--mc-duct-lora did not change with the theme (${light} / ${dark})`);
       await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark');
-      const exp = await expectedFills(page, data, idx0);
-      let probs = [];
+      const dark = await cssVars(page);
+      assert(dark.s4 && dark.s4 !== light.s4 && dark.lora !== light.lora, `--mc-duct-* did not change with the theme (${light.s4}/${dark.s4}, ${light.lora}/${dark.lora})`);
+      let f = null;
       for (let i = 0; i < 30; i++) {
-        probs = fillProblems((await pageState(page)).rects, exp);
-        if (!probs.length) break;
+        f = await fieldProblems(page, data, idx0);
+        if (!f.probs.length && f.r.sum !== before) break;
         await sleep(200);
       }
-      assert(!probs.length, 'after theme change: ' + probs.slice(0, 4).join(' | '));
-      assert((await pageState(page)).rects.some((r, i) => r.fill && !before.includes(r.fill)), 'no fill changed with the theme');
+      assert(f.r.sum !== before, 'field image unchanged after the theme change');
+      assert(!f.probs.length, 'after theme change: ' + f.probs.slice(0, 4).join(' | '));
+      const st = await pageState(page);
+      const o = outlineProblems(st.rects, data, idx0, dark.lora);
+      assert(!o.probs.length, 'dark outlines: ' + o.probs.slice(0, 3).join(' | '));
+      assert(st.rects.length === rects0 && st.fields.length === 1, `rects ${rects0}->${st.rects.length}, fields ${st.fields.length}`);
       const ov = await page.evaluate(inPageOverlaps);
       assert(!ov.hits.length, 'dark: ' + ov.hits.join('; '));
       await MH.setTheme(page, 'light');
@@ -484,6 +564,8 @@ async function run() {
       await page.waitForFunction(() => !document.querySelector('.mc-duct-legend') && !document.querySelector('.mc-duct-time'), null, { timeout: 5000 });
       const st = await pageState(page);
       assert(!st.rects.length, `${st.rects.length} cells still drawn`);
+      assert(!st.fields.length, 'field image left on the map');
+      assert(!(await page.evaluate(() => document.querySelectorAll('.mc-duct-field').length)), 'field canvas left in the DOM');
       assert(st.legends === 0 && st.times === 0, 'legend/time boxes left');
       assert(await page.evaluate(() => JSON.parse(localStorage.getItem('mc-tile-overlays') || '[]').indexOf('ducting') < 0), 'preference still has ducting');
     });
@@ -497,6 +579,7 @@ async function run() {
       await sleep(300);
       const st = await pageState(page);
       assert(st.legends === 1 && st.times === 1 && st.rects.length === data.cells.length, `legends=${st.legends} times=${st.times} rects=${st.rects.length}`);
+      assert(st.fields.length === 1 && await page.evaluate(() => document.querySelectorAll('.mc-duct-field').length) === 1, 'field images: ' + st.fields.length);
       await setOverlayUi(page, false);
     });
 
@@ -512,6 +595,7 @@ async function run() {
       await lp.page.mouse.move(5, 5);
       const st = await pageState(lp.page);
       assert(st.legends === 1 && st.times === 1, `legends=${st.legends} times=${st.times}`);
+      assert(st.fields.length === 1 && st.fields[0].inDom, 'live field images: ' + st.fields.length);
       const ov = await lp.page.evaluate(inPageOverlaps);
       assert(!ov.hits.length, ov.hits.join('; '));
       assert(!lp.page.__errors.length, lp.page.__errors.slice(0, 3).join(' | '));
@@ -536,7 +620,7 @@ async function run() {
       assert((await np.page.locator('label[data-tile-overlay-id="ducting"]').count()) === 0, 'entry present');
       await sleep(400);
       const st = await pageState(np.page);
-      assert(!st.rects.length && !st.legends && !st.times, 'overlay drawn although the server has none');
+      assert(!st.rects.length && !st.fields.length && !st.legends && !st.times, 'overlay drawn although the server has none');
       assert(!np.page.__errors.length, np.page.__errors.slice(0, 3).join(' | '));
     });
 
@@ -552,7 +636,7 @@ async function run() {
         await sp.page.waitForSelector('.mc-duct-legend', { state: 'visible', timeout: 25000 });
         await sp.page.waitForFunction((src) => new RegExp(src).test((document.querySelector('.mc-duct-legend') || {}).textContent || ''), want.source, { timeout: 10000 });
         const st = await pageState(sp.page);
-        assert(!st.rects.length, 'cells drawn');
+        assert(!st.rects.length && !st.fields.length, 'cells or field drawn');
         const errs = sp.page.__errors.filter(e => !/Failed to load resource/.test(e));
         assert(!errs.length, errs.slice(0, 3).join(' | '));
       });

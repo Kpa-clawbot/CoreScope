@@ -29,17 +29,18 @@ Which maps appear in the list is up to the site operator, who can turn groups of
 
 When the site operator has turned it on, the layers button has an extra **Tropospheric ducting** checkbox under Overlays (on the Map, Live and Repeater Planner pages). If you do not see it, this site does not offer it.
 
-Ducting is when a layer of air traps radio signals and carries them far beyond the normal range, so a distant node may suddenly be heard. The overlay shows a forecast, one coloured square per grid cell of the weather model:
+Ducting is when a layer of air traps radio signals and carries them far beyond the normal range, so a distant node may suddenly be heard. The overlay shows a forecast as a smooth colour field over the area around the mesh, like the usual tropospheric ducting forecast maps. The colour follows how quickly the air's refractivity drops with height (dN/dh, in N units per km): the faster it drops, the more signals bend back toward the ground.
 
-- **Can carry LoRa 868/915 MHz**: a duct that can trap signals at 1 GHz or lower. Mesh links can stretch over long distances here.
-- **1-3 GHz only** and **Above 3 GHz only**: a duct exists, but it is too thin to trap LoRa. It matters for other radio services.
-- **Super-refraction**: signals bend more than usual, which extends range a little, but there is no duct.
-- A **lighter shade** means an elevated duct (a layer above the ground). A stronger shade means a surface-based duct, which reaches the ground. An elevated duct mostly helps nodes that sit inside it, such as repeaters on high sites.
-- Cells with nothing of interest are not drawn.
+- **No colour**: normal propagation (dN/dh above about -60 N/km).
+- **Faint purple and blue**: super-refraction (from -79 N/km), drawn faintly because it is common. Signals bend more than usual, which extends range a little, but there is no duct.
+- **Green, then yellow, orange and red**: ducting (from -157 N/km). The air traps signals in a layer; the further along the scale, the stronger the trapping.
+- **Pink**: very strong ducting (around -600 N/km and beyond).
+- A **dashed outline** marks a grid cell where a duct can carry LoRa 868/915 MHz (it traps signals at 1 GHz or lower). Mesh links can stretch over long distances there. A duct without the outline is too thin for LoRa and matters only for higher frequencies.
+- Areas without forecast data are not drawn; the field fades out at their edge.
 
-Use the **Forecast time** slider to move through the coming hours. Click a square for its details: type, base and top of the duct (metres above ground), strength, the lowest frequency it can trap and whether it can carry 868 and 915 MHz. The legend shows the weather model, the data attribution and when the forecast was last updated.
+The legend shows the colour scale with these thresholds. Use the **Forecast time** slider to move through the coming hours. Click anywhere in the field for the details of that grid cell: type (normal, super-refraction, elevated duct or surface-based duct), base and top of the duct (metres above ground), strength, the lowest frequency it can trap and whether it can carry 868 and 915 MHz. An elevated duct is a layer above the ground and mostly helps nodes that sit inside it, such as repeaters on high sites; a surface-based duct reaches the ground. The legend also shows the weather model, the data attribution and when the forecast was last updated.
 
-It is an indicator only. The weather model sees layers about 200 m or thicker, so thinner ducts, such as most over the sea, do not appear, and each square covers tens of kilometres. A clear map does not mean no long-distance reception, and a coloured square does not promise it. See also [Why did a node far away hear my packet?](faq.md#12-why-did-a-node-far-away-hear-my-packet)
+It is an indicator only. The weather model sees layers about 200 m or thicker, so thinner ducts, such as most over the sea, do not appear, and each grid cell covers tens of kilometres: the smooth field is interpolated between cell centres and shows no detail finer than that. A clear map does not mean no long-distance reception, and a coloured area does not promise it. See also [Why did a node far away hear my packet?](faq.md#12-why-did-a-node-far-away-hear-my-packet)
 
 ## Marker shapes and colors
 

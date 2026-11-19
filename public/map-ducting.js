@@ -1,19 +1,47 @@
 /* map-ducting.js — tropospheric ducting map overlay.
  *
- * Shows, per grid cell, whether the atmosphere can bend or trap radio signals
- * and whether a duct can carry LoRa (868/915 MHz). Data: GET /api/ducting
- * (hourly forecast, one array entry per `times` entry, see
- * cmd/server/ducting_types.go).
+ * Draws the forecast refractivity gradient as a smooth, semi-transparent
+ * colour field (like the usual tropo-ducting forecast maps): transparent where
+ * propagation is normal, then purple, blue, green, yellow, orange, red and
+ * pink as the gradient gets stronger. Cells where a duct can carry LoRa
+ * (868/915 MHz) get a dashed outline. Data: GET /api/ducting (hourly
+ * forecast, one array entry per `times` entry, see cmd/server/ducting_types.go).
  *
  *   window.MC_createDuctingLayer(opts) -> L.Layer
  *       Fetches /api/ducting when added to a map, refreshes every 30 min while
- *       on it, draws one canvas rectangle per cell that is ever a duct or
- *       super-refraction, and adds a legend and a forecast-time slider.
+ *       on it (every minute until it has data), draws the field as one canvas
+ *       image overlay, one invisible clickable rectangle per cell with data
+ *       (popups, LoRa outline), a legend and a forecast-time slider.
  *       A layer removed mid-fetch never touches the map afterwards.
- *   window.MC_ductBin(cls, fmin)        -> 'lora'|'uhf'|'micro'|'super'|null
  *   window.MC_ductTimeIndex(times, now) -> index of the latest time <= now
+ *   window.MC_ductFieldColor(g, stops)  -> [r, g, b, a] for a dN/dh value
+ *   window.MC_ductFieldStops()          -> stops read from the CSS variables
+ *   window.MC_ductGrid(cells, step)     -> the cells' lattice (see ductGrid)
+ *   window.MC_ductGridValues(grid, cells, i) -> Float32Array, NaN = no data
+ *   window.MC_ductSample(grid, vals, lat, lon) -> { g, a }
+ *   window.MC_ductRowLat(y, h, north, south)   -> latitude of image row y
  *
- * Fill colours are read from the --mc-duct-* CSS variables at draw time.
+ * The field image:
+ *   - The cells sit on a regular lattice: centre = floor(x/step)*step + step/2.
+ *     The image covers the bounding box of every cell that has data at some
+ *     hour (the cells' outer edges), so its bounds stay put while the slider
+ *     moves. Several separate regions share one image; its long side is
+ *     capped at MAX_SIDE px, so far-apart regions get fewer pixels per cell
+ *     (the browser smooths the upscaling). Cells on both sides of the
+ *     antimeridian are drawn where Leaflet puts them (lon -180..180); the
+ *     image then spans the whole width, nothing is wrapped.
+ *   - Rows are sampled in Web Mercator (row -> latitude by the inverse
+ *     projection), so the field lines up with the basemap at every zoom.
+ *   - The value is the cell's min dN/dh (g), bilinearly interpolated between
+ *     cell centres over the cells that have data. Where a neighbour has no
+ *     data the field fades to transparent by the cell's edge, so there are no
+ *     hard square edges.
+ *   - Built only when the data, the forecast hour or the theme changes,
+ *     O(image pixels); pan and zoom only move/scale the image.
+ *
+ * Colours come from the --mc-duct-s1..s8 CSS variables (hex or rgb()), the
+ * field opacity from --mc-duct-alpha and the LoRa outline from
+ * --mc-duct-lora, all read at draw time.
  */
 (function () {
   'use strict';
@@ -24,38 +52,43 @@
   // ask again every minute instead of waiting a full refresh period.
   var RETRY_MS = 60 * 1000;
   var LORA_MAX_MHZ = 1000;   // duct with fmin <= 1 GHz carries 868/915 MHz
-  var UHF_MAX_MHZ = 3000;
   var BAND_868 = 868;
   var BAND_915 = 915;
-
-  // Fill opacity per class: elevated ducts are lighter than surface-based.
-  var OPACITY = { 2: 0.35, 3: 0.3, 4: 0.55 };
-  var VAR_NAME = { lora: '--mc-duct-lora', uhf: '--mc-duct-uhf', micro: '--mc-duct-micro', super: '--mc-duct-super' };
-  var GRID_VAR = '--mc-duct-grid';
   var TYPE_NAME = { 0: 'No data', 1: 'Normal', 2: 'Super-refraction', 3: 'Elevated duct', 4: 'Surface-based duct' };
+
+  // Colour scale: dN/dh (N/km) at each --mc-duct-sN variable. -79 starts
+  // super-refraction, -157 is a trapping layer (duct).
+  var STOP_G = [-79, -100, -130, -157, -220, -300, -400, -600];
+  var FADE_FROM = -60;          // above: transparent; -60..first stop: alpha ramps up
+  var DEFAULT_ALPHA = 0.6;      // when --mc-duct-alpha is unset
+  // Opacity follows strength so ducts stand out: super-refraction (common)
+  // starts faint at SUPER_ALPHA of the field opacity and reaches full
+  // opacity at the ducting threshold DUCT_G.
+  var SUPER_ALPHA = 0.25;
+  var DUCT_G = -157;
+  var LUT_SIZE = 600;           // colour table, one entry per N/km from FADE_FROM
+  var PX_PER_CELL = 16;
+  var MAX_SIDE = 2048;          // image long side, px
+  var MAX_GRID = 1 << 22;       // lattice slots (0.25 deg worldwide is ~1M)
+  var MAX_LAT = 85.0511287798;  // Web Mercator limit
+  var FIELD_PANE = 'mcDuctFieldPane';
+  var FIELD_Z = '245';          // above tiles (200), below the tile overlays (250) and vectors (400)
+  var LORA_VAR = '--mc-duct-lora';
+  var ALPHA_VAR = '--mc-duct-alpha';
+  var LORA_STYLE = { stroke: true, weight: 1.5, opacity: 0.95, dashArray: '4 3' };
+
+  // Legend: position (0..1 along the bar) of FADE_FROM and of each stop.
+  // Spread out instead of linear in g, so the labels have room.
+  // "Strong" sits right-aligned at the end: the -400..-600 stretch.
+  var BAR_FADE = 0.13;
+  var BAR_POS = [0.19, 0.29, 0.44, 0.58, 0.69, 0.78, 0.86, 1];
+  var BAR_LABELS = [[0, 'Normal'], [0.19, 'Super-refraction'], [0.58, 'Ducting'], [1, 'Strong', true]];
 
   var NOTE = 'Indicator only: model levels are ~200 m apart, so thinner ducts are not visible.';
   var MSG_PENDING = 'Ducting forecast is being prepared';
   var MSG_ERROR = 'Ducting forecast unavailable';
 
-  var LEGEND_ROWS = [
-    ['lora', 'Duct that can carry LoRa 868/915 MHz'],
-    ['uhf', 'Duct for 1-3 GHz only'],
-    ['micro', 'Duct for above 3 GHz only'],
-    ['super', 'Super-refraction (extended range, no duct)']
-  ];
-
   // ── Pure helpers ──────────────────────────────────────────────────────────
-
-  function ductBin(cls, fmin) {
-    if (cls === 2) return 'super';
-    if (cls !== 3 && cls !== 4) return null;
-    var f = Number(fmin);
-    if (!isFinite(f) || f <= 0) return null;   // 0 = no duct
-    if (f <= LORA_MAX_MHZ) return 'lora';
-    if (f <= UHF_MAX_MHZ) return 'uhf';
-    return 'micro';
-  }
 
   // Latest time <= now; the first when every time is in the future; -1 when
   // there are no times.
@@ -75,6 +108,11 @@
   }
 
   function at(arr, i) { return (arr && arr[i] != null) ? Number(arr[i]) : 0; }
+
+  function isLora(cell, i) {
+    var f = at(cell.f, i);
+    return at(cell.c, i) >= 3 && f > 0 && f <= LORA_MAX_MHZ;
+  }
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -103,12 +141,199 @@
     return box;
   }
 
-  // '' when the variable is undefined (the cell is then left undrawn).
+  // '' when the variable is undefined.
   function cssVar(name) {
     try {
       var v = getComputedStyle(document.documentElement).getPropertyValue(name);
       return v ? String(v).trim() : '';
     } catch (_) { return ''; }
+  }
+
+  // '#rgb', '#rrggbb', '#rrggbbaa', 'rgb(r, g, b)' or 'rgba(...)' -> [r, g, b]
+  // (alpha ignored: the field has one opacity); null for anything else.
+  function parseColor(s) {
+    s = String(s || '').trim().toLowerCase();
+    var m = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(s);
+    if (m) {
+      var h = m[1];
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+    }
+    m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(s);
+    if (m) return [Math.round(+m[1]), Math.round(+m[2]), Math.round(+m[3])];
+    return null;
+  }
+
+  // The colour stops from the CSS variables: [{ g, rgb }], strongest last.
+  // A missing or unreadable variable drops its stop (nothing is invented).
+  function fieldStops() {
+    var out = [];
+    for (var k = 0; k < STOP_G.length; k++) {
+      var rgb = parseColor(cssVar('--mc-duct-s' + (k + 1)));
+      if (rgb) out.push({ g: STOP_G[k], rgb: rgb });
+    }
+    return out;
+  }
+
+  function fieldAlpha() {
+    var a = parseFloat(cssVar(ALPHA_VAR));
+    return (isFinite(a) && a >= 0 && a <= 1) ? a : DEFAULT_ALPHA;
+  }
+
+  // Colour of dN/dh value g: [r, g, b, a], a in 0..1 (before the field
+  // opacity). Transparent at FADE_FROM and above; alpha ramps to SUPER_ALPHA
+  // at the first stop, then to 1 at DUCT_G; colours interpolated between
+  // stops, the last stop beyond it.
+  function fieldAlphaAt(g, firstG) {
+    if (g >= firstG) return SUPER_ALPHA * Math.min(1, (FADE_FROM - g) / (FADE_FROM - firstG));
+    if (g <= DUCT_G || firstG <= DUCT_G) return 1;
+    return SUPER_ALPHA + (1 - SUPER_ALPHA) * (firstG - g) / (firstG - DUCT_G);
+  }
+
+  function fieldColor(g, stops) {
+    if (!stops || !stops.length || !isFinite(g) || g >= FADE_FROM) return [0, 0, 0, 0];
+    var first = stops[0], last = stops[stops.length - 1];
+    var a = fieldAlphaAt(g, first.g);
+    if (g >= first.g) return [first.rgb[0], first.rgb[1], first.rgb[2], a];
+    if (g <= last.g) return [last.rgb[0], last.rgb[1], last.rgb[2], a];
+    for (var k = 0; k < stops.length - 1; k++) {
+      var s0 = stops[k], s1 = stops[k + 1];
+      if (g >= s1.g) {
+        var t = (s0.g - g) / (s0.g - s1.g);
+        return [0, 1, 2].map(function (c) { return Math.round(s0.rgb[c] + (s1.rgb[c] - s0.rgb[c]) * t); }).concat(a);
+      }
+    }
+    return [last.rgb[0], last.rgb[1], last.rgb[2], a];
+  }
+
+  // RGBA table: entry k is g = FADE_FROM - k, alpha scaled by `alpha`.
+  function fieldLut(stops, alpha) {
+    var lut = new Uint8ClampedArray(LUT_SIZE * 4);
+    for (var k = 0; k < LUT_SIZE; k++) {
+      var c = fieldColor(FADE_FROM - k, stops);
+      lut[k * 4] = c[0]; lut[k * 4 + 1] = c[1]; lut[k * 4 + 2] = c[2];
+      lut[k * 4 + 3] = Math.round(c[3] * alpha * 255);
+    }
+    return lut;
+  }
+
+  function pct(f) { return Math.round(f * 1000) / 10 + '%'; }
+
+  function mercY(lat) { return Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)); }
+
+  // Latitude at y px from the top of an image h px tall spanning north..south
+  // in Web Mercator (y may be fractional; 0 = north edge, h = south edge).
+  function rowLat(y, h, north, south) {
+    var yn = mercY(north), ys = mercY(south);
+    var m = yn + (ys - yn) * (y / h);
+    return (2 * Math.atan(Math.exp(m)) - Math.PI / 2) * 180 / Math.PI;
+  }
+
+  // Lattice of the cells that have data (class >= 1) at some hour:
+  // { step, i0, j0, rows, cols, slot (cell index -> lattice slot, -1 = none),
+  //   south, west, north, east (outer cell edges), w, h (image px) }, or null.
+  function ductGrid(cells, step) {
+    step = Number(step);
+    if (!(step > 0) || !Array.isArray(cells)) return null;
+    var slot = new Int32Array(cells.length).fill(-1);
+    var ii = new Int32Array(cells.length), jj = new Int32Array(cells.length);
+    var i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity, n = 0;
+    for (var k = 0; k < cells.length; k++) {
+      var cell = cells[k];
+      if (!cell || !Array.isArray(cell.c) || !isFinite(cell.lat) || !isFinite(cell.lon)) continue;
+      var any = false;
+      for (var t = 0; t < cell.c.length; t++) if (cell.c[t] >= 1) { any = true; break; }
+      if (!any) continue;
+      var i = Math.round(cell.lat / step - 0.5), j = Math.round(cell.lon / step - 0.5);
+      ii[k] = i; jj[k] = j; slot[k] = 0; n++;
+      if (i < i0) i0 = i; if (i > i1) i1 = i;
+      if (j < j0) j0 = j; if (j > j1) j1 = j;
+    }
+    if (!n) return null;
+    var rows = i1 - i0 + 1, cols = j1 - j0 + 1;
+    if (rows * cols > MAX_GRID) return null;
+    for (k = 0; k < cells.length; k++) if (slot[k] === 0) slot[k] = (ii[k] - i0) * cols + (jj[k] - j0);
+    var g = { step: step, i0: i0, j0: j0, rows: rows, cols: cols, slot: slot,
+      south: Math.max(-MAX_LAT, i0 * step), north: Math.min(MAX_LAT, (i1 + 1) * step),
+      west: j0 * step, east: (j1 + 1) * step };
+    if (!(g.north > g.south)) return null;
+    // Image size: PX_PER_CELL per cell across, the Mercator aspect down,
+    // long side capped.
+    var w = cols * PX_PER_CELL;
+    var h = w * ((mercY(g.north) - mercY(g.south)) * 180 / Math.PI) / (g.east - g.west);
+    var scale = Math.min(1, MAX_SIDE / Math.max(w, h));
+    g.w = Math.max(1, Math.round(w * scale));
+    g.h = Math.max(1, Math.round(h * scale));
+    return g;
+  }
+
+  // g at time index i per lattice slot; NaN where there is no data (class 0).
+  function ductGridValues(grid, cells, i) {
+    var vals = new Float32Array(grid.rows * grid.cols).fill(NaN);
+    for (var k = 0; k < cells.length; k++) {
+      var s = grid.slot[k];
+      if (s < 0 || at(cells[k].c, i) < 1) continue;
+      var g = at(cells[k].g, i);
+      vals[s] = isFinite(g) ? g : 0;
+    }
+    return vals;
+  }
+
+  // Bilinear mix at lattice row v / column u (fractional, 0 = first centre)
+  // over the slots with data. Writes [value, coverage] into res. Coverage is
+  // 1 where all neighbours have data and falls to 0 by the edge of a cell
+  // whose neighbour has none.
+  function mix(vals, rows, cols, v, u, res) {
+    var i = Math.floor(v), j = Math.floor(u), fv = v - i, fu = u - j;
+    var p = 0, s = 0;
+    for (var di = 0; di < 2; di++) {
+      var r = i + di;
+      if (r < 0 || r >= rows) continue;
+      var wv = di ? fv : 1 - fv;
+      for (var dj = 0; dj < 2; dj++) {
+        var c = j + dj;
+        if (c < 0 || c >= cols) continue;
+        var x = vals[r * cols + c];
+        if (x !== x) continue;               // NaN: no data
+        var w = wv * (dj ? fu : 1 - fu);
+        p += w; s += w * x;
+      }
+    }
+    var a = 2 * p - 1;
+    a = a <= 0 ? 0 : a >= 1 ? 1 : a * a * (3 - 2 * a);
+    res[0] = p > 0 ? s / p : NaN;
+    res[1] = a;
+    return res;
+  }
+
+  function sample(grid, vals, lat, lon) {
+    var r = mix(vals, grid.rows, grid.cols, lat / grid.step - 0.5 - grid.i0, lon / grid.step - 0.5 - grid.j0, [0, 0]);
+    return { g: r[0], a: r[1] };
+  }
+
+  // Fills `out` (RGBA, grid.w x grid.h) with the field. O(pixels).
+  function renderField(grid, vals, lut, out) {
+    var W = grid.w, H = grid.h, rows = grid.rows, cols = grid.cols, step = grid.step;
+    var us = new Float64Array(W);
+    for (var x = 0; x < W; x++) us[x] = (grid.west + (grid.east - grid.west) * (x + 0.5) / W) / step - 0.5 - grid.j0;
+    var res = [0, 0];
+    for (var y = 0; y < H; y++) {
+      var v = rowLat(y + 0.5, H, grid.north, grid.south) / step - 0.5 - grid.i0;
+      var o = y * W * 4;
+      for (x = 0; x < W; x++, o += 4) {
+        mix(vals, rows, cols, v, us[x], res);
+        var cov = res[1];
+        if (!(cov > 0)) continue;
+        var k = Math.round(FADE_FROM - res[0]);
+        if (!(k > 0)) continue;                // normal, or NaN
+        if (k >= LUT_SIZE) k = LUT_SIZE - 1;
+        var a = lut[k * 4 + 3];
+        if (!a) continue;
+        out[o] = lut[k * 4]; out[o + 1] = lut[k * 4 + 1]; out[o + 2] = lut[k * 4 + 2];
+        out[o + 3] = a * cov;
+      }
+    }
+    return out;
   }
 
   // ── Layer ─────────────────────────────────────────────────────────────────
@@ -135,6 +360,45 @@
     return CanvasClass ? new CanvasClass({ padding: 0.5 }) : L.canvas({ padding: 0.5 });
   }
 
+  // An image overlay whose image is a canvas: the field is drawn straight
+  // into it (no data URL encode/decode), and Leaflet positions and scales it
+  // like any image overlay. null when this Leaflet has no ImageOverlay.
+  var FieldClass = null;
+  function newField(canvas, bounds, pane) {
+    if (!FieldClass && L.ImageOverlay && typeof L.ImageOverlay.extend === 'function') {
+      FieldClass = L.ImageOverlay.extend({
+        _initImage: function () {
+          var img = this._image = this._url;
+          L.DomUtil.addClass(img, 'leaflet-image-layer');
+          if (this._zoomAnimated) L.DomUtil.addClass(img, 'leaflet-zoom-animated');
+          if (this.options.className) L.DomUtil.addClass(img, this.options.className);
+          img.onselectstart = L.Util.falseFn;
+          img.onmousemove = L.Util.falseFn;
+        }
+      });
+    }
+    if (!FieldClass) return null;
+    var opts = { interactive: false, className: 'mc-duct-field' };
+    if (pane) opts.pane = pane;
+    var f = new FieldClass(canvas, bounds, opts);
+    f._mcField = true;
+    return f;
+  }
+
+  // The field's own pane: above the tiles, below the tile overlays (labels,
+  // hillshade), vectors and markers; never takes pointer events.
+  function fieldPane(map) {
+    try {
+      if (map.getPane(FIELD_PANE)) return FIELD_PANE;
+      var p = map.createPane(FIELD_PANE);
+      p.style.zIndex = FIELD_Z;
+      p.style.pointerEvents = 'none';
+      return FIELD_PANE;
+    } catch (_) { return null; }
+  }
+
+  function gridBounds(g) { return [[g.south, g.west], [g.north, g.east]]; }
+
   function makeLayerClass() {
     return L.Layer.extend({
       initialize: function (opts) {
@@ -151,18 +415,20 @@
         this._map = map;
         var gen = ++this._gen;
         this._rects = [];
+        this._grid = null;
         try {
           this._renderer = newRenderer();
           this._group = L.layerGroup();
           map.addLayer(this._group);
         } catch (_) { this._group = null; }
+        this._pane = fieldPane(map);
         this._addControls(map);
         this._watchAttribution(map);
         this._renderLegend();
         this._load(gen);
         this._schedule(REFRESH_MS);
         var self = this;
-        // Fills are read from CSS variables, so a theme switch needs a restyle.
+        // Colours are read from CSS variables, so a theme switch needs a redraw.
         this._onTheme = function () { if (self._data) self._restyle(); };
         try { window.addEventListener('theme-changed', this._onTheme); } catch (_) {}
       },
@@ -181,8 +447,9 @@
         if (this._legendCtl) { try { this._legendCtl.remove(); } catch (_) {} }
         if (this._timeCtl) { try { this._timeCtl.remove(); } catch (_) {} }
         if (this._group && m) { try { m.removeLayer(this._group); } catch (_) {} }
+        if (this._field && m) { try { m.removeLayer(this._field); } catch (_) {} }
         if (this._renderer && m) { try { m.removeLayer(this._renderer); } catch (_) {} }
-        this._map = this._group = this._renderer = null;
+        this._map = this._group = this._renderer = this._field = this._canvas = this._grid = null;
         this._legendCtl = this._timeCtl = this._legendEl = this._statusEl = this._metaEl = null;
         this._slider = this._timeLabel = this._onSlide = null;
         this._rects = [];
@@ -302,22 +569,37 @@
           st.setAttribute('role', 'status');
           box.appendChild(st);
         } else {
-          for (var i = 0; i < LEGEND_ROWS.length; i++) {
-            var row = el('div', 'mc-duct-legend-row');
-            row.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-' + LEGEND_ROWS[i][0]));
-            row.appendChild(el('span', null, LEGEND_ROWS[i][1]));
-            box.appendChild(row);
-          }
-          var nrow = el('div', 'mc-duct-legend-row');
-          nrow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-normal'));
-          nrow.appendChild(el('span', null, 'Outline only: normal propagation'));
-          box.appendChild(nrow);
-          box.appendChild(el('div', 'mc-duct-legend-note', 'Lighter shade: elevated duct (not touching the ground)'));
+          box.appendChild(this._scale());
+          var lrow = el('div', 'mc-duct-legend-row');
+          lrow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-lora'));
+          lrow.appendChild(el('span', null, 'Dashed outline: a duct here can carry LoRa 868/915 MHz'));
+          box.appendChild(lrow);
           var meta = d.attribution || d.modelLabel || d.model || '';
           if (meta) box.appendChild(el('div', 'mc-duct-legend-meta', meta));
           if (d.generatedAt) box.appendChild(el('div', 'mc-duct-legend-meta', 'Updated ' + fmtTime(d.generatedAt)));
         }
         box.appendChild(el('div', 'mc-duct-legend-note', NOTE));
+      },
+
+      // Gradient bar from the same variables as the field, labels under it.
+      _scale: function () {
+        var wrap = el('div', 'mc-duct-scale');
+        var bar = el('div', 'mc-duct-scale-bar');
+        var parts = ['transparent 0%', 'transparent ' + pct(BAR_FADE)];
+        for (var k = 0; k < STOP_G.length; k++) parts.push('var(--mc-duct-s' + (k + 1) + ') ' + pct(BAR_POS[k]));
+        bar.style.background = 'linear-gradient(to right, ' + parts.join(', ') + ')';
+        bar.setAttribute('aria-hidden', 'true');
+        wrap.appendChild(bar);
+        var labels = el('div', 'mc-duct-scale-labels');
+        for (var i = 0; i < BAR_LABELS.length; i++) {
+          var b = BAR_LABELS[i];
+          var lab = el('span', 'mc-duct-scale-label' + (b[2] ? ' mc-duct-scale-label-end' : ''), b[1]);
+          lab.style.left = pct(b[0]);
+          labels.appendChild(lab);
+        }
+        wrap.appendChild(labels);
+        wrap.appendChild(el('div', 'mc-duct-legend-caption', 'Refractivity gradient dN/dh (N/km): super-refraction from -79, ducting from -157'));
+        return wrap;
       },
 
       // ── data ──
@@ -384,12 +666,14 @@
         this._setIndex(idx);
       },
 
-      // One rectangle per cell that has data (class >= 1) at some hour.
+      // One invisible, clickable rectangle per cell that has data (class >= 1)
+      // at some hour, and the lattice the field is drawn on.
       _build: function () {
         var d = this._data, group = this._group;
         if (!group) return;
         try { group.clearLayers(); } catch (_) {}
         this._rects = [];
+        this._grid = ductGrid(d.cells, Number(d.stepDeg) || 0.5);
         var h = (Number(d.stepDeg) || 0.5) / 2;
         for (var i = 0; i < d.cells.length; i++) {
           var cell = d.cells[i];
@@ -400,6 +684,7 @@
           var rect = L.rectangle([[cell.lat - h, cell.lon - h], [cell.lat + h, cell.lon + h]],
             { renderer: this._renderer, stroke: false, fill: true, fillOpacity: 0, interactive: true });
           rect._mcCell = cell;
+          rect._mcLora = '';
           rect.bindPopup(this._popupFn(cell));
           group.addLayer(rect);
           this._rects.push(rect);
@@ -420,19 +705,51 @@
         this._restyle();
       },
 
+      // Redraws the field image and the LoRa outlines for the current hour
+      // and theme; the rectangles themselves are kept.
       _restyle: function () {
-        var i = this._idx, colors = {}, grid = cssVar(GRID_VAR);
-        for (var b in VAR_NAME) colors[b] = cssVar(VAR_NAME[b]);
+        this._drawField();
+        var i = this._idx, lora = cssVar(LORA_VAR);
         for (var r = 0; r < this._rects.length; r++) {
-          var rect = this._rects[r], cell = rect._mcCell;
-          var cls = at(cell.c, i);
-          var bin = ductBin(cls, at(cell.f, i));
-          // Every cell with data gets a faint outline, so "normal" differs from "no data".
-          var st = (cls >= 1 && grid) ? { stroke: true, color: grid, weight: 1, opacity: 1 } : { stroke: false };
-          if (bin && colors[bin]) { st.fillColor = colors[bin]; st.fillOpacity = OPACITY[cls]; }
-          else st.fillOpacity = 0;
+          var rect = this._rects[r];
+          var want = (lora && isLora(rect._mcCell, i)) ? lora : '';
+          if (want === rect._mcLora) continue;   // only changed cells redraw
+          rect._mcLora = want;
+          var st = want ? L.extend({ color: want }, LORA_STYLE) : { stroke: false };
+          st.fillOpacity = 0;
           rect.setStyle(st);
         }
+      },
+
+      _drawField: function () {
+        var g = this._grid, map = this._map, d = this._data;
+        if (!g || !map || !d) { this._dropField(); return; }
+        var t0 = Date.now();
+        var canvas = this._canvas;
+        try {
+          if (!canvas) canvas = this._canvas = document.createElement('canvas');
+          if (canvas.width !== g.w) canvas.width = g.w;
+          if (canvas.height !== g.h) canvas.height = g.h;
+          var ctx = canvas.getContext('2d');
+          var img = ctx.createImageData(g.w, g.h);
+          renderField(g, ductGridValues(g, d.cells, this._idx), fieldLut(fieldStops(), fieldAlpha()), img.data);
+          ctx.putImageData(img, 0, 0);
+        } catch (_) { this._dropField(); return; }
+        var bounds = gridBounds(g);
+        if (!this._field) {
+          this._field = newField(canvas, bounds, this._pane);
+          if (this._field) { try { map.addLayer(this._field); } catch (_) { this._field = null; } }
+        } else if (this._fieldKey !== String(bounds)) {
+          try { this._field.setBounds(L.latLngBounds(bounds)); } catch (_) {}
+        }
+        this._fieldKey = String(bounds);
+        this._fieldMs = Date.now() - t0;
+      },
+
+      _dropField: function () {
+        if (this._field && this._map) { try { this._map.removeLayer(this._field); } catch (_) {} }
+        this._field = null;
+        this._fieldKey = '';
       }
     });
   }
@@ -443,7 +760,12 @@
     if (!LayerClass) LayerClass = makeLayerClass();
     return new LayerClass(opts);
   };
-  window.MC_ductBin = ductBin;
   window.MC_ductTimeIndex = ductTimeIndex;
   window.MC_ductPopupContent = popupContent;
+  window.MC_ductFieldColor = fieldColor;
+  window.MC_ductFieldStops = fieldStops;
+  window.MC_ductGrid = ductGrid;
+  window.MC_ductGridValues = ductGridValues;
+  window.MC_ductSample = sample;
+  window.MC_ductRowLat = rowLat;
 })();

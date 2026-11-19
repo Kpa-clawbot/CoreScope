@@ -21,10 +21,11 @@
  * (neither counts as a forecast request).
  *
  * Scenarios (start({scenario}) or setScenario()):
- *   mixed      columns by a hash of the cell: normal, super-refractive,
- *              surface duct (traps 868/915 MHz), elevated duct. About one
- *              cell in three changes kind every 12 forecast hours, so the
- *              time slider changes colours.
+ *   mixed      about one 3-degree block in three is normal throughout (calm
+ *              patches); elsewhere columns by a hash of the cell: normal,
+ *              super-refractive, surface duct (traps 868/915 MHz), elevated
+ *              duct. About one cell in three of those changes kind every 12
+ *              forecast hours, so the time slider changes colours.
  *   pending    never answers (the socket is held until close())
  *   error500   HTTP 500
  *   ratelimit  HTTP 429
@@ -78,6 +79,10 @@ const PROFILES = {
 };
 
 function kindFor(scenario, lat, lon, hour) {
+  // Calm regions: about one 3-degree block in three is normal throughout, so
+  // (like real weather) calm air comes in patches and the overlay's field has
+  // cells whose neighbours are calm too.
+  if (hash32('calm:' + Math.floor(lat / 3) + ',' + Math.floor(lon / 3)) % 3 === 0) return 'normal';
   const h = hash32(cellKey(lat, lon));
   const varies = (h >>> 8) % 3 === 0;
   const base = h % KINDS.length;

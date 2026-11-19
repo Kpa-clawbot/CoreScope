@@ -47,8 +47,8 @@
  * requested state; live WebGL contexts <= maps showing a vector basemap;
  * window listener counts back at the post-first-load level after returning
  * to the same page. Scenario g adds: at most one .mc-duct-legend and one
- * .mc-duct-time per map; none (and no cells) when the overlay is off or the
- * page has no map; the picker's checkbox, the stored preference and the layers
+ * .mc-duct-time per map; none (and no cells or field image) when the overlay
+ * is off or the page has no map; one field image per map when on with data; the picker's checkbox, the stored preference and the layers
  * on the maps agree with the last request; no ducting layer or cell on a
  * removed map and no refresh timer left; no 'theme-changed' listener growth.
  *
@@ -308,7 +308,8 @@ function stressInit() {
   };
   function controlOf(m) { return S.controls.filter(function (c) { return c._map === m; }); }
   // Ducting invariants. wantOn: the overlay is requested; expectRects: number
-  // of cells that must be drawn when on (null = not checked). Returns problems.
+  // of cells that must be drawn when on (null = not checked; when > 0 the map
+  // must also show exactly one field image). Returns problems.
   S.ductCheck = function (wantOn, expectRects) {
     var p = [];
     var maps = S.liveMaps();
@@ -320,14 +321,21 @@ function stressInit() {
       var l = c.querySelectorAll('.mc-duct-legend').length, t = c.querySelectorAll('.mc-duct-time').length;
       inLeg += l; inTime += t;
       if (l > 1 || t > 1) p.push('map has ' + l + ' legends and ' + t + ' time boxes');
-      var cells = 0;
-      m.eachLayer(function (ly) { if (ly._mcCell) cells++; });
-      if (!wantOn && (l || t || cells)) p.push('overlay off but map has legend=' + l + ' time=' + t + ' cells=' + cells);
+      var cells = 0, fields = 0;
+      m.eachLayer(function (ly) { if (ly._mcCell) cells++; if (ly._mcField) fields++; });
+      var fieldDom = c.querySelectorAll('.mc-duct-field').length;
+      if (!wantOn && (l || t || cells || fields || fieldDom)) p.push('overlay off but map has legend=' + l + ' time=' + t + ' cells=' + cells + ' fields=' + fields + '/' + fieldDom);
       if (wantOn && pickers && (l !== 1 || t !== 1)) p.push('overlay on but map has legend=' + l + ' time=' + t);
+      if (fields > 1 || fieldDom > 1 || fields !== fieldDom) p.push('map has ' + fields + ' field layers, ' + fieldDom + ' field images in the DOM');
       if (wantOn && expectRects != null && cells !== expectRects) p.push('cells drawn=' + cells + ' want ' + expectRects);
+      if (wantOn && expectRects && fields !== 1) p.push('overlay on with data but ' + fields + ' field images');
     });
     if (domLeg !== inLeg || domTime !== inTime) p.push('legend/time boxes outside live maps: dom=' + domLeg + '/' + domTime + ' in maps=' + inLeg + '/' + inTime);
     if (!maps.length && (domLeg || domTime)) p.push('no map but ' + domLeg + ' legends / ' + domTime + ' time boxes in the page');
+    var inField = 0;
+    maps.forEach(function (m) { inField += m.getContainer().querySelectorAll('.mc-duct-field').length; });
+    var domField = document.querySelectorAll('.mc-duct-field').length;
+    if (domField !== inField) p.push('field images outside live maps: dom=' + domField + ' in maps=' + inField);
     var live = 0;
     S.ductRecs.forEach(function (r, i) {
       var ly = r.layer;
@@ -338,15 +346,15 @@ function stressInit() {
       } else {
         if (ly._timer != null) p.push('ducting layer #' + i + ' removed with its refresh timer running');
         if (ly._rects && ly._rects.length) p.push('ducting layer #' + i + ' removed but holds ' + ly._rects.length + ' cells');
-        if (ly._group || ly._renderer) p.push('ducting layer #' + i + ' removed but keeps its group/renderer');
+        if (ly._group || ly._renderer || ly._field) p.push('ducting layer #' + i + ' removed but keeps its group/renderer/field');
       }
     });
     if (wantOn && live !== pickers) p.push('live ducting layers=' + live + ' maps=' + pickers);
     S.maps.forEach(function (m) {
       if (isLive(m)) return;
       var n = 0;
-      try { m.eachLayer(function (ly) { if (ly._mcCell) n++; }); } catch (_) {}
-      if (n) p.push('removed map still holds ' + n + ' ducting cells');
+      try { m.eachLayer(function (ly) { if (ly._mcCell || ly._mcField) n++; }); } catch (_) {}
+      if (n) p.push('removed map still holds ' + n + ' ducting cells/field images');
     });
     return p;
   };

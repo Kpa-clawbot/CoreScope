@@ -5687,30 +5687,47 @@ body { touch-action: pan-y; }
   --mc-route-legend-border: #94a3b8;
 }
 
-/* Tropospheric ducting overlay (map-ducting.js). Fill colours per bin:
- * lora = duct that carries 868/915 MHz LoRa, uhf = 1-3 GHz only,
- * micro = above 3 GHz only, super = super-refraction. */
+/* Tropospheric ducting overlay (map-ducting.js). The field colour scale:
+ * s1..s8 at dN/dh -79 (super-refraction starts), -100, -130, -157 (ducting
+ * starts), -220, -300, -400 and -600 N/km and beyond; hex or rgb() only (read
+ * by JS). alpha = field opacity. lora = dashed outline of cells where a duct
+ * can carry 868/915 MHz. */
 :root {
-  --mc-duct-lora:  #d6246e;
-  --mc-duct-uhf:   #e8730c;
-  --mc-duct-micro: #e6b800;
-  --mc-duct-super: #5ab4f0;
-  --mc-duct-grid:  rgba(71, 85, 105, 0.45);
+  --mc-duct-s1: #8e3fd0;
+  --mc-duct-s2: #3d5ee6;
+  --mc-duct-s3: #10a8d8;
+  --mc-duct-s4: #19b24a;
+  --mc-duct-s5: #e6d21a;
+  --mc-duct-s6: #f5900f;
+  --mc-duct-s7: #e3242b;
+  --mc-duct-s8: #f03cc8;
+  --mc-duct-alpha: 0.6;
+  --mc-duct-lora: #111827;
 }
 [data-theme="dark"] {
-  --mc-duct-lora:  #ff3d8b;
-  --mc-duct-uhf:   #ff9a3c;
-  --mc-duct-micro: #ffd23f;
-  --mc-duct-super: #7cc4f5;
-  --mc-duct-grid:  rgba(203, 213, 225, 0.4);
+  --mc-duct-s1: #a557f0;
+  --mc-duct-s2: #5577ff;
+  --mc-duct-s3: #22c3f0;
+  --mc-duct-s4: #2fd35e;
+  --mc-duct-s5: #f5e33a;
+  --mc-duct-s6: #ff9d2a;
+  --mc-duct-s7: #ff3d3d;
+  --mc-duct-s8: #ff5ad8;
+  --mc-duct-alpha: 0.62;
+  --mc-duct-lora: #f8fafc;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --mc-duct-lora:  #ff3d8b;
-    --mc-duct-uhf:   #ff9a3c;
-    --mc-duct-micro: #ffd23f;
-    --mc-duct-super: #7cc4f5;
-    --mc-duct-grid:  rgba(203, 213, 225, 0.4);
+    --mc-duct-s1: #a557f0;
+    --mc-duct-s2: #5577ff;
+    --mc-duct-s3: #22c3f0;
+    --mc-duct-s4: #2fd35e;
+    --mc-duct-s5: #f5e33a;
+    --mc-duct-s6: #ff9d2a;
+    --mc-duct-s7: #ff3d3d;
+    --mc-duct-s8: #ff5ad8;
+    --mc-duct-alpha: 0.62;
+    --mc-duct-lora: #f8fafc;
   }
 }
 .mc-duct-legend,
@@ -5748,11 +5765,29 @@ body { touch-action: pan-y; }
   border-radius: 3px;
   border: 1px solid var(--mc-route-legend-border);
 }
-.mc-duct-swatch-lora  { background: var(--mc-duct-lora); }
-.mc-duct-swatch-uhf   { background: var(--mc-duct-uhf); }
-.mc-duct-swatch-micro { background: var(--mc-duct-micro); }
-.mc-duct-swatch-super { background: var(--mc-duct-super); }
-.mc-duct-swatch-normal { background: transparent; border-color: var(--mc-duct-grid); }
+.mc-duct-swatch-lora { background: transparent; border: 2px dashed var(--mc-duct-lora); }
+.mc-duct-scale { margin: 4px 0 8px; }
+.mc-duct-scale-bar {
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--mc-route-legend-border);
+}
+.mc-duct-scale-labels { position: relative; height: 16px; font-size: 11px; }
+.mc-duct-scale-label {
+  position: absolute;
+  top: 0;
+  padding: 2px 0 0 3px;
+  border-left: 1px solid var(--mc-route-legend-fg);
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.mc-duct-scale-label-end {
+  padding: 2px 3px 0 0;
+  border-left: 0;
+  border-right: 1px solid var(--mc-route-legend-fg);
+  transform: translateX(-100%);
+}
+.mc-duct-legend-caption { margin-top: 2px; color: var(--mc-route-legend-fg); opacity: 0.8; }
 .mc-duct-legend-status { margin: 4px 0; font-weight: 600; }
 .mc-duct-legend-note,
 .mc-duct-legend-meta { margin-top: 4px; color: var(--mc-route-legend-fg); opacity: 0.8; }
