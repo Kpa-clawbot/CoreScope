@@ -59,9 +59,11 @@ Yes. Use the layers button on the [Map](map.md#map-style-and-overlays) page (als
 
 ## 12. Why did a node far away hear my packet?
 
-Radio normally stops at the horizon, but in some weather a layer of air (often under a high-pressure system, or at the boundary of warm and cool air) acts like a pipe and carries signals far past it. This is called tropospheric ducting. It comes and goes over hours and can let you reach or hear nodes hundreds of kilometres away that you never see on an ordinary day. Packets that suddenly arrive from far outside your usual neighbours are a common sign.
+Radio normally stops at the horizon, but in some weather a layer of air (often under a high-pressure system, or at the boundary of warm and cool air) acts like a pipe and carries signals far past it. This is called tropospheric ducting. It comes and goes over hours and can let you reach or hear nodes hundreds of kilometres away that you never see on an ordinary day. Packets that suddenly arrive from far outside your usual neighbours can be a sign of it.
 
-If your site operator has enabled it, the **Tropospheric ducting** overlay on the [Map](map.md#tropospheric-ducting) shows where a forecast duct could carry LoRa 868/915 MHz. It is a forecast and misses thin ducts, so treat it as a hint rather than proof. Other causes of surprise long hops are a high-site repeater or a path over water.
+If your site operator has enabled it, the **Tropospheric ducting** overlay on the [Map](map.md#tropospheric-ducting) shows where the forecast finds air that bends signals more than usual, and outlines where a trapping layer may carry LoRa 868/915 MHz. It is a forecast and misses thin ducts, so treat it as a hint rather than proof.
+
+Ducting is only one possible cause of an unexpected long link. Others are misresolved hops (hash prefix collisions in the analyzer), high sites, and line of sight over water. The overlay shows conditions; it cannot tell which cause applied.
 
 ### Where is the API documentation?
 
