@@ -20,6 +20,9 @@
 
   var API_URL = '/api/ducting';
   var REFRESH_MS = 30 * 60 * 1000;
+  // While there is no data yet (server still preparing, or a failed fetch),
+  // ask again every minute instead of waiting a full refresh period.
+  var RETRY_MS = 60 * 1000;
   var LORA_MAX_MHZ = 1000;   // duct with fmin <= 1 GHz carries 868/915 MHz
   var UHF_MAX_MHZ = 3000;
   var BAND_868 = 868;
@@ -157,8 +160,8 @@
         this._watchAttribution(map);
         this._renderLegend();
         this._load(gen);
+        this._schedule(REFRESH_MS);
         var self = this;
-        this._timer = setInterval(function () { self._load(self._gen); }, REFRESH_MS);
         // Fills are read from CSS variables, so a theme switch needs a restyle.
         this._onTheme = function () { if (self._data) self._restyle(); };
         try { window.addEventListener('theme-changed', this._onTheme); } catch (_) {}
@@ -167,6 +170,7 @@
       onRemove: function (map) {
         this._gen++;                       // in-flight results are ignored
         if (this._timer != null) { try { clearInterval(this._timer); } catch (_) {} this._timer = null; }
+        this._timerMs = 0;
         if (this._abort) { try { this._abort.abort(); } catch (_) {} this._abort = null; }
         var m = map || this._map;
         if (this._onTheme) { try { window.removeEventListener('theme-changed', this._onTheme); } catch (_) {} this._onTheme = null; }
@@ -342,8 +346,18 @@
         });
       },
 
+      // Re-arms the refresh interval when its period changes.
+      _schedule: function (ms) {
+        if (this._timer != null && this._timerMs === ms) return;
+        if (this._timer != null) { try { clearInterval(this._timer); } catch (_) {} }
+        var self = this;
+        this._timerMs = ms;
+        this._timer = setInterval(function () { self._load(self._gen); }, ms);
+      },
+
       _fail: function (state) {
         if (this._data) return;            // keep the last good data
+        this._schedule(RETRY_MS);
         this._state = state;
         this._renderLegend();
       },
@@ -355,6 +369,7 @@
         var prevTime = (this._data && this._idx >= 0) ? this._data.times[this._idx] : null;
         this._data = d;
         this._state = 'ok';
+        this._schedule(REFRESH_MS);
         this._build();
         var idx = ductTimeIndex(d.times, Date.now() / 1000);
         if (this._userPicked && prevTime != null) {

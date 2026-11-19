@@ -566,7 +566,7 @@ If the grid has more cells than allowed, the step is doubled (0.5, 1, 2, 4, up t
 
 **How refreshing behaves**
 
-- The first fetch runs shortly after start, then every `refreshMinutes`, in the background. Until it finishes the overlay says the forecast is being prepared.
+- The first fetch runs shortly after start, then every `refreshMinutes`, in the background. Until it finishes the overlay says the forecast is being prepared. The browser asks again every minute while it has no forecast, then every 30 minutes; those requests read the server's copy and never reach Open-Meteo.
 - Points are requested in batches of 50 and paced to at most 400 calls per minute.
 - If a refresh fails, the last good forecast stays on the map. The server retries with a growing delay, and waits at least an hour after Open-Meteo answers that a rate limit was hit.
 
