@@ -46,7 +46,7 @@
  *
  * Overlay entry (new; window.MC_TILE_OVERLAYS[id]), stacked above any base:
  *   provider, label, attribution, maxZoom, maxNativeZoom, subdomains, optIn
- *   kind     'raster' | 'hillshade'
+ *   kind     'raster' | 'hillshade' | 'ducting'
  *   url      raster: XYZ template; hillshade: Terrarium-encoded elevation PNG
  *            template (elevation m = R*256 + G + B/256 - 32768)
  *   opacity  number 0-1 (default 1; hillshade default 0.35)
@@ -514,11 +514,27 @@
     return _hillshade;
   }
 
+  // The tropospheric-ducting overlay: only when the server enabled it
+  // (window.MC_DUCTING_CFG, set from /api/config/client). It has no url; the
+  // data layer (map-ducting.js) fetches /api/ducting itself. Same attribution
+  // -> same entry object, so maps keep their layer across registry rebuilds.
+  var _ducting = null;
+  function _ductingEntry() {
+    var c = window.MC_DUCTING_CFG;
+    var attr = (c && typeof c.attribution === 'string') ? c.attribution : '';
+    if (_ducting && _ducting.attribution === attr) return _ducting;
+    _ducting = { provider: 'ducting', kind: 'ducting', label: 'Tropospheric ducting',
+      attribution: attr, maxZoom: _DEFAULT_MAX_ZOOM, opacity: 1, zIndex: OVERLAY_Z + 10 };
+    return _ducting;
+  }
+
   // Rebuilds window.MC_TILE_OVERLAYS: hillshade (only while map-hillshade.js
-  // has defined MC_createHillshadeLayer), the EOX labels, then custom ones.
+  // has defined MC_createHillshadeLayer), ducting (only when the server
+  // config enables it), the EOX labels, then custom ones.
   function _buildOverlays() {
     var o = {};
     if (typeof window.MC_createHillshadeLayer === 'function' && _groupOn('hillshade')) o.hillshade = _hillshadeEntry();
+    if (window.MC_DUCTING_CFG) o.ducting = _ductingEntry();
     for (var k in OVERLAY_STYLES) {
       if (_groupOn(OVERLAY_STYLES[k].provider)) o[k] = OVERLAY_STYLES[k];
     }
@@ -997,6 +1013,12 @@
    */
   window.MC_buildOverlayLayer = function (overlay, opts) {
     opts = opts || {};
+    // Ducting draws vector cells from /api/ducting: no url, and no overlay
+    // pane (that pane is pointer-events:none; the cells need clicks).
+    if (overlay && overlay.kind === 'ducting') {
+      if (typeof window.MC_createDuctingLayer !== 'function') return null;
+      try { return window.MC_createDuctingLayer(overlay) || null; } catch (_) { return null; }
+    }
     if (!overlay || typeof overlay.url !== 'string') return null;
     var o = {
       attribution: overlay.attribution || '',
