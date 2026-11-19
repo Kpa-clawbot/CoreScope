@@ -3,7 +3,9 @@
 Byte-identical copy of the UMD build from the npm package; exposes
 `L.maplibreGL`. Loaded on demand by `public/map-vector.js` after MapLibre GL.
 Do not edit; to upgrade, vendor a new versioned directory and update the
-integrity table in `map-vector.js`.
+integrity table in `map-vector.js`. `map-vector.js` relies on a few Leaflet and binding
+internals (listed in its header); recheck them when upgrading Leaflet or this
+binding.
 
 - Source: https://registry.npmjs.org/@maplibre/maplibre-gl-leaflet/-/maplibre-gl-leaflet-0.1.4.tgz
 - Tarball integrity (matches `npm view @maplibre/maplibre-gl-leaflet@0.1.4 dist.integrity`):

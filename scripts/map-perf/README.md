@@ -29,7 +29,12 @@ automated fetching.
 
 ## Baseline vs candidate
 
-Start the two servers on the synthetic dataset (see `serve-dataset.sh`):
+Start the two servers on the synthetic dataset (see `serve-dataset.sh`). The
+dataset is not part of this repository: `SEED_DB` is any CoreScope
+`analyzer.db` (a large one makes the numbers meaningful) and `SHIFT_SH` a
+script that moves its timestamps up to now (`shift.sh <db> <unix-now>`), both
+set by environment variable; the defaults point at a local synthetic-dataset
+checkout.
 upstream master on :13590, the branch on :13591. Without a Carto key, Carto
 tiles come back stamped "API KEY REQUIRED"; for screenshots with real Carto
 tiles, start the servers with `CARTO_KEY_CONFIG=/path/to/a/config.json`

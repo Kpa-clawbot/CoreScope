@@ -1,5 +1,9 @@
 /* map-vector.js — vector (MapLibre GL) basemaps inside Leaflet (#2428).
  *
+ * Uses Leaflet internals (map._addZoomLimit/_removeZoomLimit, _loaded,
+ * _transitionEnd, layer._map) and the binding's _glMap: recheck them on any
+ * Leaflet or maplibre-gl-leaflet upgrade.
+ *
  *   MC_loadMapLibre() -> Promise<maplibregl>
  *     Injects, once, MapLibre's stylesheet, its CSP build and the Leaflet
  *     binding from vendor/ (constant paths + SRI), and points MapLibre at its

@@ -193,6 +193,23 @@ test('resolve(light, pick=carto-voyager) → voyager tiles (the node-map light b
   assert.ok(/voyager/.test(r.url), 'voyager URL — got ' + r.url);
 });
 
+test('getTileUrl() with a vector pick → the raster fallback, never a style JSON url', () => {
+  const ctx = makeSandbox({ theme: 'light' });
+  ctx.window.MC_MAP_CFG = { tiles: { providers: { openfreemap: { enabled: true } } } };
+  loadResolver(ctx);
+  assert.ok(ctx.window.MC_setLightTileProvider('openfreemap-liberty'), 'vector entry registered and picked');
+  const d = ctx.window.MC_resolveTile(false);
+  assert.strictEqual(d.format, 'vector');
+  const u = ctx.window.getTileUrl();
+  assert.ok(/light_all\/\{z\}\/\{x\}\/\{y\}/.test(u), 'Carto light raster template — got ' + u);
+  assert.notStrictEqual(u, d.url, 'not the style url');
+  ctx.setTheme('dark');
+  ctx.window.MC_setDarkTileProvider('openfreemap-dark');
+  assert.ok(/dark_all/.test(ctx.window.getTileUrl()), 'dark theme: Carto dark raster');
+  ctx.window.MC_setDarkTileProvider('carto-dark');
+  assert.strictEqual(ctx.window.getTileUrl(), ctx.window.MC_resolveTile(true).url, 'a raster pick is returned as is');
+});
+
 test('resolve(light, stored pick disabled by config) → falls back cleanly', () => {
   const ctx = makeSandbox({ theme: 'light' });
   ctx.window.MC_MAP_CFG = { tiles: { providers: { carto: { enabled: false } } } };

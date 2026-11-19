@@ -556,11 +556,16 @@
    * Carto key when /api/config/client hadn't landed yet. Callers that only
    * need the URL can keep calling this; callers that also want attribution /
    * maxZoom / refUrl / invertFilter should call window.MC_resolveTile()
-   * directly and read the whole descriptor. */
+   * directly and read the whole descriptor. A vector pick resolves to a style
+   * JSON url, so this returns its raster fallback instead (MC_rasterTileUrl):
+   * callers feed the result to L.tileLayer. */
   window.getTileUrl = function () {
     var isDark = (typeof window.MC_isDarkTheme === 'function') ? !!window.MC_isDarkTheme() : _tileThemeIsDark();
     if (window.MC_resolveTile) {
-      try { return window.MC_resolveTile(isDark).url; } catch (_e) {}
+      try {
+        var d = window.MC_resolveTile(isDark);
+        return (typeof window.MC_rasterTileUrl === 'function') ? window.MC_rasterTileUrl(d) : d.url;
+      } catch (_e) {}
     }
     // Legacy fallback for sandboxes that mock the registry without loading
     // map-tile-providers.js (mirrors #1614's function-URL contract).
