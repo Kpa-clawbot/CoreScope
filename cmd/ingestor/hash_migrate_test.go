@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -308,5 +309,66 @@ func TestContentHashMigrationSummary(t *testing.T) {
 				t.Errorf("summary(%d, %d) = %q, missing %q", c.rewritten, c.merged, got, want)
 			}
 		}
+	}
+}
+
+// Review on #2409: one transaction per scan batch held the writer lock for
+// seconds on an affected install, where every row in the batch is stale. The
+// stale rows of a scan batch must commit in chunks of at most writeBatch, so
+// ingest waits for one chunk, not the whole batch. Five stale encodings of one
+// packet, read in one scan batch and written two at a time, take three
+// transactions and still end as one row: a chunk merges into the row an
+// earlier chunk rewrote.
+func TestMigrateContentHashesCommitsInWriteChunks(t *testing.T) {
+	store := openHashMigrateStore(t)
+	var first int64
+	for i := 0; i < 5; i++ {
+		id := insertHashTx(t, store, hashMigrateRawA, fmt.Sprintf("stale%011d", i), "2026-01-01T00:00:00Z", 1)
+		insertHashObs(t, store, id, i, `["AA"]`)
+		if i == 0 {
+			first = id
+		}
+	}
+	ResetWriterStatsForTest()
+	t.Cleanup(ResetWriterStatsForTest)
+
+	rewritten, merged, err := store.migrateContentHashes(context.Background(), 100, 2, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rewritten != 1 || merged != 4 {
+		t.Fatalf("got rewritten=%d merged=%d, want 1, 4", rewritten, merged)
+	}
+	if got := store.WriterStatsSnapshot()["content_hash_migrate"].Count; got != 3 {
+		t.Errorf("%d migration transactions, want 3 (5 stale rows, 2 per commit)", got)
+	}
+	if n := countWhere(t, store, `SELECT COUNT(*) FROM transmissions`); n != 1 {
+		t.Errorf("%d transmissions left, want 1", n)
+	}
+	if n := countWhere(t, store, `SELECT COUNT(*) FROM observations WHERE transmission_id = ?`, first); n != 5 {
+		t.Errorf("survivor has %d observations, want 5", n)
+	}
+}
+
+func TestMigrateContentHashesRejectsNonPositiveBatches(t *testing.T) {
+	store := openHashMigrateStore(t)
+	for _, c := range []struct{ scan, write int }{{0, 1}, {1, 0}} {
+		if _, _, err := store.migrateContentHashes(context.Background(), c.scan, c.write, math.MaxInt64); err == nil {
+			t.Errorf("scan=%d write=%d: want an error", c.scan, c.write)
+		}
+	}
+}
+
+// The progress line shows a long pass moving, and stays quiet while nothing
+// has changed so an unaffected install's boot scan logs nothing.
+func TestContentHashMigrationProgress(t *testing.T) {
+	if got := contentHashMigrationProgress(5000, 9000, 0, 0); got != "" {
+		t.Errorf("unchanged pass logged %q, want nothing", got)
+	}
+	if got, want := contentHashMigrationProgress(5000, 9000, 40, 7), "scanned through id 5000 of 9000, rewrote 40, merged 7"; !strings.Contains(got, want) {
+		t.Errorf("progress = %q, missing %q", got, want)
+	}
+	if got := contentHashMigrationProgress(5000, math.MaxInt64, 1, 0); strings.Contains(got, " of ") {
+		t.Errorf("unbounded pass printed a bound: %q", got)
 	}
 }

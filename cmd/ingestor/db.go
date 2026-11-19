@@ -294,13 +294,13 @@ func (s *Store) scheduleSQLiteAsyncMigrations() {
 	// to the payload-type-bits formula, merging rows that then collide. Only
 	// rows present at boot can be stale — this process writes current hashes
 	// — so the range is fixed here, before ingest starts.
-	// PREFLIGHT: async=true reason="id-cursor scan of transmissions (86k+ rows in prod) in 5000-row batches, writer lock released between batches; only pre-#787 rows are written"
+	// PREFLIGHT: async=true reason="id-cursor scan of transmissions (86k+ rows in prod) read in 5000-row batches outside the writer lock, stale rows committed 250 per transaction; only pre-#787 rows are written"
 	var hashMigrateMaxID int64
 	if err := s.db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM transmissions`).Scan(&hashMigrateMaxID); err != nil {
 		log.Printf("[migration/async] %s not scheduled (retried next boot): read max id: %v", contentHashMigrationName, err)
 	} else if err := s.RunAsyncMigration(context.Background(), contentHashMigrationName,
 		func(ctx context.Context, _ *sql.DB) error {
-			_, _, err := s.migrateContentHashes(ctx, contentHashMigrationBatch, hashMigrateMaxID)
+			_, _, err := s.migrateContentHashes(ctx, contentHashMigrationBatch, contentHashMigrationWriteBatch, hashMigrateMaxID)
 			return err
 		}); err != nil {
 		log.Printf("[migration/async] scheduling %s failed: %v", contentHashMigrationName, err)

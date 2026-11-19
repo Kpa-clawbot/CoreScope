@@ -59,6 +59,38 @@
   }
   window.NodeAnalyticsCoverage = { notice: coverageNotice, rateText: rateText };
 
+  // The server sends only the hours that hold packets. Put every hour of the
+  // covered window (dataFrom when partial, else from) on the axis, silent
+  // ones as 0, or an outage collapses into two neighbouring bars. Above
+  // DAY_BUCKETS_ABOVE_HOURS the hours are summed per UTC day: 337 hourly bars
+  // (14 days in memory) are about 1.5 px wide and a quiet node looks empty.
+  const DAY_BUCKETS_ABOVE_HOURS = 8 * 24;
+  function fillTimeline(tl, tr) {
+    if (!tr || !tr.to) return tl;
+    const start = Date.parse(tr.dataFrom || tr.from);
+    const end = Date.parse(tr.to);
+    if (isNaN(start) || isNaN(end) || end < start) return tl;
+    const HOUR = 3600000;
+    const daily = (end - start) / HOUR > DAY_BUCKETS_ABOVE_HOURS;
+    // Rows from older ingestors carry "2006-01-02 15:04:05", so their bucket
+    // has a space where the ISO key has a T.
+    const key = iso => daily ? iso.slice(0, 10) + 'T00:00:00Z' : iso.slice(0, 13) + ':00:00Z';
+    const byKey = {};
+    tl.forEach(b => {
+      const k = key(String(b.bucket).replace(' ', 'T'));
+      const c = b.certain == null ? b.count : b.certain;
+      const cur = byKey[k];
+      byKey[k] = cur ? { bucket: k, count: cur.count + b.count, certain: cur.certain + c }
+        : { bucket: k, count: b.count, certain: c };
+      if (daily) byKey[k].day = true;
+    });
+    for (let ms = Math.floor(start / HOUR) * HOUR; ms <= end; ms += HOUR) {
+      const k = key(new Date(ms).toISOString());
+      if (!byKey[k]) byKey[k] = daily ? { bucket: k, count: 0, certain: 0, day: true } : { bucket: k, count: 0, certain: 0 };
+    }
+    return Object.keys(byKey).sort().map(k => byKey[k]);
+  }
+
   // #2260: split each timeline bucket into packets that can only be this
   // node (certain) and packets attributed to it through a hop prefix it
   // shares with other nodes (uncertain). A server without the certain field
@@ -73,7 +105,7 @@
     });
     return { certain, uncertain };
   }
-  window.NodeAnalyticsTimeline = { series: timelineSeries };
+  window.NodeAnalyticsTimeline = { series: timelineSeries, fill: fillTimeline };
 
   async function loadAnalytics(container, pubkey, days) {
     const gen = viewGeneration();
@@ -228,7 +260,7 @@
   function buildActivityChart(data) {
     const ctx = document.getElementById('activityChart');
     if (!ctx) return;
-    const tl = data.activityTimeline;
+    const tl = fillTimeline(data.activityTimeline, data.timeRange);
     const series = timelineSeries(tl);
     const style = getComputedStyle(document.documentElement);
     const certainColor = style.getPropertyValue('--accent').trim();
@@ -237,6 +269,9 @@
       type: 'bar',
       data: {
         labels: tl.map(b => {
+          // A day bucket is a UTC day: label it by its date, a local time
+          // of its midnight would read as one hour.
+          if (b.day) return b.bucket.slice(0, 10) + ' UTC';
           const d = new Date(b.bucket);
           return (typeof formatChartAxisLabel === 'function') ? formatChartAxisLabel(d, currentDays <= 3) : (currentDays <= 3 ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }));
         }),
