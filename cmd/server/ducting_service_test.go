@@ -47,13 +47,14 @@ func newTestDuctingService(t *testing.T, f *fakeOpenMeteo, cfg DuctingConfig, no
 	svc.source.sleep = func(ctx context.Context, d time.Duration) error { return ctx.Err() }
 	// The fake's first hour; a real clock would see its forecast as expired.
 	svc.now = func() time.Time { return time.Unix(1795046400, 0) }
+	svc.source.now = func() time.Time { return time.Unix(1795046400, 0) }
 	return svc, srv
 }
 
 func ductingServe(t *testing.T, svc *ductingService) (DuctingResponse, []byte) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	svc.serveHTTP(rec)
+	svc.serveHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ducting", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
@@ -77,8 +78,8 @@ func ductingKeys(m map[string]json.RawMessage) []string {
 }
 
 func TestDuctingServiceSnapshotMatchesFixture(t *testing.T) {
-	f := &fakeOpenMeteo{t: t, hours: 3, fill: ductingInversion}
-	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, [][2]float64{{51.3, -0.3}, {51.3, 0.3}})
+	f := &fakeOpenMeteo{t: t, fill: ductingInversion}
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{RefreshMinutes: 60, ForecastHours: 3}, [][2]float64{{51.3, -0.3}, {51.3, 0.3}})
 	gen := time.Unix(1795046000, 0)
 	svc.now = func() time.Time { return gen }
 	if err := svc.refreshOnce(context.Background()); err != nil {
@@ -307,8 +308,8 @@ func TestDuctingServiceAreaAndCoverage(t *testing.T) {
 }
 
 func TestDuctingServiceForecastExpired(t *testing.T) {
-	f := &fakeOpenMeteo{t: t, hours: 2, fill: ductingInversion}
-	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, [][2]float64{{51.3, -0.3}})
+	f := &fakeOpenMeteo{t: t, fill: ductingInversion}
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{RefreshMinutes: 60, ForecastHours: 3}, [][2]float64{{51.3, -0.3}})
 	now := time.Unix(1795046400, 0)
 	svc.now = func() time.Time { return now }
 	if err := svc.refreshOnce(context.Background()); err != nil {
@@ -317,16 +318,16 @@ func TestDuctingServiceForecastExpired(t *testing.T) {
 	if resp, _ := ductingServe(t, svc); resp.Status != "ok" {
 		t.Fatalf("fresh %+v", resp)
 	}
-	// The last hour (t0+3600) stays current for the whole hour it covers.
-	now = time.Unix(1795046400+3600, 0)
+	// The last hour (t0+7200) stays current for the whole hour it covers.
+	now = time.Unix(1795046400+7200, 0)
 	if resp, _ := ductingServe(t, svc); resp.Status != "ok" {
 		t.Errorf("at the last hour %+v", resp)
 	}
-	now = time.Unix(1795046400+7200, 0) // last + 3600: still current
+	now = time.Unix(1795046400+10800, 0) // last + 3600: still current
 	if resp, _ := ductingServe(t, svc); resp.Status != "ok" {
 		t.Errorf("an hour after the last hour %+v", resp)
 	}
-	now = time.Unix(1795046400+7201, 0)
+	now = time.Unix(1795046400+10801, 0)
 	resp, _ := ductingServe(t, svc)
 	if resp.Status != "error" || resp.Error != "forecast expired" || resp.GeneratedAt != 1795046400 || len(resp.Cells) != 0 {
 		t.Errorf("expired %+v", resp)
@@ -488,7 +489,7 @@ func TestDuctingServiceConcurrentReads(t *testing.T) {
 				default:
 				}
 				rec := httptest.NewRecorder()
-				svc.serveHTTP(rec)
+				svc.serveHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ducting", nil))
 				var resp DuctingResponse
 				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 					t.Errorf("torn response: %v", err)
@@ -666,7 +667,7 @@ func TestDuctingAnalyzeColumnMeanGradient(t *testing.T) {
 			hr.Temp[i], hr.RH[i], hr.Geo[i] = -5, 50, 3100
 		}
 	}
-	col := ductingColumn{Elevation: 100, Times: []int64{1, 2}, Hours: []ductingHour{hr, hr}}
+	col := ductingColumn{Elevation: 100, Hours: []ductingHour{hr, hr}}
 	cell := svc.analyzeColumn(col)
 	if len(cell.N) != 2 {
 		t.Fatalf("len(n) = %d, want 2", len(cell.N))
@@ -785,11 +786,11 @@ func TestDuctingServiceEmptyGridPending(t *testing.T) {
 }
 
 func TestDuctingServiceCacheControl(t *testing.T) {
-	f := &fakeOpenMeteo{t: t, hours: 2, fill: ductingInversion, status: 500}
-	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, [][2]float64{{51.3, -0.3}})
+	f := &fakeOpenMeteo{t: t, fill: ductingInversion, status: 500}
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{RefreshMinutes: 60, ForecastHours: 3}, [][2]float64{{51.3, -0.3}})
 	cc := func() (string, string) {
 		rec := httptest.NewRecorder()
-		svc.serveHTTP(rec)
+		svc.serveHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ducting", nil))
 		var resp DuctingResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatal(err)
@@ -812,7 +813,7 @@ func TestDuctingServiceCacheControl(t *testing.T) {
 	if st, h := cc(); st != "ok" || h != "public, max-age=300" {
 		t.Errorf("ok: %s %q", st, h)
 	}
-	svc.now = func() time.Time { return time.Unix(1795046400+7201, 0) }
+	svc.now = func() time.Time { return time.Unix(1795046400+10801, 0) }
 	if st, h := cc(); st != "error" || h != "no-store" {
 		t.Errorf("expired: %s %q", st, h)
 	}
@@ -867,5 +868,216 @@ func TestDuctingServiceGridLogLine(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "[ducting] grid: area 51.00..52.00, -1.00..0.00, step 0.5 deg, 4 cells") {
 		t.Errorf("area log %q", buf.String())
+	}
+}
+
+// A refresh whose batches straddle an hour boundary keeps every cell: the
+// window is fixed once per fetch.
+func TestDuctingServiceHourRolloverKeepsEveryCell(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, fill: ductingInversion}
+	area := [4]float64{50, -5, 55, 0} // 10 x 10 cells at 0.5 deg: two batches
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{Area: &area}, nil)
+	base := time.Unix(1795046400+3600-60, 0)
+	var mu sync.Mutex
+	calls := 0
+	svc.source.now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		return base.Add(time.Duration(calls) * 40 * time.Second)
+	}
+	if err := svc.refreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if svc.source.now().Unix() < 1795046400+3600 {
+		t.Fatal("the clock never crossed the hour")
+	}
+	resp, _ := ductingServe(t, svc)
+	if len(resp.Cells) != 100 {
+		t.Fatalf("%d cells, want all 100", len(resp.Cells))
+	}
+	if len(resp.Times) != 48 || resp.Times[0] != 1795046400 {
+		t.Errorf("times start %v, %d hours", resp.Times[:1], len(resp.Times))
+	}
+	for _, c := range resp.Cells {
+		if len(c.C) != len(resp.Times) {
+			t.Fatalf("cell has %d hours, want %d", len(c.C), len(resp.Times))
+		}
+	}
+}
+
+func TestDuctingServicePartialFailure(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	var failAll atomic.Bool
+	f := &fakeOpenMeteo{t: t, fill: ductingInversion, failReq: func(n int) int {
+		if n == 0 || failAll.Load() {
+			return http.StatusInternalServerError
+		}
+		return 0
+	}}
+	area := [4]float64{50, -5, 55, 0} // 100 cells: two batches
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{Area: &area}, nil)
+	if err := svc.refreshOnce(context.Background()); err != nil {
+		t.Fatalf("one of two batches failed: %v", err)
+	}
+	resp, body := ductingServe(t, svc)
+	if resp.Status != "ok" || len(resp.Cells) != 50 {
+		t.Fatalf("status %s, %d cells; want ok with the 50 cells of the good batch", resp.Status, len(resp.Cells))
+	}
+	for _, c := range resp.Cells {
+		if c.Lat < 52.5 { // the first batch (sorted by lat) failed
+			t.Fatalf("cell %v,%v from the failed batch", c.Lat, c.Lon)
+		}
+	}
+	out := buf.String()
+	if !strings.Contains(out, "[ducting] batch 1 of 2 failed, its 50 cells have no data: open-meteo HTTP 500") ||
+		!strings.Contains(out, "50 cells (50 dropped, 1 of 2 batches failed)") {
+		t.Errorf("log %q", out)
+	}
+
+	// Every batch failing fails the refresh; the last good snapshot stays.
+	failAll.Store(true)
+	if err := svc.refreshOnce(context.Background()); err == nil {
+		t.Fatal("refresh with every batch failed succeeded")
+	}
+	if _, body2 := ductingServe(t, svc); !bytes.Equal(body, body2) {
+		t.Error("the last good snapshot was replaced")
+	}
+}
+
+func TestDuctingServiceETag(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, fill: ductingInversion, status: 500}
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, [][2]float64{{51.3, -0.3}})
+	get := func(inm string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/ducting", nil)
+		if inm != "" {
+			r.Header.Set("If-None-Match", inm)
+		}
+		svc.serveHTTP(rec, r)
+		return rec
+	}
+	if rec := get(`"1795046400-gfs"`); rec.Code != 200 || rec.Header().Get("ETag") != "" {
+		t.Errorf("pending: %d, ETag %q", rec.Code, rec.Header().Get("ETag"))
+	}
+	_ = svc.refreshOnce(context.Background())
+	if rec := get("*"); rec.Code != 200 || rec.Header().Get("ETag") != "" {
+		t.Errorf("error: %d, ETag %q", rec.Code, rec.Header().Get("ETag"))
+	}
+	f.mu.Lock()
+	f.status = 0
+	f.mu.Unlock()
+	if err := svc.refreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	const etag = `"1795046400-gfs"`
+	rec := get("")
+	if rec.Code != 200 || rec.Header().Get("ETag") != etag || rec.Body.Len() == 0 {
+		t.Fatalf("ok: %d, ETag %q, %d bytes", rec.Code, rec.Header().Get("ETag"), rec.Body.Len())
+	}
+	for _, inm := range []string{etag, "W/" + etag, `"other", ` + etag, "*"} {
+		rec := get(inm)
+		if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
+			t.Errorf("If-None-Match %s: %d with %d bytes, want 304 and no body", inm, rec.Code, rec.Body.Len())
+		}
+		if rec.Header().Get("ETag") != etag || rec.Header().Get("Cache-Control") != "public, max-age=300" {
+			t.Errorf("If-None-Match %s: headers %v", inm, rec.Header())
+		}
+	}
+	for _, inm := range []string{`"1795046399-gfs"`, `"1795046400-icon"`, "1795046400-gfs"} {
+		if rec := get(inm); rec.Code != 200 || rec.Body.Len() == 0 {
+			t.Errorf("If-None-Match %s: %d, want 200 with the body", inm, rec.Code)
+		}
+	}
+	// Expired: no ETag, and a matching If-None-Match does not get 304.
+	svc.now = func() time.Time { return time.Unix(1795046400+48*3600+1, 0) }
+	if rec := get(etag); rec.Code != 200 || rec.Header().Get("ETag") != "" {
+		t.Errorf("expired: %d, ETag %q", rec.Code, rec.Header().Get("ETag"))
+	}
+}
+
+func TestDuctingRouteETag(t *testing.T) {
+	s, router := setupTestServer(t)
+	s.cfg.Ducting = &DuctingConfig{Enabled: true}
+	s.ducting = newDuctingService(s.cfg.Ducting, nil)
+	resp := s.ducting.baseResponse("ok", "")
+	resp.GeneratedAt = 1795046400
+	resp.Times = []int64{time.Now().Unix()}
+	s.ducting.snap.Store(encodeDuctingSnapshot(resp))
+	req := httptest.NewRequest(http.MethodGet, "/api/ducting", nil)
+	req.Header.Set("If-None-Match", `"1795046400-gfs"`)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 || rec.Header().Get("ETag") != `"1795046400-gfs"` {
+		t.Errorf("through the router: %d, %d bytes, ETag %q", rec.Code, rec.Body.Len(), rec.Header().Get("ETag"))
+	}
+}
+
+func TestDuctingServiceStartDelay(t *testing.T) {
+	if d := ductingStartDelay(func(int64) int64 { return 0 }); d != 60*time.Second {
+		t.Errorf("lowest draw %v, want 60s", d)
+	}
+	if d := ductingStartDelay(func(n int64) int64 { return n - 1 }); d != 300*time.Second {
+		t.Errorf("highest draw %v, want 300s", d)
+	}
+	// The public API (the default baseUrl, or one naming its host) waits
+	// 60..300 s; a self-hosted baseUrl starts at once.
+	for _, base := range []string{"", "https://api.open-meteo.com", "https://API.open-meteo.com."} {
+		for i := 0; i < 20; i++ {
+			svc := newDuctingService(&DuctingConfig{Enabled: true, BaseURL: base}, nil)
+			if svc.startDelay < 60*time.Second || svc.startDelay > 300*time.Second {
+				t.Fatalf("baseUrl %q: start delay %v, want 60..300 s", base, svc.startDelay)
+			}
+		}
+	}
+	for _, base := range []string{"http://127.0.0.1:13597", "https://weather.example.org"} {
+		if svc := newDuctingService(&DuctingConfig{Enabled: true, BaseURL: base}, nil); svc.startDelay != 0 {
+			t.Errorf("self-hosted %q: start delay %v, want 0", base, svc.startDelay)
+		}
+	}
+}
+
+func TestDuctingServiceRunWaitsStartDelay(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, fill: ductingInversion}
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, [][2]float64{{51.3, -0.3}})
+	if svc.startDelay != 0 {
+		t.Fatalf("self-hosted test server: start delay %v", svc.startDelay)
+	}
+	svc.startDelay = 90 * time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var waits []time.Duration
+	var reqsAtWait []int
+	svc.sleep = func(ctx context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		reqsAtWait = append(reqsAtWait, len(f.requests()))
+		if len(waits) == 2 {
+			cancel()
+		}
+		return ctx.Err()
+	}
+	select {
+	case <-svc.run(ctx):
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not exit")
+	}
+	if len(waits) != 2 || waits[0] != 90*time.Second || waits[1] != 360*time.Minute {
+		t.Fatalf("waits %v, want [1m30s 6h0m0s]", waits)
+	}
+	if reqsAtWait[0] != 0 || reqsAtWait[1] == 0 {
+		t.Errorf("requests at each wait %v: none before the start delay, then the first fetch", reqsAtWait)
+	}
+
+	// Cancelled during the start delay: no fetch at all.
+	f2 := &fakeOpenMeteo{t: t, fill: ductingInversion}
+	svc2, _ := newTestDuctingService(t, f2, DuctingConfig{}, [][2]float64{{51.3, -0.3}})
+	svc2.startDelay = time.Minute
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	svc2.sleep = func(ctx context.Context, d time.Duration) error { cancel2(); return ctx.Err() }
+	<-svc2.run(ctx2)
+	if n := len(f2.requests()); n != 0 {
+		t.Errorf("%d requests after cancel during the start delay", n)
 	}
 }

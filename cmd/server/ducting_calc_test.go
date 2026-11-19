@@ -352,3 +352,41 @@ func TestDuctMeanGradientHighTerrain(t *testing.T) {
 		t.Errorf("top 999 m: MeanGradNkm = %v, want 0", g)
 	}
 }
+
+// Mexico City: ground ~2,240 m, surface pressure ~775 hPa, and 700 hPa (the
+// models' top level) only ~860 m above it. Through DuctProfile with the GFS
+// levels, everything at or below 775 hPa is dropped, the profile stops under
+// the 1 km floor, and the cell has no field value (n = 0); the duct analysis
+// still runs on the 860 m there are. A Denver-like site (ground ~1,600 m,
+// 700 hPa ~1,450 m up) gets a value.
+func TestDuctMeanGradientMexicoCityHasNoFieldValue(t *testing.T) {
+	m, _ := ductingModel("gfs")
+	// A standard-ish column: geopotential height of each level (m above sea
+	// level), temperature and humidity; levels under ground are present, as
+	// the API returns them, and must be ignored.
+	geo := map[float64]float64{1000: 110, 975: 330, 950: 550, 925: 770, 900: 1000, 875: 1230, 850: 1460,
+		825: 1700, 800: 1950, 775: 2210, 750: 2480, 725: 2790, 700: 3100}
+	col := func(elev, surfP float64) DuctResult {
+		temps := make([]float64, len(m.LevelsHPa))
+		rhs := make([]float64, len(m.LevelsHPa))
+		geos := make([]float64, len(m.LevelsHPa))
+		for i, p := range m.LevelsHPa {
+			geos[i] = geo[p]
+			temps[i] = 24 - 6.5*geo[p]/1000
+			rhs[i] = 45
+		}
+		prof := DuctProfile(elev, surfP, 24-6.5*elev/1000, 45, m.LevelsHPa, temps, rhs, geos)
+		return AnalyzeDucting(prof)
+	}
+	mx := col(2240, 775)
+	if mx.Class == DuctClassNoData {
+		t.Fatalf("Mexico City: no data at all; want a profile to analyse")
+	}
+	if mx.MeanGradNkm != 0 {
+		t.Errorf("Mexico City: MeanGradNkm %v, want 0 (700 hPa is only 860 m up, under the 1 km floor)", mx.MeanGradNkm)
+	}
+	den := col(1600, 840)
+	if den.MeanGradNkm >= 0 || den.MeanGradNkm < -100 {
+		t.Errorf("Denver: MeanGradNkm %v, want a plausible negative value", den.MeanGradNkm)
+	}
+}

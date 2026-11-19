@@ -9,10 +9,11 @@
  *   "baseUrl": "http://127.0.0.1:13597", "gridStepDeg": 0.5, ... }
  *
  * It answers GET /v1/forecast?latitude=a,b&longitude=x,y&hourly=<vars>
- *   &models=gfs_global&forecast_hours=N&timeformat=unixtime&timezone=GMT
+ *   &models=gfs_global&start_hour=<h>&end_hour=<h>&timeformat=unixtime&timezone=GMT
+ *   (forecast_hours=N in place of start_hour/end_hour is accepted too)
  * exactly as cmd/server/ducting_source.go asks, and rejects (HTTP 400, and an
  * entry in `violations`) a request that does not match: wrong model, a
- * missing hourly variable, bad forecast_hours / timeformat, mismatched or
+ * missing hourly variable, bad forecast_hours / start_hour / end_hour / timeformat, mismatched or
  * more than 50 locations.
  *
  * Introspection, for a test that did not start this process:
@@ -210,6 +211,15 @@ function hourlyVariables() {
   return v;
 }
 
+// parseHour reads an Open-Meteo start_hour/end_hour value (yyyy-mm-ddThh:mm,
+// GMT, on the hour) as unix seconds; null if malformed.
+function parseHour(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):00$/.exec(v || '');
+  if (!m) return null;
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4]);
+  return Number.isFinite(ms) ? ms / 1000 : null;
+}
+
 function start(opts) {
   opts = opts || {};
   const model = opts.model || 'gfs_global';
@@ -259,14 +269,26 @@ function start(opts) {
     if (lats.some((v) => !Number.isFinite(v) || Math.abs(v) > 90) || lons.some((v) => !Number.isFinite(v) || Math.abs(v) > 180)) return bad(res, entry, 'coordinate out of range');
     if (q.get('models') !== model) return bad(res, entry, 'models=' + q.get('models') + ' want ' + model);
     if (q.get('timeformat') !== 'unixtime') return bad(res, entry, 'timeformat=' + q.get('timeformat'));
-    const fh = Number(q.get('forecast_hours'));
-    if (!Number.isInteger(fh) || fh < 1 || fh > 384) return bad(res, entry, 'forecast_hours=' + q.get('forecast_hours'));
+    // Either forecast_hours=N (from the current hour) or start_hour/end_hour
+    // (yyyy-mm-ddThh:mm in GMT, end inclusive), never both, as the real API.
+    let fh, t0;
+    if (q.has('start_hour') || q.has('end_hour')) {
+      if (q.has('forecast_hours')) return bad(res, entry, 'forecast_hours with start_hour/end_hour');
+      const s = parseHour(q.get('start_hour')), e = parseHour(q.get('end_hour'));
+      if (s == null || e == null || e < s) return bad(res, entry, 'start_hour=' + q.get('start_hour') + ' end_hour=' + q.get('end_hour'));
+      fh = (e - s) / 3600 + 1;
+      t0 = s;
+      if (fh > 384) return bad(res, entry, 'start_hour..end_hour spans ' + fh + ' hours');
+    } else {
+      fh = Number(q.get('forecast_hours'));
+      if (!Number.isInteger(fh) || fh < 1 || fh > 384) return bad(res, entry, 'forecast_hours=' + q.get('forecast_hours'));
+      t0 = Math.floor(Date.now() / 3600000) * 3600;
+    }
     const vars = (q.get('hourly') || '').split(',');
     const missing = expectVars.filter((v) => !vars.includes(v));
     if (missing.length) return bad(res, entry, 'hourly missing ' + missing.slice(0, 3).join(',') + (missing.length > 3 ? ' (+' + (missing.length - 3) + ')' : ''));
     entry.hours = fh;
 
-    const t0 = Math.floor(Date.now() / 3600000) * 3600;
     const times = Array.from({ length: fh }, (_, i) => t0 + 3600 * i);
     const out = lats.map((lat, i) => {
       const lon = lons[i];

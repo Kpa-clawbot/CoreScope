@@ -10,12 +10,13 @@ const (
 	ductingMaxStep   = 8.0
 
 	// With at least ductingTrimMinNodes nodes, the bounding box ignores nodes
-	// outside the 2nd..98th percentile in latitude or longitude, so one
-	// far-away (or misconfigured) node cannot stretch the grid across an
-	// ocean. Fewer nodes are too few for a percentile to mean anything.
-	ductingTrimMinNodes = 20
-	ductingTrimLowPct   = 0.02
-	ductingTrimHighPct  = 0.98
+	// farther from the nodes' median position than max(ductingTrimFloorKm,
+	// ductingTrimMADs x the median distance from it), so a few far-away (or
+	// misconfigured, even co-located) nodes cannot stretch the grid across
+	// an ocean. Fewer nodes are too few for a median to mean anything.
+	ductingTrimMinNodes = 5
+	ductingTrimFloorKm  = 500.0
+	ductingTrimMADs     = 4.0
 )
 
 type ductingCell struct{ lat, lon float64 }
@@ -98,10 +99,10 @@ func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints i
 // de-duplicated and with longitudes in [-180, 180). nodes are [lat, lon];
 // area is [south, west, north, east]. With an area, all cells covering it
 // (marginDeg is ignored). Otherwise the bounding box of the nodes (with
-// ductingTrimMinNodes or more, only those inside the 2nd..98th percentile in
-// latitude and longitude), grown by marginDeg on every side, is filled
-// edge to edge (marginDeg 0 = the bounding box itself). If there are more
-// than maxPoints cells the step doubles (up to 8 degrees). If the box still
+// ductingTrimMinNodes or more, only those ductingTrimOutliers keeps), grown
+// by marginDeg on every side, is filled edge to edge (marginDeg 0 = the
+// bounding box itself). If there are more than maxPoints cells the step
+// doubles (up to 8 degrees). If the box still
 // does not fit at 8 degrees, it falls back to the cells containing a node plus
 // marginDeg of cells around each (recounted per step; past 8 degrees the
 // maxPoints best cells are kept: most nodes first, then nearest a node cell)
@@ -261,22 +262,31 @@ func ductingLonArc(lons []float64) (west, east float64) {
 	return west, east
 }
 
-// ductingPercentile is the p-quantile (0..1) of sorted (non-empty), linearly
-// interpolated between neighbouring values.
-func ductingPercentile(sorted []float64, p float64) float64 {
-	x := p * float64(len(sorted)-1)
-	i := int(math.Floor(x))
-	if i+1 >= len(sorted) {
-		return sorted[len(sorted)-1]
+// ductingMedian is the median of v (non-empty); v is sorted in place.
+func ductingMedian(v []float64) float64 {
+	sort.Float64s(v)
+	k := len(v) / 2
+	if len(v)%2 == 1 {
+		return v[k]
 	}
-	return sorted[i] + (sorted[i+1]-sorted[i])*(x-float64(i))
+	return (v[k-1] + v[k]) / 2
 }
 
-// ductingTrimOutliers keeps the nodes inside the 2nd..98th percentile in
-// latitude and in longitude, and returns how many it dropped. Longitude is
-// measured on the unwrapped axis of the smallest arc containing every node,
-// so a mesh across the antimeridian is one cluster, not two ends of the
-// world. With fewer than ductingTrimMinNodes nodes it returns them all.
+// ductingTrimOutliers drops the nodes farther (great circle) from the nodes'
+// median position than max(ductingTrimFloorKm, ductingTrimMADs x the median
+// of those distances), and returns how many it dropped. The median position
+// is the median latitude and the median longitude, the latter measured on
+// the unwrapped axis of the smallest arc containing every node, so a mesh
+// across the antimeridian is one cluster, not two ends of the world. Medians
+// ignore any minority of nodes, so several nodes advertising the same wrong
+// position are dropped as surely as one; the floor keeps a compact mesh
+// (median distance near 0) from losing its outer nodes. With fewer than
+// ductingTrimMinNodes nodes it returns them all.
+// ductingTrimMaxShare is the largest share of nodes the outlier filter may
+// drop (but always at least one): a bigger group far from the median cannot
+// be told apart from a real second area by position alone, so it is kept.
+const ductingTrimMaxShare = 0.10
+
 func ductingTrimOutliers(valid [][2]float64) (kept [][2]float64, trimmed int) {
 	if len(valid) < ductingTrimMinNodes {
 		return valid, 0
@@ -288,27 +298,33 @@ func ductingTrimOutliers(valid [][2]float64) (kept [][2]float64, trimmed int) {
 	}
 	sort.Float64s(lons)
 	west, _ := ductingLonArc(lons)
-	unwrap := func(lon float64) float64 {
-		if lon < west {
-			return lon + 360
-		}
-		return lon
-	}
 	for i, n := range valid {
-		lons[i] = unwrap(n[1])
+		lons[i] = n[1]
+		if lons[i] < west {
+			lons[i] += 360
+		}
 	}
-	sort.Float64s(lats)
-	sort.Float64s(lons)
-	latLo, latHi := ductingPercentile(lats, ductingTrimLowPct), ductingPercentile(lats, ductingTrimHighPct)
-	lonLo, lonHi := ductingPercentile(lons, ductingTrimLowPct), ductingPercentile(lons, ductingTrimHighPct)
+	medLat, medLon := ductingMedian(lats), ductingMedian(lons)
+	dist := make([]float64, len(valid))
+	for i, n := range valid {
+		dist[i] = haversineKm(medLat, medLon, n[0], n[1])
+	}
+	limit := math.Max(ductingTrimFloorKm, ductingTrimMADs*ductingMedian(append([]float64(nil), dist...)))
 	kept = make([][2]float64, 0, len(valid))
-	for _, n := range valid {
-		u := unwrap(n[1])
-		if n[0] >= latLo && n[0] <= latHi && u >= lonLo && u <= lonHi {
+	for i, n := range valid {
+		if dist[i] <= limit {
 			kept = append(kept, n)
 		}
 	}
-	return kept, len(valid) - len(kept)
+	// Outliers are a few bad positions, not a region: if more than
+	// ductingTrimMaxShare of the nodes (or more than one, in a small mesh)
+	// would go, the mesh really spans several areas, so keep them all (the
+	// box, or its fallback, covers it).
+	allowed := math.Max(1, math.Floor(ductingTrimMaxShare*float64(len(valid))))
+	if trimmed = len(valid) - len(kept); float64(trimmed) > allowed {
+		return valid, 0
+	}
+	return kept, trimmed
 }
 
 // ductingBoxCells fills the boxes with the area lattice (same cell centres as

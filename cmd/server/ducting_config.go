@@ -128,8 +128,10 @@ func (c *DuctingConfig) resolved() (DuctingConfig, []string) {
 		r.ForecastHours = defaultDuctingForecastHours
 	}
 	// A forecast shorter than the refresh interval expires before the next
-	// refresh lands.
-	if minHours := (r.RefreshMinutes+59)/60 + 1; r.ForecastHours < minHours {
+	// refresh lands, and that refresh can land up to a fetch (several
+	// minutes, paced) plus the start of a new hour later: refresh hours
+	// rounded up, plus 2.
+	if minHours := (r.RefreshMinutes+59)/60 + 2; r.ForecastHours < minHours {
 		warns = append(warns, fmt.Sprintf("ducting.forecastHours %d is shorter than the refresh interval; using %d", r.ForecastHours, minHours))
 		r.ForecastHours = minHours
 	}

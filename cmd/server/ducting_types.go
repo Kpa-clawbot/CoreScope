@@ -33,8 +33,20 @@ const (
 	ductMaxHeightAGL    = 3000.0 // m: only the lowest 3 km are analysed
 	ductSuperGradientNk = -79.0  // N/km: super-refraction threshold
 	ductSurfaceHeightM  = 2.0    // m AGL of the 2 m surface point
-	ductFminConstMHz    = 120000.0
-	ductMeanLayerM      = 1500.0 // m: depth of the layer MeanGradNkm averages over
+	// ductFminConstMHz: fmin = ductFminConstMHz / (d * sqrt(ΔM)) MHz, the
+	// same constant for surface-based and elevated ducts, on purpose. There
+	// is no single ratio between the two: ITU-R P.834-4 (2003) section 7.2
+	// and its Fig. 4 show that for an elevated duct fmin depends on the
+	// shape of the profile below the layer, and is higher than for the
+	// equivalent surface duct when the lapse rate is only just past ducting
+	// but lower for very intense gradients. NTIA Report 81-69 (Dougherty and
+	// Dutton, 1981, eq. 7) likewise applies one thickness law to elevated
+	// ducts. With model levels 200-250 m apart, d is itself only a
+	// coarse bound, so a per-class factor would add precision the data does
+	// not have. d for an elevated duct is the full duct thickness (from
+	// where M below the layer equals M at its top), not just the layer.
+	ductFminConstMHz = 120000.0
+	ductMeanLayerM   = 1500.0 // m: depth of the layer MeanGradNkm averages over
 )
 
 // DuctLevel is one point of a vertical profile, ascending by HeightAGL.

@@ -5,6 +5,10 @@ package main
 // server stays inside the free tier (600 calls/min, 5,000/hour,
 // 10,000/day; a location costs ductingCallsPerPoint calls). Errors never
 // carry the request URL: baseUrl may be a private host.
+//
+// Open-Meteo's start_hour/end_hour are ISO 8601 "yyyy-mm-ddThh:mm" in the
+// request's timezone (GMT here), and end_hour is inclusive; they cannot be
+// combined with forecast_hours.
 
 import (
 	"bytes"
@@ -13,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -84,12 +89,52 @@ type ductingHour struct {
 	Temp, RH, Geo    []float64
 }
 
-// ductingColumn is the forecast for one requested cell.
+// ductingColumn is the forecast for one requested cell, one hour per hour
+// of the fetch's ductingWindow.
 type ductingColumn struct {
 	Lat, Lon  float64 // the requested cell centre
 	Elevation float64 // m; NaN if the API gave none
-	Times     []int64 // unix seconds
 	Hours     []ductingHour
+}
+
+// ductingWindow is the forecast hours of one fetch: Hours hourly steps from
+// Start (unix seconds, on a UTC hour). It is fixed once per fetch and sent
+// to every batch as start_hour/end_hour, so the batches line up even when
+// the hour changes during a paced fetch (forecast_hours would count from
+// each request's own current hour).
+type ductingWindow struct {
+	Start int64
+	Hours int
+}
+
+// newDuctingWindow returns a window of hours hours, starting at the UTC hour
+// that contains now.
+func newDuctingWindow(now time.Time, hours int) ductingWindow {
+	return ductingWindow{Start: now.UTC().Truncate(time.Hour).Unix(), Hours: hours}
+}
+
+// times returns the window's hours, unix seconds, ascending.
+func (w ductingWindow) times() []int64 {
+	out := make([]int64, w.Hours)
+	for i := range out {
+		out[i] = w.Start + int64(i)*3600
+	}
+	return out
+}
+
+// ductingHourParam formats unix seconds as an Open-Meteo start_hour/end_hour
+// value: yyyy-mm-ddThh:mm in GMT (the request's timezone).
+func ductingHourParam(unix int64) string {
+	return time.Unix(unix, 0).UTC().Format("2006-01-02T15:04")
+}
+
+// ductingFetch is the result of one fetch. Failed batches' cells have no
+// column; their errors are logged, not returned.
+type ductingFetch struct {
+	Window  ductingWindow
+	Cols    []ductingColumn
+	Batches int
+	Failed  int
 }
 
 type ductingLedgerEntry struct {
@@ -183,13 +228,20 @@ func (s *ductingSource) record(calls float64) {
 	s.mu.Unlock()
 }
 
-// fetch returns the forecast for cells ([lat, lon]), in request order, minus
-// the locations the API answered with a per-location error. Requests carry
-// at most ductingBatchSize locations and are paced to ductingCallsPerMinute.
-// Any request failure fails the whole fetch.
-func (s *ductingSource) fetch(ctx context.Context, cells [][2]float64, forecastHours int) ([]ductingColumn, error) {
+// fetch returns the forecast for cells ([lat, lon]) over forecastHours hours
+// from the current UTC hour, in request order, minus the locations the API
+// answered with a per-location error. Requests carry at most
+// ductingBatchSize locations and are paced to ductingCallsPerMinute.
+//
+// A failed batch (transport error, non-2xx other than 429, bad body) is
+// logged and its cells are left out; the other batches are kept. Once more
+// than half of all batches have failed, the fetch stops and fails with the
+// first batch error. A 429, a spent budget or a cancelled ctx fail the
+// whole fetch at once.
+func (s *ductingSource) fetch(ctx context.Context, cells [][2]float64, forecastHours int) (ductingFetch, error) {
+	res := ductingFetch{Window: newDuctingWindow(s.now(), forecastHours)}
 	if len(cells) == 0 {
-		return nil, nil
+		return res, nil
 	}
 	perPoint := ductingCallsPerPoint(s.model)
 	planned := float64(len(cells)) * perPoint
@@ -197,11 +249,13 @@ func (s *ductingSource) fetch(ctx context.Context, cells [][2]float64, forecastH
 	hour, day := s.spentLocked(s.now())
 	s.mu.Unlock()
 	if s.capped && (hour+planned > ductingHourlyCallCap || day+planned > ductingDailyCallCap) {
-		return nil, errDuctingBudget
+		return res, errDuctingBudget
 	}
 
 	vars := ductingVariables(s.model)
-	out := make([]ductingColumn, 0, len(cells))
+	res.Batches = (len(cells) + ductingBatchSize - 1) / ductingBatchSize
+	res.Cols = make([]ductingColumn, 0, len(cells))
+	var firstErr error
 	prevCalls := 0.0
 	for start := 0; start < len(cells); start += ductingBatchSize {
 		end := start + ductingBatchSize
@@ -213,20 +267,33 @@ func (s *ductingSource) fetch(ctx context.Context, cells [][2]float64, forecastH
 			// The previous batch's calls at ductingCallsPerMinute.
 			wait := time.Duration(prevCalls / ductingCallsPerMinute * float64(time.Minute))
 			if err := s.sleep(ctx, wait); err != nil {
-				return nil, err
+				return res, err
 			}
 		}
-		cols, err := s.fetchBatch(ctx, batch, vars, forecastHours)
-		if err != nil {
-			return nil, err
-		}
+		cols, err := s.fetchBatch(ctx, batch, vars, res.Window)
+		// Sent (and counted) whether it failed or not.
 		prevCalls = float64(len(batch)) * perPoint
-		out = append(out, cols...)
+		if err != nil {
+			if errors.Is(err, errDuctingRateLimited) || ctx.Err() != nil {
+				return res, err
+			}
+			res.Failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+			log.Printf("[ducting] batch %d of %d failed, its %d cells have no data: %v",
+				start/ductingBatchSize+1, res.Batches, len(batch), err)
+			if 2*res.Failed > res.Batches {
+				return res, fmt.Errorf("%d of %d batches failed: %w", res.Failed, res.Batches, firstErr)
+			}
+			continue
+		}
+		res.Cols = append(res.Cols, cols...)
 	}
-	return out, nil
+	return res, nil
 }
 
-func (s *ductingSource) query(batch [][2]float64, vars []string, forecastHours int) string {
+func (s *ductingSource) query(batch [][2]float64, vars []string, w ductingWindow) string {
 	lats := make([]string, len(batch))
 	lons := make([]string, len(batch))
 	for i, c := range batch {
@@ -242,15 +309,17 @@ func (s *ductingSource) query(batch [][2]float64, vars []string, forecastHours i
 	b.WriteString(strings.Join(vars, ","))
 	b.WriteString("&models=")
 	b.WriteString(s.model.OpenMeteoID)
-	b.WriteString("&forecast_hours=")
-	b.WriteString(strconv.Itoa(forecastHours))
+	b.WriteString("&start_hour=")
+	b.WriteString(ductingHourParam(w.Start))
+	b.WriteString("&end_hour=") // inclusive
+	b.WriteString(ductingHourParam(w.Start + int64(w.Hours-1)*3600))
 	b.WriteString("&timeformat=unixtime&timezone=GMT")
 	return b.String()
 }
 
-func (s *ductingSource) fetchBatch(ctx context.Context, batch [][2]float64, vars []string, forecastHours int) ([]ductingColumn, error) {
+func (s *ductingSource) fetchBatch(ctx context.Context, batch [][2]float64, vars []string, w ductingWindow) ([]ductingColumn, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		s.baseURL+"/v1/forecast?"+s.query(batch, vars, forecastHours), nil)
+		s.baseURL+"/v1/forecast?"+s.query(batch, vars, w), nil)
 	if err != nil {
 		return nil, errors.New("open-meteo request could not be built")
 	}
@@ -277,7 +346,7 @@ func (s *ductingSource) fetchBatch(ctx context.Context, batch [][2]float64, vars
 	if int64(len(body)) > s.maxBody {
 		return nil, fmt.Errorf("open-meteo response larger than %d bytes", s.maxBody)
 	}
-	return parseDuctingResponse(body, batch, s.model, forecastHours, s.now())
+	return parseDuctingResponse(body, batch, s.model, w)
 }
 
 // ductingTransportError drops the *url.Error wrapper (it names the URL) and
@@ -323,9 +392,9 @@ type openMeteoLocation struct {
 	Hourly    map[string][]*float64 `json:"hourly"`
 }
 
-// parseDuctingResponse decodes a forecast response for batch: a JSON array
-// for several locations, a single object for one.
-func parseDuctingResponse(body []byte, batch [][2]float64, m DuctingModel, forecastHours int, now time.Time) ([]ductingColumn, error) {
+// parseDuctingResponse decodes a forecast response for batch, requested for
+// window w: a JSON array for several locations, a single object for one.
+func parseDuctingResponse(body []byte, batch [][2]float64, m DuctingModel, w ductingWindow) ([]ductingColumn, error) {
 	var locs []openMeteoLocation
 	trimmed := bytes.TrimLeft(body, " \t\r\n")
 	if len(trimmed) > 0 && trimmed[0] == '[' {
@@ -344,7 +413,7 @@ func parseDuctingResponse(body []byte, batch [][2]float64, m DuctingModel, forec
 	}
 	out := make([]ductingColumn, 0, len(locs))
 	for i, l := range locs {
-		if col, ok := l.column(batch[i], m, forecastHours, now); ok {
+		if col, ok := l.column(batch[i], m, w); ok {
 			out = append(out, col)
 		}
 	}
@@ -358,49 +427,33 @@ func ductingValue(vals []*float64, i int) float64 {
 	return math.NaN()
 }
 
-// ductingTimeSlackSeconds is how far outside [now, now+forecastHours] a
-// returned time may fall (clock skew, a forecast that started earlier).
-const ductingTimeSlackSeconds = 24 * 3600
-
-// ductingTimeAxisValid reports whether raw is a sane hourly axis for a
-// forecastHours request: at most forecastHours+1 entries, finite, strictly
-// ascending in exact 3600 s steps, and inside the slack window around now.
-// It allocates nothing, so it runs before anything sized by the axis.
-func ductingTimeAxisValid(raw []*float64, forecastHours int, now time.Time) bool {
-	if len(raw) == 0 || len(raw) > forecastHours+1 {
+// ductingTimeAxisValid reports whether raw is exactly the hourly axis of
+// window w: w.Hours entries, the first at w.Start, then every 3600 s. Every
+// column of a fetch then shares the window's hours. It allocates nothing,
+// so it runs before anything sized by the axis.
+func ductingTimeAxisValid(raw []*float64, w ductingWindow) bool {
+	if w.Hours < 1 || len(raw) != w.Hours {
 		return false
 	}
-	lo := now.Unix() - ductingTimeSlackSeconds
-	hi := now.Unix() + int64(forecastHours)*3600 + ductingTimeSlackSeconds
-	var prev int64
 	for i, t := range raw {
-		if t == nil || !ductFinite(*t) || *t < float64(lo) || *t > float64(hi) {
+		if t == nil || *t != float64(w.Start+int64(i)*3600) {
 			return false
 		}
-		v := int64(*t)
-		if float64(v) != *t || (i > 0 && v-prev != 3600) {
-			return false
-		}
-		prev = v
 	}
 	return true
 }
 
-// column converts one location; false for an error object or one without
-// a usable time axis (see ductingTimeAxisValid).
-func (l openMeteoLocation) column(cell [2]float64, m DuctingModel, forecastHours int, now time.Time) (ductingColumn, bool) {
+// column converts one location; false for an error object or one whose time
+// axis is not window w (see ductingTimeAxisValid).
+func (l openMeteoLocation) column(cell [2]float64, m DuctingModel, w ductingWindow) (ductingColumn, bool) {
 	if l.Error || l.Hourly == nil {
 		return ductingColumn{}, false
 	}
-	rawTimes := l.Hourly["time"]
-	if !ductingTimeAxisValid(rawTimes, forecastHours, now) {
+	if !ductingTimeAxisValid(l.Hourly["time"], w) {
 		return ductingColumn{}, false
 	}
-	times := make([]int64, len(rawTimes))
-	for i, t := range rawTimes {
-		times[i] = int64(*t)
-	}
-	col := ductingColumn{Lat: cell[0], Lon: cell[1], Elevation: math.NaN(), Times: times}
+	nh := w.Hours
+	col := ductingColumn{Lat: cell[0], Lon: cell[1], Elevation: math.NaN()}
 	if l.Elevation != nil {
 		col.Elevation = *l.Elevation
 	}
@@ -415,10 +468,10 @@ func (l openMeteoLocation) column(cell [2]float64, m DuctingModel, forecastHours
 		geos[k] = l.Hourly["geopotential_height_"+lv+"hPa"]
 	}
 	sp, t2, rh2 := l.Hourly["surface_pressure"], l.Hourly["temperature_2m"], l.Hourly["relative_humidity_2m"]
-	col.Hours = make([]ductingHour, len(times))
+	col.Hours = make([]ductingHour, nh)
 	// One backing array for every level value of the column.
-	flat := make([]float64, 3*nl*len(times))
-	for i := range times {
+	flat := make([]float64, 3*nl*nh)
+	for i := 0; i < nh; i++ {
 		h := ductingHour{
 			SurfP: ductingValue(sp, i),
 			T2m:   ductingValue(t2, i),

@@ -205,6 +205,7 @@ func analyzeM(h, m, n []float64) DuctResult {
 		}
 		d, dm := top-base, mMax-mTop
 		if d > 0 && dm > 0 {
+			// One constant for surface and elevated ducts: see ductFminConstMHz.
 			f := ductFminConstMHz / (d * math.Sqrt(dm))
 			if !found || f < bestF || (f == bestF && base < bestBase) {
 				found, surface = true, j < 0
