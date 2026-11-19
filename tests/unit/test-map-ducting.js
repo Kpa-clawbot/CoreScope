@@ -1576,6 +1576,8 @@ test('overlay is not registered without MC_DUCTING_CFG', () => {
 
 test('overlay is registered from MC_DUCTING_CFG and rebuilt when config arrives later', () => {
   const w = loadProviders();
+  // The EOX labels are an opt-in group: on here, to compare the stacking.
+  w.MC_MAP_CFG = { tiles: { providers: { eox: { enabled: true } } } };
   w.MC_DUCTING_CFG = { model: 'gfs', modelLabel: 'NOAA GFS', stepDeg: 0.5, attribution: 'Weather data by X' };
   w.MC_initTileRegistry(true);
   const o = w.MC_TILE_OVERLAYS.ducting;
