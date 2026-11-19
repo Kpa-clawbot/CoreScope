@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"log"
 	"net/http"
 	"sort"
@@ -15,9 +14,12 @@ import (
 // repeaters: enough to spot one that went quiet without opening each node.
 type myRepeaterJSON struct {
 	Pubkey string `json:"pubkey"`
-	Name   string `json:"name"`  // "" when unnamed or no longer in the analyzer database
-	Known  bool   `json:"known"` // false once the node left the analyzer database
-	Role   string `json:"role"`  // as stored, lowercase; "" when not known
+	Name   string `json:"name"`  // "" when unnamed or in neither nodes nor inactive_nodes
+	Known  bool   `json:"known"` // false when the node is in neither nodes nor inactive_nodes
+	// Inactive: retention moved the node to inactive_nodes (silent longer
+	// than retention.nodeDays); name, role and lastHeard come from there.
+	Inactive bool   `json:"inactive"`
+	Role     string `json:"role"` // as stored, lowercase; "" when not known
 	// ClaimedAt is the caller's own claim.
 	ClaimedAt string `json:"claimedAt"`
 	// LastHeard is the newer of the node's last advert and the last
@@ -40,8 +42,8 @@ type myRepeatersJSON struct {
 }
 
 // handleMyRepeaters lists the repeaters the caller claimed, by name (then
-// pubkey). Claims of nodes that left the analyzer database are kept and
-// marked known: false.
+// pubkey). A node retention moved to inactive_nodes is read from there and
+// marked inactive; a claim of a node in neither table is kept as known: false.
 func (s *Server) handleMyRepeaters(w http.ResponseWriter, _ *http.Request, u *users.User, _ *users.Session) {
 	claims, err := s.auth.st.RepeaterClaimsByUser(u.ID)
 	if err != nil {
@@ -59,12 +61,38 @@ func (s *Server) handleMyRepeaters(w http.ResponseWriter, _ *http.Request, u *us
 		pks[i] = c.Pubkey
 	}
 	nodes := map[string]notifyNode{}
+	inactive := map[string]notifyNode{}
 	if s.db != nil {
 		if nodes, err = s.db.NotifyNodes(pks, false); err != nil {
 			log.Printf("[users] my repeaters %d: nodes: %v", u.ID, err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+		var missing []string
+		for _, pk := range pks {
+			if _, ok := nodes[pk]; !ok {
+				missing = append(missing, pk)
+			}
+		}
+		if len(missing) > 0 {
+			if inactive, err = s.db.InactiveNodeBasics(missing); err != nil {
+				log.Printf("[users] my repeaters %d: inactive nodes: %v", u.ID, err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+		}
+	}
+	infos, err := s.auth.st.RepeaterInfoOfUserRepeaters(u.ID)
+	if err != nil {
+		log.Printf("[users] my repeaters %d: info: %v", u.ID, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	claimers, err := s.auth.st.RepeaterClaimsOfUserRepeaters(u.ID)
+	if err != nil {
+		log.Printf("[users] my repeaters %d: claims: %v", u.ID, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 	heard := map[string]time.Time{}
 	var relay map[string]RepeaterRelayInfo
@@ -74,7 +102,12 @@ func (s *Server) handleMyRepeaters(w http.ResponseWriter, _ *http.Request, u *us
 	}
 	for _, c := range claims {
 		nd, known := nodes[c.Pubkey]
-		r := myRepeaterJSON{Pubkey: c.Pubkey, Name: nd.Name, Known: known, Role: strings.ToLower(nd.Role),
+		gone := false
+		if !known {
+			nd, gone = inactive[c.Pubkey]
+			known = gone
+		}
+		r := myRepeaterJSON{Pubkey: c.Pubkey, Name: nd.Name, Known: known, Inactive: gone, Role: strings.ToLower(nd.Role),
 			ClaimedAt: rfc3339(c.ClaimedAt), Comaintainers: []string{}}
 		last, _ := parseRelayTS(nd.LastSeen)
 		if t, ok := heard[c.Pubkey]; ok && t.After(last) {
@@ -87,21 +120,10 @@ func (s *Server) handleMyRepeaters(w http.ResponseWriter, _ *http.Request, u *us
 		if info, ok := lookupRelayInfo(relay, c.Pubkey); ok {
 			r.LastRelayed = stringPtrOrNil(info.LastRelayed)
 		}
-		info, err := s.auth.st.GetRepeaterInfo(c.Pubkey)
-		if err == nil {
+		if info, ok := infos[c.Pubkey]; ok {
 			r.Status = stringPtrOrNil(info.Status)
-		} else if !errors.Is(err, users.ErrNotFound) {
-			log.Printf("[users] my repeaters %d: info %s: %v", u.ID, c.Pubkey, err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
 		}
-		others, err := s.auth.st.RepeaterClaims(c.Pubkey)
-		if err != nil {
-			log.Printf("[users] my repeaters %d: claims %s: %v", u.ID, c.Pubkey, err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		for _, o := range others {
+		for _, o := range claimers[c.Pubkey] {
 			if o.UserID != u.ID {
 				r.Comaintainers = append(r.Comaintainers, o.DisplayName)
 			}
@@ -120,4 +142,41 @@ func (s *Server) handleMyRepeaters(w http.ResponseWriter, _ *http.Request, u *us
 		return a.Pubkey < b.Pubkey
 	})
 	writeJSON(w, out)
+}
+
+// InactiveNodeBasics reads name, role and last_seen of the given pubkeys
+// from inactive_nodes (nodes retention moved there), keyed by lowercase
+// pubkey. Empty when the table does not exist. Read-only.
+func (db *DB) InactiveNodeBasics(pubkeys []string) (map[string]notifyNode, error) {
+	out := make(map[string]notifyNode, len(pubkeys))
+	if !db.inactiveNodesPresent() {
+		return out, nil
+	}
+	for i := 0; i < len(pubkeys); i += notifyNodeChunk {
+		chunk := pubkeys[i:min(i+notifyNodeChunk, len(pubkeys))]
+		args := make([]any, len(chunk))
+		for j, pk := range chunk {
+			args[j] = pk
+		}
+		rows, err := db.conn.Query(`SELECT public_key, COALESCE(name, ''), COALESCE(role, ''), COALESCE(last_seen, '')
+			FROM inactive_nodes WHERE public_key IN (`+sqlPlaceholders(len(chunk))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var n notifyNode
+			if err := rows.Scan(&n.Pubkey, &n.Name, &n.Role, &n.LastSeen); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			n.Pubkey = strings.ToLower(n.Pubkey)
+			out[n.Pubkey] = n
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }

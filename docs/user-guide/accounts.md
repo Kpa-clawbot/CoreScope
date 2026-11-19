@@ -345,8 +345,10 @@ enabled.
   changed field), claims as `repeater.claim` and `repeater.unclaim`.
 - **My repeaters:** *My account, My repeaters* lists the repeaters you claimed, silent ones
   first: when each was last heard (by the same rule as the node pages), its saved status, who
-  else maintains it, and an *Unclaim* button. A repeater that left the analyzer database stays
-  listed until you unclaim it. Deep link: `#/account?section=repeaters`.
+  else maintains it, and an *Unclaim* button. A repeater silent longer than
+  `retention.nodeDays`, which the analyzer moves to its inactive nodes, stays listed by name as
+  silent with its last advert. A repeater the analyzer has no record of at all is listed as no
+  longer in the database until you unclaim it. Deep link: `#/account?section=repeaters`.
 - **Removing a claim:** *Admin, Users*, open the user, *Remove* next to the claim. Admins use
   this when a claimer left or claimed a repeater that is not theirs.
 

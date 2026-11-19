@@ -297,6 +297,45 @@ func (s *Store) RepeaterClaimsByUser(userID int64) ([]RepeaterClaim, error) {
 	return scanRepeaterClaims(rows)
 }
 
+// RepeaterClaimsOfUserRepeaters returns the active claimers of every
+// repeater the user claimed, by pubkey, in one query (My repeaters).
+func (s *Store) RepeaterClaimsOfUserRepeaters(userID int64) (map[string][]RepeaterClaim, error) {
+	rows, err := s.db.Query(repeaterClaimsSelect+` WHERE u.status = 'active'
+		AND c.pubkey IN (SELECT pubkey FROM repeater_claims WHERE user_id = ?)
+		ORDER BY c.pubkey, c.claimed_at, c.user_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	list, err := scanRepeaterClaims(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]RepeaterClaim)
+	for _, c := range list {
+		out[c.Pubkey] = append(out[c.Pubkey], c)
+	}
+	return out, nil
+}
+
+// RepeaterInfoOfUserRepeaters returns the saved info of every repeater the
+// user claimed that has some, by pubkey, in one query (My repeaters).
+func (s *Store) RepeaterInfoOfUserRepeaters(userID int64) (map[string]RepeaterInfo, error) {
+	rows, err := s.db.Query(repeaterInfoSelect+` WHERE i.pubkey IN (SELECT pubkey FROM repeater_claims WHERE user_id = ?)`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]RepeaterInfo)
+	for rows.Next() {
+		ri, err := scanRepeaterInfo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[ri.Pubkey] = *ri
+	}
+	return out, rows.Err()
+}
+
 // CanEditRepeater: admin always; a non-active user never; with no active
 // claimers any active user; otherwise only the active claimers.
 func (s *Store) CanEditRepeater(u *User, pubkey string) (bool, error) {

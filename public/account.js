@@ -166,15 +166,15 @@
   }
 
   // How a claimed repeater sounds on the mesh, with the rule the node pages
-  // use (getNodeStatus: silent past the repeater threshold is stale; a
-  // silent one whose prefix still relays is uncertain).
-  function repeaterHealth(r) {
+  // use (getNodeStatus from roles.js: silent past the repeater threshold is
+  // stale; a silent one whose prefix still relays is uncertain). fns carries
+  // getNodeStatus and timeAgo so tests can pass the real ones in.
+  function repeaterHealth(r, fns) {
     if (!r.known) return { state: 'gone', rank: 0, text: 'no longer in the database' };
     if (!r.lastHeard) return { state: 'stale', rank: 1, text: 'never heard' };
     var node = { role: r.role || 'repeater', last_heard: r.lastHeard, last_relayed: r.lastRelayed || null };
-    var state = typeof window.getNodeStatus === 'function' ? window.getNodeStatus(node)
-      : (Date.now() - new Date(r.lastHeard).getTime() < 72 * 3600 * 1000 ? 'active' : 'stale');
-    var when = typeof window.timeAgo === 'function' ? window.timeAgo(r.lastHeard) : fmtDate(r.lastHeard);
+    var state = fns.getNodeStatus(node);
+    var when = fns.timeAgo(r.lastHeard);
     if (state === 'active') return { state: state, rank: 3, text: 'heard ' + when };
     if (state === 'uncertain') return { state: state, rank: 2, text: 'last heard ' + when + ', its prefix still relays' };
     return { state: 'stale', rank: 1, text: 'silent, last heard ' + when };
@@ -183,13 +183,16 @@
   var HEALTH_CHIP = { active: 'um-status-active', uncertain: 'um-status-pending', stale: 'um-status-disabled', gone: 'um-chip-unsubscribed' };
 
   // The repeaters this account claimed, silent ones first, each with its
-  // saved status, the other maintainers and an Unclaim button.
-  function myRepeatersHtml(list) {
+  // saved status, the other maintainers and an Unclaim button. A repeater
+  // retention moved to inactive_nodes (inactive) is listed as silent from
+  // its last advert there.
+  function myRepeatersHtml(list, fns) {
+    fns = fns || { getNodeStatus: window.getNodeStatus, timeAgo: window.timeAgo };
     if (!list || !list.length) {
       return '<li class="account-empty" id="myRepEmpty"><span>You have not claimed a repeater. ' +
         'Open a repeater\'s node page and choose Claim under Repeater info; it then shows up here.</span></li>';
     }
-    var rows = list.map(function (r, i) { return { r: r, h: repeaterHealth(r), i: i }; });
+    var rows = list.map(function (r, i) { return { r: r, h: repeaterHealth(r, fns), i: i }; });
     rows.sort(function (a, b) { return a.h.rank - b.h.rank || a.i - b.i; });
     var html = '';
     rows.forEach(function (x) {
@@ -491,14 +494,17 @@
         }).catch(function () { CSAuth.say('compMsg', 'Network error, try again.', false); });
       }
       document.getElementById('compList').addEventListener('click', function (e) {
-        var pk = e.target && e.target.getAttribute && e.target.getAttribute('data-unlink');
-        if (!pk) return;
+        var btn = e.target;
+        var pk = btn && btn.getAttribute && btn.getAttribute('data-unlink');
+        if (!pk || btn.disabled) return;
         if (!window.confirm('Unlink this companion? Its coverage no longer counts as yours. ' +
           'Link it again by logging in from CoreDrive RX.')) return;
+        btn.disabled = true; // a second click while the DELETE runs would 404 over the success message
         return CSAuth.request('DELETE', '/api/account/companions/' + encodeURIComponent(pk)).then(function (r) {
           CSAuth.say('compMsg', r.ok ? 'Companion unlinked.' : CSAuth.errText(r), r.ok);
           loadCompanions();
-        }).catch(function () { CSAuth.say('compMsg', 'Network error, try again.', false); });
+        }).catch(function () { CSAuth.say('compMsg', 'Network error, try again.', false); })
+          .then(function () { btn.disabled = false; });
       });
       loadCompanions();
 
@@ -511,13 +517,16 @@
         }).catch(function () { CSAuth.say('myRepMsg', 'Network error, try again.', false); });
       }
       document.getElementById('myRepList').addEventListener('click', function (e) {
-        var pk = e.target && e.target.getAttribute && e.target.getAttribute('data-unclaim');
-        if (!pk) return;
+        var btn = e.target;
+        var pk = btn && btn.getAttribute && btn.getAttribute('data-unclaim');
+        if (!pk || btn.disabled) return;
         if (!window.confirm('Unclaim this repeater? Your name is no longer shown as its maintainer.')) return;
+        btn.disabled = true; // a second click while the DELETE runs would 404 over the success message
         return CSAuth.request('DELETE', '/api/repeaters/' + encodeURIComponent(pk) + '/claim').then(function (r) {
           CSAuth.say('myRepMsg', r.ok ? 'Repeater unclaimed.' : CSAuth.errText(r), r.ok);
           loadMyRepeaters();
-        }).catch(function () { CSAuth.say('myRepMsg', 'Network error, try again.', false); });
+        }).catch(function () { CSAuth.say('myRepMsg', 'Network error, try again.', false); })
+          .then(function () { btn.disabled = false; });
       });
       loadMyRepeaters().then(function () { scrollToSection('repeaters'); });
     }
