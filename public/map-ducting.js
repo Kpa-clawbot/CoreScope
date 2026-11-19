@@ -28,6 +28,7 @@
   // Fill opacity per class: elevated ducts are lighter than surface-based.
   var OPACITY = { 2: 0.35, 3: 0.3, 4: 0.55 };
   var VAR_NAME = { lora: '--mc-duct-lora', uhf: '--mc-duct-uhf', micro: '--mc-duct-micro', super: '--mc-duct-super' };
+  var GRID_VAR = '--mc-duct-grid';
   var TYPE_NAME = { 0: 'No data', 1: 'Normal', 2: 'Super-refraction', 3: 'Elevated duct', 4: 'Surface-based duct' };
 
   var NOTE = 'Indicator only: model levels are ~200 m apart, so thinner ducts are not visible.';
@@ -131,6 +132,7 @@
           map.addLayer(this._group);
         } catch (_) { this._group = null; }
         this._addControls(map);
+        this._watchAttribution(map);
         this._renderLegend();
         this._load(gen);
         var self = this;
@@ -149,6 +151,7 @@
         if (this._slider && this._onSlide) {
           try { this._slider.removeEventListener('input', this._onSlide); } catch (_) {}
         }
+        this._unwatchAttribution(m);
         if (this._legendCtl) { try { this._legendCtl.remove(); } catch (_) {} }
         if (this._timeCtl) { try { this._timeCtl.remove(); } catch (_) {} }
         if (this._group && m) { try { m.removeLayer(this._group); } catch (_) {} }
@@ -163,7 +166,7 @@
       _addControls: function (map) {
         var self = this;
         try {
-          var timeCtl = new L.Control({ position: 'bottomright' });
+          var timeCtl = new L.Control({ position: 'bottomleft' });
           timeCtl.onAdd = function () {
             var box = el('div', 'mc-duct-time');
             var label = el('label', 'mc-duct-time-label', 'Forecast time');
@@ -192,7 +195,7 @@
           this._timeCtl = timeCtl;
           timeCtl.addTo(map);
 
-          var legendCtl = new L.Control({ position: 'bottomright' });
+          var legendCtl = new L.Control({ position: 'bottomleft' });
           legendCtl.onAdd = function () {
             var box = el('div', 'mc-duct-legend');
             self._legendEl = box;
@@ -204,11 +207,69 @@
         } catch (_) { /* map already gone */ }
       },
 
+      // The bottom-left corner shares the map's bottom edge with Leaflet's
+      // attribution bar, which wraps to several lines on narrow screens.
+      // Lift the corner by the bar's measured height whenever the two overlap
+      // horizontally; re-measured on resize, layer changes and bar resizes.
+      _watchAttribution: function (map) {
+        var self = this;
+        this._lift = function () { self._applyLift(); };
+        try { map.on('resize layeradd layerremove', this._lift); } catch (_) {}
+        try {
+          var attr = this._attrEl();
+          if (attr && typeof ResizeObserver === 'function') {
+            this._ro = new ResizeObserver(this._lift);
+            this._ro.observe(attr);
+          }
+        } catch (_) {}
+        this._applyLift();
+      },
+
+      _unwatchAttribution: function (map) {
+        if (this._ro) { try { this._ro.disconnect(); } catch (_) {} this._ro = null; }
+        if (this._lift && map) { try { map.off('resize layeradd layerremove', this._lift); } catch (_) {} }
+        if (this._corner) { try { this._corner.style.marginBottom = ''; } catch (_) {} }
+        this._lift = this._corner = null;
+      },
+
+      _attrEl: function () {
+        var ac = this._map && this._map.attributionControl;
+        return (ac && typeof ac.getContainer === 'function') ? ac.getContainer() : null;
+      },
+
+      _applyLift: function () {
+        var box = this._legendEl, attr = this._attrEl();
+        var corner = box && box.parentNode;
+        if (!corner || !corner.style) return;
+        this._corner = corner;
+        var h = 0;
+        try {
+          if (attr && attr.offsetHeight) {
+            var a = attr.getBoundingClientRect(), c = corner.getBoundingClientRect();
+            // Overlap only if the bar reaches left over the ducting controls.
+            if (a.left < c.right) h = attr.offsetHeight;
+          }
+        } catch (_) { h = 0; }
+        corner.style.marginBottom = h ? h + 'px' : '';
+      },
+
       _renderLegend: function () {
         var box = this._legendEl;
         if (!box) return;
+        var self = this;
+        if (this._legendOpen == null) {
+          // Compact by default on phones so the legend does not cover the map.
+          var narrow = false;
+          try { narrow = !!(window.matchMedia && window.matchMedia('(max-width: 600px)').matches); } catch (_) {}
+          this._legendOpen = !narrow;
+        }
         box.textContent = '';
-        box.appendChild(el('div', 'mc-duct-legend-title', 'Tropospheric ducting'));
+        var head = el('button', 'mc-duct-legend-title', 'Tropospheric ducting');
+        head.type = 'button';
+        head.setAttribute('aria-expanded', this._legendOpen ? 'true' : 'false');
+        head.addEventListener('click', function () { self._legendOpen = !self._legendOpen; self._renderLegend(); });
+        box.appendChild(head);
+        if (!this._legendOpen) return;
         var d = this._data;
         if (!d) {
           var st = el('div', 'mc-duct-legend-status', this._state === 'pending' ? MSG_PENDING : this._state === 'error' ? MSG_ERROR : 'Loading ducting forecast');
@@ -221,9 +282,12 @@
             row.appendChild(el('span', null, LEGEND_ROWS[i][1]));
             box.appendChild(row);
           }
+          var nrow = el('div', 'mc-duct-legend-row');
+          nrow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-normal'));
+          nrow.appendChild(el('span', null, 'Outline only: normal propagation'));
+          box.appendChild(nrow);
           box.appendChild(el('div', 'mc-duct-legend-note', 'Lighter shade: elevated duct (not touching the ground)'));
-          var meta = (d.modelLabel || d.model || '');
-          if (d.attribution) meta += (meta ? '. ' : '') + d.attribution;
+          var meta = d.attribution || d.modelLabel || d.model || '';
           if (meta) box.appendChild(el('div', 'mc-duct-legend-meta', meta));
           if (d.generatedAt) box.appendChild(el('div', 'mc-duct-legend-meta', 'Updated ' + fmtTime(d.generatedAt)));
         }
@@ -283,7 +347,7 @@
         this._setIndex(idx);
       },
 
-      // One rectangle per cell that is ever a duct or super-refraction.
+      // One rectangle per cell that has data (class >= 1) at some hour.
       _build: function () {
         var d = this._data, group = this._group;
         if (!group) return;
@@ -294,7 +358,7 @@
           var cell = d.cells[i];
           if (!cell || !Array.isArray(cell.c)) continue;
           var any = false;
-          for (var t = 0; t < cell.c.length; t++) if (cell.c[t] >= 2) { any = true; break; }
+          for (var t = 0; t < cell.c.length; t++) if (cell.c[t] >= 1) { any = true; break; }
           if (!any) continue;
           var rect = L.rectangle([[cell.lat - h, cell.lon - h], [cell.lat + h, cell.lon + h]],
             { renderer: this._renderer, stroke: false, fill: true, fillOpacity: 0, interactive: true });
@@ -320,14 +384,17 @@
       },
 
       _restyle: function () {
-        var i = this._idx, colors = {};
+        var i = this._idx, colors = {}, grid = cssVar(GRID_VAR);
         for (var b in VAR_NAME) colors[b] = cssVar(VAR_NAME[b]);
         for (var r = 0; r < this._rects.length; r++) {
           var rect = this._rects[r], cell = rect._mcCell;
           var cls = at(cell.c, i);
           var bin = ductBin(cls, at(cell.f, i));
-          if (bin && colors[bin]) rect.setStyle({ fillColor: colors[bin], fillOpacity: OPACITY[cls] });
-          else rect.setStyle({ fillOpacity: 0 });
+          // Every cell with data gets a faint outline, so "normal" differs from "no data".
+          var st = (cls >= 1 && grid) ? { stroke: true, color: grid, weight: 1, opacity: 1 } : { stroke: false };
+          if (bin && colors[bin]) { st.fillColor = colors[bin]; st.fillOpacity = OPACITY[cls]; }
+          else st.fillOpacity = 0;
+          rect.setStyle(st);
         }
       }
     });

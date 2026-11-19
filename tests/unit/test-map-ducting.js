@@ -59,7 +59,7 @@ function makeLeaflet(stats) {
   };
   L.Control = function (opts) { this.options = opts || {}; };
   L.Control.prototype.addTo = function (map) {
-    this._map = map; this._container = this.onAdd(map); map._controls.push(this); return this;
+    this._map = map; this._container = this.onAdd(map); this._container.parentNode = map.corner; map._controls.push(this); return this;
   };
   L.Control.prototype.remove = function () {
     if (this._map._gone) throw new Error('map gone');
@@ -84,7 +84,13 @@ function makeLeaflet(stats) {
 }
 
 function makeMap() {
-  const m = { _controls: [], _layers: [], _gone: false };
+  const m = { _controls: [], _layers: [], _gone: false, _on: {} };
+  m.on = (ev, f) => { ev.split(' ').forEach(e => { (m._on[e] = m._on[e] || []).push(f); }); return m; };
+  m.off = (ev, f) => { ev.split(' ').forEach(e => { m._on[e] = (m._on[e] || []).filter(x => x !== f); }); return m; };
+  m.fire = (e) => (m._on[e] || []).slice().forEach(f => f());
+  m.corner = { style: { marginBottom: '' }, getBoundingClientRect: () => ({ left: 0, right: 270 }) };
+  m.attr = { offsetHeight: 36, rect: { left: 0 }, getBoundingClientRect() { return this.rect; } };
+  m.attributionControl = { getContainer: () => m.attr };
   m.addLayer = (l) => { m._layers.push(l); return m; };
   m.removeLayer = (l) => { if (m._gone) throw new Error('map gone'); m._layers = m._layers.filter(x => x !== l); return m; };
   return m;
@@ -182,14 +188,14 @@ test('MC_ductTimeIndex: before first, between, after last, empty', () => {
 
 // ── drawing ─────────────────────────────────────────────────────────────────
 
-test('draws a rectangle only for cells that are ever class 2-4, bounds = centre +- step/2', async () => {
+test('draws a rectangle for every cell with data (class >= 1), none for class 0 only; bounds = centre +- step/2', async () => {
   const s = await mount(SAMPLE);
-  assert.strictEqual(s.stats.rects.length, 2, 'third cell is only class 0/1');
+  assert.strictEqual(s.stats.rects.length, 3, 'third cell is class 0/1/1: outline only');
   const r = s.stats.rects[0];
   assert.deepStrictEqual(JSON.parse(JSON.stringify(r.bounds)), [[51.0, -0.5], [51.5, 0.0]]);
   assert.strictEqual(r.opts.renderer, s.stats.renderers[0], 'shared canvas renderer');
   assert.strictEqual(s.stats.renderers.length, 1);
-  assert.strictEqual(s.layer._group.layers.length, 2);
+  assert.strictEqual(s.layer._group.layers.length, 3);
 });
 
 test('default time is the latest <= now, else the first; colour comes from the CSS variables', async () => {
@@ -294,8 +300,8 @@ test('legend: bins, model, attribution, updated time, indicator-only note', asyn
   assert.ok(/Updated /.test(t));
   assert.ok(t.includes('Indicator only: model levels are ~200 m apart, so thinner ducts are not visible.'));
   const sw = find(s.map._controls[1]._container, n => /mc-duct-swatch-/.test(n.className));
-  assert.deepStrictEqual(sw.map(n => n.className.split(' ')[1]), ['mc-duct-swatch-lora', 'mc-duct-swatch-uhf', 'mc-duct-swatch-micro', 'mc-duct-swatch-super']);
-  assert.ok(s.map._controls.every(c => c.options.position === 'bottomright'));
+  assert.deepStrictEqual(sw.map(n => n.className.split(' ')[1]), ['mc-duct-swatch-lora', 'mc-duct-swatch-uhf', 'mc-duct-swatch-micro', 'mc-duct-swatch-super', 'mc-duct-swatch-normal']);
+  assert.ok(s.map._controls.every(c => c.options.position === 'bottomleft'));
 });
 
 test('pending status shows the preparing message and draws nothing', async () => {
@@ -332,7 +338,7 @@ test('failed or pending refresh keeps the last good data', async () => {
   assert.strictEqual(s.api.calls.length, 2);
   s.api.calls[1].fail();
   await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 2);
+  assert.strictEqual(s.stats.rects.length, 3);
   assert.strictEqual(fillOf(s.stats.rects[1]), '#aa0001');
   assert.ok(!legendText(s).includes('unavailable'));
   s.timers[0].fn();
@@ -340,7 +346,7 @@ test('failed or pending refresh keeps the last good data', async () => {
   await tick(); await tick();
   assert.ok(!legendText(s).includes('being prepared'));
   assert.ok(legendText(s).includes('Updated '));
-  assert.strictEqual(s.layer._group.layers.length, 2);
+  assert.strictEqual(s.layer._group.layers.length, 3);
 });
 
 test('a good refresh rebuilds cells and keeps a user-picked time', async () => {
@@ -351,7 +357,7 @@ test('a good refresh rebuilds cells and keeps a user-picked time', async () => {
   s.api.calls[1].ok(clone(SAMPLE));
   await tick(); await tick();
   assert.strictEqual(s.layer._idx, 2);
-  assert.strictEqual(s.layer._group.layers.length, 2, 'old rects cleared');
+  assert.strictEqual(s.layer._group.layers.length, 3, 'old rects cleared');
 });
 
 // ── teardown ────────────────────────────────────────────────────────────────
@@ -400,8 +406,79 @@ test('re-adding after remove fetches again and ignores the first fetch', async (
   assert.strictEqual(s.stats.rects.length, 0, 'stale generation ignored');
   s.api.calls[1].ok(SAMPLE);
   await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 2);
+  assert.strictEqual(s.stats.rects.length, 3);
   assert.strictEqual(s.api.calls[0].url, '/api/ducting');
+});
+
+// ── outlines, legend text, compact legend ───────────────────────────────────
+
+test('every cell with data gets an outline from --mc-duct-grid; class 0 does not; fills unchanged', async () => {
+  const s = makeSandbox();
+  s.vars['--mc-duct-grid'] = 'rgba(1,2,3,0.4)';
+  const layer = s.ctx.MC_createDuctingLayer({});
+  layer.onAdd(makeMap());
+  s.api.calls[0].ok(SAMPLE);
+  await tick(); await tick();
+  const [a, , c] = s.stats.rects;
+  layer._setIndex(0);                       // cell a: class 1, cell c: class 0
+  assert.strictEqual(a.style.stroke, true);
+  assert.strictEqual(a.style.color, 'rgba(1,2,3,0.4)');
+  assert.strictEqual(a.style.fillOpacity, 0, 'normal: outline only');
+  assert.strictEqual(c.style.stroke, false, 'class 0 undrawn');
+  layer._setIndex(2);                       // cell a: surface duct, cell c: class 1
+  assert.strictEqual(a.style.stroke, true);
+  assert.strictEqual(fillOf(a), '#aa0001');
+  assert.strictEqual(c.style.stroke, true);
+  delete s.vars['--mc-duct-grid'];
+  s.ctx.dispatch('theme-changed');
+  assert.strictEqual(c.style.stroke, false, 'no variable -> no outline, no invented colour');
+});
+
+test('legend has the outline-only row and shows only the attribution, not the model twice', async () => {
+  const s = await mount(SAMPLE);
+  const t = legendText(s);
+  assert.ok(t.includes('Outline only: normal propagation'), t);
+  assert.strictEqual(t.split('NOAA GFS').length - 1, 1, 'model name once (inside the attribution)');
+  assert.ok(t.includes('Weather data by Open-Meteo.com (CC BY 4.0), NOAA GFS'));
+  assert.ok(!/NOAA GFS\. /.test(t));
+});
+
+test('legend is collapsible and starts collapsed on narrow screens', async () => {
+  const s = makeSandbox();
+  s.ctx.matchMedia = (q) => ({ matches: /max-width: 600px/.test(q) });
+  const map = makeMap();
+  const layer = s.ctx.MC_createDuctingLayer({});
+  layer.onAdd(map);
+  s.api.calls[0].ok(SAMPLE);
+  await tick(); await tick();
+  const box = map._controls[1]._container;
+  const head = () => find(box, n => n.tagName === 'button')[0];
+  assert.strictEqual(head().attrs['aria-expanded'], 'false');
+  assert.ok(!box.textContent.includes('Indicator only'), 'body hidden when compact');
+  head().fire('click');
+  assert.strictEqual(head().attrs['aria-expanded'], 'true');
+  assert.ok(box.textContent.includes('Indicator only'));
+});
+
+test('bottom-left corner is lifted above the attribution bar, re-measured, and released', () => {
+  const s = makeSandbox();
+  const map = makeMap();
+  const layer = s.ctx.MC_createDuctingLayer({});
+  layer.onAdd(map);
+  assert.strictEqual(map.corner.style.marginBottom, '36px', 'two-line bar');
+  map.attr.offsetHeight = 54;
+  map.fire('resize');
+  assert.strictEqual(map.corner.style.marginBottom, '54px', 'follows a taller bar');
+  map.attr.rect = { left: 400 };            // short bar at the right: no overlap
+  map.fire('layeradd');
+  assert.strictEqual(map.corner.style.marginBottom, '', 'no lift without overlap');
+  map.attr.rect = { left: 0 };
+  map.fire('resize');
+  assert.strictEqual(map.corner.style.marginBottom, '54px');
+  layer.onRemove(map);
+  assert.strictEqual(map.corner.style.marginBottom, '', 'released on remove');
+  assert.strictEqual((map._on.resize || []).length, 0);
+  assert.strictEqual((map._on.layeradd || []).length, 0);
 });
 
 // ── theme & missing variables ───────────────────────────────────────────────
