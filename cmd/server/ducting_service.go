@@ -14,6 +14,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,9 +23,20 @@ import (
 const (
 	ductingBackoffBase      = 5 * time.Minute  // first retry after a failure
 	ductingRateLimitBackoff = 60 * time.Minute // minimum wait after a 429 or a spent budget
+	// ductingNodeMaxAgeDays: only nodes heard (last_seen) within this many
+	// days place the grid, so a node that moved away or went dark long ago
+	// cannot keep the forecast over the wrong place.
+	ductingNodeMaxAgeDays = 14
+	// ductingExpiryGrace: the last forecast hour stays current for this long.
+	ductingExpiryGrace = 3600 // seconds
 )
 
 var errDuctingBusy = errors.New("ducting refresh already running")
+
+// errDuctingNoCells: the grid is empty (no node positions yet, or none the
+// model covers). Served as "pending" and retried after ductingBackoffBase;
+// it is not a failure of the weather source.
+var errDuctingNoCells = errors.New("no grid cells")
 
 // ductingSnapshot is what the handler serves: the response and its JSON.
 type ductingSnapshot struct {
@@ -41,7 +53,8 @@ type ductingService struct {
 	now    func() time.Time
 	sleep  func(ctx context.Context, d time.Duration) error // between refreshes
 
-	refreshMu sync.Mutex // one refresh at a time
+	refreshMu   sync.Mutex // one refresh at a time
+	emptyLogged bool       // the empty grid was logged; guarded by refreshMu
 }
 
 func newDuctingService(c *DuctingConfig, nodes func() ([][2]float64, error)) *ductingService {
@@ -114,6 +127,19 @@ func (s *ductingService) refreshOnce(ctx context.Context) error {
 	defer s.refreshMu.Unlock()
 	started := time.Now()
 	resp, queried, err := s.build(ctx)
+	if errors.Is(err, errDuctingNoCells) {
+		if !s.emptyLogged {
+			log.Printf("[ducting] no grid cells yet (no node positions from the last %d days, or none the model covers); retrying every %s",
+				ductingNodeMaxAgeDays, ductingBackoffBase)
+			s.emptyLogged = true
+		}
+		// A good snapshot is kept, as after a failure; it expires on its own.
+		if cur := s.snap.Load(); cur == nil || cur.resp.Status != "ok" {
+			s.snap.Store(s.statusSnapshot("pending", ""))
+		}
+		return err
+	}
+	s.emptyLogged = false
 	if err != nil {
 		if ctx.Err() != nil {
 			return err // shutting down: leave the state as it is
@@ -141,18 +167,19 @@ func (s *ductingService) build(ctx context.Context) (DuctingResponse, int, error
 			return DuctingResponse{}, 0, errors.New("node positions unavailable")
 		}
 	}
-	cells, step, fellBack := ductingGrid(nodes, s.cfg.Area, s.cfg.GridStepDeg, ductingMaxPoints(s.cfg, s.model), s.cfg.marginDegOrDefault())
+	cells, step, fellBack, info := ductingGridWithInfo(nodes, s.cfg.Area, s.cfg.GridStepDeg, ductingMaxPoints(s.cfg, s.model), s.cfg.marginDegOrDefault())
 	if fellBack {
 		log.Printf("[ducting] node area too large for maxPoints even at %g deg; covering the regions around nodes instead", ductingMaxStep)
 	}
 	cells = s.inCoverage(cells)
+	if len(cells) == 0 {
+		return DuctingResponse{}, 0, errDuctingNoCells
+	}
+	log.Print(ductingGridLogLine(info, step, len(cells)))
 
 	resp := s.baseResponse("ok", "")
 	resp.StepDeg = step
 	resp.GeneratedAt = s.now().Unix()
-	if len(cells) == 0 {
-		return resp, 0, nil
-	}
 	cols, err := s.source.fetch(ctx, cells, s.cfg.ForecastHours)
 	if err != nil {
 		return DuctingResponse{}, len(cells), err
@@ -171,6 +198,25 @@ func (s *ductingService) build(ctx context.Context) (DuctingResponse, int, error
 		resp.Cells = append(resp.Cells, s.analyzeColumn(col))
 	}
 	return resp, len(cells), nil
+}
+
+// ductingGridLogLine describes the grid of one refresh: where and how big,
+// never which nodes.
+func ductingGridLogLine(info ductingGridInfo, step float64, cells int) string {
+	b := info.box
+	where := "box"
+	if info.area {
+		where = "area"
+	}
+	var sb strings.Builder
+	sb.WriteString("[ducting] grid: " + where + " " +
+		strconv.FormatFloat(b[0], 'f', 2, 64) + ".." + strconv.FormatFloat(b[2], 'f', 2, 64) + ", " +
+		strconv.FormatFloat(b[1], 'f', 2, 64) + ".." + strconv.FormatFloat(b[3], 'f', 2, 64))
+	if !info.area {
+		sb.WriteString(" (" + strconv.Itoa(info.nodes) + " nodes, " + strconv.Itoa(info.trimmed) + " trimmed)")
+	}
+	sb.WriteString(", step " + strconv.FormatFloat(step, 'g', -1, 64) + " deg, " + strconv.Itoa(cells) + " cells")
+	return sb.String()
 }
 
 // inCoverage drops cells outside a regional model's bounds: the API has no
@@ -231,11 +277,18 @@ func (s *ductingService) analyzeColumn(col ductingColumn) DuctingCell {
 
 // nextDelay is the wait before the next refresh: RefreshMinutes after a
 // success; 5, 10, 20... minutes (capped at RefreshMinutes) after
-// consecutive failures; at least an hour after a 429 or a spent budget.
+// consecutive failures; at least an hour after a 429 or a spent budget;
+// always 5 minutes (ductingBackoffBase) while the grid is empty.
 func (s *ductingService) nextDelay(err error, failures int) time.Duration {
 	refresh := time.Duration(s.cfg.RefreshMinutes) * time.Minute
 	if err == nil {
 		return refresh
+	}
+	if errors.Is(err, errDuctingNoCells) {
+		if refresh < ductingBackoffBase {
+			return refresh
+		}
+		return ductingBackoffBase
 	}
 	d := refresh
 	if failures < 16 { // 5 min << 15 is far past the 24 h cap
@@ -262,9 +315,12 @@ func (s *ductingService) run(ctx context.Context) <-chan struct{} {
 			if ctx.Err() != nil {
 				return
 			}
-			if err != nil {
+			switch {
+			case errors.Is(err, errDuctingNoCells):
+				// not a failure: nothing to back off from
+			case err != nil:
 				failures++
-			} else {
+			default:
 				failures = 0
 			}
 			if s.sleep(ctx, s.nextDelay(err, failures)) != nil {
@@ -275,16 +331,26 @@ func (s *ductingService) run(ctx context.Context) <-chan struct{} {
 	return done
 }
 
+// serveHTTP writes the snapshot. The forecast is expired once its last hour
+// is more than ductingExpiryGrace old. Only "ok" may be cached (5 minutes,
+// well under any refresh interval); "pending" and "error" are no-store so a
+// cache never pins a transient state.
 func (s *ductingService) serveHTTP(w http.ResponseWriter) {
 	snap := s.snap.Load()
 	if snap == nil {
 		snap = s.statusSnapshot("pending", "")
 	}
-	if t := snap.resp.Times; snap.resp.Status == "ok" && len(t) > 0 && t[len(t)-1] < s.now().Unix() {
+	if t := snap.resp.Times; snap.resp.Status == "ok" && len(t) > 0 && t[len(t)-1]+ductingExpiryGrace < s.now().Unix() {
 		resp := s.baseResponse("error", "forecast expired")
 		resp.GeneratedAt = snap.resp.GeneratedAt
+		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, resp)
 		return
+	}
+	if snap.resp.Status == "ok" {
+		w.Header().Set("Cache-Control", "public, max-age=300")
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
 	}
 	writeJSONBytes(w, snap.body)
 }
@@ -301,27 +367,47 @@ func (s *Server) handleDucting(w http.ResponseWriter, r *http.Request) {
 // ductingNodes returns the positions of the nodes /api/nodes shows, so the
 // overlay's cells cannot reveal a hidden or blacklisted node.
 func (s *Server) ductingNodes() ([][2]float64, error) {
-	return s.db.ductingNodeCoords(s.visibleNodeInfo())
+	return s.db.ductingNodeCoords(s.visibleNodeInfo(), time.Now())
 }
 
-// ductingNodeCoords returns [lat, lon] of the nodes with a position fix that
-// visible accepts (nil accepts all). Read-only.
-func (db *DB) ductingNodeCoords(visible func(n *nodeInfo) bool) ([][2]float64, error) {
-	rows, err := db.conn.Query("SELECT public_key, name, lat, lon FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL")
+// ductingParseLastSeen parses nodes.last_seen in the forms CoreScope and
+// SQLite write; ok is false for anything else.
+func ductingParseLastSeen(v string) (time.Time, bool) {
+	v = strings.TrimSpace(v)
+	if t, ok := parseRelayTS(v); ok {
+		return t, true
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04:05.000", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// ductingNodeCoords returns [lat, lon] of the nodes with a position fix,
+// a last_seen within ductingNodeMaxAgeDays of now (missing or unparsable:
+// left out) and that visible accepts (nil accepts all). Read-only.
+func (db *DB) ductingNodeCoords(visible func(n *nodeInfo) bool, now time.Time) ([][2]float64, error) {
+	rows, err := db.conn.Query("SELECT public_key, name, lat, lon, last_seen FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL AND last_seen IS NOT NULL")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	cutoff := now.Add(-ductingNodeMaxAgeDays * 24 * time.Hour)
 	var out [][2]float64
 	for rows.Next() {
 		var pk string
-		var name sql.NullString
+		var name, lastSeen sql.NullString
 		var lat, lon float64
-		if err := rows.Scan(&pk, &name, &lat, &lon); err != nil {
+		if err := rows.Scan(&pk, &name, &lat, &lon, &lastSeen); err != nil {
 			return nil, err
 		}
 		if lat == 0 && lon == 0 {
 			continue // no real fix
+		}
+		if seen, ok := ductingParseLastSeen(lastSeen.String); !ok || seen.Before(cutoff) {
+			continue // stale, or no usable timestamp
 		}
 		n := nodeInfo{PublicKey: pk, Name: name.String, Lat: lat, Lon: lon, HasGPS: true}
 		if visible != nil && !visible(&n) {

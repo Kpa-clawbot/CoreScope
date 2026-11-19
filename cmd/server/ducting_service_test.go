@@ -225,10 +225,10 @@ func TestDuctingServicePendingErrorOK(t *testing.T) {
 func TestDuctingServiceNoCellsAndNoData(t *testing.T) {
 	f := &fakeOpenMeteo{t: t, hours: 1}
 	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, nil)
-	if err := svc.refreshOnce(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := svc.refreshOnce(context.Background()); !errors.Is(err, errDuctingNoCells) {
+		t.Fatalf("err %v, want errDuctingNoCells", err)
 	}
-	if resp, _ := ductingServe(t, svc); resp.Status != "ok" || len(resp.Cells) != 0 {
+	if resp, _ := ductingServe(t, svc); resp.Status != "pending" || len(resp.Cells) != 0 || len(resp.Times) != 0 {
 		t.Errorf("no nodes: %+v", resp)
 	}
 	if len(f.requests()) != 0 {
@@ -317,11 +317,16 @@ func TestDuctingServiceForecastExpired(t *testing.T) {
 	if resp, _ := ductingServe(t, svc); resp.Status != "ok" {
 		t.Fatalf("fresh %+v", resp)
 	}
-	now = time.Unix(1795046400+3600, 0) // the last hour itself is still current
+	// The last hour (t0+3600) stays current for the whole hour it covers.
+	now = time.Unix(1795046400+3600, 0)
 	if resp, _ := ductingServe(t, svc); resp.Status != "ok" {
 		t.Errorf("at the last hour %+v", resp)
 	}
-	now = time.Unix(1795046400+3601, 0)
+	now = time.Unix(1795046400+7200, 0) // last + 3600: still current
+	if resp, _ := ductingServe(t, svc); resp.Status != "ok" {
+		t.Errorf("an hour after the last hour %+v", resp)
+	}
+	now = time.Unix(1795046400+7201, 0)
 	resp, _ := ductingServe(t, svc)
 	if resp.Status != "error" || resp.Error != "forecast expired" || resp.GeneratedAt != 1795046400 || len(resp.Cells) != 0 {
 		t.Errorf("expired %+v", resp)
@@ -510,15 +515,16 @@ func TestDuctingNodesExcludeHidden(t *testing.T) {
 	visible := "aa11" + strings.Repeat("0", 60)
 	black := "bb22" + strings.Repeat("0", 60)
 	hidden := "cc33" + strings.Repeat("0", 60)
+	seen := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
 	for _, q := range []string{
-		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('` + visible + `', 'Repeater A', 51.3, -0.3)`,
-		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('` + black + `', 'Blacklisted', 40.3, -70.3)`,
-		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('` + hidden + `', 'secret-base', 30.3, 60.3)`,
-		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('dd44', NULL, 0, 0)`,
-		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('ee55', 'No fix', NULL, NULL)`,
-		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('ff66', NULL, -33.9, 18.4)`,
+		`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES ('` + visible + `', 'Repeater A', 51.3, -0.3, ?)`,
+		`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES ('` + black + `', 'Blacklisted', 40.3, -70.3, ?)`,
+		`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES ('` + hidden + `', 'secret-base', 30.3, 60.3, ?)`,
+		`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES ('dd44', NULL, 0, 0, ?)`,
+		`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES ('ee55', 'No fix', NULL, NULL, ?)`,
+		`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES ('ff66', NULL, -33.9, 18.4, ?)`,
 	} {
-		if _, err := db.conn.Exec(q); err != nil {
+		if _, err := db.conn.Exec(q, seen); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -669,5 +675,197 @@ func TestDuctingAnalyzeColumnMeanGradient(t *testing.T) {
 	n850 := Refractivity(850, 5, 60) // at 1500 m AGL exactly
 	if want := int(math.Round((n850 - n0) / 1.5)); cell.N[0] != want || cell.N[1] != want || want == 0 {
 		t.Errorf("n %v, want %d", cell.N, want)
+	}
+}
+
+func TestDuctingNodesRecentOnly(t *testing.T) {
+	db := setupTestDB(t)
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	for _, n := range []struct {
+		pk, lastSeen string
+		lat          float64
+	}{
+		{"a1", now.Add(-time.Hour).Format(time.RFC3339), 10.1},                         // fresh
+		{"a2", now.Add(-13 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z"), 20.1}, // 13 days, ms form
+		{"a3", now.Add(-24 * time.Hour).Format("2006-01-02 15:04:05"), 30.1},           // SQLite datetime() form
+		{"b1", now.Add(-30 * 24 * time.Hour).Format(time.RFC3339), 40.1},               // 30 days: stale
+		{"b2", now.Add(-15 * 24 * time.Hour).Format(time.RFC3339Nano), 50.1},           // just past 14 days
+		{"b3", "yesterday", 60.1}, // unparseable
+		{"b4", "", 70.1},          // empty
+	} {
+		if _, err := db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES (?, 'n', ?, 5.1, ?)`, n.pk, n.lat, n.lastSeen); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES ('b5', 'n', 80.1, 5.1, NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	coords, err := db.ductingNodeCoords(nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(coords, func(i, j int) bool { return coords[i][0] < coords[j][0] })
+	want := [][2]float64{{10.1, 5.1}, {20.1, 5.1}, {30.1, 5.1}}
+	if len(coords) != len(want) {
+		t.Fatalf("coords %v, want %v", coords, want)
+	}
+	for i := range want {
+		if coords[i] != want[i] {
+			t.Fatalf("coords %v, want %v", coords, want)
+		}
+	}
+}
+
+func TestDuctingServiceEmptyGridPending(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	f := &fakeOpenMeteo{t: t, hours: 1, fill: ductingInversion}
+	var nodes atomic.Pointer[[][2]float64]
+	empty := [][2]float64{}
+	nodes.Store(&empty)
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, nil)
+	svc.nodes = func() ([][2]float64, error) { return *nodes.Load(), nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var waits []time.Duration
+	var statusAtWait []string
+	svc.sleep = func(ctx context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		statusAtWait = append(statusAtWait, svc.snap.Load().resp.Status)
+		switch len(waits) {
+		case 3: // the mesh's first node appears
+			one := [][2]float64{{51.3, -0.3}}
+			nodes.Store(&one)
+		case 4:
+			cancel()
+		}
+		return ctx.Err()
+	}
+	select {
+	case <-svc.run(ctx):
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not exit")
+	}
+	want := []time.Duration{5 * time.Minute, 5 * time.Minute, 5 * time.Minute, 360 * time.Minute}
+	if len(waits) != len(want) {
+		t.Fatalf("waits %v, want %v", waits, want)
+	}
+	for i := range want {
+		if waits[i] != want[i] {
+			t.Errorf("wait %d: %v, want %v", i, waits[i], want[i])
+		}
+	}
+	if got := strings.Join(statusAtWait, ","); got != "pending,pending,pending,ok" {
+		t.Errorf("statuses %s", got)
+	}
+	if n := strings.Count(buf.String(), "[ducting] no grid cells yet"); n != 1 {
+		t.Errorf("empty grid logged %d times: %s", n, buf.String())
+	}
+	if strings.Contains(buf.String(), "refresh failed") {
+		t.Errorf("an empty grid was logged as a failure: %s", buf.String())
+	}
+	if len(f.requests()) != 1 {
+		t.Errorf("%d API requests, want 1 (only once there was a cell)", len(f.requests()))
+	}
+
+	// An empty grid after a good refresh keeps the good snapshot.
+	nodes.Store(&empty)
+	if err := svc.refreshOnce(context.Background()); !errors.Is(err, errDuctingNoCells) {
+		t.Fatalf("err %v", err)
+	}
+	if resp, _ := ductingServe(t, svc); resp.Status != "ok" || len(resp.Cells) != 1 {
+		t.Errorf("after an empty refresh %+v", resp)
+	}
+
+	if d := svc.nextDelay(errDuctingNoCells, 0); d != 5*time.Minute {
+		t.Errorf("nextDelay(no cells) %v", d)
+	}
+}
+
+func TestDuctingServiceCacheControl(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, hours: 2, fill: ductingInversion, status: 500}
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, [][2]float64{{51.3, -0.3}})
+	cc := func() (string, string) {
+		rec := httptest.NewRecorder()
+		svc.serveHTTP(rec)
+		var resp DuctingResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp.Status, rec.Header().Get("Cache-Control")
+	}
+	if st, h := cc(); st != "pending" || h != "no-store" {
+		t.Errorf("pending: %s %q", st, h)
+	}
+	_ = svc.refreshOnce(context.Background())
+	if st, h := cc(); st != "error" || h != "no-store" {
+		t.Errorf("error: %s %q", st, h)
+	}
+	f.mu.Lock()
+	f.status = 0
+	f.mu.Unlock()
+	if err := svc.refreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st, h := cc(); st != "ok" || h != "public, max-age=300" {
+		t.Errorf("ok: %s %q", st, h)
+	}
+	svc.now = func() time.Time { return time.Unix(1795046400+7201, 0) }
+	if st, h := cc(); st != "error" || h != "no-store" {
+		t.Errorf("expired: %s %q", st, h)
+	}
+}
+
+func TestDuctingRouteCacheControlOK(t *testing.T) {
+	// Through the router: the handler's header wins over the /api/ no-store
+	// middleware for an ok snapshot.
+	s, router := setupTestServer(t)
+	s.cfg.Ducting = &DuctingConfig{Enabled: true}
+	s.ducting = newDuctingService(s.cfg.Ducting, nil)
+	resp := s.ducting.baseResponse("ok", "")
+	resp.Times = []int64{time.Now().Unix()}
+	s.ducting.snap.Store(encodeDuctingSnapshot(resp))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ducting", nil))
+	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=300" {
+		t.Errorf("Cache-Control %q", cc)
+	}
+}
+
+func TestDuctingServiceGridLogLine(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	f := &fakeOpenMeteo{t: t, hours: 1, fill: ductingInversion}
+	// 25 nodes around Seattle and one in London: the London node is trimmed.
+	var nodes [][2]float64
+	for i := 0; i < 5; i++ {
+		for j := 0; j < 5; j++ {
+			nodes = append(nodes, [2]float64{47.3 + 0.1*float64(i), -122.6 + 0.1*float64(j)})
+		}
+	}
+	nodes = append(nodes, [2]float64{51.5, -0.1})
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, nodes)
+	if err := svc.refreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if n := strings.Count(out, "[ducting] grid: box "); n != 1 {
+		t.Fatalf("grid logged %d times: %s", n, out)
+	}
+	if !strings.Contains(out, "[ducting] grid: box 47.30..47.70, -122.60..-122.20 (25 nodes, 1 trimmed), step 0.5 deg, 4 cells") {
+		t.Errorf("log %q", out)
+	}
+
+	buf.Reset()
+	area := [4]float64{51, -1, 52, 0}
+	svc2, _ := newTestDuctingService(t, f, DuctingConfig{Area: &area}, nil)
+	if err := svc2.refreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "[ducting] grid: area 51.00..52.00, -1.00..0.00, step 0.5 deg, 4 cells") {
+		t.Errorf("area log %q", buf.String())
 	}
 }

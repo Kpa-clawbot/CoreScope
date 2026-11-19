@@ -119,19 +119,34 @@ func AnalyzeDucting(profile []DuctLevel) DuctResult {
 	return analyzeM(h, m, n)
 }
 
+// ductMeanMinLayerM is the shallowest layer ductMeanGradient still averages
+// over when the profile stops below ductMeanLayerM (high terrain: the models'
+// top level, 700 hPa, is only ~1.4 km above Denver).
+const ductMeanMinLayerM = 1000.0
+
 // ductMeanGradient returns (N at ductMeanLayerM - N at the first point) /
 // ductMeanLayerM in N/km, with N at ductMeanLayerM linearly interpolated
-// between the two points that bracket it. 0 when none do (the profile top
-// is below ductMeanLayerM). h ascends; h[0] is the 2 m surface point.
+// between the two points that bracket it. When none do but the highest point
+// is at least ductMeanMinLayerM above ground, it returns the mean over that
+// shallower depth instead: (N at the top - N at the first point) / its
+// height. 0 when the profile is shallower still. h ascends; h[0] is the 2 m
+// surface point.
 func ductMeanGradient(h, n []float64) float64 {
+	top := -1
 	for i := 0; i+1 < len(h); i++ {
+		if top < 0 || h[i+1] > h[top] {
+			top = i + 1
+		}
 		if h[i] > ductMeanLayerM || h[i+1] < ductMeanLayerM || h[i+1] <= h[i] {
 			continue
 		}
 		n1500 := n[i] + (n[i+1]-n[i])*(ductMeanLayerM-h[i])/(h[i+1]-h[i])
 		return (n1500 - n[0]) / ductMeanLayerM * 1000
 	}
-	return 0
+	if top < 0 || h[top] < ductMeanMinLayerM {
+		return 0
+	}
+	return (n[top] - n[0]) / h[top] * 1000
 }
 
 // analyzeM finds trapping layers in an M profile (heights ascending) and

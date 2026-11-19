@@ -289,11 +289,11 @@ func TestDuctMeanGradientTopBelowLayer(t *testing.T) {
 	prof := []DuctLevel{
 		{HeightAGL: 2, PressureHPa: 1000, TempC: 15, RHPct: 50},
 		{HeightAGL: 500, PressureHPa: 950, TempC: 12, RHPct: 55},
-		{HeightAGL: 1499, PressureHPa: 850, TempC: 5, RHPct: 60},
+		{HeightAGL: 900, PressureHPa: 905, TempC: 9, RHPct: 60},
 	}
 	r := AnalyzeDucting(prof)
 	if r.MeanGradNkm != 0 {
-		t.Errorf("MeanGradNkm = %v, want 0 (top below 1500 m)", r.MeanGradNkm)
+		t.Errorf("MeanGradNkm = %v, want 0 (top below 1000 m)", r.MeanGradNkm)
 	}
 	if r.MinGradNkm == 0 {
 		t.Error("MinGradNkm should still be computed")
@@ -319,5 +319,36 @@ func TestDuctMeanGradientStandardAtmosphere(t *testing.T) {
 	r := AnalyzeDucting(DuctProfile(elev, ps, isaT(elev), 40, levels, temps, rhs, zs))
 	if r.MeanGradNkm < -50 || r.MeanGradNkm > -30 {
 		t.Errorf("MeanGradNkm = %.2f, want about -40 (-50..-30)", r.MeanGradNkm)
+	}
+}
+
+// High terrain: the models stop at 700 hPa, ~1,400 m above a Denver-like
+// surface, so no two points bracket 1500 m. The mean is taken over the
+// depth there is: (N(top) - N(2 m)) / h_top.
+func TestDuctMeanGradientHighTerrain(t *testing.T) {
+	prof := []DuctLevel{
+		{HeightAGL: 2, PressureHPa: 835, TempC: 20, RHPct: 30},
+		{HeightAGL: 400, PressureHPa: 800, TempC: 17, RHPct: 30},
+		{HeightAGL: 1400, PressureHPa: 700, TempC: 8, RHPct: 35},
+	}
+	want := (Refractivity(700, 8, 35) - Refractivity(835, 20, 30)) / 1400 * 1000
+	r := AnalyzeDucting(prof)
+	if want >= 0 || want < -100 {
+		t.Fatalf("test profile gives an implausible %v N/km", want)
+	}
+	ductApprox(t, "MeanGradNkm", r.MeanGradNkm, want, 1e-9)
+
+	// Just below 1500 m: still the available depth, not 0.
+	prof[2].HeightAGL = 1499
+	want = (Refractivity(700, 8, 35) - Refractivity(835, 20, 30)) / 1499 * 1000
+	ductApprox(t, "MeanGradNkm 1499 m", AnalyzeDucting(prof).MeanGradNkm, want, 1e-9)
+
+	// Exactly 1000 m is enough; just under is not.
+	prof[2].HeightAGL = 1000
+	want = (Refractivity(700, 8, 35) - Refractivity(835, 20, 30)) / 1000 * 1000
+	ductApprox(t, "MeanGradNkm 1000 m", AnalyzeDucting(prof).MeanGradNkm, want, 1e-9)
+	prof[2].HeightAGL = 999
+	if g := AnalyzeDucting(prof).MeanGradNkm; g != 0 {
+		t.Errorf("top 999 m: MeanGradNkm = %v, want 0", g)
 	}
 }

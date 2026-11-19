@@ -59,7 +59,11 @@ type DuctResult struct {
 	// surface point) / ductMeanLayerM, in N/km (ITU-R P.453 style). The map
 	// field is coloured by it: averaged over the layer that matters for
 	// propagation, it is far less noisy than MinGradNkm, which a single thin
-	// layer can dominate. 0 when the profile does not reach ductMeanLayerM.
+	// layer can dominate. On high terrain, where the profile stops below
+	// ductMeanLayerM but its top is at least 1000 m above ground
+	// (ductMeanMinLayerM), it is the mean over that shallower depth:
+	// (N at the top - N at 2 m) / the top's height. 0 when the profile
+	// is shallower than 1000 m (or there is no data).
 	MeanGradNkm float64
 }
 
@@ -111,7 +115,7 @@ type DuctingCell struct {
 	T   []int   `json:"t"`  // duct top m AGL, rounded
 	DM  []int   `json:"dm"` // ΔM x10, rounded
 	G   []int   `json:"g"`  // min dN/dh N/km, rounded
-	N   []int   `json:"n"`  // mean dN/dh over the lowest 1.5 km, N/km, rounded; 0 = no data
+	N   []int   `json:"n"`  // mean dN/dh over the lowest 1.5 km (high terrain: down to 1 km), N/km, rounded; 0 = no data
 }
 
 // DuctingResponse is GET /api/ducting.

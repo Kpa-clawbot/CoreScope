@@ -527,3 +527,160 @@ func TestDuctingGridExplicitAreaNeverFlagsOrChanges(t *testing.T) {
 		t.Fatal("area flagged as fallback")
 	}
 }
+
+// ductingTestMesh is rows x cols nodes from (lat0, lon0), 0.1 degree apart;
+// lons are wrapped, so a mesh may straddle the antimeridian.
+func ductingTestMesh(lat0, lon0 float64, rows, cols int) [][2]float64 {
+	var out [][2]float64
+	for i := 0; i < rows; i++ {
+		for j := 0; j < cols; j++ {
+			out = append(out, [2]float64{lat0 + 0.1*float64(i), ductingWrapLon(lon0 + 0.1*float64(j))})
+		}
+	}
+	return out
+}
+
+func checkCellsInRange(t *testing.T, cells [][2]float64) {
+	t.Helper()
+	for i, c := range cells {
+		if c[1] < -180 || c[1] >= 180 || math.IsNaN(c[1]) {
+			t.Fatalf("centre %v outside [-180,180)", c)
+		}
+		if i > 0 && math.Abs(c[0]-cells[i-1][0]) < 1e-6 && math.Abs(c[1]-cells[i-1][1]) < 1e-6 {
+			t.Fatalf("near-duplicate centres %v %v", cells[i-1], c)
+		}
+	}
+	checkSortedUnique(t, cells)
+}
+
+func TestDuctingGridTrimsOutlierNode(t *testing.T) {
+	// 25 nodes around Seattle and one in London: the box stays Seattle-sized
+	// and keeps the 0.5 degree step.
+	nodes := append(ductingTestMesh(47.3, -122.6, 5, 5), [2]float64{51.5, -0.1})
+	cells, step, fell, info := ductingGridWithInfo(nodes, nil, 0.5, 450, 2)
+	if step != 0.5 || fell {
+		t.Fatalf("step %v fell %v", step, fell)
+	}
+	// lat 45.3..49.7 -> 45.25..49.75 (10); lon -124.6..-120.2 -> -124.75..-120.25 (10)
+	if len(cells) != 100 {
+		t.Fatalf("%d cells", len(cells))
+	}
+	for _, c := range cells {
+		if c[0] < 45 || c[0] > 50 || c[1] < -125 || c[1] > -120 {
+			t.Fatalf("cell %v outside the Seattle box", c)
+		}
+	}
+	if info.nodes != 25 || info.trimmed != 1 || !info.hasBox || info.area {
+		t.Errorf("info %+v", info)
+	}
+}
+
+func TestDuctingGridNoTrimBelowMinNodes(t *testing.T) {
+	// 10 Seattle nodes and London: too few to trim, London stays in the box.
+	nodes := append(ductingTestMesh(47.3, -122.6, 2, 5), [2]float64{51.5, -0.1})
+	kept, trimmed := ductingTrimOutliers(nodes)
+	if trimmed != 0 || len(kept) != len(nodes) {
+		t.Fatalf("trimmed %d of %d", trimmed, len(nodes))
+	}
+	cells, step, _, info := ductingGridWithInfo(nodes, nil, 0.5, 450, 0)
+	if info.trimmed != 0 || info.nodes != 11 {
+		t.Errorf("info %+v", info)
+	}
+	if !hasCell(cells, ductingCentre(51.5, step), ductingCentre(-0.1, step)) {
+		t.Errorf("London not covered at step %v", step)
+	}
+	// 19 nodes: still untrimmed; 20: trimmed.
+	n19 := append(ductingTestMesh(47.3, -122.6, 3, 6), [2]float64{51.5, -0.1})
+	if _, tr := ductingTrimOutliers(n19); tr != 0 || len(n19) != 19 {
+		t.Errorf("19 nodes: trimmed %d", tr)
+	}
+	n20 := append(ductingTestMesh(47.3, -122.6, 1, 19), [2]float64{51.5, -0.1})
+	if kept, tr := ductingTrimOutliers(n20); len(n20) != 20 || tr < 1 || hasCell(kept, 51.5, -0.1) {
+		t.Errorf("20 nodes: trimmed %d, kept %v", tr, kept)
+	}
+}
+
+func TestDuctingGridTrimAntimeridian(t *testing.T) {
+	// 25 nodes around Fiji across the antimeridian (179.7..-179.9), plus a
+	// node near Brisbane and one at Tahiti: both trimmed, the box stays a
+	// narrow band across 180.
+	fiji := ductingTestMesh(-17.3, 179.7, 5, 5)
+	nodes := append(append([][2]float64{}, fiji...), [2]float64{-27.5, 153.0}, [2]float64{-17.5, -149.6})
+	kept, trimmed := ductingTrimOutliers(nodes)
+	if trimmed != 2 || len(kept) != 25 {
+		t.Fatalf("trimmed %d, kept %d", trimmed, len(kept))
+	}
+	cells, step, fell, info := ductingGridWithInfo(nodes, nil, 0.5, 450, 1)
+	if step != 0.5 || fell || info.trimmed != 2 {
+		t.Fatalf("step %v fell %v info %+v", step, fell, info)
+	}
+	checkCellsInRange(t, cells)
+	var east, west bool
+	for _, c := range cells {
+		if c[0] < -18.5 || c[0] > -15.5 {
+			t.Fatalf("cell %v: latitude stretched by an outlier", c)
+		}
+		switch {
+		case c[1] >= 178:
+			west = true
+		case c[1] <= -178:
+			east = true
+		default:
+			t.Fatalf("cell %v: longitude stretched by an outlier", c)
+		}
+	}
+	if !east || !west {
+		t.Errorf("box does not straddle 180: %v", cells)
+	}
+	// The box is logged west > east across the antimeridian.
+	if info.box[1] < 178 || info.box[3] > -178 {
+		t.Errorf("box %v", info.box)
+	}
+}
+
+func TestDuctingWrapLon(t *testing.T) {
+	for in, want := range map[float64]float64{
+		-180.25: 179.75, 180: -180, 180.25: -179.75, -180: -180, 0: 0, 179.75: 179.75, 539.5: 179.5, -540: -180,
+	} {
+		if got := ductingWrapLon(in); math.Abs(got-want) > 1e-9 {
+			t.Errorf("ductingWrapLon(%v) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestDuctingGridLongitudeWrap(t *testing.T) {
+	for _, step := range []float64{0.7, 1.4} {
+		// An area starting at -180: the first column's centre (-180 - a bit)
+		// is the cell across the antimeridian, not a longitude past -180.
+		for _, area := range [][4]float64{{10, -180, 12, -170}, {-10, -180, 10, 180}, {10, 170, 12, 180}} {
+			cells, _, _ := ductingGrid(nil, &area, step, 100000, 0)
+			if len(cells) == 0 {
+				t.Fatalf("step %v area %v: no cells", step, area)
+			}
+			checkCellsInRange(t, cells)
+		}
+		area := [4]float64{10, -180, 12, -170}
+		cells, _, _ := ductingGrid(nil, &area, step, 100000, 0)
+		// At 0.7 the first column is centred on -180.25: 179.75. (At 1.4 it
+		// is -179.9, already in range.)
+		first := ductingWrapLon(ductingCentre(-180, step))
+		if (step == 0.7 && math.Abs(first-179.75) > 1e-9) || !hasCell(cells, ductingCentre(10, step), first) {
+			t.Errorf("step %v: wrapped first column %v missing: %v", step, first, cells)
+		}
+		// An antimeridian node box, and the regions-around-nodes fallback.
+		nodes := [][2]float64{{10.1, 179.1}, {10.1, -179.1}}
+		cells, _, _ = ductingGrid(nodes, nil, step, 1000, 1)
+		checkCellsInRange(t, cells)
+		cells, _, _ = ductingGrid(nodes, nil, step, 1000, 0)
+		checkCellsInRange(t, cells)
+		fiji := ductingTestMesh(-17.3, 179.7, 5, 5)
+		cells, _, _ = ductingGrid(fiji, nil, step, 1000, 3)
+		checkCellsInRange(t, cells)
+		ranked, _ := ductingDilate(fiji, step, 2, 100000)
+		for _, r := range ranked {
+			if r.lon < -180 || r.lon >= 180 {
+				t.Fatalf("step %v: dilated centre %v,%v outside [-180,180)", step, r.lat, r.lon)
+			}
+		}
+	}
+}
