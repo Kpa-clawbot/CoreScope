@@ -100,8 +100,8 @@ func TestDuctingBoundaryValuesAccepted(t *testing.T) {
 	if len(warns) != 0 || r.GridStepDeg != 0.25 || r.MaxPoints != 1000 || r.RefreshMinutes != 60 || r.ForecastHours != 120 {
 		t.Fatalf("%+v %v", r, warns)
 	}
-	r, warns = (&DuctingConfig{GridStepDeg: 2, MaxPoints: 1, RefreshMinutes: 1440, ForecastHours: 1}).resolved()
-	if len(warns) != 0 || r.GridStepDeg != 2 || r.MaxPoints != 1 || r.RefreshMinutes != 1440 || r.ForecastHours != 1 {
+	r, warns = (&DuctingConfig{GridStepDeg: 2, MaxPoints: 1, RefreshMinutes: 1440, ForecastHours: 25}).resolved()
+	if len(warns) != 0 || r.GridStepDeg != 2 || r.MaxPoints != 1 || r.RefreshMinutes != 1440 || r.ForecastHours != 25 {
 		t.Fatalf("%+v %v", r, warns)
 	}
 }
@@ -118,7 +118,8 @@ func TestDuctingBadModel(t *testing.T) {
 }
 
 func TestDuctingBaseURL(t *testing.T) {
-	bad := []string{"ftp://api.example.com", "https://", "/relative", "api.example.com", "https://u:p@h", "https://user@h.example"}
+	bad := []string{"ftp://api.example.com", "https://", "/relative", "api.example.com", "https://u:p@h", "https://user@h.example",
+		"https://om.example.com?apikey=k", "https://om.example.com/?x=1", "https://om.example.com/#frag", "https://om.example.com/?"}
 	for _, u := range bad {
 		r, warns := (&DuctingConfig{BaseURL: u}).resolved()
 		if r.BaseURL != defaultDuctingBaseURL {
@@ -328,5 +329,23 @@ func TestDuctingLogConfigSelfHosted(t *testing.T) {
 	logDuctingConfig(&DuctingConfig{Enabled: true, Model: "gfs"})
 	if !strings.Contains(buf.String(), "budget cap") {
 		t.Errorf("public log %q", buf.String())
+	}
+}
+
+func TestDuctingForecastHoursCoversRefresh(t *testing.T) {
+	for _, tc := range []struct{ refresh, hours, want int }{
+		{360, 3, 7},    // 6 h refresh needs 7 h
+		{90, 1, 3},     // ceil(90/60)+1
+		{60, 2, 2},     // exactly enough
+		{1440, 24, 25}, // a day
+		{360, 48, 48},  // default untouched
+	} {
+		r, warns := (&DuctingConfig{RefreshMinutes: tc.refresh, ForecastHours: tc.hours}).resolved()
+		if r.ForecastHours != tc.want {
+			t.Errorf("refresh %d hours %d: got %d, want %d", tc.refresh, tc.hours, r.ForecastHours, tc.want)
+		}
+		if raised := tc.want != tc.hours; raised != hasWarn(warns, "ducting.forecastHours") {
+			t.Errorf("refresh %d hours %d: warnings %v", tc.refresh, tc.hours, warns)
+		}
 	}
 }

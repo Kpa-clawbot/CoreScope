@@ -127,13 +127,19 @@ func (c *DuctingConfig) resolved() (DuctingConfig, []string) {
 		warns = append(warns, fmt.Sprintf("ducting.forecastHours must be 1..120, using %d", defaultDuctingForecastHours))
 		r.ForecastHours = defaultDuctingForecastHours
 	}
+	// A forecast shorter than the refresh interval expires before the next
+	// refresh lands.
+	if minHours := (r.RefreshMinutes+59)/60 + 1; r.ForecastHours < minHours {
+		warns = append(warns, fmt.Sprintf("ducting.forecastHours %d is shorter than the refresh interval; using %d", r.ForecastHours, minHours))
+		r.ForecastHours = minHours
+	}
 
 	r.BaseURL = defaultDuctingBaseURL
 	if c.BaseURL != "" {
 		if u, ok := ductingBaseURL(c.BaseURL); ok {
 			r.BaseURL = u
 		} else {
-			warns = append(warns, "ducting.baseUrl must be an absolute http(s) URL with a host and no credentials, using the default")
+			warns = append(warns, "ducting.baseUrl must be an absolute http(s) URL with a host and no credentials, query or fragment, using the default")
 		}
 	}
 
@@ -171,7 +177,7 @@ func ductingAreaValid(a [4]float64) bool {
 // slashes.
 func ductingBaseURL(s string) (string, bool) {
 	u, err := url.Parse(strings.TrimSpace(s))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return "", false
 	}
 	return strings.TrimRight(u.String(), "/"), true
