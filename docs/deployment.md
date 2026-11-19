@@ -531,7 +531,7 @@ Enable it in `config.json`:
 "ducting": { "enabled": true }
 ```
 
-The map colours the mean refractivity gradient over the lowest 1.5 km above ground (N/km), the ITU-R P.453 style gradient, which tracks where radio signals bend most. `GET /api/ducting` carries it per cell and hour as `n` (N/km, rounded, 0 = no data) next to the duct class and the other fields.
+The map colours the mean refractivity gradient over the lowest 1.5 km above ground (N/km), the ITU-R P.453 style gradient, which tracks where radio signals bend most. On high terrain the models' top level (700 hPa, about 3,000 m above sea level) can be less than 1.5 km above the ground; there the mean is taken over the depth that is available, as long as it is at least 1 km. `GET /api/ducting` carries it per cell and hour as `n` (N/km, rounded) next to the duct class and the other fields. `n` = 0 means no data (no forecast, or less than 1 km of profile above the ground), not a zero gradient.
 
 The defaults suit most sites. All keys are optional:
 
@@ -542,14 +542,24 @@ The defaults suit most sites. All keys are optional:
 | `area` | none | `[south, west, north, east]` in degrees | Forecast this box instead of the bounding box of your nodes. `-90 <= south < north <= 90`, `-180 <= west < east <= 180`. An invalid value is ignored with a warning. |
 | `marginDeg` | `5` | `0` to `10` | Degrees added on every side of the bounding box of your nodes, so the overlay reaches past the outermost nodes. `0` forecasts just the bounding box itself. Ignored when `area` is set. |
 | `gridStepDeg` | `0.5` | `0.25` to `2` | Grid cell size in degrees. |
-| `maxPoints` | `450` | `1` to `1000` | Most grid cells (forecast points) to fetch. The default fits one city-sized mesh plus the 5 degree margin at 0.5 degrees (21 x 21 = 441 cells). The server may lower this further to stay inside the daily call budget. |
+| `maxPoints` | `450` | `1` to `1000` | Most grid cells (forecast points) to fetch. With the other defaults the grid keeps 0.5 degree cells only while the nodes' box plus the 5 degree margin fits in 450 cells, which means nodes spread over at most about half a degree each way (21 x 21 = 441 cells); a wider mesh gets 1 degree cells (nodes spread up to about 11 degrees each way), see *Call budget*. The server may lower this further to stay inside the daily call budget. |
 | `refreshMinutes` | `360` | `60` to `1440` | How often to fetch a new forecast. GFS itself only runs every 6 hours. |
 | `forecastHours` | `48` | `1` to `120` | How many hours ahead the time slider can go. |
 | `baseUrl` | `"https://api.open-meteo.com"` | absolute `http(s)` URL, no credentials | Open-Meteo server to use. |
 
 A value outside its allowed range is replaced by the default and a warning naming the key is logged at startup (`[ducting] ...`). Warnings never print `baseUrl`.
 
-By default the forecast covers the bounding box of all your nodes plus `marginDeg` (5 degrees) on every side, filled edge to edge, so the map's normal view is covered with a continuous field with no gaps between nodes. The box takes the shortest way round the globe: nodes at 179 and -179 degrees longitude give a narrow box across the antimeridian, not one 358 degrees wide. Nodes that are hidden or blacklisted are left out, so they cannot stretch the box. Set `area` to forecast a fixed region instead (the box and `marginDeg` are then ignored).
+By default the forecast covers the bounding box of your nodes plus `marginDeg` (5 degrees) on every side, filled edge to edge, so the map's normal view is covered with a continuous field with no gaps between nodes. The box takes the shortest way round the globe: nodes at 179 and -179 degrees longitude give a narrow box across the antimeridian, not one 358 degrees wide. Cell centres are always longitudes from -180 up to (not including) 180. Set `area` to forecast a fixed region instead (the box and `marginDeg` are then ignored).
+
+Which nodes place the box:
+
+- Only nodes with a position whose `last_seen` is within the last 14 days. A node not heard for longer, or with no readable `last_seen`, is left out.
+- Nodes that are hidden or blacklisted are left out, so they cannot stretch the box.
+- With 20 or more such nodes, the box covers only the nodes between the 2nd and 98th percentile of latitude and of longitude (longitude measured along the shortest way round, so a mesh across the antimeridian is trimmed correctly). One node far away, or one advertising a wrong position, then cannot stretch the grid across an ocean. The most extreme node on each side is usually left out as well; the margin covers it. With fewer than 20 nodes nothing is trimmed. The regions-around-nodes fallback (see *Call budget*) still covers every node.
+
+Each refresh logs the grid it used, without naming any node: `[ducting] grid: box S..N, W..E (k nodes, t trimmed), step X deg, C cells` (`k` nodes inside the box, `t` left out as outliers; W is greater than E when the box crosses the antimeridian). With `area` set the line reads `[ducting] grid: area S..N, W..E, step X deg, C cells`.
+
+**On a public instance, set `area`.** Without it the grid follows whatever positions nodes advertise, so anyone who can get a node onto your map can move part of the forecast, within the limits above. With `area` set the grid stays where you put it, whatever the nodes advertise.
 
 **Models**
 
@@ -574,10 +584,15 @@ If the box has more cells than allowed, the step is doubled (0.5, 1, 2, 4, up to
 - The first fetch runs shortly after start, then every `refreshMinutes`, in the background. Until it finishes the overlay says the forecast is being prepared. The browser asks again every minute while it has no forecast, then every 30 minutes; those requests read the server's copy and never reach Open-Meteo.
 - Points are requested in batches of 50 and paced to at most 400 calls per minute.
 - If a refresh fails, the last good forecast stays on the map. The server retries with a growing delay, and waits at least an hour after Open-Meteo answers that a rate limit was hit.
+- If there is nothing to forecast yet (no `area` and no node position from the last 14 days, or none inside a regional model's coverage), `GET /api/ducting` says `pending`, Open-Meteo is not contacted, and the server looks again every 5 minutes. It logs `[ducting] no grid cells yet ...` once, not on every retry. A forecast already on the map stays there.
+- A forecast counts as expired an hour after its last forecast hour; the API then answers `error` with `forecast expired`.
+- `GET /api/ducting` answers with `Cache-Control: public, max-age=300` when it has a forecast (`ok`), so a CDN or browser may keep it for 5 minutes, and with `no-store` while `pending` or on `error`.
 
 **Self-hosting Open-Meteo**
 
 Follow the upstream documentation at <https://github.com/open-meteo/open-meteo> to run your own instance with the model you chose, then point CoreScope at it. When `baseUrl` is anything other than the public `api.open-meteo.com`, the free-tier call budget does not apply: the 8,000 calls a day limit is not used to lower `maxPoints`, the hourly and daily hard caps are not enforced, and the startup log says `(self-hosted: no call budget)` instead of `(budget cap N)`. Requests are still paced to 400 calls per minute and a 429 answer is still backed off from.
+
+The check is on the host name in `baseUrl` only. If you put a proxy or cache in front of the **public** API, its `baseUrl` must keep the host name `api.open-meteo.com` (for example by resolving that name to the proxy); under any other name it counts as self-hosted, the call budget is switched off, and the instance can run past Open-Meteo's free limits.
 
 ```json
 "ducting": { "enabled": true, "baseUrl": "https://weather.example.org" }
@@ -585,7 +600,7 @@ Follow the upstream documentation at <https://github.com/open-meteo/open-meteo> 
 
 **What is public.** `/api/config/client` tells browsers only the model, its label, the grid step and the attribution text. `baseUrl` is never sent. The forecast cells themselves are public through `GET /api/ducting`.
 
-**How it is calculated.** For each cell and hour, humidity is turned into water-vapour pressure, then into radio refractivity `N = 77.6 / T x (P + 4810 e / T)` (ITU-R P.453) and modified refractivity `M = N + 0.157 h` (h in metres above ground). Where M decreases with height in the lowest 3 km, the layer traps radio waves. Its thickness `d` (metres) and strength `ΔM` (M units) give the lowest frequency it can trap, `fmin ≈ 120000 / (d x √ΔM)` MHz. A 868 MHz LoRa signal needs `d x √ΔM` of at least about 138, for example a 44 m thick duct with ΔM of 10. Each cell is classed as normal, super-refraction (the refractivity gradient reaches -79 N/km or steeper, which stretches range without trapping), elevated duct (the layer starts above the ground) or surface-based duct.
+**How it is calculated.** For each cell and hour, humidity is turned into water-vapour pressure, then into radio refractivity `N = 77.6 / T x (P + 4810 e / T)` (ITU-R P.453) and modified refractivity `M = N + 0.157 h` (h in metres above ground). Where M decreases with height in the lowest 3 km, the layer traps radio waves. Its thickness `d` (metres) and strength `ΔM` (M units) give the lowest frequency it can trap, `fmin ≈ 120000 / (d x √ΔM)` MHz. A 868 MHz LoRa signal needs `d x √ΔM` of at least about 138, for example a 44 m thick duct with ΔM of 10. The map's colour is the mean gradient of N from the 2 m surface point to 1.5 km above ground; where the profile stops lower (high terrain), from 2 m to its top, if that is at least 1 km up. Each cell is classed as normal, super-refraction (the refractivity gradient reaches -79 N/km or steeper, which stretches range without trapping), elevated duct (the layer starts above the ground) or surface-based duct.
 
 **Limitations.** Say these to your users:
 
