@@ -25,7 +25,7 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 const { JSDOM } = require('jsdom');
-const { loadApiBase } = require('./api-base-sandbox');
+const { loadApiBase } = require('../unit/api-base-sandbox');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');

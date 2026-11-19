@@ -146,7 +146,9 @@
       "tests/e2e/test-lint-network-calls.js",
       "tests/e2e/test-radio-setting-1869-e2e.js",
       "tests/e2e/test-observer-neighbors-2270-e2e.js",
-      "tests/e2e/test-table-sort.js"
+      "tests/e2e/test-table-sort.js",
+      "tests/e2e/test-map-teardown-races.js",
+      "tests/e2e/test-map-vector-leaflet-zoom.js"
     ]
   },
   "playwrightRunner": {
