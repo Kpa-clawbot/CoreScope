@@ -17,6 +17,15 @@
  * The 'custom' entries inject one raster provider through /api/config/client
  * and answer its tiles from a labelled fake tile server routed in Playwright
  * (no network).
+ *
+ * The 'ducting' entries (tropospheric ducting overlay) need a server with a
+ * `ducting` config block and a finished /api/ducting; they are skipped, with
+ * the reason in index.json, otherwise. Their views come from the cells of
+ * /api/ducting, not from VIEWS (so a fixture server works), and a view whose
+ * nodes are missing skips its entries instead of failing the run. Start such a
+ * server with the fake Open-Meteo described in tests/e2e/test-map-ducting-e2e.js.
+ * Run only them: --only ducting-map-light,ducting-map-dark,ducting-zoom-light,
+ * ducting-popup-light,ducting-live-light
  */
 'use strict';
 const fs = require('fs');
@@ -36,6 +45,13 @@ const CUSTOM = { id: 'gallery', label: 'Gallery fake tiles', type: 'light', cate
 const VIEWS = {
   mountains: { label: 'Denver / Front Range', bbox: { lat: [39, 41], lon: [-106.5, -104] }, zoom: 10 },
   city: { label: 'New York', bbox: { lat: [40.3, 41.2], lon: [-74.5, -73.5] }, zoom: 11 },
+};
+
+// Views for the ducting entries, resolved from /api/ducting (resolveDuctingViews).
+// 'ducting' = the whole grid, 'ducting-surface' = the first surface-duct cell.
+const DUCTING_VIEWS = {
+  ducting: { label: 'Ducting grid', zoom: 7 },
+  'ducting-surface': { label: 'A surface-duct cell', zoom: 9 },
 };
 
 // ── Data table ──────────────────────────────────────────────────────────────
@@ -86,6 +102,13 @@ for (const theme of ['light', 'dark']) {
 for (const theme of ['light', 'dark']) {
   add('picker', `picker-${theme}`, `Layer picker open (${theme})`, { theme, provider: 'auto', picker: true });
 }
+// Tropospheric ducting overlay (opt-in, server needs `ducting`).
+for (const theme of ['light', 'dark']) {
+  add('ducting', `ducting-map-${theme}`, `Ducting overlay with legend (${theme})`, { theme, provider: 'auto', overlays: ['ducting'], view: 'ducting', ducting: true });
+}
+add('ducting', 'ducting-zoom-light', 'Ducting overlay, zoomed on coloured cells (light)', { theme: 'light', provider: 'auto', overlays: ['ducting'], view: 'ducting-surface', ducting: true });
+add('ducting', 'ducting-popup-light', 'Ducting overlay, popup on a surface duct (light)', { theme: 'light', provider: 'auto', overlays: ['ducting'], view: 'ducting-surface', ducting: true, ductPopup: true });
+add('ducting', 'ducting-live-light', 'Live page with the ducting overlay (light)', { theme: 'light', route: '#/live', provider: 'auto', overlays: ['ducting'], view: 'ducting', ducting: true });
 add('custom', 'custom-map', 'Custom raster provider on the map', { theme: 'light', provider: 'custom-' + CUSTOM.id, custom: true });
 add('custom', 'custom-picker', 'Custom raster provider in the picker', { theme: 'light', provider: 'custom-' + CUSTOM.id, custom: true, picker: true });
 
@@ -106,9 +129,33 @@ async function resolveViews(baseUrl) {
   for (const k of Object.keys(VIEWS)) {
     const v = VIEWS[k];
     const inside = nodes.filter((n) => n.lat >= v.bbox.lat[0] && n.lat <= v.bbox.lat[1] && n.lon >= v.bbox.lon[0] && n.lon <= v.bbox.lon[1]);
-    if (!inside.length) throw new Error(`no nodes in the ${v.label} box; edit VIEWS in gallery.js`);
+    if (!inside.length) { out[k] = null; continue; }   // entries using it are skipped
     out[k] = { label: v.label, lat: +median(inside.map((n) => n.lat)).toFixed(4), lon: +median(inside.map((n) => n.lon)).toFixed(4), zoom: v.zoom, nodes: inside.length };
   }
+  return out;
+}
+
+/**
+ * The ducting views, from the cells of /api/ducting: { views, reason }.
+ * `reason` is why the ducting entries cannot be captured ('' = they can).
+ */
+async function resolveDuctingViews(baseUrl) {
+  const out = { views: {}, reason: '' };
+  let cfg;
+  try { cfg = await fetchJson(baseUrl + '/api/config/client'); } catch (err) { out.reason = 'cannot read /api/config/client: ' + err.message; return out; }
+  if (!cfg || !cfg.ducting) { out.reason = 'the server has no ducting block in /api/config/client (ducting.enabled is off)'; return out; }
+  let d = null;
+  for (let i = 0; i < 40; i++) {
+    try { d = await fetchJson(baseUrl + '/api/ducting'); } catch (_) { d = null; }
+    if (d && d.status === 'ok') break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!d || d.status !== 'ok' || !d.cells || !d.cells.length) { out.reason = `/api/ducting has no data (status ${d && d.status}${d && d.error ? ': ' + d.error : ''})`; return out; }
+  const idx = (() => { const now = Date.now() / 1000; let b = 0; d.times.forEach((t, i) => { if (t <= now) b = i; }); return b; })();
+  const lat = median(d.cells.map((c) => c.lat)), lon = median(d.cells.map((c) => c.lon));
+  out.views.ducting = { label: DUCTING_VIEWS.ducting.label, lat: +lat.toFixed(4), lon: +lon.toFixed(4), zoom: DUCTING_VIEWS.ducting.zoom, nodes: d.cells.length };
+  const surf = d.cells.find((c) => c.c[idx] === 4) || d.cells.find((c) => c.c.indexOf(4) >= 0) || d.cells[0];
+  out.views['ducting-surface'] = { label: DUCTING_VIEWS['ducting-surface'].label, lat: surf.lat, lon: surf.lon, zoom: DUCTING_VIEWS['ducting-surface'].zoom, nodes: 1 };
   return out;
 }
 
@@ -175,6 +222,11 @@ async function openPicker(page) {
 async function capture(browser, e, views, outDir, base) {
   const rec = { id: e.id, file: null, thumb: null, title: e.title, category: e.category, theme: e.theme, provider: e.provider, overlays: e.overlays, route: e.route, view: null, status: 'ok', failures: [], tiles: null, vectorPath: null };
   const v = views[e.view];
+  if (!v) {
+    rec.status = 'skipped';
+    rec.failures.push(e.ducting ? `ducting entries skipped: ${views.__ductingReason || 'no view'}` : `no nodes in the '${e.view}' view box`);
+    return rec;
+  }
   rec.view = { name: v.label, lat: v.lat, lon: v.lon, zoom: v.zoom };
   // The open picker is taller than 800 px (its Overlays group is below the fold).
   const context = await browser.newContext({ viewport: e.picker ? { width: VIEWPORT.width, height: 1100 } : VIEWPORT, deviceScaleFactor: 1, serviceWorkers: 'block' });
@@ -189,7 +241,7 @@ async function capture(browser, e, views, outDir, base) {
     if (e.custom || e.enable) await installConfig(page, e);
     await MH.presetStorage(page, {
       theme: e.theme, provider: e.provider, overlays: e.overlays,
-      extra: { 'map-view': JSON.stringify({ lat: v.lat, lng: v.lon, zoom: v.zoom }), 'live-controls-expanded': 'true' },
+      extra: { 'map-view': JSON.stringify({ lat: v.lat, lng: v.lon, zoom: v.zoom }), 'live-map-view': JSON.stringify({ lat: v.lat, lng: v.lon, zoom: v.zoom }), 'live-controls-expanded': 'true' },
     });
     await page.goto(base + '/' + e.route, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForSelector('.leaflet-container', { timeout: 60000 });
@@ -201,10 +253,33 @@ async function capture(browser, e, views, outDir, base) {
       if (!ok) { rec.status = 'skipped'; rec.failures.push(`overlay '${o}' is not registered`); return rec; }
     }
     await MH.waitForMarkers(page, { timeout: 30000 });
+    if (e.ducting) {
+      const drawn = await page.waitForFunction(() => {
+        const maps = ((window.__mcHarness && window.__mcHarness.maps) || []).filter((m) => m && m._container && m._container.isConnected && m._loaded);
+        let n = 0; maps.forEach((m) => m.eachLayer((l) => { if (l._mcCell) n++; }));
+        return n > 0 && !!document.querySelector('.mc-duct-legend');
+      }, null, { timeout: 20000 }).then(() => true, () => false);
+      if (!drawn) rec.failures.push('ducting cells or legend not drawn');
+    }
     if (e.vector) {
       await page.waitForFunction(() => { const p = window.__mcVector; return p && (p.glIdleMs != null || p.fallback); }, null, { timeout: 45000, polling: 100 }).catch(() => {});
     }
     const t = await settle(page, e.vector ? 0 : MIN_TILES);
+    if (e.ductPopup) {
+      const opened = await page.evaluate(() => {
+        const m = window.__mcHarness.maps.filter((x) => x._container && x._container.isConnected && x._loaded)[0];
+        const s = document.querySelector('.mc-duct-time input[type=range]');
+        const idx = s ? parseInt(s.value, 10) : 0;
+        let hit = null;
+        m.eachLayer((l) => { if (!hit && l._mcCell && l._mcCell.c[idx] === 4 && Math.abs(l._mcCell.lat - m.getCenter().lat) < 1e-6) hit = l; });
+        if (!hit) m.eachLayer((l) => { if (!hit && l._mcCell && l._mcCell.c[idx] === 4) hit = l; });
+        if (!hit) return false;
+        hit.openPopup([hit._mcCell.lat, hit._mcCell.lon]);
+        return !!document.querySelector('.leaflet-popup .mc-duct-popup');
+      });
+      if (!opened) rec.failures.push('no surface-duct cell popup could be opened');
+      await page.waitForTimeout(300);
+    }
     if (e.picker) await openPicker(page);
     const probe = e.vector ? await page.evaluate(() => window.__mcVector) : null;
     const log = MH.getRequestLog(page);
@@ -216,7 +291,10 @@ async function capture(browser, e, views, outDir, base) {
     if (t.timedOut) rec.failures.push('tiles did not settle within 45 s');
     if (t.failed) rec.failures.push(`${t.failed} tile(s) failed to load`);
     if (bad.length) rec.failures.push(`${bad.length} tile request(s) with HTTP >= 400 (first: ${bad[0].status} ${MH.redactUrl(bad[0].url)})`);
-    if (log.failed.length) rec.failures.push(`${log.failed.length} request(s) failed (first: ${log.failed[0].error})`);
+    // The live page builds its map at a default view and then jumps to the saved
+    // one, so Chromium cancels the first view's tile requests: not a failure.
+    const failedReq = log.failed.filter((r) => !(e.route === '#/live' && /ERR_ABORTED/.test(r.error)));
+    if (failedReq.length) rec.failures.push(`${failedReq.length} request(s) failed (first: ${failedReq[0].error})`);
     if (e.vector && rec.vectorPath !== 'maplibre-gl') rec.failures.push(`vector path: ${rec.vectorPath}${probe && probe.fallbackReason ? ' (' + probe.fallbackReason + ')' : ''}`);
     if (!e.vector && log.maplibre.length) rec.failures.push('raster entry requested MapLibre');
     if (resolved && e.provider !== 'auto' && resolved !== e.provider) rec.failures.push(`resolved provider is '${resolved}', expected '${e.provider}'`);
@@ -274,7 +352,7 @@ function writeIndex(outDir, base, views, entries) {
   const fresh = new Map(entries.map((x) => [x.id, x]));
   const prev = new Map(old.map((x) => [x.id, x]));
   const merged = E.map((e) => fresh.get(e.id) || prev.get(e.id)).filter(Boolean);
-  fs.writeFileSync(file, JSON.stringify({ meta: { baseUrl: base, generatedAt: new Date().toISOString(), viewport: VIEWPORT, mode: 'live', views }, entries: merged }, null, 2));
+  fs.writeFileSync(file, JSON.stringify({ meta: { baseUrl: base, generatedAt: new Date().toISOString(), viewport: VIEWPORT, mode: 'live', views: Object.fromEntries(Object.entries(views).filter(([k]) => !k.startsWith('__'))) }, entries: merged }, null, 2));
 }
 
 async function main() {
@@ -284,6 +362,9 @@ async function main() {
   const outDir = path.resolve(a.out);
   fs.mkdirSync(path.join(outDir, 'thumbs'), { recursive: true });
   const views = await resolveViews(base);
+  const dv = await resolveDuctingViews(base);
+  Object.assign(views, dv.views);
+  if (dv.reason) views.__ductingReason = dv.reason;
   let list = E;
   if (a.only) { const want = new Set(a.only.split(',')); list = E.filter((e) => want.has(e.id)); if (!list.length) throw new Error('--only matches nothing'); }
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] });
