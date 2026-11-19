@@ -1,7 +1,7 @@
 /**
  * Node analytics activity timeline: the server sends only the hours that
  * hold packets, so the chart must place every hour of the covered window on
- * the axis, silent hours included. Without that a 11 h outage collapsed into
+ * the axis, silent hours included. Without that an 11 h outage collapsed into
  * two neighbouring bars. Loads the real public/node-analytics.js in a vm
  * sandbox.
  */
@@ -74,6 +74,45 @@ t('missing or malformed time range: buckets unchanged', () => {
   assert.strictEqual(fill(tl, null), tl);
   assert.strictEqual(fill(tl, { from: 'garbage', to: '2026-11-17T20:00:00Z' }), tl);
   assert.strictEqual(fill(tl, { from: '2026-11-17T20:00:00Z', to: '2026-11-17T18:00:00Z' }), tl);
+});
+
+t('an end exactly on the hour includes that hour', () => {
+  const out = fill([], { from: '2026-11-17T17:00:00Z', to: '2026-11-17T19:00:00Z' });
+  assert.deepStrictEqual(Array.from(out, b => b.bucket), ['2026-11-17T17:00:00Z', '2026-11-17T18:00:00Z', '2026-11-17T19:00:00Z']);
+});
+
+t('7 days stay hourly', () => {
+  const out = fill([], { from: '2026-11-12T10:00:00Z', to: '2026-11-19T10:00:00Z' });
+  assert.strictEqual(out.length, 169);
+  assert.ok(out.every(b => !b.day));
+});
+
+t('more than 8 days covered: one bucket per UTC day, counts and certain summed', () => {
+  const out = fill([
+    { bucket: '2026-11-18T01:00:00Z', count: 3, certain: 1 },
+    { bucket: '2026-11-18T22:00:00Z', count: 2, certain: 2 },
+    { bucket: '2026-11-19T09:00:00Z', count: 1 },
+  ], { from: '2026-11-05T10:00:00Z', to: '2026-11-19T10:00:00Z' });
+  assert.strictEqual(out.length, 15);
+  assert.strictEqual(out[0].bucket, '2026-11-05T00:00:00Z');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(out.slice(-2))), [
+    { bucket: '2026-11-18T00:00:00Z', count: 5, certain: 3, day: true },
+    { bucket: '2026-11-19T00:00:00Z', count: 1, certain: 1, day: true },
+  ]);
+  assert.ok(out.every(b => b.day === true));
+  assert.ok(out.slice(0, -2).every(b => b.count === 0));
+});
+
+t('a 365-day window gives 366 day buckets', () => {
+  const out = fill([], { from: '2025-11-19T10:00:00Z', to: '2026-11-19T10:00:00Z' });
+  assert.strictEqual(out.length, 366);
+});
+
+t('a legacy space-format bucket lands on its hour, not beside it', () => {
+  const out = fill([{ bucket: '2026-11-17 18:00:00Z', count: 2 }],
+    { from: '2026-11-17T17:00:00Z', to: '2026-11-17T19:00:00Z' });
+  assert.deepStrictEqual(Array.from(out, b => b.bucket), ['2026-11-17T17:00:00Z', '2026-11-17T18:00:00Z', '2026-11-17T19:00:00Z']);
+  assert.deepStrictEqual(Array.from(out, b => b.count), [0, 2, 0]);
 });
 
 t('a bucket outside the window is kept, not dropped', () => {
