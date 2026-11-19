@@ -182,8 +182,9 @@ async function resolveDuctingViews(baseUrl) {
     lon = best.reduce((a, c) => a + c.lon, 0) / best.length;
   }
   // Frame the coverage when it is regional (else the cells within 12 degrees
-  // of that centre): fit its bounding box into the 1280x800 map with Map
-  // Controls collapsed, like a regional forecast map, instead of a fixed zoom.
+  // of that centre) so the field fills the whole 1280x800 map (Map Controls
+  // collapsed): the smallest zoom at which the view lies inside the forecast
+  // area, centred on it, like a regional forecast map.
   const span = (k) => Math.max(...d.cells.map((c) => c[k])) - Math.min(...d.cells.map((c) => c[k]));
   const region = (span('lon') <= 40 && span('lat') <= 30) ? d.cells
     : d.cells.filter((c) => Math.abs(c.lat - lat) <= 12 && Math.abs(c.lon - lon) <= 12);
@@ -194,11 +195,9 @@ async function resolveDuctingViews(baseUrl) {
     const w = Math.min(...region.map((c) => c.lon)) - h, e = Math.max(...region.map((c) => c.lon)) + h;
     const merc = (a) => Math.log(Math.tan(Math.PI / 4 + a * Math.PI / 360));
     const fit = (px, frac) => Math.log2(px / (256 * frac));
-    zoom = Math.max(3, Math.min(7, Math.floor(Math.min(fit(1180, (e - w) / 360), fit(700, (merc(n) - merc(s)) / (2 * Math.PI))))));
+    zoom = Math.max(3, Math.min(8, Math.ceil(Math.max(fit(1280, (e - w) / 360), fit(748, (merc(n) - merc(s)) / (2 * Math.PI))))));
     lat = Math.atan(Math.sinh((merc(n) + merc(s)) / 2)) * 180 / Math.PI;
-    // The legend covers x 10..270 at the bottom left: put the field's centre
-    // 110 px right of the map centre, so its west edge clears the legend.
-    lon = (w + e) / 2 - 110 * 360 / (256 * Math.pow(2, zoom));
+    lon = (w + e) / 2;
   }
   out.views.ducting = { label: DUCTING_VIEWS.ducting.label, lat: +lat.toFixed(4), lon: +lon.toFixed(4), zoom, nodes: best ? best.length : d.cells.length, ductIdx: idx };
   // A duct that can carry LoRa (fmin <= 1000 MHz, so it has the dashed
