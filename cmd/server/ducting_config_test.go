@@ -36,8 +36,9 @@ func TestDuctingDefaults(t *testing.T) {
 	if len(warns) != 0 {
 		t.Fatalf("unexpected warnings: %v", warns)
 	}
-	if r.Model != "gfs" || r.GridStepDeg != 0.5 || r.MaxPoints != 200 || r.RefreshMinutes != 360 ||
-		r.ForecastHours != 48 || r.BaseURL != "https://api.open-meteo.com" || r.Area != nil {
+	if r.Model != "gfs" || r.GridStepDeg != 0.5 || r.MaxPoints != 450 || r.RefreshMinutes != 360 ||
+		r.ForecastHours != 48 || r.BaseURL != "https://api.open-meteo.com" || r.Area != nil ||
+		r.MarginDeg == nil || *r.MarginDeg != 5 {
 		t.Fatalf("bad defaults: %+v", r)
 	}
 	if _, w := (*DuctingConfig)(nil).resolved(); len(w) != 0 {
@@ -85,7 +86,7 @@ func TestDuctingOutOfRangeKeys(t *testing.T) {
 		if !hasWarn(warns, "ducting."+tc.key) {
 			t.Errorf("%s %+v: no warning, got %v", tc.key, tc.cfg, warns)
 		}
-		if r.GridStepDeg != 0.5 || r.MaxPoints != 200 || r.RefreshMinutes != 360 || r.ForecastHours != 48 {
+		if r.GridStepDeg != 0.5 || r.MaxPoints != 450 || r.RefreshMinutes != 360 || r.ForecastHours != 48 {
 			t.Errorf("%s: default not applied: %+v", tc.key, r)
 		}
 	}
@@ -207,6 +208,9 @@ func TestDuctingBudget(t *testing.T) {
 	if got := ductingMaxPoints(DuctingConfig{MaxPoints: 200, RefreshMinutes: 360}, gfs); got != 200 {
 		t.Fatalf("refresh 360: %d, want 200", got)
 	}
+	if got := ductingMaxPoints(DuctingConfig{MaxPoints: 450, RefreshMinutes: 360}, gfs); got != 450 {
+		t.Fatalf("default maxPoints at refresh 360: %d, want 450", got)
+	}
 	if got := ductingMaxPoints(DuctingConfig{MaxPoints: 1000, RefreshMinutes: 360}, gfs); got != 476 {
 		t.Fatalf("refresh 360 max 1000: %d, want 476", got)
 	}
@@ -266,7 +270,7 @@ func TestDuctingLogConfig(t *testing.T) {
 func TestDuctingMarginDeg(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	r, warns := (&DuctingConfig{Enabled: true}).resolved()
-	if len(warns) != 0 || r.MarginDeg == nil || *r.MarginDeg != 2 || r.marginDegOrDefault() != 2 {
+	if len(warns) != 0 || r.MarginDeg == nil || *r.MarginDeg != 5 || r.marginDegOrDefault() != 5 {
 		t.Fatalf("default: %v %v", r.MarginDeg, warns)
 	}
 	for _, v := range []float64{0, 0.5, 10} {
@@ -277,7 +281,7 @@ func TestDuctingMarginDeg(t *testing.T) {
 	}
 	for _, v := range []float64{-1, 11, math.NaN(), math.Inf(1)} {
 		r, warns = (&DuctingConfig{MarginDeg: f(v)}).resolved()
-		if !hasWarn(warns, "ducting.marginDeg must be 0..10, using 2") || *r.MarginDeg != 2 {
+		if !hasWarn(warns, "ducting.marginDeg must be 0..10, using 5") || *r.MarginDeg != 5 {
 			t.Fatalf("invalid %v: %v %v", v, *r.MarginDeg, warns)
 		}
 	}
@@ -286,7 +290,7 @@ func TestDuctingMarginDeg(t *testing.T) {
 	if len(warns) != 0 || r.Area == nil {
 		t.Fatalf("area: %v", warns)
 	}
-	if (DuctingConfig{}).marginDegOrDefault() != 2 {
+	if (DuctingConfig{}).marginDegOrDefault() != 5 {
 		t.Fatal("unresolved default")
 	}
 }

@@ -537,17 +537,17 @@ The defaults suit most sites. All keys are optional:
 |-----|---------|---------|---------|
 | `enabled` | `false` | `true` / `false` | Turns the feature on. When off, `GET /api/ducting` returns 404 and the overlay is not offered. |
 | `model` | `"gfs"` | `gfs`, `icon`, `rrfs-conus` | Weather model, see the table below. |
-| `area` | none | `[south, west, north, east]` in degrees | Forecast this box instead of only the places with nodes. `-90 <= south < north <= 90`, `-180 <= west < east <= 180`. An invalid value is ignored with a warning. |
-| `marginDeg` | `2` | `0` to `10` | Degrees of margin around your nodes: the forecast covers the area around them, not just the cells they sit in, so the overlay is a continuous field. `0` fetches only the cells that contain a node. Ignored when `area` is set. |
+| `area` | none | `[south, west, north, east]` in degrees | Forecast this box instead of the bounding box of your nodes. `-90 <= south < north <= 90`, `-180 <= west < east <= 180`. An invalid value is ignored with a warning. |
+| `marginDeg` | `5` | `0` to `10` | Degrees added on every side of the bounding box of your nodes, so the overlay reaches past the outermost nodes. `0` forecasts just the bounding box itself. Ignored when `area` is set. |
 | `gridStepDeg` | `0.5` | `0.25` to `2` | Grid cell size in degrees. |
-| `maxPoints` | `200` | `1` to `1000` | Most grid cells (forecast points) to fetch. The server may lower this further to stay inside the daily call budget. |
+| `maxPoints` | `450` | `1` to `1000` | Most grid cells (forecast points) to fetch. The default fits one city-sized mesh plus the 5 degree margin at 0.5 degrees (21 x 21 = 441 cells). The server may lower this further to stay inside the daily call budget. |
 | `refreshMinutes` | `360` | `60` to `1440` | How often to fetch a new forecast. GFS itself only runs every 6 hours. |
 | `forecastHours` | `48` | `1` to `120` | How many hours ahead the time slider can go. |
 | `baseUrl` | `"https://api.open-meteo.com"` | absolute `http(s)` URL, no credentials | Open-Meteo server to use. |
 
 A value outside its allowed range is replaced by the default and a warning naming the key is logged at startup (`[ducting] ...`). Warnings never print `baseUrl`.
 
-By default the grid covers every cell that contains at least one node plus a margin of `marginDeg` (2 degrees) around it, so the map shows a continuous field rather than isolated squares; set `marginDeg` to `0` for node cells only. Nodes that are hidden or blacklisted are left out, so they cannot influence which cells are fetched. Set `area` to forecast a fixed region instead.
+By default the forecast covers the bounding box of all your nodes plus `marginDeg` (5 degrees) on every side, filled edge to edge, so the map's normal view is covered with a continuous field with no gaps between nodes. The box takes the shortest way round the globe: nodes at 179 and -179 degrees longitude give a narrow box across the antimeridian, not one 358 degrees wide. Nodes that are hidden or blacklisted are left out, so they cannot stretch the box. Set `area` to forecast a fixed region instead (the box and `marginDeg` are then ignored).
 
 **Models**
 
@@ -561,9 +561,9 @@ By default the grid covers every cell that contains at least one node plus a mar
 
 Open-Meteo counts a request with more than 10 variables as several calls. CoreScope asks for temperature, humidity and height at every level plus three surface values. For GFS that is 42 variables per point, so **4.2 calls per point per refresh** (ICON: 27 variables, 2.7 calls).
 
-The server limits the number of points so a day stays under 8,000 calls, leaving headroom below the 10,000 free limit: points <= 8,000 / (calls per point x refreshes per day). The effective limit is `min(maxPoints, that value)`, and is logged at startup. With the defaults, 200 points every 6 hours (4 refreshes a day) is 200 x 4.2 x 4 = about 3,400 calls a day. Refreshing hourly with GFS would cap you at about 79 points.
+The server limits the number of points so a day stays under 8,000 calls, leaving headroom below the 10,000 free limit: points <= 8,000 / (calls per point x refreshes per day). The effective limit is `min(maxPoints, that value)`, and is logged at startup. With the defaults, 450 points every 6 hours (4 refreshes a day) is 450 x 4.2 x 4 = about 7,600 calls a day (the GFS cap at that refresh is 476 points). A worked example: nodes spread over a region 20 x 15 degrees, with `gridStepDeg` 1, is 300 points, and 300 x 4.2 x 4 = about 5,000 calls a day. Refreshing hourly with GFS would cap you at about 79 points.
 
-If the grid has more cells than allowed, the step is doubled (0.5, 1, 2, 4, up to 8 degrees) until it fits, so the map gets coarser rather than the budget being exceeded. The margin is recounted in cells at each step. If it still does not fit at 8 degrees, the cells with the most nodes are kept first, then those closest to a node.
+If the box has more cells than allowed, the step is doubled (0.5, 1, 2, 4, up to 8 degrees) until it fits, so the map gets coarser rather than the budget being exceeded. If the box needs more than `maxPoints` cells even at 8 degrees (nodes spread over most of the world), the server falls back to the regions around the nodes: the cells that contain a node plus `marginDeg` around each, doubling the step as needed and, at 8 degrees, keeping the cells with the most nodes first, then those closest to a node. It then logs `[ducting] node area too large for maxPoints even at 8 deg; covering the regions around nodes instead` once per refresh.
 
 **How refreshing behaves**
 

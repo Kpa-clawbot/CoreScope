@@ -2,41 +2,38 @@ package main
 
 import (
 	"math"
-	"sort"
 	"testing"
 )
 
 func TestDuctingGridNodeCells(t *testing.T) {
+	// Seattle area and New York: the whole box between them is filled.
 	nodes := [][2]float64{{47.61, -122.33}, {47.70, -122.30}, {40.71, -74.00}}
-	cells, step := ductingGrid(nodes, nil, 0.5, 100, 0)
-	if step != 0.5 {
-		t.Fatalf("step %v", step)
+	cells, step, fell := ductingGrid(nodes, nil, 2, 1000, 0)
+	if step != 2 || fell {
+		t.Fatalf("step %v fell %v", step, fell)
 	}
-	want := [][2]float64{{40.75, -73.75}, {47.75, -122.25}}
-	if len(cells) != len(want) {
-		t.Fatalf("cells %v", cells)
+	// lat 40.71..47.70 -> centres 41..47 (4); lon -122.33..-74 -> -123..-73 (25)
+	if len(cells) != 4*25 {
+		t.Fatalf("%d cells", len(cells))
 	}
-	for i := range want {
-		if cells[i] != want[i] {
-			t.Fatalf("cell %d = %v, want %v", i, cells[i], want[i])
+	checkSortedUnique(t, cells)
+	for lat := 41.0; lat <= 47; lat += 2 {
+		for lon := -123.0; lon <= -75; lon += 2 {
+			if !hasCell(cells, lat, lon) {
+				t.Fatalf("gap at %v,%v", lat, lon)
+			}
 		}
 	}
 }
 
 func TestDuctingGridSortedDeduped(t *testing.T) {
 	nodes := [][2]float64{{10.1, 20.1}, {10.2, 20.2}, {10.1, 5.1}, {-5.1, 30.1}, {10.1, 20.4}}
-	cells, _ := ductingGrid(nodes, nil, 0.5, 100, 0)
-	if len(cells) != 3 {
-		t.Fatalf("cells %v", cells)
+	cells, _, _ := ductingGrid(nodes, nil, 0.5, 100000, 0)
+	// lat -5.1..10.2 -> 32 rows; lon 5.1..30.1 -> 51 columns
+	if len(cells) != 32*51 {
+		t.Fatalf("%d cells", len(cells))
 	}
-	if !sort.SliceIsSorted(cells, func(i, j int) bool {
-		if cells[i][0] != cells[j][0] {
-			return cells[i][0] < cells[j][0]
-		}
-		return cells[i][1] < cells[j][1]
-	}) {
-		t.Fatalf("not sorted: %v", cells)
-	}
+	checkSortedUnique(t, cells)
 }
 
 func TestDuctingGridIgnoresBadNodes(t *testing.T) {
@@ -44,17 +41,17 @@ func TestDuctingGridIgnoresBadNodes(t *testing.T) {
 		{0, 0}, {math.NaN(), 10}, {10, math.NaN()}, {math.Inf(1), 0}, {91, 10}, {10, 181}, {-95, 0},
 		{50.1, 8.1},
 	}
-	cells, _ := ductingGrid(nodes, nil, 0.5, 100, 0)
+	cells, _, _ := ductingGrid(nodes, nil, 0.5, 100, 0)
 	if len(cells) != 1 || cells[0] != [2]float64{50.25, 8.25} {
 		t.Fatalf("cells %v", cells)
 	}
-	if cells, _ := ductingGrid(nil, nil, 0.5, 10, 0); len(cells) != 0 {
+	if cells, _, _ := ductingGrid(nil, nil, 0.5, 10, 0); len(cells) != 0 {
 		t.Fatalf("empty: %v", cells)
 	}
 }
 
 func TestDuctingGridClampsLatitude(t *testing.T) {
-	cells, _ := ductingGrid([][2]float64{{89.9, 10.1}, {-89.9, 10.1}}, nil, 0.5, 10, 0)
+	cells, _, _ := ductingGrid([][2]float64{{89.9, 10.1}, {-89.9, 10.1}}, nil, 0.5, 10, 0)
 	if len(cells) != 2 {
 		t.Fatalf("%v", cells)
 	}
@@ -67,7 +64,7 @@ func TestDuctingGridClampsLatitude(t *testing.T) {
 
 func TestDuctingGridArea(t *testing.T) {
 	area := [4]float64{10, 20, 12, 23}
-	cells, step := ductingGrid(nil, &area, 0.5, 1000, 0)
+	cells, step, _ := ductingGrid(nil, &area, 0.5, 1000, 0)
 	if step != 0.5 || len(cells) != 4*6 {
 		t.Fatalf("step %v count %d", step, len(cells))
 	}
@@ -76,12 +73,12 @@ func TestDuctingGridArea(t *testing.T) {
 	}
 	// unaligned area still fully covered
 	area = [4]float64{10.1, 20.1, 10.6, 20.6}
-	cells, _ = ductingGrid(nil, &area, 0.5, 1000, 0)
+	cells, _, _ = ductingGrid(nil, &area, 0.5, 1000, 0)
 	if len(cells) != 4 {
 		t.Fatalf("unaligned: %v", cells)
 	}
 	// nodes are ignored when an area is given
-	cells, _ = ductingGrid([][2]float64{{60, 60}}, &[4]float64{10, 20, 10.5, 20.5}, 0.5, 10, 0)
+	cells, _, _ = ductingGrid([][2]float64{{60, 60}}, &[4]float64{10, 20, 10.5, 20.5}, 0.5, 10, 0)
 	if len(cells) != 1 || cells[0] != [2]float64{10.25, 20.25} {
 		t.Fatalf("%v", cells)
 	}
@@ -93,7 +90,7 @@ func TestDuctingGridStepDoubling(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		nodes = append(nodes, [2]float64{10.1 + float64(i), 20.1})
 	}
-	cells, step := ductingGrid(nodes, nil, 0.5, 5, 0)
+	cells, step, _ := ductingGrid(nodes, nil, 0.5, 5, 0)
 	if step != 2 {
 		t.Fatalf("step %v, want 2 (cells %v)", step, cells)
 	}
@@ -101,7 +98,7 @@ func TestDuctingGridStepDoubling(t *testing.T) {
 		t.Fatalf("cells %d", len(cells))
 	}
 	// area too large for step 0.5 doubles too
-	_, step = ductingGrid(nil, &[4]float64{0, 0, 10, 10}, 0.5, 50, 0)
+	_, step, _ = ductingGrid(nil, &[4]float64{0, 0, 10, 10}, 0.5, 50, 0)
 	if step != 2 {
 		t.Fatalf("area step %v, want 2", step)
 	}
@@ -115,7 +112,7 @@ func TestDuctingGridTopNFallback(t *testing.T) {
 		{60.1, 100.1}, // C
 		{70.1, 150.1}, // D
 	}
-	cells, step := ductingGrid(nodes, nil, 0.5, 2, 0)
+	cells, step, _ := ductingGrid(nodes, nil, 0.5, 2, 0)
 	if step != 8 {
 		t.Fatalf("step %v", step)
 	}
@@ -126,33 +123,33 @@ func TestDuctingGridTopNFallback(t *testing.T) {
 		t.Fatalf("top cells %v", cells)
 	}
 	// ties resolve in sort order
-	cells, _ = ductingGrid([][2]float64{{60.1, 100.1}, {-60.1, -100.1}, {0.1, 0.1}}, nil, 0.5, 2, 0)
+	cells, _, _ = ductingGrid([][2]float64{{60.1, 100.1}, {-60.1, -100.1}, {0.1, 0.1}}, nil, 0.5, 2, 0)
 	if len(cells) != 2 || cells[0][0] != -60 || cells[1][0] != 4 {
 		t.Fatalf("ties: %v", cells)
 	}
 }
 
 func TestDuctingGridBadStep(t *testing.T) {
-	cells, step := ductingGrid([][2]float64{{10.1, 10.1}}, nil, 0, 10, 0)
+	cells, step, _ := ductingGrid([][2]float64{{10.1, 10.1}}, nil, 0, 10, 0)
 	if step != 0.5 || len(cells) != 1 {
 		t.Fatalf("%v %v", cells, step)
 	}
 }
 
 func TestDuctingGridAntimeridian(t *testing.T) {
-	cells, _ := ductingGrid([][2]float64{{10.1, 180}, {10.1, -180}}, nil, 0.5, 10, 0)
+	cells, _, _ := ductingGrid([][2]float64{{10.1, 180}, {10.1, -180}}, nil, 0.5, 10, 0)
 	if len(cells) != 1 || cells[0] != [2]float64{10.25, -179.75} {
 		t.Fatalf("lon 180/-180: %v", cells)
 	}
 	// wide cell around the antimeridian never yields a centre past 180
-	cells, _ = ductingGrid([][2]float64{{10.1, 179}}, nil, 8, 10, 0)
+	cells, _, _ = ductingGrid([][2]float64{{10.1, 179}}, nil, 8, 10, 0)
 	for _, c := range cells {
 		if c[1] > 180 || c[1] < -180 {
 			t.Fatalf("out of range: %v", cells)
 		}
 	}
 	for _, step := range []float64{0.25, 0.3, 0.5, 2} {
-		cells, _ = ductingGrid(nil, &[4]float64{10, 170, 11, 180}, step, 1000, 0)
+		cells, _, _ = ductingGrid(nil, &[4]float64{10, 170, 11, 180}, step, 1000, 0)
 		if len(cells) == 0 {
 			t.Fatalf("step %v: no cells", step)
 		}
@@ -183,21 +180,48 @@ func checkSortedUnique(t *testing.T, cells [][2]float64) {
 	}
 }
 
-func TestDuctingGridMarginZeroIsNodeCells(t *testing.T) {
-	nodes := [][2]float64{{47.61, -122.33}, {47.70, -122.30}, {40.71, -74.00}}
-	a, sa := ductingGrid(nodes, nil, 0.5, 100, 0)
-	if sa != 0.5 || len(a) != 2 || a[0] != [2]float64{40.75, -73.75} || a[1] != [2]float64{47.75, -122.25} {
+func TestDuctingGridMarginZeroIsBoundingBox(t *testing.T) {
+	nodes := [][2]float64{{10.1, 20.1}, {11.4, 21.4}}
+	a, sa, _ := ductingGrid(nodes, nil, 0.5, 100, 0)
+	// lat 10.1..11.4 -> centres 10.25..11.25 (3); lon 20.1..21.4 -> 20.25..21.25 (3)
+	if sa != 0.5 || len(a) != 9 || a[0] != [2]float64{10.25, 20.25} || a[8] != [2]float64{11.25, 21.25} {
 		t.Fatalf("margin 0: %v %v", a, sa)
 	}
 	// a negative margin behaves as 0
-	b, _ := ductingGrid(nodes, nil, 0.5, 100, -3)
-	if len(b) != 2 {
+	b, _, _ := ductingGrid(nodes, nil, 0.5, 100, -3)
+	if len(b) != 9 {
 		t.Fatalf("negative margin: %v", b)
+	}
+	// one node, margin 0: just its own cell
+	c, _, _ := ductingGrid([][2]float64{{47.61, -122.33}}, nil, 0.5, 100, 0)
+	if len(c) != 1 || c[0] != [2]float64{47.75, -122.25} {
+		t.Fatalf("single node: %v", c)
+	}
+	// a node exactly on a cell edge still yields one cell
+	d, _, _ := ductingGrid([][2]float64{{10.5, 20.5}}, nil, 0.5, 100, 0)
+	if len(d) != 1 {
+		t.Fatalf("edge node: %v", d)
+	}
+}
+
+func TestDuctingDilateNodeCells(t *testing.T) {
+	valid := [][2]float64{{47.61, -122.33}, {47.70, -122.30}, {40.71, -74.00}}
+	out, ok := ductingDilate(valid, 0.5, 0, 100)
+	if !ok || len(out) != 2 {
+		t.Fatalf("%v %v", out, ok)
+	}
+	cells := make([][2]float64, len(out))
+	for i, r := range out {
+		cells[i] = [2]float64{r.lat, r.lon}
+	}
+	ductingSortCells(cells)
+	if cells[0] != [2]float64{40.75, -73.75} || cells[1] != [2]float64{47.75, -122.25} {
+		t.Fatalf("%v", cells)
 	}
 }
 
 func TestDuctingGridMarginBlock(t *testing.T) {
-	cells, step := ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 100, 1)
+	cells, step, _ := ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 100, 1)
 	if step != 0.5 || len(cells) != 25 {
 		t.Fatalf("step %v, %d cells: %v", step, len(cells), cells)
 	}
@@ -205,16 +229,17 @@ func TestDuctingGridMarginBlock(t *testing.T) {
 	if !hasCell(cells, 10.25, 20.25) || !hasCell(cells, 9.25, 19.25) || !hasCell(cells, 11.25, 21.25) || hasCell(cells, 11.75, 20.25) {
 		t.Fatalf("block wrong: %v", cells)
 	}
-	// margin not a multiple of the step rounds up: 0.6 at 0.5 = 2 rings
-	cells, _ = ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 100, 0.6)
-	if len(cells) != 25 {
+	// the box edges need not be cell multiples: 0.6 around 10.1,20.1 is
+	// 9.5..10.7 x 19.5..20.7 = 3x3 cells
+	cells, _, _ = ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 100, 0.6)
+	if len(cells) != 9 {
 		t.Fatalf("0.6 margin: %d cells", len(cells))
 	}
 }
 
 func TestDuctingGridMarginOverlapDeduped(t *testing.T) {
 	// adjacent node cells: blocks of 9 overlap in 6 cells -> 12 cells
-	cells, _ := ductingGrid([][2]float64{{10.1, 20.1}, {10.1, 20.6}}, nil, 0.5, 100, 0.5)
+	cells, _, _ := ductingGrid([][2]float64{{10.1, 20.1}, {10.1, 20.6}}, nil, 0.5, 100, 0.5)
 	if len(cells) != 12 {
 		t.Fatalf("%d cells: %v", len(cells), cells)
 	}
@@ -223,7 +248,7 @@ func TestDuctingGridMarginOverlapDeduped(t *testing.T) {
 
 func TestDuctingGridMarginAntimeridian(t *testing.T) {
 	for _, step := range []float64{0.5, 0.3, 8} {
-		cells, _ := ductingGrid([][2]float64{{10.1, 179.9}, {10.1, -179.9}}, nil, step, 1000, 1)
+		cells, _, _ := ductingGrid([][2]float64{{10.1, 179.9}, {10.1, -179.9}}, nil, step, 1000, 1)
 		var wrapped bool
 		for _, c := range cells {
 			if c[1] >= 180 || c[1] < -180 {
@@ -239,14 +264,14 @@ func TestDuctingGridMarginAntimeridian(t *testing.T) {
 		checkSortedUnique(t, cells)
 	}
 	// both sides of the meridian share one lattice: no duplicates, 25 cells
-	cells, _ := ductingGrid([][2]float64{{10.1, 179.9}}, nil, 0.5, 100, 1)
+	cells, _, _ := ductingGrid([][2]float64{{10.1, 179.9}}, nil, 0.5, 100, 1)
 	if len(cells) != 25 || !hasCell(cells, 10.25, -179.75) || !hasCell(cells, 10.25, 179.75) {
 		t.Fatalf("%d cells: %v", len(cells), cells)
 	}
 }
 
 func TestDuctingGridMarginPolarClamp(t *testing.T) {
-	cells, _ := ductingGrid([][2]float64{{84.9, 10.1}}, nil, 0.5, 100, 2)
+	cells, _, _ := ductingGrid([][2]float64{{84.9, 10.1}}, nil, 0.5, 100, 2)
 	if len(cells) == 0 {
 		t.Fatal("no cells")
 	}
@@ -262,17 +287,17 @@ func TestDuctingGridMarginPolarClamp(t *testing.T) {
 
 func TestDuctingGridMarginStepDoubling(t *testing.T) {
 	// margin 1: 25 cells at step 0.5 (k=2) > 10, so step 1 (k=1, 9 cells) fits.
-	cells, step := ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 10, 1)
+	cells, step, _ := ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 10, 1)
 	if step != 1 || len(cells) != 9 {
 		t.Fatalf("step %v, %d cells", step, len(cells))
 	}
-	// maxPoints 5: step 2 gives k=1 -> 9 > 5, step 4 gives k=1 -> 9, step 8 k=1.
-	cells, step = ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 5, 1)
-	if step != 8 || len(cells) != 5 {
+	// maxPoints 5: step 1 gives 9 > 5, step 2 gives a 2x2 box.
+	cells, step, _ = ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 5, 1)
+	if step != 2 || len(cells) != 4 {
 		t.Fatalf("step %v, %d cells", step, len(cells))
 	}
-	// margin 1 at step 2 is k=1 (9 cells), margin 1 at step 0.5 is k=2: confirm k recomputed
-	cells, step = ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 9, 1)
+	// the box is recounted at every step
+	cells, step, _ = ductingGrid([][2]float64{{10.1, 20.1}}, nil, 0.5, 9, 1)
 	if step != 1 || len(cells) != 9 {
 		t.Fatalf("recompute: step %v, %d cells", step, len(cells))
 	}
@@ -281,7 +306,7 @@ func TestDuctingGridMarginStepDoubling(t *testing.T) {
 func TestDuctingGridMarginTrimKeepsNodeCellsFirst(t *testing.T) {
 	// Three far-apart nodes at step 8 with margin 2: 9 cells each, maxPoints 4.
 	nodes := [][2]float64{{-60.1, -100.1}, {-60.2, -100.2}, {0.1, 0.1}, {60.1, 100.1}}
-	cells, step := ductingGrid(nodes, nil, 0.5, 4, 2)
+	cells, step, _ := ductingGrid(nodes, nil, 0.5, 4, 2)
 	if step != 8 || len(cells) != 4 {
 		t.Fatalf("step %v, cells %v", step, cells)
 	}
@@ -293,7 +318,7 @@ func TestDuctingGridMarginTrimKeepsNodeCellsFirst(t *testing.T) {
 		}
 	}
 	// with room for only 2, the 2-node cell wins, then the first by (lat, lon)
-	cells, _ = ductingGrid(nodes, nil, 0.5, 2, 2)
+	cells, _, _ = ductingGrid(nodes, nil, 0.5, 2, 2)
 	if len(cells) != 2 || !hasCell(cells, ductingCentre(-60.1, 8), ductingCentre(-100.1, 8)) {
 		t.Fatalf("top 2: %v", cells)
 	}
@@ -301,8 +326,8 @@ func TestDuctingGridMarginTrimKeepsNodeCellsFirst(t *testing.T) {
 
 func TestDuctingGridMarginIgnoredWithArea(t *testing.T) {
 	area := [4]float64{10, 20, 12, 22}
-	a, sa := ductingGrid(nil, &area, 0.5, 1000, 0)
-	b, sb := ductingGrid(nil, &area, 0.5, 1000, 10)
+	a, sa, _ := ductingGrid(nil, &area, 0.5, 1000, 0)
+	b, sb, _ := ductingGrid(nil, &area, 0.5, 1000, 10)
 	if sa != sb || len(a) != len(b) {
 		t.Fatalf("area changed by margin: %d vs %d", len(a), len(b))
 	}
@@ -319,9 +344,186 @@ func TestDuctingGridMarginBounded(t *testing.T) {
 	for i := 0; i < 400; i++ {
 		nodes = append(nodes, [2]float64{-60 + float64(i%20)*5.3, -170 + float64(i/20)*16.1})
 	}
-	cells, step := ductingGrid(nodes, nil, 0.25, 50, 10)
+	cells, step, _ := ductingGrid(nodes, nil, 0.25, 50, 10)
 	if len(cells) == 0 || len(cells) > 50 || step > 8 {
 		t.Fatalf("%d cells at step %v", len(cells), step)
 	}
 	checkSortedUnique(t, cells)
+}
+
+func TestDuctingGridSingleNodeBox(t *testing.T) {
+	// margin 2 at step 0.5: a square of about 2*margin/step cells a side
+	// around the node (the lattice adds one when the edges fall mid-cell).
+	cells, step, fell := ductingGrid([][2]float64{{51.3, -0.3}}, nil, 0.5, 400, 2)
+	if step != 0.5 || fell || len(cells) != 81 {
+		t.Fatalf("step %v fell %v, %d cells", step, fell, len(cells))
+	}
+	for _, c := range cells {
+		if c[0] < 49.25 || c[0] > 53.25 || c[1] < -2.25 || c[1] > 1.75 {
+			t.Fatalf("cell %v outside the box", c)
+		}
+	}
+	checkSortedUnique(t, cells)
+	if !hasCell(cells, 51.25, -0.25) || !hasCell(cells, 49.25, -2.25) || !hasCell(cells, 53.25, 1.75) {
+		t.Fatalf("box wrong: %v", cells)
+	}
+}
+
+func TestDuctingGridTwoNodesFilledWithMargin(t *testing.T) {
+	// two distant nodes on one continent: every cell of the box between them
+	// and the margin around it, no gaps
+	nodes := [][2]float64{{48.1, 2.1}, {52.4, 13.4}}
+	cells, step, fell := ductingGrid(nodes, nil, 1, 1000, 3)
+	if step != 1 || fell {
+		t.Fatalf("step %v fell %v", step, fell)
+	}
+	// lat 45.1..55.4 -> centres 45.5..55.5 (11); lon -0.9..16.4 -> -0.5..16.5 (18)
+	if len(cells) != 11*18 {
+		t.Fatalf("%d cells, want %d", len(cells), 11*18)
+	}
+	for lat := 45.5; lat <= 55.5; lat++ {
+		for lon := -0.5; lon <= 16.5; lon++ {
+			if !hasCell(cells, lat, lon) {
+				t.Fatalf("gap at %v,%v", lat, lon)
+			}
+		}
+	}
+	checkSortedUnique(t, cells)
+}
+
+func TestDuctingGridBoxStepDoubling(t *testing.T) {
+	nodes := [][2]float64{{10.1, 20.1}, {20.1, 40.1}}
+	// 0.5: 20x40 = 800 cells; 1: 11x21 = 231 > 200; 2: 6x11 = 66
+	cells, step, fell := ductingGrid(nodes, nil, 0.5, 200, 0)
+	if step != 2 || fell || len(cells) != 66 {
+		t.Fatalf("step %v fell %v, %d cells", step, fell, len(cells))
+	}
+}
+
+func TestDuctingGridBoxLatitudeClamp(t *testing.T) {
+	cells, _, fell := ductingGrid([][2]float64{{84.1, 10.1}, {84.9, 12.1}}, nil, 2, 1000, 10)
+	if fell || len(cells) == 0 {
+		t.Fatalf("fell %v, %d cells", fell, len(cells))
+	}
+	var top float64
+	for _, c := range cells {
+		top = math.Max(top, c[0])
+		if math.Abs(c[0]) > 85 {
+			t.Fatalf("centre beyond 85: %v", c)
+		}
+	}
+	if top != 85 { // the cell [84,86] has its centre on 85
+		t.Fatalf("top row %v", top)
+	}
+	// both poles with a huge margin: still within +-85
+	cells, _, _ = ductingGrid([][2]float64{{89.9, 10.1}, {-89.9, 10.1}}, nil, 8, 1000, 10)
+	for _, c := range cells {
+		if math.Abs(c[0]) > 85.5 {
+			t.Fatalf("beyond clamp: %v", c)
+		}
+	}
+}
+
+func TestDuctingGridBoxAntimeridian(t *testing.T) {
+	// nodes at 179 and -179: a narrow box across the meridian, not 358 degrees
+	nodes := [][2]float64{{10.1, 179.1}, {10.1, -179.1}}
+	cells, step, fell := ductingGrid(nodes, nil, 0.5, 1000, 1)
+	if step != 0.5 || fell {
+		t.Fatalf("step %v fell %v", step, fell)
+	}
+	// lon 178.1..180 (4 columns) and -180..-178.1 (4 columns); lat 9.1..11.1 (5 rows)
+	if len(cells) != 5*8 {
+		t.Fatalf("%d cells: %v", len(cells), cells)
+	}
+	checkSortedUnique(t, cells)
+	for _, c := range cells {
+		if c[1] >= 180 || c[1] < -180 {
+			t.Fatalf("centre out of [-180,180): %v", c)
+		}
+		if c[1] > -176 && c[1] < 178 {
+			t.Fatalf("cell %v is in the part of the world between the nodes", c)
+		}
+	}
+	if !hasCell(cells, 10.25, 179.75) || !hasCell(cells, 10.25, -179.75) || !hasCell(cells, 10.25, 178.25) || !hasCell(cells, 10.25, -178.25) {
+		t.Fatalf("cells %v", cells)
+	}
+	// a wide step puts a centre on 180: it is the -180 cell, once
+	for _, step := range []float64{8, 0.3} {
+		cells, _, _ = ductingGrid(nodes, nil, step, 1000, 1)
+		checkSortedUnique(t, cells)
+		for _, c := range cells {
+			if c[1] > 180 || c[1] < -180 {
+				t.Fatalf("step %v: out of range %v", step, c)
+			}
+		}
+	}
+	// margin pushing a box edge past -180 wraps to the east side
+	cells, _, _ = ductingGrid([][2]float64{{10.1, -179.5}, {10.1, -170.1}}, nil, 0.5, 1000, 2)
+	if !hasCell(cells, 10.25, 179.25) || !hasCell(cells, 10.25, -171.75) || hasCell(cells, 10.25, 0.25) {
+		t.Fatalf("wrapped margin: %v", cells)
+	}
+	checkSortedUnique(t, cells)
+}
+
+func TestDuctingGridBoxFullWorldSpan(t *testing.T) {
+	// nodes every 90 degrees: the largest gap is 90, the span 270, and a
+	// margin of 50 reaches 360: the full -180..180
+	nodes := [][2]float64{{10.1, -170.1}, {10.1, -80.1}, {10.1, 9.9}, {10.1, 99.9}}
+	cells, step, fell := ductingGrid(nodes, nil, 8, 10000, 50)
+	if fell || step != 8 {
+		t.Fatalf("step %v fell %v", step, fell)
+	}
+	if !hasCell(cells, 12, -180) || !hasCell(cells, 12, 172) {
+		t.Fatalf("full span missing the edges: %v", cells)
+	}
+	for _, c := range cells {
+		if c[1] > 180 || c[1] < -180 {
+			t.Fatalf("out of range %v", c)
+		}
+	}
+	checkSortedUnique(t, cells)
+}
+
+func TestDuctingGridWorldwideFallsBackToNodeCells(t *testing.T) {
+	// a worldwide spread cannot fit at 8 degrees: dilated node cells, flagged
+	nodes := [][2]float64{{60.1, 100.1}, {-60.1, -100.1}, {0.1, 0.1}, {40.1, -100.1}}
+	cells, step, fell := ductingGrid(nodes, nil, 0.5, 400, 2)
+	if !fell {
+		t.Fatal("fallback not flagged")
+	}
+	if step > 8 || len(cells) == 0 || len(cells) > 400 {
+		t.Fatalf("step %v, %d cells", step, len(cells))
+	}
+	checkSortedUnique(t, cells)
+	// the fallback is the dilated node cells, so the middle of the box is empty
+	for _, c := range cells {
+		if math.Abs(c[0]-30) < 5 && math.Abs(c[1]-40) < 5 {
+			t.Fatalf("cell %v in the middle of the box", c)
+		}
+	}
+	for _, n := range nodes {
+		var near bool
+		for _, c := range cells {
+			if math.Abs(c[0]-n[0]) < 5 && math.Abs(c[1]-n[1]) < 5 {
+				near = true
+			}
+		}
+		if !near {
+			t.Fatalf("no cell near node %v: %v", n, cells)
+		}
+	}
+}
+
+func TestDuctingGridExplicitAreaNeverFlagsOrChanges(t *testing.T) {
+	area := [4]float64{10, 20, 12, 23}
+	a, sa, fa := ductingGrid(nil, &area, 0.5, 1000, 5)
+	b, sb, fb := ductingGrid([][2]float64{{-60, 100}, {60, -100}}, &area, 0.5, 1000, 0)
+	if fa || fb || sa != sb || len(a) != 24 || len(b) != 24 {
+		t.Fatalf("%v %v %d %d", fa, fb, len(a), len(b))
+	}
+	// an area too big for maxPoints is still trimmed, never "fallen back"
+	_, _, f := ductingGrid(nil, &[4]float64{-80, -170, 80, 170}, 0.5, 10, 0)
+	if f {
+		t.Fatal("area flagged as fallback")
+	}
 }
