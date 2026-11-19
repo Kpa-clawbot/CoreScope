@@ -1013,8 +1013,9 @@
    */
   window.MC_buildOverlayLayer = function (overlay, opts) {
     opts = opts || {};
-    // Ducting draws vector cells from /api/ducting: no url, and no overlay
-    // pane (that pane is pointer-events:none; the cells need clicks).
+    // Ducting draws its own field from /api/ducting: no url and no tile
+    // overlay pane (it makes its own panes; clicks reach it through one map
+    // click handler).
     if (overlay && overlay.kind === 'ducting') {
       if (typeof window.MC_createDuctingLayer !== 'function') return null;
       try { return window.MC_createDuctingLayer(overlay) || null; } catch (_) { return null; }

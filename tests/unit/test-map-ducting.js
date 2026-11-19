@@ -16,7 +16,8 @@
  *   - the field image layer: pane, bounds, pixels, redrawn (not rebuilt) on
  *     time and theme change, resized/rebounded on refresh, removed on teardown
  *   - nothing interactive on the map: the cells with data are a list, the
- *     dashed LoRa outline (ducts with 0 < fmin <= 868 MHz) one
+ *     dashed LoRa outline (shown fmin <= the highest judged LoRa frequency:
+ *     915 MHz by default, else the site's los.frequencyMhz) one
  *     non-interactive multi-polygon on a canvas in a pane without pointer
  *     events
  *   - map clicks: MC_ductCellAt lattice lookup (world copies), one map click
@@ -225,8 +226,10 @@ function find(node, pred, out) {
 }
 
 // Adds a layer to a fresh map with time frozen at `now`, resolves the fetch.
-async function mount(body, now) {
+// los: window.MC_LOS_CFG (the site's line-of-sight config), unset by default.
+async function mount(body, now, los) {
   const s = makeSandbox();
+  if (los) s.ctx.MC_LOS_CFG = los;
   const realNow = Date.now;
   Date.now = () => (now != null ? now : T1 + 60) * 1000;
   try {
@@ -742,7 +745,7 @@ test('default time is the latest <= now, else the first', async () => {
   assert.strictEqual(early.layer._idx, 0);
 });
 
-test('LoRa outline: dashed --mc-duct-lora only for ducts with 0 < fmin <= 868 MHz', async () => {
+test('LoRa outline: dashed --mc-duct-lora only for ducts whose shown fmin <= 915 MHz (default bands)', async () => {
   const s = await mount(SAMPLE, T0);
   assert.deepStrictEqual(loraSet(s), ['51.25,0.25'], 'elevated duct f=78; class 1 and 0 cells not');
   const l = loraLayer(s);
@@ -757,33 +760,81 @@ test('LoRa outline: dashed --mc-duct-lora only for ducts with 0 < fmin <= 868 MH
   s.layer._setIndex(2);
   assert.deepStrictEqual(loraSet(s), ['51.25,-0.25'], 'surface duct f=380; f=4200 not');
   const body = clone(SAMPLE);
-  body.cells[0].c = [3, 4, 3]; body.cells[0].f = [868, 869, 0];
-  body.cells[1].f = [915, 1000, 4200];
+  body.cells[0].c = [3, 4, 3]; body.cells[0].f = [868, 920, 0];
+  body.cells[1].f = [914, 1000, 4200];
   const e = await mount(body, T0);
-  assert.deepStrictEqual(loraSet(e), ['51.25,-0.25'], 'f=868 yes; f=915 no (one threshold: 868)');
+  assert.deepStrictEqual(loraSet(e), ['51.25,-0.25', '51.25,0.25'], 'f=868 (shown 870) and f=914 (shown 910) are <= 915');
   e.layer._setIndex(1);
-  assert.deepStrictEqual(loraSet(e), [], 'f=869, f=1000');
+  assert.deepStrictEqual(loraSet(e), [], 'f=920, f=1000 (shown 920, 1000) are above 915');
   e.layer._setIndex(2);
   assert.deepStrictEqual(loraSet(e), [], 'class 3 with f=0 is no duct');
+  const g = clone(SAMPLE);
+  g.cells[0].c = [3, 3, 3]; g.cells[0].f = [916, 925, 900];
+  const ge = await mount(g, T0);
+  assert.deepStrictEqual(loraSet(ge), ['51.25,0.25'], 'f=916 shows 920: above 915 even though f itself is close');
+  ge.layer._setIndex(2);
+  assert.ok(loraSet(ge).includes('51.25,-0.25'), 'f=900 outlined (trapped at 915)');
 });
 
-test('LoRa outline and popup agree for every class and frequency', async () => {
-  const fs_ = [0, 78, 380, 700, 868, 869, 915, 950, 1000, 1500];
+test('default bands: f=900 is outlined; popup says 868 not trapped, 915 possibly', async () => {
+  const body = clone(SAMPLE);
+  body.cells[0].c = [4, 4, 4]; body.cells[0].f = [900, 900, 900];
+  const s = await mount(body, T0);
+  assert.ok(loraSet(s).includes('51.25,-0.25'));
+  const lines = s.ctx.MC_ductPopupContent(body.cells[0], 0).textContent.split('\n').filter(l => /^LoRa /.test(l));
+  assert.deepStrictEqual(lines, ['LoRa 868 MHz: not trapped by this layer', 'LoRa 915 MHz: possibly trapped (model estimate)']);
+});
+
+test('site frequency 910.525 MHz: one verdict line, outline threshold 910.525 (905 yes, 950 no)', async () => {
+  const body = clone(SAMPLE);
+  body.cells[0].c = [4, 4, 4]; body.cells[0].f = [905, 950, 868];
+  const s = await mount(body, T0, { frequencyMhz: 910.525 });
+  const pop = (i) => s.ctx.MC_ductPopupContent(body.cells[0], i).textContent;
+  const lora = (i) => pop(i).split('\n').filter(l => /^LoRa /.test(l));
+  assert.ok(loraSet(s).includes('51.25,-0.25'), 'f=905 (shown 910) outlined');
+  assert.deepStrictEqual(lora(0), ['LoRa 910.525 MHz: possibly trapped (model estimate)']);
+  assert.ok(pop(0).includes('Lowest trapped frequency: \u2248 910 MHz (model estimate)'), pop(0));
+  s.layer._setIndex(1);
+  assert.ok(!loraSet(s).includes('51.25,-0.25'), 'f=950 not outlined');
+  assert.deepStrictEqual(lora(1), ['LoRa 910.525 MHz: not trapped by this layer']);
+  s.layer._setIndex(2);
+  assert.ok(loraSet(s).includes('51.25,-0.25'), 'f=868 (shown 870) outlined at 910.525');
+  assert.ok(legendText(s).includes('Dashed outline: the model shows a duct that may carry LoRa at 910.525 MHz'), legendText(s));
+  // Out of range site frequencies fall back to the two bands.
+  for (const bad of [50, 7000, 'x', null]) {
+    const b = await mount(clone(SAMPLE), T0, { frequencyMhz: bad });
+    assert.ok(legendText(b).includes('LoRa at 868 / 915 MHz'), 'frequencyMhz ' + bad);
+  }
+});
+
+test('LoRa outline and popup agree for every class and frequency (default bands and a site frequency)', async () => {
+  const fs_ = [0, 78, 380, 700, 864, 865, 868, 905, 909, 914, 915, 916, 950, 1000, 1500];
   const body = clone(SAMPLE);
   body.times = fs_.map((_, i) => T0 + i * 3600);
   const mk = (c) => ({ lat: 51.25, lon: -0.25, c: fs_.map(() => c), f: fs_.slice(), b: fs_.map(() => 0), t: fs_.map(() => 100), dm: fs_.map(() => 50), n: fs_.map(() => -60) });
-  for (const cls of [2, 3, 4]) {
-    body.cells = [mk(cls)];
-    const s = await mount(body, T0);
-    fs_.forEach((f, i) => {
-      s.layer._setIndex(i);
-      const outlined = loraSet(s).length === 1;
-      const txt = s.ctx.MC_ductPopupContent(body.cells[0], i).textContent;
-      const says = /LoRa 868\/915 MHz: possibly trapped \(model estimate\)/.test(txt);
-      assert.strictEqual(outlined, says, `class ${cls} f=${f}: outline ${outlined}, popup ${txt}`);
-      assert.strictEqual(outlined, cls >= 3 && f > 0 && f <= 868, `class ${cls} f=${f}`);
-      if (!says) assert.ok(/LoRa 868\/915 MHz: not trapped by this layer/.test(txt), txt);
-    });
+  const sig2 = (v) => Number(Number(v).toPrecision(2));
+  for (const [los, freqs] of [[null, [868, 915]], [{ frequencyMhz: 910.525 }, [910.525]]]) {
+    for (const cls of [2, 3, 4]) {
+      body.cells = [mk(cls)];
+      const s = await mount(body, T0, los);
+      fs_.forEach((f, i) => {
+        s.layer._setIndex(i);
+        const outlined = loraSet(s).length === 1;
+        const txt = s.ctx.MC_ductPopupContent(body.cells[0], i).textContent;
+        const lines = txt.split('\n').filter(l => /^LoRa /.test(l));
+        const shown = cls >= 3 && f > 0 ? sig2(f) : 0;
+        assert.strictEqual(lines.length, freqs.length, 'one line per judged frequency: ' + txt);
+        freqs.forEach((fr, k) => {
+          const want = shown > 0 && shown <= fr;
+          assert.strictEqual(lines[k], `LoRa ${fr} MHz: ` + (want ? 'possibly trapped (model estimate)' : 'not trapped by this layer'), `class ${cls} f=${f} at ${fr}`);
+        });
+        const says = lines.some(l => /possibly trapped/.test(l));
+        assert.strictEqual(outlined, says, `class ${cls} f=${f}: outline ${outlined}, popup ${txt}`);
+        assert.strictEqual(outlined, shown > 0 && shown <= freqs[freqs.length - 1], `class ${cls} f=${f}`);
+        // The frequency line shows the very value the verdicts used.
+        assert.ok(txt.includes('Lowest trapped frequency: ' + (shown ? '\u2248 ' + shown + ' MHz (model estimate)' : 'none')), txt);
+      });
+    }
   }
 });
 
@@ -856,9 +907,12 @@ test('slider is disabled until data arrives', () => {
 
 // ── popup ───────────────────────────────────────────────────────────────────
 
-const POSSIBLY = 'LoRa 868/915 MHz: possibly trapped (model estimate)';
-const NOT_TRAPPED = 'LoRa 868/915 MHz: not trapped by this layer';
-const LAYER_LINE = 'Trapping layer in the model (\u2265 ~200 m thick)';
+// The LoRa verdict lines at the default bands (868 and 915 MHz).
+const loraLines = (both) => ['LoRa 868 MHz: ' + both[0], 'LoRa 915 MHz: ' + both[1]];
+const YES = 'possibly trapped (model estimate)', NO = 'not trapped by this layer';
+const POSSIBLY = loraLines([YES, YES]).join('\n');          // trapped at both
+const NOT_TRAPPED = loraLines([NO, NO]).join('\n');         // at neither
+const LAYER_LINE = 'Trapping layer in the model (its levels are ~200 m apart, so thinner layers are not resolved)';
 
 test('popup text for each class: trapping layer, frequency estimate and the LoRa line', async () => {
   const s = await mount(SAMPLE, T0);
@@ -881,8 +935,8 @@ test('popup text for each class: trapping layer, frequency estimate and the LoRa
     'Top: 100 m above ground',
     'Strength: 10.0 M-units',
     'Lowest trapped frequency: \u2248 380 MHz (model estimate)',
-    POSSIBLY,
-  ]);
+  ].concat(loraLines([YES, YES])));
+  assert.ok(!/\u2265 ~200 m thick/.test(sfc), 'old thickness claim gone');
   const elev = pop(b, 1);
   assert.ok(/Elevated duct/.test(elev) && elev.includes(LAYER_LINE));
   assert.ok(/Base: 600 m/.test(elev) && /Top: 820 m/.test(elev) && /Strength: 6\.0/.test(elev), elev);
@@ -894,11 +948,15 @@ test('popup text for each class: trapping layer, frequency estimate and the LoRa
 
 test('popup: lowest trapped frequency rounded to 2 significant figures', async () => {
   const s = makeSandbox();
-  const cell = { lat: 0, lon: 0, c: [3, 3, 3, 3, 3, 3], f: [78.4, 868, 915, 1234, 4249, 99.6], b: [0, 0, 0, 0, 0, 0], t: [0, 0, 0, 0, 0, 0], dm: [0, 0, 0, 0, 0, 0] };
+  const cell = { lat: 0, lon: 0, c: [3, 3, 3, 3, 3, 3, 3], f: [78.4, 868, 915, 1234, 4249, 99.6, 905], b: [0, 0, 0, 0, 0, 0, 0], t: [0, 0, 0, 0, 0, 0, 0], dm: [0, 0, 0, 0, 0, 0, 0] };
   const got = cell.f.map((_, i) => /Lowest trapped frequency: \u2248 (\d+) MHz \(model estimate\)/.exec(s.ctx.MC_ductPopupContent(cell, i).textContent)[1]);
-  assert.deepStrictEqual(got, ['78', '870', '920', '1200', '4200', '100']);
-  // The LoRa line follows f itself, not the rounded figure.
-  assert.ok(s.ctx.MC_ductPopupContent(cell, 1).textContent.includes(POSSIBLY), '868 itself');
+  assert.deepStrictEqual(got, ['78', '870', '920', '1200', '4200', '100', '910']);
+  // The verdicts follow the shown figure: f=868 shows 870, so not at 868 but at 915;
+  // f=915 shows 920, at neither; f=905 shows 910, at 915.
+  const t = (i) => s.ctx.MC_ductPopupContent(cell, i).textContent;
+  assert.ok(t(1).includes(loraLines([NO, YES]).join('\n')), '868 itself: ' + t(1));
+  assert.ok(t(2).includes(NOT_TRAPPED), '915 itself: ' + t(2));
+  assert.ok(t(6).includes(loraLines([NO, YES]).join('\n')), '905: ' + t(6));
 });
 
 test('popup: gradient line rounded, only when n has data; class 0 shows no data', async () => {
@@ -933,14 +991,14 @@ test('older server without n: no field, but cells, LoRa outlines, popups and edg
   assert.ok(s.layer._canvas.img.data.every(v => v === 0));
 });
 
-test('popup: one LoRa line, no separate 868/915 answers; no innerHTML use', async () => {
+test('popup: one LoRa line per default band, no yes/no; no innerHTML use', async () => {
   const body = clone(SAMPLE);
-  body.cells[1].f = [900, 868, 915];
+  body.cells[1].f = [900, 860, 915];
   const s = await mount(body, T0);
   const pop = (i) => s.ctx.MC_ductPopupContent(body.cells[1], i).textContent;
-  assert.ok(pop(0).includes(NOT_TRAPPED) && !/Can carry/.test(pop(0)), pop(0));
-  assert.ok(pop(1).includes(POSSIBLY), pop(1));
-  assert.ok(pop(2).includes(NOT_TRAPPED), '915 alone is above the one threshold: ' + pop(2));
+  assert.ok(pop(0).includes(loraLines([NO, YES]).join('\n')) && !/Can carry|: yes|: no\b/.test(pop(0)), pop(0));
+  assert.ok(pop(1).includes(POSSIBLY), '860 shows 860: both bands: ' + pop(1));
+  assert.ok(pop(2).includes(NOT_TRAPPED), '915 shows 920, above both: ' + pop(2));
   assert.ok(!/innerHTML/.test(SRC.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')), 'no innerHTML in map-ducting.js');
 });
 
@@ -1027,7 +1085,7 @@ test('open popup follows the slider, closes where the hour has no data, and goes
 test('legend: banded bar from the field variables, scale labels, LoRa row, attribution, note', async () => {
   const s = await mount(SAMPLE);
   const t = legendText(s);
-  assert.ok(t.includes('Dashed outline: the model shows a duct that may carry LoRa 868/915 MHz'), t);
+  assert.ok(t.includes('Dashed outline: the model shows a duct that may carry LoRa at 868 / 915 MHz'), t);
   assert.ok(t.includes('Refractivity gradient over the lowest 1.5 km (N/km)'), t);
   assert.ok(!/-79|-157|Super-refraction|Ducting \(/.test(t), 'no g-based thresholds or labels: ' + t);
   assert.ok(t.includes('NOAA GFS') && t.includes('Open-Meteo.com (CC BY 4.0)'), t);
