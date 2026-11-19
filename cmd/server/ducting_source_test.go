@@ -226,6 +226,7 @@ func TestDuctingSourceQuery(t *testing.T) {
 func TestDuctingSourcePacing(t *testing.T) {
 	f := &fakeOpenMeteo{t: t, hours: 1}
 	src, _, waits := newTestDuctingSource(t, f, "gfs")
+	src.capped = true // pacing is for the public API's per-minute limit
 	if _, err := src.fetch(context.Background(), ductingTestCells(100), 1); err != nil {
 		t.Fatal(err)
 	}
@@ -235,6 +236,22 @@ func TestDuctingSourcePacing(t *testing.T) {
 	}
 	if d := (*waits)[0]; d < 31400*time.Millisecond || d > 31600*time.Millisecond {
 		t.Errorf("wait %v, want ~31.5s", d)
+	}
+	if n := len(f.requests()); n != 2 {
+		t.Errorf("%d requests, want 2", n)
+	}
+}
+
+// A self-hosted source has no per-minute limit: batches go back to back.
+func TestDuctingSourceSelfHostedNotPaced(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, hours: 1}
+	src, _, waits := newTestDuctingSource(t, f, "gfs")
+	src.capped = false
+	if _, err := src.fetch(context.Background(), ductingTestCells(100), 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(*waits) != 0 {
+		t.Fatalf("waits %v, want none for a self-hosted source", *waits)
 	}
 	if n := len(f.requests()); n != 2 {
 		t.Errorf("%d requests, want 2", n)
@@ -500,13 +517,13 @@ func TestDuctingSourceSelfHostedNoCallCap(t *testing.T) {
 	if len(f.requests()) != 1500/ductingBatchSize {
 		t.Errorf("%d requests, want %d", len(f.requests()), 1500/ductingBatchSize)
 	}
-	// Pacing still applies.
+	// Nor is it paced: the per-minute pace is for the public API only.
 	src2, _, waits := newTestDuctingSource(t, &fakeOpenMeteo{t: t, hours: 1}, "gfs")
 	if _, err := src2.fetch(context.Background(), ductingTestCells(100), 1); err != nil {
 		t.Fatal(err)
 	}
-	if len(*waits) != 1 {
-		t.Errorf("waits %v, want one paced wait", *waits)
+	if len(*waits) != 0 {
+		t.Errorf("waits %v, want none for a self-hosted source", *waits)
 	}
 	// The same fetch is refused for the public host.
 	src.capped = true
@@ -628,6 +645,7 @@ func TestDuctingSourcePartialFailureKeepsOtherBatches(t *testing.T) {
 		return 0
 	}}
 	src, _, waits := newTestDuctingSource(t, f, "gfs")
+	src.capped = true // paced like the public API, to check a failed batch still counts
 	cells := ductingTestCells(150)
 	res, err := src.fetch(context.Background(), cells, 2)
 	if err != nil {
