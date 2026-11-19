@@ -7,6 +7,8 @@
  *   - the colour bands (MC_ductFieldColor / MC_ductFieldStops): flat colour
  *     at and between stops, transparent for normal values, constant alpha,
  *     missing variables; the legend bar's hard stops
+ *   - the field value is the cells' n (mean dN/dh over the lowest 1.5 km);
+ *     n 0 or missing (an older server) is no data
  *   - the lattice, Mercator row -> latitude, Catmull-Rom bicubic sampling
  *     (exact at cell centres, continuous, bilinear next to missing data, the
  *     separable renderer equal to a naive 4x4 evaluation) and the fade to
@@ -18,7 +20,7 @@
  *   - the forecast area's dotted outline (merged boundary runs, antimeridian
  *     seam, one layer per build, colour from --mc-duct-edge) and the wider
  *     fade at the area's outer edge
- *   - popup text per class and the 868/915 MHz answers
+ *   - popup text per class, the 1.5 km gradient line and the 868/915 MHz answers
  *   - pending / error / failed-refresh legend states, legend content
  *   - remove during an in-flight fetch, timer cleanup, refresh cadence
  *   - overlay registry + MC_buildOverlayLayer (factory absent -> null)
@@ -36,13 +38,13 @@ const SRC = fs.readFileSync(path.join(REPO_ROOT, 'public', 'map-ducting.js'), 'u
 const PROV = fs.readFileSync(path.join(REPO_ROOT, 'public', 'map-tile-providers.js'), 'utf8');
 const SAMPLE = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'tests', 'fixtures', 'ducting-sample.json'), 'utf8'));
 const T0 = SAMPLE.times[0], T1 = SAMPLE.times[1], T2 = SAMPLE.times[2];
-// One colour per stop (-79, -100, -130, -157, -220, -300, -400, -600 N/km).
+// One colour per stop (-44, -48, -54, -58, -62, -70, -80, -90 N/km).
 const STOP_RGB = [[128, 0, 128], [0, 0, 255], [0, 200, 200], [0, 160, 0], [240, 240, 0], [250, 150, 0], [230, 0, 0], [250, 0, 200]];
-const STOP_G = [-79, -100, -130, -157, -220, -300, -400, -600];
+const STOP_N = [-44, -48, -54, -58, -62, -70, -80, -90];
 const STOP_VARS = {};
 STOP_RGB.forEach((c, k) => { STOP_VARS['--mc-duct-s' + (k + 1)] = '#' + c.map(v => v.toString(16).padStart(2, '0')).join(''); });
 STOP_VARS['--mc-duct-s3'] = ' rgb(0, 200, 200) ';   // rgb() form too
-const STOPS = STOP_G.map((g, k) => ({ g, rgb: STOP_RGB[k] }));
+const STOPS = STOP_N.map((g, k) => ({ g, rgb: STOP_RGB[k] }));
 
 const queue = [];
 function test(name, fn) { queue.push([name, fn]); }
@@ -238,16 +240,17 @@ test('MC_ductFieldColor: each stop starts its band; flat colour down to the next
       assert.deepStrictEqual(f(next), STOPS[k + 1].rgb.concat(1), 'the next stop belongs to the next band');
     }
   });
-  assert.deepStrictEqual(f(-188.5), STOP_RGB[3].concat(1), 'between -157 and -220: the -157 colour, not a mix');
+  assert.deepStrictEqual(f(-66.5), STOP_RGB[4].concat(1), 'between -62 and -70: the -62 colour, not a mix');
+  assert.deepStrictEqual(f(-51), STOP_RGB[1].concat(1), 'between -48 and -54: the -48 colour');
   assert.deepStrictEqual(f(-7945), STOP_RGB[7].concat(1), 'beyond the last stop');
 });
 
-test('MC_ductFieldColor: transparent above -79 (normal), NaN or without stops; alpha never anything but 0 or 1', () => {
+test('MC_ductFieldColor: transparent above -44 (normal), NaN or without stops; alpha never anything but 0 or 1', () => {
   const { ctx } = makeSandbox();
   const f = (g) => Array.from(ctx.MC_ductFieldColor(g, STOPS));
-  for (const g of [100, 0, -40, -60, -78, -78.999]) assert.strictEqual(f(g)[3], 0, 'g=' + g);
-  assert.deepStrictEqual(f(-79), STOP_RGB[0].concat(1), 'super-refraction starts at -79, at full alpha');
-  for (let g = -79; g > -800; g -= 3.7) assert.strictEqual(f(g)[3], 1, 'constant alpha at ' + g);
+  for (const g of [100, 0, -30, -40, -43, -43.999]) assert.strictEqual(f(g)[3], 0, 'n=' + g);
+  assert.deepStrictEqual(f(-44), STOP_RGB[0].concat(1), 'the colour starts at -44, at full alpha');
+  for (let g = -44; g > -800; g -= 1.7) assert.strictEqual(f(g)[3], 1, 'constant alpha at ' + g);
   assert.strictEqual(f(NaN)[3], 0);
   assert.strictEqual(Array.from(ctx.MC_ductFieldColor(-300, []))[3], 0, 'no stops -> transparent');
   assert.strictEqual(Array.from(ctx.MC_ductFieldColor(-300, null))[3], 0);
@@ -261,15 +264,15 @@ test('MC_ductFieldStops: reads hex and rgb() variables, drops missing or unreada
   s.vars['--mc-duct-s5'] = 'tomato';
   s.vars['--mc-duct-s6'] = '#f90';
   const st2 = JSON.parse(JSON.stringify(s.ctx.MC_ductFieldStops()));
-  assert.deepStrictEqual(st2.map(x => x.g), [-79, -130, -157, -300, -400, -600]);
+  assert.deepStrictEqual(st2.map(x => x.g), [-44, -54, -58, -70, -80, -90]);
   assert.deepStrictEqual(st2[3].rgb, [255, 153, 0], '#rgb expanded');
-  // Without -100 the -79 band runs on to -130; without -220 the -157 one to -300.
-  assert.deepStrictEqual(Array.from(s.ctx.MC_ductFieldColor(-104.5, st2)), STOP_RGB[0].concat(1));
-  assert.deepStrictEqual(Array.from(s.ctx.MC_ductFieldColor(-250, st2)), STOP_RGB[3].concat(1));
-  // Without -79 nothing is coloured above the first stop that is there.
+  // Without -48 the -44 band runs on to -54; without -62 the -58 one to -70.
+  assert.deepStrictEqual(Array.from(s.ctx.MC_ductFieldColor(-50.5, st2)), STOP_RGB[0].concat(1));
+  assert.deepStrictEqual(Array.from(s.ctx.MC_ductFieldColor(-65, st2)), STOP_RGB[3].concat(1));
+  // Without -44 nothing is coloured above the first stop that is there.
   const st3 = st2.slice(1);
-  assert.strictEqual(Array.from(s.ctx.MC_ductFieldColor(-110, st3))[3], 0);
-  assert.deepStrictEqual(Array.from(s.ctx.MC_ductFieldColor(-130, st3)), [0, 200, 200, 1]);
+  assert.strictEqual(Array.from(s.ctx.MC_ductFieldColor(-50, st3))[3], 0);
+  assert.deepStrictEqual(Array.from(s.ctx.MC_ductFieldColor(-54, st3)), [0, 200, 200, 1]);
 });
 
 // ── lattice, projection, sampling ───────────────────────────────────────────
@@ -306,7 +309,7 @@ test('MC_ductGrid: lattice of the cells with data, outer edges as bounds, image 
 
 test('MC_ductGrid: several far-apart regions share one image, capped at 2048 px', () => {
   const { ctx } = makeSandbox();
-  const cell = (lat, lon) => ({ lat, lon, c: [1], f: [0], b: [0], t: [0], dm: [0], g: [-100] });
+  const cell = (lat, lon) => ({ lat, lon, c: [1], f: [0], b: [0], t: [0], dm: [0], n: [-50] });
   const cells = [cell(-33.75, 151.25), cell(51.25, -0.25), cell(30.25, -95.25), cell(64.25, -147.75)];
   const g = ctx.MC_ductGrid(cells, 0.5);
   assert.ok(g.w <= 2048 && g.h <= 2048 && Math.max(g.w, g.h) === 2048, g.w + 'x' + g.h);
@@ -322,21 +325,39 @@ test('MC_ductSample: value at centres, bilinear between, fades out at cells with
   const { ctx } = makeSandbox();
   const cells = clone(SAMPLE.cells);
   const g = ctx.MC_ductGrid(cells, 0.5);
-  const v = ctx.MC_ductGridValues(g, cells, 2);           // a=-210, b=-160, c=-40, (51.75,0.25) none
+  const v = ctx.MC_ductGridValues(g, cells, 2);           // n: a=-66, b=-55, c=-40, (51.75,0.25) none
   assert.ok(Number.isNaN(v[3]), 'missing slot is NaN');
   const at = (lat, lon) => ctx.MC_ductSample(g, v, lat, lon);
-  assert.strictEqual(at(51.25, -0.25).g, -210);
+  assert.strictEqual(at(51.25, -0.25).g, -66);
   assert.strictEqual(at(51.25, -0.25).a, 0.5, 'centre of an outer-edge cell: half faded');
-  assert.strictEqual(at(51.25, 0).g, -185, 'halfway between a and b');
+  assert.strictEqual(at(51.25, 0).g, -60.5, 'halfway between a and b');
   assert.strictEqual(at(51.25, 0).a, 0.5);
   assert.strictEqual(at(51.25, 0.5).a, 0, 'b east edge: no neighbour, faded out');
   assert.strictEqual(at(51, -0.25).a, 0, 'south edge');
   const q = at(51.25, 0.375).a;
   assert.ok(q > 0 && q < 1, 'fading within half a cell: ' + q);
   assert.strictEqual(at(51.75, 0.25).a, 0, 'centre of the missing cell');
-  assert.ok(Math.abs(at(51.5, 0).g - (-210 - 160 - 40) / 3) < 1e-4, 'mean over the cells that have data');
+  assert.ok(Math.abs(at(51.5, 0).g - (-66 - 55 - 40) / 3) < 1e-4, 'mean over the cells that have data');
   const v0 = ctx.MC_ductGridValues(g, cells, 0);           // cell c is class 0 at t0
   assert.ok(Number.isNaN(v0[2]), 'class 0 at this hour is no data');
+});
+
+test('MC_ductGridValues: the field is n, not g; n 0, missing or not a number is no data', () => {
+  const { ctx } = makeSandbox();
+  const cells = clone(SAMPLE.cells);
+  const g = ctx.MC_ductGrid(cells, 0.5);
+  assert.deepStrictEqual(Array.from(ctx.MC_ductGridValues(g, cells, 1)).slice(0, 3), [-46, -57, -36], 'n at t1, not g (-96, -170, -38)');
+  cells[0].n[1] = 0;                                       // 0 = no data at this hour
+  cells[1].n = null;
+  delete cells[2].n;
+  const v = ctx.MC_ductGridValues(g, cells, 1);
+  assert.ok([0, 1, 2, 3].every(k => Number.isNaN(v[k])), 'all no data: ' + Array.from(v));
+  cells[1].n = [-50, 'x', -52];
+  const w = ctx.MC_ductGridValues(g, cells, 1);
+  assert.ok(Number.isNaN(w[1]), 'not a number');
+  assert.strictEqual(ctx.MC_ductGridValues(g, cells, 2)[1], -52);
+  assert.ok(Number.isNaN(ctx.MC_ductGridValues(g, cells, 7)[1]), 'past the end of n');
+  assert.ok(Number.isNaN(ctx.MC_ductSample(g, v, 51.25, -0.25).g), 'no field anywhere');
 });
 
 // Catmull-Rom, written out the plain way: 16 lookups per point.
@@ -357,7 +378,7 @@ function wavy(rows, cols, step, lat0, lon0) {
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const g = -150 + 90 * Math.sin(r * 0.9) * Math.cos(c * 0.7) - 4 * r * c;
-      cells.push({ lat: lat0 + r * step, lon: lon0 + c * step, c: [3], f: [500], b: [0], t: [0], dm: [0], g: [g] });
+      cells.push({ lat: lat0 + r * step, lon: lon0 + c * step, c: [3], f: [500], b: [0], t: [0], dm: [0], n: [g] });
     }
   }
   return cells;
@@ -462,7 +483,7 @@ function block(rows, cols, lat0, lon0, step) {
   step = step || 0.5;
   const cells = [];
   for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
-    cells.push({ lat: lat0 + i * step, lon: lon0 + j * step, c: [1], f: [0], b: [0], t: [0], dm: [0], g: [-100] });
+    cells.push({ lat: lat0 + i * step, lon: lon0 + j * step, c: [1], f: [0], b: [0], t: [0], dm: [0], n: [-50] });
   }
   return cells;
 }
@@ -617,8 +638,8 @@ test('field: one image layer in its own pane below markers, over the cells\' out
   assert.strictEqual(s.layer._canvas.height, s.layer._grid.h);
 });
 
-test('field pixels: duct cell coloured like MC_ductFieldColor of its g, normal cell transparent', async () => {
-  const s = await mount(SAMPLE, T2);                       // a: surface duct g=-210
+test('field pixels: cell coloured like MC_ductFieldColor of its n, normal cell transparent', async () => {
+  const s = await mount(SAMPLE, T2);                       // a: surface duct, n=-66
   const p = pixelAt(s, 51.25, -0.25);
   // Exactly the band colour of the value sampled at that pixel's centre ...
   const g = s.layer._grid, cv = s.layer._canvas;
@@ -628,13 +649,14 @@ test('field pixels: duct cell coloured like MC_ductFieldColor of its g, normal c
   const exact = s.ctx.MC_ductFieldColor(smp.g, STOPS);
   for (let k = 0; k < 3; k++) assert.ok(Math.abs(p.rgba[k] - exact[k]) <= 2, `channel ${k}: ${p.rgba} vs ${exact}`);
   assert.ok(Math.abs(p.rgba[3] - 0.5 * 255 * smp.a) <= 2, 'alpha = --mc-duct-alpha x coverage: ' + p.rgba[3]);
-  // ... which, half a pixel from the centre, is close to the cell's own g.
-  assert.ok(Math.abs(smp.g - -210) < 10, 'sampled ' + smp.g);
-  const want = s.ctx.MC_ductFieldColor(-210, STOPS);
-  assert.deepStrictEqual(p.rgba.slice(0, 3), Array.from(want).slice(0, 3), 'the -157..-220 band colour, flat');
-  const s0 = await mount(SAMPLE, T0);                      // a: normal g=-41
+  // ... which, half a pixel from the centre, is close to the cell's own n.
+  assert.ok(Math.abs(smp.g - -66) < 1, 'sampled ' + smp.g);
+  const want = s.ctx.MC_ductFieldColor(-66, STOPS);
+  assert.deepStrictEqual(p.rgba.slice(0, 3), Array.from(want).slice(0, 3), 'the -62..-70 band colour, flat');
+  assert.deepStrictEqual(p.rgba.slice(0, 3), STOP_RGB[4]);
+  const s0 = await mount(SAMPLE, T0);                      // a: n=-38 (above -44)
   assert.strictEqual(pixelAt(s0, 51.25, -0.25).rgba[3], 0, 'normal cell transparent');
-  assert.ok(pixelAt(s0, 51.25, 0.25).rgba[3] > 40, 'elevated duct next to it is coloured (every cell here is on the outer edge: half faded)');
+  assert.ok(pixelAt(s0, 51.25, 0.25).rgba[3] > 40, 'n=-60 next to it is coloured (every cell here is on the outer edge: half faded)');
 });
 
 test('field pixels: soft edge where a neighbour has no data, nothing outside the cells', async () => {
@@ -700,7 +722,7 @@ test('changing time redraws the field in place: same rects, image layer, rendere
   assert.strictEqual(cv.puts, puts + 1, 'one redraw');
   assert.strictEqual(s.api.calls.length, calls);
   assert.strictEqual(s.layer._idx, 2);
-  assert.notDeepStrictEqual(pixelAt(s, 51.25, -0.25).rgba, before, 'normal -> surface duct');
+  assert.notDeepStrictEqual(pixelAt(s, 51.25, -0.25).rgba, before, 'n -38 -> -66');
   const img = cv.img;
   s.layer._setIndex(0);
   assert.strictEqual(cv.img, img, 'pixel buffer reused for the same size');
@@ -716,7 +738,7 @@ test('field build is O(pixels) and fast: 860 cells (Gulf-sized lattice)', () => 
   for (let i = 0; i < 21; i++) {
     for (let j = 0; j < 41; j++) {
       if (cells.length >= 860) break;
-      cells.push({ lat: 25.25 + i * 0.5, lon: -99.75 + j * 0.5, c: [((i + j) % 4) + 1], f: [500], b: [0], t: [0], dm: [0], g: [-40 - ((i * 7 + j * 13) % 400)] });
+      cells.push({ lat: 25.25 + i * 0.5, lon: -99.75 + j * 0.5, c: [((i + j) % 4) + 1], f: [500], b: [0], t: [0], dm: [0], n: [-36 - ((i * 7 + j * 13) % 60)] });
     }
   }
   const g = ctx.MC_ductGrid(cells, 0.5);
@@ -755,19 +777,54 @@ test('popup text for each class and the 868/915 answers', async () => {
   const [a, b] = s.stats.rects;
   const normal = pop(a, 0);
   assert.ok(/Normal/.test(normal) && !/868/.test(normal));
+  assert.ok(normal.includes('Gradient, lowest 1.5 km: \u221238 N/km'), normal);
   const sup = pop(a, 1);
   assert.ok(/Super-refraction/.test(sup) && /Can carry 868 MHz: no/.test(sup) && /Can carry 915 MHz: no/.test(sup), sup);
+  assert.ok(sup.includes('Gradient, lowest 1.5 km: \u221246 N/km'), sup);
   const sfc = pop(a, 2);
   assert.ok(/Surface-based duct/.test(sfc));
   assert.ok(/Base: 0 m above ground/.test(sfc) && /Top: 100 m above ground/.test(sfc), sfc);
   assert.ok(/Strength: 10\.0 M-units/.test(sfc), sfc);
   assert.ok(/Lowest trapped frequency: 380 MHz/.test(sfc), sfc);
   assert.ok(/Can carry 868 MHz: yes/.test(sfc) && /Can carry 915 MHz: yes/.test(sfc), sfc);
+  assert.deepStrictEqual(sfc.split('\n').slice(0, 2), ['Surface-based duct', 'Gradient, lowest 1.5 km: \u221266 N/km'], 'the gradient right under the type');
   const elev = pop(b, 1);
   assert.ok(/Elevated duct/.test(elev));
   assert.ok(/Base: 600 m/.test(elev) && /Top: 820 m/.test(elev) && /Strength: 6\.0/.test(elev), elev);
   assert.ok(/Lowest trapped frequency: 1500 MHz/.test(elev));
   assert.ok(/Can carry 868 MHz: no/.test(elev) && /Can carry 915 MHz: no/.test(elev));
+  assert.ok(elev.includes('Gradient, lowest 1.5 km: \u221257 N/km'), elev);
+});
+
+test('popup: gradient line rounded, only when n has data; class 0 shows no data', async () => {
+  const body = clone(SAMPLE);
+  body.cells[0].n = [-52.6, 0, 7];
+  delete body.cells[1].n;
+  const s = await mount(body, T0);
+  const pop = (rect, i) => { s.layer._idx = i; return rect.popupFn().textContent; };
+  const [a, b, c] = s.stats.rects;
+  assert.ok(pop(a, 0).includes('Gradient, lowest 1.5 km: \u221253 N/km'), pop(a, 0));
+  assert.ok(!/Gradient/.test(pop(a, 1)), 'n 0: no line: ' + pop(a, 1));
+  assert.ok(pop(a, 2).includes('Gradient, lowest 1.5 km: 7 N/km'), pop(a, 2));
+  const eb = pop(b, 0);
+  assert.ok(!/Gradient/.test(eb) && /Elevated duct/.test(eb) && /Can carry 868 MHz: yes/.test(eb), 'no n: the rest as before: ' + eb);
+  assert.strictEqual(pop(c, 0), 'No data');
+});
+
+test('older server without n: no field, but cells, LoRa outlines, popups and edge as before; no throw', async () => {
+  const body = clone(SAMPLE);
+  body.cells.forEach(c => { delete c.n; });
+  const s = await mount(body, T2);
+  assert.strictEqual(s.stats.rects.length, 3);
+  assert.strictEqual(s.stats.fields.length, 1, 'the (empty) image layer is still there');
+  assert.ok(s.layer._canvas.img.data.every(v => v === 0), 'nothing coloured');
+  assert.strictEqual(loraOf(s.stats.rects[0]), '#0a0b0c/4 3', 'surface duct f=380 still outlined');
+  assert.strictEqual(s.stats.lines.length, 1, 'forecast-area edge');
+  s.layer._idx = 2;
+  assert.ok(/Surface-based duct/.test(s.stats.rects[0].popupFn().textContent));
+  for (const i of [0, 1, 2]) s.layer._setIndex(i);
+  s.ctx.dispatch('theme-changed');
+  assert.ok(s.layer._canvas.img.data.every(v => v === 0));
 });
 
 test('popup: 868 vs 915 split between 868 and 915 MHz; no innerHTML use', async () => {
@@ -789,7 +846,8 @@ test('legend: banded bar from the field variables, scale labels, LoRa row, attri
   const s = await mount(SAMPLE);
   const t = legendText(s);
   assert.ok(t.includes('Dashed outline: a duct here can carry LoRa 868/915 MHz'), t);
-  assert.ok(t.includes('Refractivity gradient dN/dh (N/km)'), t);
+  assert.ok(t.includes('Refractivity gradient over the lowest 1.5 km (N/km)'), t);
+  assert.ok(!/-79|-157|Super-refraction|Ducting \(/.test(t), 'no g-based thresholds or labels: ' + t);
   assert.ok(t.includes('NOAA GFS') && t.includes('Open-Meteo.com (CC BY 4.0)'), t);
   assert.ok(/Updated /.test(t));
   assert.ok(t.includes('Indicator only: model levels are ~200 m apart, so thinner ducts are not visible.'));
@@ -807,14 +865,20 @@ test('legend: banded bar from the field variables, scale labels, LoRa row, attri
     assert.ok(stops[k + 1].at > stops[k].at, 'band ' + k / 2 + ' has width');
     if (k) assert.strictEqual(stops[k].at, stops[k - 1].at, 'band ' + k / 2 + ' starts where the previous ends (no blend)');
   }
-  assert.deepStrictEqual(stops.filter((_, i) => i % 2 === 0).map(x => x.c), ['transparent'].concat(STOP_G.map((_, k) => `var(--mc-duct-s${k + 1})`)));
+  assert.deepStrictEqual(stops.filter((_, i) => i % 2 === 0).map(x => x.c), ['transparent'].concat(STOP_N.map((_, k) => `var(--mc-duct-s${k + 1})`)));
   assert.strictEqual(stops[0].at, 0);
   assert.strictEqual(stops[17].at, 100);
   assert.ok(!/#[0-9a-f]{3,8}\b|rgb\(/i.test(bar.style.background), 'no literal colour in the bar');
   const labels = find(box, n => /mc-duct-scale-label\b/.test(n.className));
-  assert.deepStrictEqual(labels.map(n => n.textContent), ['Normal', 'Super-refraction', 'Ducting', 'Strong']);
+  assert.deepStrictEqual(labels.map(n => n.textContent), ['Normal', 'Enhanced', 'Strong', 'Very strong']);
   const left = labels.map(n => parseFloat(n.style.left));
   assert.ok(left.every((v, i) => i === 0 || v > left[i - 1]), 'labels in order: ' + left);
+  // "Enhanced" marks where the colour starts (-44, band 1), "Strong" the -62 band (5).
+  assert.strictEqual(left[0], 0);
+  assert.strictEqual(left[1], stops[2].at, 'Enhanced at the start of the first colour');
+  assert.strictEqual(left[2], stops[10].at, 'Strong at the start of the -62 band');
+  assert.strictEqual(left[3], 100);
+  assert.ok(/mc-duct-scale-label-end/.test(labels[3].className), 'Very strong right-aligned at the end');
   const sw = find(box, n => /mc-duct-swatch-/.test(n.className));
   assert.deepStrictEqual(sw.map(n => n.className), ['mc-duct-swatch mc-duct-swatch-lora', 'mc-duct-swatch mc-duct-swatch-edge']);
   assert.ok(s.map._controls.every(c => c.options.position === 'bottomleft'));
@@ -902,7 +966,7 @@ test('a good refresh rebuilds cells and keeps a user-picked time', async () => {
 test('a refresh with a larger area moves the field bounds and resizes its canvas', async () => {
   const s = await mount(SAMPLE, T1 + 60);
   const body = clone(SAMPLE);
-  body.cells.push({ lat: 52.75, lon: 1.25, c: [4, 4, 4], f: [300, 300, 300], b: [0, 0, 0], t: [90, 90, 90], dm: [80, 80, 80], g: [-400, -400, -400] });
+  body.cells.push({ lat: 52.75, lon: 1.25, c: [4, 4, 4], f: [300, 300, 300], b: [0, 0, 0], t: [90, 90, 90], dm: [80, 80, 80], g: [-400, -400, -400], n: [-95, -95, -95] });
   s.timers[0].fn();
   s.api.calls[1].ok(body);
   await tick(); await tick();
@@ -1044,7 +1108,7 @@ test('missing variables: no stops -> transparent field, no LoRa variable -> no o
   layer._setIndex(2);
   const d = layer._canvas.img.data;
   assert.ok(d.every(v => v === 0), 'nothing drawn without colours');
-  // (-157 is the only stop below; with --mc-duct-alpha unset the opacity is the default.)
+  // (-58 is the only stop below; with --mc-duct-alpha unset the opacity is the default.)
   assert.ok(s.stats.rects.every(r => !r.style.stroke), 'no outline without --mc-duct-lora');
   assert.ok(!/magenta|orange|gold|lightblue|#[0-9a-f]{6}\b/i.test(SRC.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')), 'no colour literals in map-ducting.js');
   s.vars['--mc-duct-s4'] = '#00a000';
