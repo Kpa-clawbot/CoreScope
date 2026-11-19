@@ -99,6 +99,7 @@ func newTestDuctingSource(t *testing.T, f *fakeOpenMeteo, model string) (*ductin
 	t.Cleanup(srv.Close)
 	m, _ := ductingModel(model)
 	src := newDuctingSource(srv.URL, m)
+	src.now = func() time.Time { return time.Unix(1795046400, 0) } // the fake's first hour
 	var waits []time.Duration
 	src.sleep = func(ctx context.Context, d time.Duration) error {
 		waits = append(waits, d)
@@ -350,13 +351,13 @@ func TestDuctingSourceOversizeBody(t *testing.T) {
 func TestDuctingSourceMalformed(t *testing.T) {
 	m, _ := ductingModel("gfs")
 	cells := ductingTestCells(2)
-	if _, err := parseDuctingResponse([]byte(`[{"hourly":{"time":[1]}}]`), cells, m); err == nil {
+	if _, err := parseDuctingResponse([]byte(`[{"hourly":{"time":[1]}}]`), cells, m, 48, ductNow); err == nil {
 		t.Error("location count mismatch accepted")
 	}
-	if _, err := parseDuctingResponse([]byte(`not json`), cells[:1], m); err == nil {
+	if _, err := parseDuctingResponse([]byte(`not json`), cells[:1], m, 48, ductNow); err == nil {
 		t.Error("invalid JSON accepted")
 	}
-	cols, err := parseDuctingResponse([]byte(`{"elevation":5,"hourly":{"time":[]}}`), cells[:1], m)
+	cols, err := parseDuctingResponse([]byte(`{"elevation":5,"hourly":{"time":[]}}`), cells[:1], m, 48, ductNow)
 	if err != nil || len(cols) != 0 {
 		t.Errorf("no-times location: %v %d", err, len(cols))
 	}
@@ -441,6 +442,8 @@ func TestDuctingIsPublicAPI(t *testing.T) {
 		"":                                        true,
 		"https://api.open-meteo.com":              true,
 		"https://API.Open-Meteo.com/":             true,
+		"https://api.open-meteo.com.":             true,
+		"https://API.Open-Meteo.com.:443/x":       true,
 		"https://api.open-meteo.com:443":          true,
 		"https://om.example.com":                  false,
 		"http://localhost:8080":                   false,
@@ -482,5 +485,109 @@ func TestDuctingSourceSelfHostedNoCallCap(t *testing.T) {
 	}
 	if !newDuctingSource("https://api.open-meteo.com", src.model).capped {
 		t.Error("public API source is not capped")
+	}
+}
+
+var ductNow = time.Unix(1795046400, 0)
+
+func TestDuctingSourceTimeAxis(t *testing.T) {
+	m, _ := ductingModel("gfs")
+	cells := ductingTestCells(1)
+	mk := func(times ...float64) []byte {
+		ts := make([]*float64, len(times))
+		for i := range times {
+			ts[i] = &times[i]
+		}
+		b, _ := json.Marshal(map[string]any{"elevation": 1, "hourly": map[string]any{"time": ts}})
+		return b
+	}
+	t0 := float64(1795046400)
+	for name, tc := range map[string]struct {
+		times []float64
+		hours int
+		ok    bool
+	}{
+		"well-formed":   {[]float64{t0, t0 + 3600, t0 + 7200}, 3, true},
+		"exact limit":   {[]float64{t0, t0 + 3600, t0 + 7200, t0 + 10800}, 3, true},
+		"too long":      {[]float64{t0, t0 + 3600, t0 + 7200, t0 + 10800, t0 + 14400}, 3, false},
+		"unsorted":      {[]float64{t0 + 3600, t0, t0 + 7200}, 3, false},
+		"duplicate":     {[]float64{t0, t0, t0 + 3600}, 3, false},
+		"not hourly":    {[]float64{t0, t0 + 1800, t0 + 3600}, 3, false},
+		"gap":           {[]float64{t0, t0 + 7200}, 3, false},
+		"fractional":    {[]float64{t0 + 0.5, t0 + 3600.5}, 3, false},
+		"before window": {[]float64{t0 - 25*3600, t0 - 24*3600}, 3, false},
+		"inside slack":  {[]float64{t0 - 24*3600, t0 - 23*3600}, 3, true},
+		"after window":  {[]float64{t0 + 28*3600, t0 + 29*3600}, 3, false},
+		"epoch zero":    {[]float64{0, 3600}, 3, false},
+		"far future":    {[]float64{4e12, 4e12 + 3600}, 3, false},
+	} {
+		cols, err := parseDuctingResponse(mk(tc.times...), cells, m, tc.hours, ductNow)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := len(cols) == 1; got != tc.ok {
+			t.Errorf("%s: accepted=%v, want %v", name, got, tc.ok)
+		}
+	}
+}
+
+func TestDuctingSourceHugeTimeAxisSkipped(t *testing.T) {
+	const huge = 1000000
+	f := &fakeOpenMeteo{t: t, hours: 3}
+	f.fill = func(i int, lat, lon float64, h map[string][]*float64) {
+		if i != 1 {
+			return
+		}
+		ts := make([]*float64, huge)
+		for k := range ts {
+			v := float64(1795046400 + 3600*k)
+			ts[k] = &v
+		}
+		h["time"] = ts
+	}
+	src, _, _ := newTestDuctingSource(t, f, "gfs")
+	src.maxBody = 64 << 20
+	cells := ductingTestCells(3)
+	cols, err := src.fetch(context.Background(), cells, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cols) != 2 || cols[0].Lat != cells[0][0] || cols[1].Lat != cells[2][0] {
+		t.Fatalf("%d columns, want the two well-formed locations (0 and 2)", len(cols))
+	}
+	for _, c := range cols {
+		if len(c.Times) != 3 || len(c.Hours) != 3 {
+			t.Errorf("column has %d times, %d hours", len(c.Times), len(c.Hours))
+		}
+	}
+}
+
+func TestDuctingSourceNoRedirects(t *testing.T) {
+	var hits int
+	var mu sync.Mutex
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer target.Close()
+	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/v1/forecast", http.StatusFound)
+	}))
+	defer redir.Close()
+	m, _ := ductingModel("gfs")
+	src := newDuctingSource(redir.URL, m)
+	_, err := src.fetch(context.Background(), ductingTestCells(1), 3)
+	var he *ductingHTTPError
+	if !errors.As(err, &he) || he.Status != http.StatusFound {
+		t.Fatalf("err %v, want HTTP 302 error", err)
+	}
+	ductingAssertNoURL(t, err, target.URL)
+	ductingAssertNoURL(t, err, redir.URL)
+	mu.Lock()
+	defer mu.Unlock()
+	if hits != 0 {
+		t.Errorf("redirect target was contacted %d times", hits)
 	}
 }

@@ -50,7 +50,7 @@ func ductingIsPublicAPI(baseURL string) bool {
 	if err != nil || u.Hostname() == "" {
 		return true
 	}
-	return strings.EqualFold(u.Hostname(), ductingPublicHost)
+	return strings.EqualFold(strings.TrimSuffix(u.Hostname(), "."), ductingPublicHost)
 }
 
 // errDuctingRateLimited is returned when Open-Meteo answers 429.
@@ -115,7 +115,13 @@ func newDuctingSource(baseURL string, model DuctingModel) *ductingSource {
 	return &ductingSource{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		model:   model,
-		client:  &http.Client{Timeout: ductingHTTPTimeout},
+		// A redirect is never followed: a 3xx is reported as a plain non-2xx
+		// status, so a hostile or misconfigured upstream cannot bounce the
+		// request (and its User-Agent) to another host.
+		client: &http.Client{
+			Timeout:       ductingHTTPTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		ua:      ductingUserAgent,
 		sleep:   ductingSleep,
 		now:     time.Now,
@@ -271,7 +277,7 @@ func (s *ductingSource) fetchBatch(ctx context.Context, batch [][2]float64, vars
 	if int64(len(body)) > s.maxBody {
 		return nil, fmt.Errorf("open-meteo response larger than %d bytes", s.maxBody)
 	}
-	return parseDuctingResponse(body, batch, s.model)
+	return parseDuctingResponse(body, batch, s.model, forecastHours, s.now())
 }
 
 // ductingTransportError drops the *url.Error wrapper (it names the URL) and
@@ -319,7 +325,7 @@ type openMeteoLocation struct {
 
 // parseDuctingResponse decodes a forecast response for batch: a JSON array
 // for several locations, a single object for one.
-func parseDuctingResponse(body []byte, batch [][2]float64, m DuctingModel) ([]ductingColumn, error) {
+func parseDuctingResponse(body []byte, batch [][2]float64, m DuctingModel, forecastHours int, now time.Time) ([]ductingColumn, error) {
 	var locs []openMeteoLocation
 	trimmed := bytes.TrimLeft(body, " \t\r\n")
 	if len(trimmed) > 0 && trimmed[0] == '[' {
@@ -338,7 +344,7 @@ func parseDuctingResponse(body []byte, batch [][2]float64, m DuctingModel) ([]du
 	}
 	out := make([]ductingColumn, 0, len(locs))
 	for i, l := range locs {
-		if col, ok := l.column(batch[i], m); ok {
+		if col, ok := l.column(batch[i], m, forecastHours, now); ok {
 			out = append(out, col)
 		}
 	}
@@ -352,21 +358,46 @@ func ductingValue(vals []*float64, i int) float64 {
 	return math.NaN()
 }
 
+// ductingTimeSlackSeconds is how far outside [now, now+forecastHours] a
+// returned time may fall (clock skew, a forecast that started earlier).
+const ductingTimeSlackSeconds = 24 * 3600
+
+// ductingTimeAxisValid reports whether raw is a sane hourly axis for a
+// forecastHours request: at most forecastHours+1 entries, finite, strictly
+// ascending in exact 3600 s steps, and inside the slack window around now.
+// It allocates nothing, so it runs before anything sized by the axis.
+func ductingTimeAxisValid(raw []*float64, forecastHours int, now time.Time) bool {
+	if len(raw) == 0 || len(raw) > forecastHours+1 {
+		return false
+	}
+	lo := now.Unix() - ductingTimeSlackSeconds
+	hi := now.Unix() + int64(forecastHours)*3600 + ductingTimeSlackSeconds
+	var prev int64
+	for i, t := range raw {
+		if t == nil || !ductFinite(*t) || *t < float64(lo) || *t > float64(hi) {
+			return false
+		}
+		v := int64(*t)
+		if float64(v) != *t || (i > 0 && v-prev != 3600) {
+			return false
+		}
+		prev = v
+	}
+	return true
+}
+
 // column converts one location; false for an error object or one without
-// usable times.
-func (l openMeteoLocation) column(cell [2]float64, m DuctingModel) (ductingColumn, bool) {
+// a usable time axis (see ductingTimeAxisValid).
+func (l openMeteoLocation) column(cell [2]float64, m DuctingModel, forecastHours int, now time.Time) (ductingColumn, bool) {
 	if l.Error || l.Hourly == nil {
 		return ductingColumn{}, false
 	}
 	rawTimes := l.Hourly["time"]
-	if len(rawTimes) == 0 {
+	if !ductingTimeAxisValid(rawTimes, forecastHours, now) {
 		return ductingColumn{}, false
 	}
 	times := make([]int64, len(rawTimes))
 	for i, t := range rawTimes {
-		if t == nil || !ductFinite(*t) {
-			return ductingColumn{}, false
-		}
 		times[i] = int64(*t)
 	}
 	col := ductingColumn{Lat: cell[0], Lon: cell[1], Elevation: math.NaN(), Times: times}
