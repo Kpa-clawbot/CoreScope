@@ -144,6 +144,31 @@ assert(empty && empty.group === 'encrypted',
 const leak = out.find(c => /^ch(\d+|\?)$/.test(c.displayName));
 assert(!leak, 'no displayName matches the raw chNNN placeholder');
 
+console.log('\n=== Local key whose channel the server already decrypts ===');
+
+// The server decrypted #coredrive on byte 0x76, so the undecrypted bucket on
+// that byte is traffic its key did not open: a local #coredrive key must not
+// put that bucket under the name.
+const shared = decorate([
+  { hash: 118, name: '#coredrive', messages: 1632, senders: 36, encrypted: false },
+  { hash: 118, name: 'ch118',      messages: 3349, senders: 0,  encrypted: true  },
+  { hash: 99,  name: '#bemesh',    messages: 996,  senders: 94, encrypted: false },
+  { hash: 99,  name: 'ch99',       messages: 739,  senders: 0,  encrypted: true  },
+], { 118: '#coredrive', 99: 'private-room' }, {});
+const sharedEnc = shared.find(c => c.hash === 118 && c.encrypted);
+assert(sharedEnc && sharedEnc.displayName === 'Encrypted (0x76)',
+  'undecrypted bucket next to the server-decrypted channel of the local key stays "Encrypted (0x76)"');
+assert(sharedEnc && sharedEnc.group === 'encrypted',
+  'that bucket stays in the "encrypted" group, not "mine"');
+const sharedDec = shared.find(c => c.hash === 118 && !c.encrypted);
+assert(sharedDec && sharedDec.displayName === '#coredrive' && sharedDec.group === 'network',
+  'the decrypted #coredrive row is unchanged');
+// A local key for a channel the server does not know may be what the bucket
+// holds, even when another decrypted channel shares the byte.
+const otherEnc = shared.find(c => c.hash === 99 && c.encrypted);
+assert(otherEnc && otherEnc.displayName === 'private-room' && otherEnc.group === 'mine',
+  'a local key for a channel the server did not decrypt still names the bucket');
+
 console.log('\n=== Grouped table render: order + sort ===');
 
 const tbody = global._analyticsChannelTbodyHtml(out, 'messages', 'desc', {
