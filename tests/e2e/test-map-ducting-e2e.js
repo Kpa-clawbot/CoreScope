@@ -140,9 +140,13 @@ async function setOverlayUi(page, on) {
 function inPageState() {
   const maps = ((window.__mcHarness && window.__mcHarness.maps) || [])
     .filter(m => m && m._container && m._container.isConnected && m._loaded);
-  const rects = [], fields = [];
+  const rects = [], fields = [], edges = [];
   maps.forEach((m, mi) => {
     m.eachLayer((l) => {
+      if (l._mcEdge) {
+        const parts = l.getLatLngs().map(p => p.map(ll => [ll.lat, ll.lng]));
+        edges.push({ map: mi, parts, color: l.options.color, dash: l.options.dashArray, weight: l.options.weight, interactive: l.options.interactive });
+      }
       if (l._mcCell) {
         const c = l._mcCell;
         rects.push({ map: mi, lat: c.lat, lon: c.lon, stroke: !!l.options.stroke, color: l.options.stroke ? l.options.color : null, dash: l.options.stroke ? l.options.dashArray : null, fillOpacity: l.options.fillOpacity });
@@ -156,6 +160,7 @@ function inPageState() {
     maps: maps.length,
     rects,
     fields,
+    edges,
     legends: q('.mc-duct-legend').length,
     times: q('.mc-duct-time').length,
     legendVisible: q('.mc-duct-legend').some(vis),
@@ -252,6 +257,15 @@ function neighbours(data, c) {
   return [[st, 0], [-st, 0], [0, st], [0, -st]].map(([a, b]) => byKey.get(key(c.lat + a, c.lon + b))).filter(Boolean);
 }
 
+// 1 for a cell whose 8 neighbours are all in the forecast area (data at some
+// hour), 0.5 on the area's outer ring: the field's coverage at a cell centre.
+function ringFactor(data, c) {
+  const st = data.stepDeg, key = (la, lo) => `${la.toFixed(4)},${lo.toFixed(4)}`;
+  const area = new Set(data.cells.filter(x => x.c.some(v => v >= 1)).map(x => key(x.lat, x.lon)));
+  for (const a of [-st, 0, st]) for (const b of [-st, 0, st]) if (!area.has(key(c.lat + a, c.lon + b))) return 0.5;
+  return 1;
+}
+
 /**
  * Checks the field at hour idx: duct cells coloured like their g, a normal
  * cell (with only normal or missing neighbours) transparent, and every probed
@@ -271,7 +285,8 @@ async function fieldProblems(page, data, idx) {
     const bad = Math.abs(p.px[3] - p.exp[3]) > 3 || (p.exp[3] >= 64 && p.px.slice(0, 3).some((v, k) => Math.abs(v - p.exp[k]) > 4));
     if (bad) probs.push(`${where}: pixel ${p.px} but the field there is ${p.exp}`);
     if (i < ducts.length) {
-      if (p.px[3] < 0.8 * r.alpha * 255) probs.push(`${where}: duct centre alpha ${p.px[3]}`);
+      // Full opacity inside the forecast area, half on its outer ring (the wider edge fade).
+      if (p.px[3] < 0.8 * r.alpha * 255 * ringFactor(data, ducts[i])) probs.push(`${where}: duct centre alpha ${p.px[3]}`);
       if (p.px.slice(0, 3).some((v, k) => Math.abs(v - p.own[k]) > 60)) probs.push(`${where}: pixel ${p.px} far from its own colour ${p.own}`);
     } else if (p.px[3] !== 0) probs.push(`${where}: normal cell centre not transparent (${p.px})`);
   });
@@ -404,6 +419,39 @@ async function run() {
       const ov = await page.evaluate(inPageOverlaps);
       assert(ov.mine === 2, 'legend and time box not both visible');
       assert(!ov.hits.length, ov.hits.join('; '));
+    });
+
+    await test('the forecast area has a dotted outline on its outer boundary, and the legend explains it', async () => {
+      const st = await pageState(page);
+      assert(st.edges.length === 1, 'edge layers: ' + st.edges.length);
+      const e = st.edges[0];
+      assert(e.dash === '1 5' && e.weight === 1 && e.interactive === false && e.color, 'edge style: ' + JSON.stringify([e.dash, e.weight, e.interactive, e.color]));
+      assert(/Dotted line: edge of the forecast area/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 200));
+      // Every unit of every run separates a cell with data from one without.
+      const step = Number(data.stepDeg) || 0.5;
+      const has = new Set();
+      data.cells.forEach(c => { if (c.c.some(v => v >= 1)) has.add(Math.round(c.lat / step - 0.5) + ',' + Math.round(c.lon / step - 0.5)); });
+      const cell = (i, j) => has.has(i + ',' + j);
+      let units = 0;
+      e.parts.forEach((p) => {
+        assert(p.length === 2, 'a run has 2 points');
+        const [a, b] = p;
+        if (Math.abs(a[0] - b[0]) < 1e-9) {            // horizontal, between rows
+          const r = Math.round(a[0] / step), j0 = Math.round(Math.min(a[1], b[1]) / step), j1 = Math.round(Math.max(a[1], b[1]) / step);
+          for (let j = j0; j < j1; j++, units++) assert(cell(r - 1, j) !== cell(r, j), `run at lat ${a[0]} lon ${j * step}: not a boundary`);
+        } else {                                       // vertical, between columns
+          assert(Math.abs(a[1] - b[1]) < 1e-9, 'run is neither horizontal nor vertical');
+          const c = Math.round(a[1] / step), i0 = Math.round(Math.min(a[0], b[0]) / step), i1 = Math.round(Math.max(a[0], b[0]) / step);
+          for (let i = i0; i < i1; i++, units++) assert(cell(i, c - 1) !== cell(i, c), `run at lon ${a[1]} lat ${i * step}: not a boundary`);
+        }
+      });
+      // ... and every boundary unit is covered (count them independently).
+      let want = 0;
+      has.forEach((k) => {
+        const [i, j] = k.split(',').map(Number);
+        [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]].forEach(([a, b]) => { if (!cell(a, b)) want++; });
+      });
+      assert(units === want, `boundary units drawn=${units} want ${want}`);
     });
 
     // On a short viewport the expanded picker list is taller than the space

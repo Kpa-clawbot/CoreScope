@@ -321,8 +321,9 @@ function stressInit() {
       var l = c.querySelectorAll('.mc-duct-legend').length, t = c.querySelectorAll('.mc-duct-time').length;
       inLeg += l; inTime += t;
       if (l > 1 || t > 1) p.push('map has ' + l + ' legends and ' + t + ' time boxes');
-      var cells = 0, fields = 0;
-      m.eachLayer(function (ly) { if (ly._mcCell) cells++; if (ly._mcField) fields++; });
+      var cells = 0, fields = 0, edges = 0;
+      m.eachLayer(function (ly) { if (ly._mcCell) cells++; if (ly._mcField) fields++; if (ly._mcEdge) edges++; });
+      if (edges > 1 || (!wantOn && edges)) p.push('map has ' + edges + ' edge outlines (overlay ' + (wantOn ? 'on' : 'off') + ')');
       var fieldDom = c.querySelectorAll('.mc-duct-field').length;
       if (!wantOn && (l || t || cells || fields || fieldDom)) p.push('overlay off but map has legend=' + l + ' time=' + t + ' cells=' + cells + ' fields=' + fields + '/' + fieldDom);
       if (wantOn && pickers && (l !== 1 || t !== 1)) p.push('overlay on but map has legend=' + l + ' time=' + t);

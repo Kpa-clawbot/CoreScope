@@ -36,6 +36,7 @@ Ducting is when a layer of air traps radio signals and carries them far beyond t
 - **Green, then yellow, orange and red**: ducting (from -157 N/km). The air traps signals in a layer; the further along the scale, the stronger the trapping.
 - **Pink**: very strong ducting (around -600 N/km and beyond).
 - A **dashed outline** marks a grid cell where a duct can carry LoRa 868/915 MHz (it traps signals at 1 GHz or lower). Mesh links can stretch over long distances there. A duct without the outline is too thin for LoRa and matters only for higher frequencies.
+- A faint **dotted line** marks the edge of the forecast area. There is no forecast beyond it, and the colours fade out towards it, so a blank map outside the line means "not covered", not "no ducting".
 - Areas without forecast data are not drawn; the field fades out at their edge.
 
 The legend shows the colour scale with these thresholds. Use the **Forecast time** slider to move through the coming hours. Click anywhere in the field for the details of that grid cell: type (normal, super-refraction, elevated duct or surface-based duct), base and top of the duct (metres above ground), strength, the lowest frequency it can trap and whether it can carry 868 and 915 MHz. An elevated duct is a layer above the ground and mostly helps nodes that sit inside it, such as repeaters on high sites; a surface-based duct reaches the ground. The legend also shows the weather model, the data attribution and when the forecast was last updated.

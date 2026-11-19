@@ -12,6 +12,9 @@
  *     time and theme change, resized/rebounded on refresh, removed on teardown
  *   - one invisible rectangle per cell with data; dashed LoRa outline only
  *     for ducts with 0 < fmin <= 1000 MHz
+ *   - the forecast area's dotted outline (merged boundary runs, antimeridian
+ *     seam, one layer per build, colour from --mc-duct-edge) and the wider
+ *     fade at the area's outer edge
  *   - popup text per class and the 868/915 MHz answers
  *   - pending / error / failed-refresh legend states, legend content
  *   - remove during an in-flight fetch, timer cleanup, refresh cadence
@@ -111,6 +114,12 @@ function makeLeaflet(stats) {
     g.clearLayers = () => { g.layers = []; return g; };
     return g;
   };
+  L.polyline = (latlngs, opts) => {
+    const l = { kind: 'polyline', latlngs, opts, style: {}, setStyleCalls: 0 };
+    l.setStyle = (st) => { Object.assign(l.style, st); l.setStyleCalls++; return l; };
+    stats.lines.push(l);
+    return l;
+  };
   L.rectangle = (bounds, opts) => {
     const r = { kind: 'rect', bounds, opts, style: {}, setStyleCalls: 0 };
     r.setStyle = (s) => { Object.assign(r.style, s); r.setStyleCalls++; return r; };
@@ -147,12 +156,12 @@ function makeApi() {
 
 function makeSandbox(opts) {
   opts = opts || {};
-  const stats = { rects: [], renderers: [], fields: [] };
+  const stats = { rects: [], renderers: [], fields: [], lines: [] };
   const timers = [];
   const cleared = [];
   let nextId = 1;
   const winL = {};
-  const vars = Object.assign({ '--mc-duct-lora': ' #0a0b0c ', '--mc-duct-alpha': '0.5' }, STOP_VARS);
+  const vars = Object.assign({ '--mc-duct-lora': ' #0a0b0c ', '--mc-duct-edge': ' rgba(1, 2, 3, 0.8) ', '--mc-duct-alpha': '0.5' }, STOP_VARS);
   const ctx = {
     console, JSON, Date, Math, Object, Array, String, Number, isFinite, parseInt, Promise,
     document: { createElement: makeEl, documentElement: {} },
@@ -317,9 +326,9 @@ test('MC_ductSample: value at centres, bilinear between, fades out at cells with
   assert.ok(Number.isNaN(v[3]), 'missing slot is NaN');
   const at = (lat, lon) => ctx.MC_ductSample(g, v, lat, lon);
   assert.strictEqual(at(51.25, -0.25).g, -210);
-  assert.strictEqual(at(51.25, -0.25).a, 1, 'full at a centre, even next to a missing cell');
+  assert.strictEqual(at(51.25, -0.25).a, 0.5, 'centre of an outer-edge cell: half faded');
   assert.strictEqual(at(51.25, 0).g, -185, 'halfway between a and b');
-  assert.strictEqual(at(51.25, 0).a, 1);
+  assert.strictEqual(at(51.25, 0).a, 0.5);
   assert.strictEqual(at(51.25, 0.5).a, 0, 'b east edge: no neighbour, faded out');
   assert.strictEqual(at(51, -0.25).a, 0, 'south edge');
   const q = at(51.25, 0.375).a;
@@ -328,6 +337,73 @@ test('MC_ductSample: value at centres, bilinear between, fades out at cells with
   assert.ok(Math.abs(at(51.5, 0).g - (-210 - 160 - 40) / 3) < 1e-4, 'mean over the cells that have data');
   const v0 = ctx.MC_ductGridValues(g, cells, 0);           // cell c is class 0 at t0
   assert.ok(Number.isNaN(v0[2]), 'class 0 at this hour is no data');
+});
+
+// A filled block of cells (rows x cols, lower-left centre lat0/lon0).
+function block(rows, cols, lat0, lon0, step) {
+  step = step || 0.5;
+  const cells = [];
+  for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
+    cells.push({ lat: lat0 + i * step, lon: lon0 + j * step, c: [1], f: [0], b: [0], t: [0], dm: [0], g: [-100] });
+  }
+  return cells;
+}
+const segs = (ctx, cells) => JSON.parse(JSON.stringify(ctx.MC_ductEdges(ctx.MC_ductGrid(cells, 0.5)))).map(sg => sg.map(p => p.join(',')).sort().join(' | ')).sort();
+
+test('MC_ductEdges: a filled 3x4 block is 4 merged runs on its outer boundary', () => {
+  const { ctx } = makeSandbox();
+  // rows 3 (lat 10.25..11.25), cols 4 (lon 20.25..21.75): edges 10..11.5, 20..22
+  assert.deepStrictEqual(segs(ctx, block(3, 4, 10.25, 20.25)), [
+    '10,20 | 10,22', '11.5,20 | 11.5,22', '10,20 | 11.5,20', '10,22 | 11.5,22',
+  ].map(x => x.split(' | ').sort().join(' | ')).sort());
+});
+
+test('MC_ductEdges: an L-shape has 6 runs; two separate blocks have two outlines', () => {
+  const { ctx } = makeSandbox();
+  // L: 2x2 block plus 2 extra cells to the east on the bottom row.
+  const l = block(2, 2, 10.25, 20.25).concat(block(1, 2, 10.25, 21.25));
+  assert.strictEqual(ctx.MC_ductEdges(ctx.MC_ductGrid(l, 0.5)).length, 6);
+  const two = block(2, 2, 10.25, 20.25).concat(block(2, 2, 30.25, 40.25));
+  const e = ctx.MC_ductEdges(ctx.MC_ductGrid(two, 0.5));
+  assert.strictEqual(e.length, 8, '4 + 4');
+  assert.ok(e.every(sg => Math.abs(sg[0][0] - sg[1][0]) <= 1 && Math.abs(sg[0][1] - sg[1][1]) <= 1), 'no run bridges the blocks');
+  assert.strictEqual(ctx.MC_ductEdges(null).length, 0);
+});
+
+test('MC_ductEdges: a hole inside the area is outlined too', () => {
+  const { ctx } = makeSandbox();
+  const cells = block(3, 3, 10.25, 20.25).filter(c => !(c.lat === 10.75 && c.lon === 20.75));
+  assert.strictEqual(ctx.MC_ductEdges(ctx.MC_ductGrid(cells, 0.5)).length, 8, '4 outer + 4 around the hole');
+});
+
+test('MC_ductEdges: a block across the antimeridian draws no line across the world and no seam line', () => {
+  const { ctx } = makeSandbox();
+  const cells = block(2, 1, 10.25, 179.75).concat(block(2, 1, 10.25, -179.75));
+  const e = ctx.MC_ductEdges(ctx.MC_ductGrid(cells, 0.5));
+  assert.ok(e.every(sg => Math.abs(sg[0][1] - sg[1][1]) <= 0.5 + 1e-9), 'no run spans more than a cell in lon');
+  assert.ok(!e.some(sg => Math.abs(Math.abs(sg[0][1]) - 180) < 1e-9 && sg[0][1] === sg[1][1]), 'no line at lon +-180 where the cells meet');
+  assert.strictEqual(e.length, 6, 'top and bottom of each half, west edge of the east half, east edge of the west half');
+  // Without the other half the seam IS an edge.
+  assert.strictEqual(ctx.MC_ductEdges(ctx.MC_ductGrid(block(2, 1, 10.25, 179.75), 0.5)).length, 4);
+});
+
+test('fade at the area\'s outer edge spans a cell; interior cells next to filled neighbours are unaffected', () => {
+  const { ctx } = makeSandbox();
+  const cells = block(5, 5, 10.25, 20.25);        // lon 20..22.5, lat 10..12.5
+  const g = ctx.MC_ductGrid(cells, 0.5);
+  const v = ctx.MC_ductGridValues(g, cells, 0);
+  const a = (lat, lon) => ctx.MC_ductSample(g, v, lat, lon).a;
+  assert.strictEqual(a(11.25, 20), 0, 'at the edge');
+  assert.ok(Math.abs(a(11.25, 20.25) - 0.5) < 1e-9, 'half a cell in: ' + a(11.25, 20.25));
+  assert.ok(a(11.25, 20.125) > 0 && a(11.25, 20.125) < a(11.25, 20.25), 'rising within the outer half cell');
+  assert.ok(a(11.25, 20.5) > 0.5 && a(11.25, 20.5) < 1, 'still fading between the first and second cell');
+  assert.strictEqual(a(11.25, 20.75), 1, 'second cell in: full');
+  assert.strictEqual(a(11.25, 21.25), 1, 'interior');
+  assert.strictEqual(a(11.25, 21.75), 1, 'interior, next to the outer ring');
+  // A hole in an otherwise filled area: the cells next to it are still the interior's... a hole is an edge too.
+  const holed = cells.filter(c => !(c.lat === 11.25 && c.lon === 21.25));
+  const gh = ctx.MC_ductGrid(holed, 0.5);
+  assert.strictEqual(gh.soft[(1) * 5 + 0], 1);
 });
 
 // ── drawing ─────────────────────────────────────────────────────────────────
@@ -351,7 +427,59 @@ test('one invisible rectangle per cell with data (class >= 1); bounds = centre +
   assert.strictEqual(r.opts.stroke, false);
   assert.ok(s.stats.rects.every(x => x._mcCell && x.style.fillOpacity !== 1));
   assert.strictEqual(s.stats.renderers.length, 1);
-  assert.strictEqual(s.layer._group.layers.length, 3);
+  assert.strictEqual(s.layer._group.layers.length, 4, '3 rects + the edge outline');
+});
+
+test('edge outline: one non-interactive dotted polyline per build, in the group, on the shared renderer', async () => {
+  const s = await mount(SAMPLE, T0);
+  assert.strictEqual(s.stats.lines.length, 1);
+  const l = s.stats.lines[0];
+  assert.strictEqual(l._mcEdge, true);
+  assert.ok(s.layer._group.layers.includes(l), 'removed with the group');
+  assert.strictEqual(l.opts.renderer, s.stats.renderers[0]);
+  assert.strictEqual(l.opts.interactive, false);
+  assert.strictEqual(l.opts.weight, 1);
+  assert.strictEqual(l.opts.dashArray, '1 5');
+  assert.notStrictEqual(l.opts.dashArray, '4 3', 'not the LoRa dash');
+  assert.strictEqual(l.opts.color, 'rgba(1, 2, 3, 0.8)', 'from --mc-duct-edge, trimmed');
+  assert.ok(l.opts.opacity > 0 && l.opts.opacity < 1);
+  assert.ok(l.latlngs.length >= 4, 'merged runs');
+  // Not rebuilt on slider moves or theme changes; restyled only when the colour changes.
+  s.layer._setIndex(2);
+  s.ctx.dispatch('theme-changed');
+  assert.strictEqual(s.stats.lines.length, 1);
+  assert.strictEqual(l.setStyleCalls, 0, 'same colour: no restyle');
+  s.vars['--mc-duct-edge'] = '#abcdef';
+  s.ctx.dispatch('theme-changed');
+  assert.strictEqual(s.stats.lines.length, 1);
+  assert.strictEqual(l.style.color, '#abcdef');
+  assert.strictEqual(l.setStyleCalls, 1);
+  // A rebuild (refresh) makes a fresh one.
+  s.layer._build();
+  assert.strictEqual(s.stats.lines.length, 2);
+  assert.strictEqual(s.layer._group.layers.filter(x => x._mcEdge).length, 1);
+  assert.strictEqual(s.stats.lines[1].opts.color, '#abcdef');
+  const group = s.layer._group;
+  s.layer.onRemove(s.map);
+  assert.strictEqual(s.layer._edge, null);
+  assert.ok(!s.map._layers.includes(group), 'group (and the edge) gone from the map');
+});
+
+test('edge outline: no colour variable -> stroke off, never invented', async () => {
+  const s = makeSandbox();
+  s.vars['--mc-duct-edge'] = '';
+  const map = makeMap();
+  const layer = s.ctx.MC_createDuctingLayer({});
+  layer.onAdd(map);
+  s.api.calls[0].ok(clone(SAMPLE));
+  await tick(); await tick();
+  assert.strictEqual(s.stats.lines[0].opts.stroke, false);
+});
+
+test('legend: dotted-line row for the forecast area edge', async () => {
+  const s = await mount(SAMPLE);
+  assert.ok(legendText(s).includes('Dotted line: edge of the forecast area (no forecast beyond it)'));
+  assert.strictEqual(find(s.map._controls[1]._container, n => /mc-duct-swatch-edge/.test(n.className || '')).length, 1);
 });
 
 test('field: one image layer in its own pane below markers, over the cells\' outer edges', async () => {
@@ -388,7 +516,7 @@ test('field pixels: duct cell coloured like MC_ductFieldColor of its g, normal c
   for (let k = 0; k < 3; k++) assert.ok(Math.abs(p.rgba[k] - want[k]) <= 40, `channel ${k}: ${p.rgba} vs ${want}`);
   const s0 = await mount(SAMPLE, T0);                      // a: normal g=-41
   assert.strictEqual(pixelAt(s0, 51.25, -0.25).rgba[3], 0, 'normal cell transparent');
-  assert.ok(pixelAt(s0, 51.25, 0.25).rgba[3] > 100, 'elevated duct next to it is coloured');
+  assert.ok(pixelAt(s0, 51.25, 0.25).rgba[3] > 40, 'elevated duct next to it is coloured (every cell here is on the outer edge: half faded)');
 });
 
 test('field pixels: soft edge where a neighbour has no data, nothing outside the cells', async () => {
@@ -400,7 +528,7 @@ test('field pixels: soft edge where a neighbour has no data, nothing outside the
   const row = [];
   for (let x = 24; x < W; x++) row.push(px(cv, x, yb)[3]);
   for (let k = 1; k < row.length; k++) assert.ok(row[k] <= row[k - 1], 'monotonic fade: ' + row.join(','));
-  assert.ok(row[0] > 100 && row[row.length - 1] < 10, row.join(','));
+  assert.ok(row[0] > 40 && row[row.length - 1] < 10, row.join(','));
   // The missing cell's centre (51.75, 0.25) is transparent; so are the corners.
   assert.strictEqual(pixelAt(s, 51.75, 0.25).rgba[3], 0);
   assert.strictEqual(px(cv, W - 1, 0)[3], 0);
@@ -553,7 +681,7 @@ test('legend: gradient bar from the field variables, scale labels, LoRa row, att
   const left = labels.map(n => parseFloat(n.style.left));
   assert.ok(left.every((v, i) => i === 0 || v > left[i - 1]), 'labels in order: ' + left);
   const sw = find(box, n => /mc-duct-swatch-/.test(n.className));
-  assert.deepStrictEqual(sw.map(n => n.className), ['mc-duct-swatch mc-duct-swatch-lora']);
+  assert.deepStrictEqual(sw.map(n => n.className), ['mc-duct-swatch mc-duct-swatch-lora', 'mc-duct-swatch mc-duct-swatch-edge']);
   assert.ok(s.map._controls.every(c => c.options.position === 'bottomleft'));
 });
 
@@ -601,7 +729,7 @@ test('failed or pending refresh keeps the last good data', async () => {
   await tick(); await tick();
   assert.ok(!legendText(s).includes('being prepared'));
   assert.ok(legendText(s).includes('Updated '));
-  assert.strictEqual(s.layer._group.layers.length, 3);
+  assert.strictEqual(s.layer._group.layers.length, 4, '3 rects + the edge outline');
 });
 
 test('no data yet: retries every minute until data arrives, then every 30 minutes', async () => {
@@ -631,7 +759,7 @@ test('a good refresh rebuilds cells and keeps a user-picked time', async () => {
   s.api.calls[1].ok(clone(SAMPLE));
   await tick(); await tick();
   assert.strictEqual(s.layer._idx, 2);
-  assert.strictEqual(s.layer._group.layers.length, 3, 'old rects cleared');
+  assert.strictEqual(s.layer._group.layers.length, 4, 'old rects and edge cleared, new ones added');
   assert.strictEqual(s.stats.fields.length, 1, 'same field layer');
   assert.strictEqual(s.stats.fields[0].setBoundsCalls, 0);
 });
@@ -648,7 +776,7 @@ test('a refresh with a larger area moves the field bounds and resizes its canvas
   assert.strictEqual(f.setBoundsCalls, 1);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(f._bounds)).b, [[51, -0.5], [53, 1.5]]);
   assert.strictEqual(s.layer._canvas.width, 64);
-  assert.ok(pixelAt(s, 52.75, 1.25).rgba[3] > 100, 'new cell drawn');
+  assert.ok(pixelAt(s, 52.75, 1.25).rgba[3] > 40, 'new cell drawn (outer-edge cell: half faded)');
 });
 
 // ── teardown ────────────────────────────────────────────────────────────────
