@@ -29,12 +29,17 @@ func ductingInversion(i int, lat, lon float64, h map[string][]*float64) {
 	}
 }
 
+var ductingNoMargin = 0.0
+
 func newTestDuctingService(t *testing.T, f *fakeOpenMeteo, cfg DuctingConfig, nodes [][2]float64) (*ductingService, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	cfg.Enabled = true
 	cfg.BaseURL = srv.URL
+	if cfg.MarginDeg == nil { // these tests count node cells; the margin has its own test
+		cfg.MarginDeg = &ductingNoMargin
+	}
 	svc := newDuctingService(&cfg, func() ([][2]float64, error) { return nodes, nil })
 	svc.source.sleep = func(ctx context.Context, d time.Duration) error { return ctx.Err() }
 	// The fake's first hour; a real clock would see its forecast as expired.
@@ -335,7 +340,7 @@ func TestDuctingServiceRunBackoff(t *testing.T) {
 		f.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	svc := newDuctingService(&DuctingConfig{Enabled: true, BaseURL: srv.URL}, func() ([][2]float64, error) {
+	svc := newDuctingService(&DuctingConfig{Enabled: true, BaseURL: srv.URL, MarginDeg: &ductingNoMargin}, func() ([][2]float64, error) {
 		return [][2]float64{{51.3, -0.3}}, nil
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -399,7 +404,7 @@ func TestDuctingServiceRunStopsOnCancel(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	t.Cleanup(block.Close)
-	svc2 := newDuctingService(&DuctingConfig{Enabled: true, BaseURL: block.URL}, func() ([][2]float64, error) {
+	svc2 := newDuctingService(&DuctingConfig{Enabled: true, BaseURL: block.URL, MarginDeg: &ductingNoMargin}, func() ([][2]float64, error) {
 		return [][2]float64{{51.3, -0.3}}, nil
 	})
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -545,5 +550,19 @@ func TestDuctingRoute(t *testing.T) {
 	s.cfg.Ducting.Enabled = false
 	if rec := get(); rec.Code != http.StatusNotFound {
 		t.Errorf("disabled again: %d, want 404", rec.Code)
+	}
+}
+
+func TestDuctingServiceDefaultMarginCoversRegion(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, hours: 2, fill: ductingInversion}
+	one := [][2]float64{{51.3, -0.3}}
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{MarginDeg: nil}, one)
+	svc.cfg.MarginDeg = nil // unresolved: falls back to the 2 degree default
+	if err := svc.refreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := ductingServe(t, svc)
+	if got := len(resp.Cells); got != 81 { // 9x9 block at 0.5 degrees
+		t.Fatalf("%d cells, want 81", got)
 	}
 }

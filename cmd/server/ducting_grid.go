@@ -25,13 +25,26 @@ func ductingSortCells(c [][2]float64) {
 	})
 }
 
+// ductingRanked is a candidate cell with what the 8-degree trim ranks on.
+type ductingRanked struct {
+	lat, lon float64
+	count    int // nodes inside the cell; 0 for margin-only cells
+	dist     int // Chebyshev ring distance to the nearest node cell
+}
+
+// ductingDilateBound caps the dilated cell set at this multiple of maxPoints
+// so a large margin cannot allocate without limit; past it a step counts as
+// "too many".
+const ductingDilateBound = 50
+
 // ductingGrid returns the cell centres to query, sorted (lat, lon) and
 // de-duplicated. nodes are [lat, lon]; area is [south, west, north, east].
-// With an area, all cells covering it; otherwise the cells containing a
-// node. If there are more than maxPoints cells the step doubles (up to 8
-// degrees); past that the maxPoints cells holding the most nodes are kept.
-// Returns the step actually used.
-func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints int) ([][2]float64, float64) {
+// With an area, all cells covering it (marginDeg is ignored); otherwise the
+// cells containing a node plus marginDeg of cells around each. If there are
+// more than maxPoints cells the step doubles (up to 8 degrees) and the margin
+// is recomputed in cells; past that the maxPoints best cells are kept: most
+// nodes first, then nearest a node cell. Returns the step actually used.
+func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints int, marginDeg float64) ([][2]float64, float64) {
 	if !(step > 0) || math.IsInf(step, 0) {
 		step = defaultDuctingGridStepDeg
 	}
@@ -49,23 +62,29 @@ func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints i
 			valid = append(valid, [2]float64{math.Max(-ductingMaxAbsLat, math.Min(ductingMaxAbsLat, lat)), lon})
 		}
 	}
-	var counts map[ductingCell]int
 	for {
 		var cells [][2]float64
+		var ranked []ductingRanked
 		if area != nil {
 			cells = ductingAreaCells(*area, step, maxPoints)
 		} else {
-			counts = make(map[ductingCell]int)
-			for _, n := range valid {
-				lon := ductingCentre(n[1], step)
-				if lon > 180 { // a wide cell straddling the antimeridian
-					lon -= 360
-				}
-				counts[ductingCell{ductingCentre(n[0], step), lon}]++
+			k := 0
+			if marginDeg > 0 {
+				k = int(math.Ceil(marginDeg/step - 1e-9))
 			}
-			cells = make([][2]float64, 0, len(counts))
-			for c := range counts {
-				cells = append(cells, [2]float64{c.lat, c.lon})
+			var ok bool
+			ranked, ok = ductingDilate(valid, step, k, ductingDilateBound*maxPoints)
+			if !ok {
+				if step*2 <= ductingMaxStep {
+					step *= 2
+					continue
+				}
+				// Last step and still huge: fall back to node cells only.
+				ranked, _ = ductingDilate(valid, step, 0, math.MaxInt)
+			}
+			cells = make([][2]float64, len(ranked))
+			for i, r := range ranked {
+				cells[i] = [2]float64{r.lat, r.lon}
 			}
 			ductingSortCells(cells)
 		}
@@ -80,13 +99,106 @@ func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints i
 			// Area grid has no node counts: keep the first maxPoints in order.
 			return cells[:maxPoints], step
 		}
-		sort.SliceStable(cells, func(i, j int) bool {
-			return counts[ductingCell{cells[i][0], cells[i][1]}] > counts[ductingCell{cells[j][0], cells[j][1]}]
+		sort.Slice(ranked, func(i, j int) bool {
+			a, b := ranked[i], ranked[j]
+			if a.count != b.count {
+				return a.count > b.count
+			}
+			if a.dist != b.dist {
+				return a.dist < b.dist
+			}
+			if a.lat != b.lat {
+				return a.lat < b.lat
+			}
+			return a.lon < b.lon
 		})
-		top := cells[:maxPoints]
+		top := make([][2]float64, maxPoints)
+		for i := range top {
+			top[i] = [2]float64{ranked[i].lat, ranked[i].lon}
+		}
 		ductingSortCells(top)
 		return top, step
 	}
+}
+
+type ductingIdx struct{ lat, lon int64 }
+
+// ductingDilate returns the node cells at step plus k rings of cells around
+// each (a (2k+1)x(2k+1) block). With k == 0 these are exactly the cells
+// containing a node. Cell centres share ductingCentre's lattice; latitude
+// centres beyond +-85 are dropped from the rings and longitudes wrap into
+// [-180,180) so cells stay valid and de-duplicated across the antimeridian.
+// ok is false when the set grows past limit cells.
+func ductingDilate(valid [][2]float64, step float64, k int, limit int) (out []ductingRanked, ok bool) {
+	if k == 0 {
+		counts := make(map[ductingCell]int)
+		for _, n := range valid {
+			lon := ductingCentre(n[1], step)
+			if lon > 180 { // a wide cell straddling the antimeridian
+				lon -= 360
+			}
+			counts[ductingCell{ductingCentre(n[0], step), lon}]++
+		}
+		out = make([]ductingRanked, 0, len(counts))
+		for c, n := range counts {
+			out = append(out, ductingRanked{lat: c.lat, lon: c.lon, count: n})
+		}
+		return out, true
+	}
+	// Cells per full turn of longitude; when whole, indices wrap exactly.
+	period := 360 / step
+	whole := math.Abs(period-math.Round(period)) < 1e-9
+	p := int64(math.Round(period))
+	reduce := func(j int64) int64 {
+		if !whole {
+			return j
+		}
+		return ((j % p) + p) % p
+	}
+	counts := make(map[ductingIdx]int)
+	for _, n := range valid {
+		counts[ductingIdx{int64(math.Floor(n[0] / step)), reduce(int64(math.Floor(n[1] / step)))}]++
+	}
+	dist := make(map[ductingIdx]int)
+	k64 := int64(k)
+	for c := range counts {
+		for di := -k64; di <= k64; di++ {
+			lat := float64(c.lat+di)*step + step/2
+			for dj := -k64; dj <= k64; dj++ {
+				d := int(max(abs64(di), abs64(dj)))
+				if d > 0 && math.Abs(lat) > ductingMaxAbsLat {
+					continue
+				}
+				key := ductingIdx{c.lat + di, reduce(c.lon + dj)}
+				if old, seen := dist[key]; !seen || d < old {
+					dist[key] = d
+				}
+				if len(dist) > limit {
+					return nil, false
+				}
+			}
+		}
+	}
+	out = make([]ductingRanked, 0, len(dist))
+	for key, d := range dist {
+		lon := float64(key.lon)*step + step/2
+		if lon >= 180 {
+			lon -= 360
+		} else if lon < -180 {
+			lon += 360
+		}
+		out = append(out, ductingRanked{
+			lat: float64(key.lat)*step + step/2, lon: lon, count: counts[key], dist: d,
+		})
+	}
+	return out, true
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // ductingAreaCells lists the cell centres covering area. It stops once it has
