@@ -1139,6 +1139,8 @@ type ClientConfigResponse struct {
 	LOS *LOSClientConfig `json:"los,omitempty"`
 	// Present only when planner.enabled (planner_config.go).
 	Planner *PlannerClientConfig `json:"planner,omitempty"`
+	// Present only when ducting.enabled (ducting_config.go).
+	Ducting *DuctingClientConfig `json:"ducting,omitempty"`
 }
 
 // ClientUserManagement tells the frontend that accounts exist, and whether
