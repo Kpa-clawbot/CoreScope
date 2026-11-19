@@ -1,10 +1,12 @@
 /* map-ducting.js — tropospheric ducting map overlay.
  *
- * Draws the forecast refractivity gradient as a semi-transparent field of
- * colour bands (like the usual tropo-ducting forecast maps): transparent where
- * propagation is normal, then purple, blue, cyan, green, yellow, orange, red
- * and pink as the gradient gets stronger; each colour is one range of dN/dh. Cells where a duct can carry LoRa
- * (868/915 MHz) get a dashed outline. Data: GET /api/ducting (hourly
+ * Draws the forecast mean refractivity gradient over the lowest 1.5 km (the
+ * cells' `n`) as a semi-transparent field of colour bands (like the usual
+ * tropo-ducting forecast maps): transparent where propagation is normal, then
+ * purple, blue, cyan, green, yellow, orange, red and pink as the gradient gets
+ * stronger; each colour is one range of N/km. Cells where a duct can carry
+ * LoRa (868/915 MHz) get a dashed outline (from the duct analysis: c and f,
+ * not n). Data: GET /api/ducting (hourly
  * forecast, one array entry per `times` entry, see cmd/server/ducting_types.go).
  *
  *   window.MC_createDuctingLayer(opts) -> L.Layer
@@ -14,11 +16,12 @@
  *       (popups, LoRa outline), a legend and a forecast-time slider.
  *       A layer removed mid-fetch never touches the map afterwards.
  *   window.MC_ductTimeIndex(times, now) -> index of the latest time <= now
- *   window.MC_ductFieldColor(g, stops)  -> [r, g, b, a] (band colour) for a dN/dh value
+ *   window.MC_ductFieldColor(v, stops)  -> [r, g, b, a] (band colour) for a field value (N/km)
  *   window.MC_ductFieldStops()          -> stops read from the CSS variables
  *   window.MC_ductGrid(cells, step)     -> the cells' lattice (see ductGrid)
  *   window.MC_ductGridValues(grid, cells, i) -> Float32Array, NaN = no data
- *   window.MC_ductSample(grid, vals, lat, lon) -> { g, a }
+ *   window.MC_ductSample(grid, vals, lat, lon) -> { g, a }: g = field value
+ *       (n, N/km; the name predates n), a = coverage
  *   window.MC_ductFieldValues(grid, vals) -> { g, a } Float32Arrays, one entry
  *       per image pixel: what the field image is coloured from
  *   window.MC_ductRowLat(y, h, north, south)   -> latitude of image row y
@@ -35,7 +38,8 @@
  *     image then spans the whole width, nothing is wrapped.
  *   - Rows are sampled in Web Mercator (row -> latitude by the inverse
  *     projection), so the field lines up with the basemap at every zoom.
- *   - The value is the cell's min dN/dh (g), interpolated between cell
+ *   - The value is the cell's mean dN/dh over the lowest 1.5 km (n; 0 or
+ *     missing = no data at that hour), interpolated between cell
  *     centres with Catmull-Rom bicubic over the 4x4 neighbourhood (lattice
  *     indices clamped at its border), so band edges are smooth curves rather
  *     than the straight segments bilinear gives. Next to a cell without data
@@ -47,7 +51,7 @@
  *     a full cell inside the edge (see areaSoft).
  *   - The area's outer boundary is drawn as thin dotted lines (ductEdges),
  *     one segment per run of cell edges, so users see where the forecast ends.
- *   - Colour: the flat colour of the band g falls in (no blending between
+ *   - Colour: the flat colour of the band n falls in (no blending between
  *     stops), every band at the same field opacity, times the coverage.
  *   - Built only when the data, the forecast hour or the theme changes,
  *     O(image pixels): the interpolation is separable (per image column the
@@ -74,16 +78,16 @@
   var BAND_915 = 915;
   var TYPE_NAME = { 0: 'No data', 1: 'Normal', 2: 'Super-refraction', 3: 'Elevated duct', 4: 'Surface-based duct' };
 
-  // Colour bands: --mc-duct-sN colours dN/dh (N/km) from STOP_G[N-1] down to
-  // (not including) the next stop; the last one everything below it. Above
-  // the first (-79, where super-refraction starts) is transparent; -157 is a
-  // trapping layer (duct). Whole numbers: the colour table relies on it.
-  var STOP_G = [-79, -100, -130, -157, -220, -300, -400, -600];
+  // Colour bands: --mc-duct-sN colours n (mean dN/dh over the lowest 1.5 km,
+  // N/km) from STOP_N[N-1] down to (not including) the next stop; the last one
+  // everything below it. Above the first (-44) is transparent: normal air is
+  // about -40. Whole numbers: the colour table relies on it.
+  var STOP_N = [-44, -48, -54, -58, -62, -70, -80, -90];
   var DEFAULT_ALPHA = 0.8;      // when --mc-duct-alpha is unset
-  // Colour table: entry n is the colour of g = -n, and of every g in
-  // (-n - 1, -n] (same band, the stops being whole numbers); the last entry
-  // covers everything stronger.
-  var LUT_SIZE = 1 - STOP_G[STOP_G.length - 1];
+  // Colour table: entry k is the colour of the value -k, and of every value
+  // in (-k - 1, -k] (same band, the stops being whole numbers); the last
+  // entry covers everything stronger.
+  var LUT_SIZE = 1 - STOP_N[STOP_N.length - 1];
   var PX_PER_CELL = 48;
   var MAX_SIDE = 2048;          // image long side, px
   var MAX_GRID = 1 << 22;       // lattice slots (0.25 deg worldwide is ~1M)
@@ -97,10 +101,12 @@
   var LORA_STYLE = { stroke: true, weight: 1.5, opacity: 0.95, dashArray: '4 3' };
 
   // Legend: where each band starts (0..1 along the bar; the last runs to the
-  // end, transparent before the first). Spread out instead of linear in g,
-  // so the labels have room. "Strong" sits right-aligned at the end.
-  var BAR_POS = [0.19, 0.29, 0.44, 0.58, 0.69, 0.78, 0.86, 0.93];
-  var BAR_LABELS = [[0, 'Normal'], [0.19, 'Super-refraction'], [0.58, 'Ducting'], [1, 'Strong', true]];
+  // end, transparent before the first). Spread out instead of linear in n,
+  // so the labels have room. "Very strong" sits right-aligned at the end.
+  var BAR_POS = [0.19, 0.26, 0.34, 0.41, 0.48, 0.6, 0.73, 0.86];
+  var BAR_LABELS = [[0, 'Normal'], [BAR_POS[0], 'Enhanced'], [BAR_POS[4], 'Strong'], [1, 'Very strong', true]];
+  var CAPTION = 'Refractivity gradient over the lowest 1.5 km (N/km)';
+  var MINUS = '\u2212';
 
   var NOTE = 'Indicator only: model levels are ~200 m apart, so thinner ducts are not visible.';
   var MSG_PENDING = 'Ducting forecast is being prepared';
@@ -127,6 +133,17 @@
 
   function at(arr, i) { return (arr && arr[i] != null) ? Number(arr[i]) : 0; }
 
+  // The field value of `cell` at time index i: n (N/km), or NaN when there is
+  // no data (class 0; n missing, 0 or not a number).
+  function fieldValue(cell, i) {
+    if (at(cell.c, i) < 1) return NaN;
+    var n = at(cell.n, i);
+    return (n !== 0 && isFinite(n)) ? n : NaN;
+  }
+
+  // '-52' with a real minus sign.
+  function fmtSigned(v) { return v < 0 ? MINUS + Math.abs(v) : String(v); }
+
   function isLora(cell, i) {
     var f = at(cell.f, i);
     return at(cell.c, i) >= 3 && f > 0 && f <= LORA_MAX_MHZ;
@@ -144,6 +161,10 @@
     var cls = at(cell.c, i);
     var box = el('div', 'mc-duct-popup');
     box.appendChild(el('div', 'mc-duct-popup-title', TYPE_NAME[cls] || TYPE_NAME[0]));
+    // What the field colour shows; for every class, since it can be strong
+    // where the duct analysis finds no duct.
+    var n = fieldValue(cell, i);
+    if (n === n) box.appendChild(el('div', null, 'Gradient, lowest 1.5 km: ' + fmtSigned(Math.round(n)) + ' N/km'));
     if (cls < 2) return box;
     var fmin = at(cell.f, i);
     var rows = [];
@@ -182,13 +203,14 @@
     return null;
   }
 
-  // The colour stops from the CSS variables: [{ g, rgb }], strongest last.
+  // The colour stops from the CSS variables: [{ g, rgb }] (g = the stop's
+  // field value, N/km), strongest last.
   // A missing or unreadable variable drops its stop (nothing is invented).
   function fieldStops() {
     var out = [];
-    for (var k = 0; k < STOP_G.length; k++) {
+    for (var k = 0; k < STOP_N.length; k++) {
       var rgb = parseColor(cssVar('--mc-duct-s' + (k + 1)));
-      if (rgb) out.push({ g: STOP_G[k], rgb: rgb });
+      if (rgb) out.push({ g: STOP_N[k], rgb: rgb });
     }
     return out;
   }
@@ -198,7 +220,7 @@
     return (isFinite(a) && a >= 0 && a <= 1) ? a : DEFAULT_ALPHA;
   }
 
-  // Colour of dN/dh value g: [r, g, b, a], the flat colour of its band
+  // Colour of field value g (N/km): [r, g, b, a], the flat colour of its band
   // (stops[k].g >= g > stops[k + 1].g -> stops[k]; at or below the last stop
   // -> the last), alpha 1; transparent above the first stop, for NaN or
   // without stops. No blending between stops, no opacity ramp.
@@ -209,7 +231,7 @@
     return [c[0], c[1], c[2], 1];
   }
 
-  // RGBA table: entry n is the colour of g = -n, alpha scaled by `alpha`.
+  // RGBA table: entry n is the colour of the value -n, alpha scaled by `alpha`.
   function fieldLut(stops, alpha) {
     var lut = new Uint8ClampedArray(LUT_SIZE * 4);
     for (var n = 0; n < LUT_SIZE; n++) {
@@ -343,14 +365,14 @@
     return out;
   }
 
-  // g at time index i per lattice slot; NaN where there is no data (class 0).
+  // The field value (n) at time index i per lattice slot; NaN where there is
+  // no data (class 0, n 0 or missing: an older server sends no n, and then
+  // the whole field is empty while the cells, popups and outlines still work).
   function ductGridValues(grid, cells, i) {
     var vals = new Float32Array(grid.rows * grid.cols).fill(NaN);
     for (var k = 0; k < cells.length; k++) {
       var s = grid.slot[k];
-      if (s < 0 || at(cells[k].c, i) < 1) continue;
-      var g = at(cells[k].g, i);
-      vals[s] = isFinite(g) ? g : 0;
+      if (s >= 0) vals[s] = fieldValue(cells[k], i);
     }
     return vals;
   }
@@ -796,7 +818,7 @@
         var wrap = el('div', 'mc-duct-scale');
         var bar = el('div', 'mc-duct-scale-bar');
         var parts = ['transparent 0%', 'transparent ' + pct(BAR_POS[0])];
-        for (var k = 0; k < STOP_G.length; k++) {
+        for (var k = 0; k < STOP_N.length; k++) {
           var c = 'var(--mc-duct-s' + (k + 1) + ') ';
           parts.push(c + pct(BAR_POS[k]), c + pct(k + 1 < BAR_POS.length ? BAR_POS[k + 1] : 1));
         }
@@ -811,7 +833,7 @@
           labels.appendChild(lab);
         }
         wrap.appendChild(labels);
-        wrap.appendChild(el('div', 'mc-duct-legend-caption', 'Refractivity gradient dN/dh (N/km): super-refraction from -79, ducting from -157'));
+        wrap.appendChild(el('div', 'mc-duct-legend-caption', CAPTION));
         return wrap;
       },
 

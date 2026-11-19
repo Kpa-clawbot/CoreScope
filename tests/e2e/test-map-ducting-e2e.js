@@ -45,11 +45,14 @@ const BASE = (process.env.BASE_URL || 'http://localhost:13596').replace(/\/+$/, 
 const FAKE_PORT = parseInt(process.env.FAKE_PORT || '13597', 10);
 const SCENARIO = 'mixed';
 const LORA_MAX_MHZ = 1000;
-// The field's colour bands start at these dN/dh values (map-ducting.js STOP_G).
-const STOP_G = [-79, -100, -130, -157, -220, -300, -400, -600];
+// The field's colour bands start at these values of n, the mean dN/dh over
+// the lowest 1.5 km in N/km (map-ducting.js STOP_N).
+const STOP_N = [-44, -48, -54, -58, -62, -70, -80, -90];
+// The field value of a cell at hour h: n, or null for no data (0 or class 0).
+const fieldN = (c, h) => (c.c[h] >= 1 && Array.isArray(c.n) && c.n[h]) ? c.n[h] : null;
 // A stop between a and b (within 0.5 N/km): the two may legitimately sit in
 // different bands, so their colours are not compared.
-const stopBetween = (a, b) => STOP_G.some(s => s >= Math.min(a, b) - 0.5 && s <= Math.max(a, b) + 0.5);
+const stopBetween = (a, b) => STOP_N.some(s => s >= Math.min(a, b) - 0.5 && s <= Math.max(a, b) + 0.5);
 
 let passed = 0, failed = 0, skipped = 0;
 async function test(name, fn) {
@@ -225,7 +228,7 @@ function cssVars(page) {
  * points of the image corners and of the centre), so a field drawn with the
  * wrong projection does not line up. For each probe also returns what the
  * field should be at that pixel's centre (MC_ductSample at Leaflet's latlng
- * for it) and the colour of the cell's own g. Runs in the page.
+ * for it) and the colour of the cell's own n. Runs in the page.
  */
 function inPageFieldProbe(arg) {
   const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
@@ -250,7 +253,7 @@ function inPageFieldProbe(arg) {
       const ll = m.unproject([nw.x + (x + 0.5) / cv.width * (se.x - nw.x), nw.y + (y + 0.5) / cv.height * (se.y - nw.y)], z);
       const smp = window.MC_ductSample(grid, vals, ll.lat, ll.lng);
       const exp = window.MC_ductFieldColor(smp.g, stops);
-      return { lat: c.lat, lon: c.lon, g: c.g, px, smp, exp: [exp[0], exp[1], exp[2], Math.round(exp[3] * alpha * smp.a * 255)], own: window.MC_ductFieldColor(c.g, stops) };
+      return { lat: c.lat, lon: c.lon, n: c.n, px, smp, exp: [exp[0], exp[1], exp[2], Math.round(exp[3] * alpha * smp.a * 255)], own: window.MC_ductFieldColor(c.n, stops) };
     }),
   };
 }
@@ -264,41 +267,57 @@ function neighbours(data, c) {
 
 // 1 for a cell whose 8 neighbours are all in the forecast area (data at some
 // hour), 0.5 on the area's outer ring: the field's coverage at a cell centre.
-function ringFactor(data, c) {
+// 0 (not checked) when a neighbour in the area has no n at hour idx.
+function ringFactor(data, c, idx) {
   const st = data.stepDeg, key = (la, lo) => `${la.toFixed(4)},${lo.toFixed(4)}`;
-  const area = new Set(data.cells.filter(x => x.c.some(v => v >= 1)).map(x => key(x.lat, x.lon)));
-  for (const a of [-st, 0, st]) for (const b of [-st, 0, st]) if (!area.has(key(c.lat + a, c.lon + b))) return 0.5;
-  return 1;
+  const byKey = new Map(data.cells.filter(x => x.c.some(v => v >= 1)).map(x => [key(x.lat, x.lon), x]));
+  let f = 1;
+  for (const a of [-st, 0, st]) for (const b of [-st, 0, st]) {
+    const x = byKey.get(key(c.lat + a, c.lon + b));
+    if (!x) f = Math.min(f, 0.5);
+    else if (fieldN(x, idx) == null) return 0;
+  }
+  return f;
 }
 
 /**
- * Checks the field at hour idx: duct cells coloured like their g, a normal
- * cell (with only normal or missing neighbours) transparent, and every probed
+ * Checks the field at hour idx: coloured cells (n <= -44) coloured like their
+ * n, a normal cell (n > -44, with only normal or missing neighbours) transparent, and every probed
  * pixel equal to the field sampled at Leaflet's position of that pixel. The
  * colours are flat bands, so a probe within 0.5 N/km of a band boundary (its
  * pixel's float rounding may land on either side) has its colour checks
  * skipped; the alpha check always applies.
  */
 async function fieldProblems(page, data, idx) {
-  const ducts = data.cells.filter(c => c.c[idx] >= 3 && c.g[idx] <= -157).slice(0, 12);
-  const calm = data.cells.filter(c => c.c[idx] === 1 && c.g[idx] > -60 && neighbours(data, c).every(n => n.c[idx] === 0 || n.g[idx] > -60)).slice(0, 6);
-  const cells = ducts.concat(calm).map(c => ({ lat: c.lat, lon: c.lon, g: c.g[idx] }));
+  // Coloured cells, clear of the first stop (a cell at exactly -44 samples
+  // either side of it a fraction of a pixel away); spread over the bands.
+  const ducts = data.cells.filter(c => fieldN(c, idx) != null && fieldN(c, idx) <= STOP_N[0] - 1)
+    .sort((a, b) => a.n[idx] - b.n[idx]).filter((c, i, arr) => i % Math.max(1, Math.floor(arr.length / 12)) === 0).slice(0, 12);
+  // Normal: n above -44 with a margin, and no lattice neighbour so much
+  // stronger that the slope carries the value past -44 within the pixel or
+  // two between the probe and the cell centre.
+  const calm = data.cells.filter((c) => {
+    const v = fieldN(c, idx);
+    return v != null && v > STOP_N[0] + 1 && neighbours(data, c).every(nb => { const w = fieldN(nb, idx); return w == null || w > v - 20; });
+  }).slice(0, 6);
+  const cells = ducts.concat(calm).map(c => ({ lat: c.lat, lon: c.lon, n: c.n[idx] }));
   const r = await page.evaluate(inPageFieldProbe, { idx, cells });
   if (r.err) return { probs: [r.err], r };
   const probs = [];
-  if (!ducts.length) probs.push(`no duct cell with g <= -157 at hour ${idx}`);
+  if (!ducts.length) probs.push(`no cell with n <= ${STOP_N[0]} at hour ${idx}`);
   r.probes.forEach((p, i) => {
-    const where = `${p.lat},${p.lon} g=${p.g}`;
+    const where = `${p.lat},${p.lon} n=${p.n}`;
     // Colour only where opaque enough: the canvas stores premultiplied alpha.
     const edge = stopBetween(p.smp.g, p.smp.g);
     const bad = Math.abs(p.px[3] - p.exp[3]) > 3 || (!edge && p.exp[3] >= 64 && p.px.slice(0, 3).some((v, k) => Math.abs(v - p.exp[k]) > 4));
     if (bad) probs.push(`${where}: pixel ${p.px} but the field there is ${p.exp}`);
     if (i < ducts.length) {
-      // Full opacity inside the forecast area, half on its outer ring (the wider edge fade).
-      if (p.px[3] < 0.8 * r.alpha * 255 * ringFactor(data, ducts[i])) probs.push(`${where}: duct centre alpha ${p.px[3]}`);
+      // Full opacity inside the forecast area, half on its outer ring (the wider edge fade);
+      // a neighbour without n at this hour fades it too, so only data-rich cells are probed for alpha.
+      if (p.px[3] < 0.8 * r.alpha * 255 * ringFactor(data, ducts[i], idx)) probs.push(`${where}: coloured centre alpha ${p.px[3]}`);
       // The pixel centre is a fraction of a cell from the cell centre, so it
       // has the cell's own band colour unless a band boundary lies between.
-      if (!stopBetween(p.g, p.smp.g) && p.px.slice(0, 3).some((v, k) => Math.abs(v - p.own[k]) > 4)) probs.push(`${where}: pixel ${p.px} not its own band colour ${p.own} (sampled g ${p.smp.g})`);
+      if (!stopBetween(p.n, p.smp.g) && p.px.slice(0, 3).some((v, k) => Math.abs(v - p.own[k]) > 4)) probs.push(`${where}: pixel ${p.px} not its own band colour ${p.own} (sampled n ${p.smp.g})`);
     } else if (p.px[3] !== 0) probs.push(`${where}: normal cell centre not transparent (${p.px})`);
   });
   return { probs, r, ducts: ducts.length, calm: calm.length };
@@ -371,7 +390,7 @@ async function run() {
     await test('cell classes and frequencies match the scenario', async () => {
       const probs = [];
       data.cells.forEach((c) => {
-        ['c', 'f', 'b', 't', 'dm', 'g'].forEach((k) => { if (!Array.isArray(c[k]) || c[k].length !== data.times.length) probs.push(`${c.lat},${c.lon}: ${k} has ${c[k] && c[k].length} entries`); });
+        ['c', 'f', 'b', 't', 'dm', 'g', 'n'].forEach((k) => { if (!Array.isArray(c[k]) || c[k].length !== data.times.length) probs.push(`${c.lat},${c.lon}: ${k} has ${c[k] && c[k].length} entries`); });
         data.times.forEach((_, h) => {
           const want = FAKE.intendedKind(SCENARIO, c.lat, c.lon, h).cls;
           if (c.c[h] !== want) probs.push(`${c.lat},${c.lon} h${h}: class ${c.c[h]} want ${want}`);
@@ -380,6 +399,7 @@ async function run() {
           if (c.c[h] === 4 && !(c.f[h] > 0 && c.f[h] <= 868)) probs.push(`${c.lat},${c.lon} h${h}: surface duct fmin ${c.f[h]} does not trap 868 MHz`);
           if (c.c[h] >= 3 && Math.abs(c.f[h] - Math.round(a.fmin)) > 1) probs.push(`${c.lat},${c.lon} h${h}: fmin ${c.f[h]} vs ${Math.round(a.fmin)}`);
           if (c.c[h] <= 2 && c.f[h] !== 0) probs.push(`${c.lat},${c.lon} h${h}: class ${c.c[h]} with fmin ${c.f[h]}`);
+          if (Array.isArray(c.n) && !Number.isInteger(c.n[h])) probs.push(`${c.lat},${c.lon} h${h}: n ${c.n[h]} is not a whole number`);
         });
       });
       assert(!probs.length, probs.slice(0, 6).join(' | '));
@@ -426,7 +446,7 @@ async function run() {
       assert(st.maps === 1 && st.rects.length === data.cells.length, `maps=${st.maps} rects=${st.rects.length} cells=${data.cells.length}`);
       assert(st.fields.length === 1 && st.fields[0].inDom && st.fields[0].pane === 'mcDuctFieldPane', 'field images: ' + JSON.stringify(st.fields));
       assert(st.legends === 1 && st.times === 1 && st.legendVisible && st.timeVisible, `legends=${st.legends} times=${st.times}`);
-      assert(/LoRa 868\/915/.test(st.legendText) && /Super-refraction/.test(st.legendText) && /dN\/dh/.test(st.legendText) && /Updated/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 160));
+      assert(/LoRa 868\/915/.test(st.legendText) && /Enhanced/.test(st.legendText) && /Very strong/.test(st.legendText) && /lowest 1\.5 km \(N\/km\)/.test(st.legendText) && /Updated/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 160));
       const ov = await page.evaluate(inPageOverlaps);
       assert(ov.mine === 2, 'legend and time box not both visible');
       assert(!ov.hits.length, ov.hits.join('; '));
@@ -561,6 +581,8 @@ async function run() {
       assert(/Surface-based duct/.test(r.text), 'popup: ' + r.text);
       assert(/Can carry 868 MHz: yes/.test(r.text) && /Can carry 915 MHz: yes/.test(r.text), 'popup: ' + r.text);
       assert(/Base: 0 m/.test(r.text) && /Lowest trapped frequency: \d+ MHz/.test(r.text), 'popup: ' + r.text);
+      const n = fieldN(r.cell, idx0);
+      if (n != null) assert(r.text.includes('Gradient, lowest 1.5 km: ' + (n < 0 ? '\u2212' + -n : n) + ' N/km'), 'popup gradient (n=' + n + '): ' + r.text);
     });
     await test('clicking a super-refraction cell says no duct, 868 MHz: no', async () => {
       const r = await popupFor(2);
