@@ -1045,6 +1045,95 @@ test('re-adding after remove fetches again and ignores the first fetch', async (
   assert.strictEqual(s.api.calls[0].url, '/api/ducting');
 });
 
+test('re-add then pending: cells and field are drawn from the kept data at once', async () => {
+  const s = await mount(SAMPLE, T0);
+  s.layer.onRemove(s.map);
+  s.stats.rects.length = 0; s.stats.fields.length = 0;
+  s.layer.onAdd(s.map);
+  assert.strictEqual(s.stats.rects.length, 3, 'cells drawn before any answer');
+  assert.ok(s.map._layers.some(l => l._mcField), 'field drawn before any answer');
+  assert.ok(!legendText(s).includes('out of date'), 'nothing wrong yet');
+  s.api.calls[s.api.calls.length - 1].ok({ status: 'pending' });
+  await tick(); await tick();
+  assert.strictEqual(s.stats.rects.length, 3);
+  assert.ok(s.map._layers.some(l => l._mcField), 'field kept');
+  assert.ok(legendText(s).includes('Forecast out of date \u2014 showing the last one received'));
+});
+
+test('re-add then fetch failure: the kept data stays drawn', async () => {
+  const s = await mount(SAMPLE, T0);
+  s.layer.onRemove(s.map);
+  s.stats.rects.length = 0;
+  s.layer.onAdd(s.map);
+  s.api.calls[s.api.calls.length - 1].fail();
+  await tick(); await tick();
+  assert.strictEqual(s.stats.rects.length, 3);
+  assert.ok(s.map._layers.some(l => l._mcField));
+  assert.ok(!legendText(s).includes('unavailable'));
+});
+
+test('re-add then success: the kept data is replaced by the new data', async () => {
+  const s = await mount(SAMPLE, T0);
+  s.layer.onRemove(s.map);
+  s.stats.rects.length = 0;
+  s.layer.onAdd(s.map);
+  assert.strictEqual(s.stats.rects.length, 3, 'kept data first');
+  const body = clone(SAMPLE);
+  body.generatedAt = T2;
+  s.api.calls[s.api.calls.length - 1].ok(body);
+  await tick(); await tick();
+  assert.strictEqual(s.stats.rects.length, 6, 'rebuilt from the new answer');
+  assert.strictEqual(s.layer._data.generatedAt, T2);
+});
+
+test('re-add re-picks the hour; a user-picked hour is kept while it exists', async () => {
+  const s = await mount(SAMPLE, T0);
+  assert.strictEqual(s.layer._idx, 0);
+  s.layer.onRemove(s.map);
+  const realNow = Date.now;
+  Date.now = () => (T2 + 5) * 1000;
+  try {
+    s.layer.onAdd(s.map);
+    assert.strictEqual(s.layer._idx, 2, 'latest hour <= now, not the old one');
+    s.layer._userPicked = true;
+    s.layer._setIndex(1);
+    s.layer.onRemove(s.map);
+    s.layer.onAdd(s.map);
+    assert.strictEqual(s.layer._idx, 1, 'picked hour kept');
+  } finally { Date.now = realNow; }
+});
+
+test('out-of-date notice: shown on pending, error and failure while old data is drawn; gone on the next ok', async () => {
+  const s = await mount(SAMPLE, T0);
+  const MSG = 'Forecast out of date \u2014 showing the last one received';
+  assert.ok(!legendText(s).includes('out of date'));
+  for (const body of [{ status: 'pending' }, { status: 'error', error: 'forecast expired' }, { status: 'error', error: 'boom' }]) {
+    s.timers[0].fn();
+    s.api.calls[s.api.calls.length - 1].ok(body);
+    await tick(); await tick();
+    assert.ok(legendText(s).includes(MSG), JSON.stringify(body));
+    assert.strictEqual(s.stats.rects.length, 3, 'old data still drawn');
+    const status = find(s.map._controls[1]._container, n => n.className === 'mc-duct-legend-status');
+    assert.strictEqual(status.length, 1, 'one status line');
+  }
+  s.timers[0].fn();
+  s.api.calls[s.api.calls.length - 1].ok(clone(SAMPLE));
+  await tick(); await tick();
+  assert.ok(!legendText(s).includes('out of date'), 'cleared by ok');
+});
+
+test('an ok answer re-picks the hour, keeping a user-picked one that is still there', async () => {
+  const s = await mount(SAMPLE, T0);
+  const realNow = Date.now;
+  Date.now = () => (T2 + 5) * 1000;
+  try {
+    s.timers[0].fn();
+    s.api.calls[s.api.calls.length - 1].ok(clone(SAMPLE));
+    await tick(); await tick();
+    assert.strictEqual(s.layer._idx, 2);
+  } finally { Date.now = realNow; }
+});
+
 // ── legend text, compact legend ─────────────────────────────────────────────
 
 test('legend shows only the attribution, not the model twice', async () => {

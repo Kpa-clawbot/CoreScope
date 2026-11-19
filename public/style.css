@@ -5688,10 +5688,10 @@ body { touch-action: pan-y; }
 }
 
 /* Tropospheric ducting overlay (map-ducting.js). The field colour bands:
- * s1..s8 each colour dN/dh from -79 (super-refraction starts), -100, -130,
- * -157 (ducting starts), -220, -300, -400 and -600 N/km down to the next
- * stop (s8: -600 and beyond), flat, no blending; hex or rgb() only (read by
- * JS). alpha = field opacity, the same for every band. lora = dashed outline of cells where a duct
+ * s1..s8 each colour the mean refractivity gradient over the lowest
+ * 1.5 km, from -44 N/km (s1), -48, -54, -58, -62, -70, -80 and -90 N/km (s8)
+ * down to the next stop (s8: -90 and beyond); weaker is transparent. Flat, no
+ * blending; hex or rgb() only (read by JS). alpha = field opacity, the same for every band. lora = dashed outline of cells where a duct
  * can carry 868/915 MHz. edge = dotted line around the forecast area. */
 :root {
   --mc-duct-s1: #8e3fd0;

@@ -111,6 +111,7 @@
   var NOTE = 'Indicator only: model levels are ~200 m apart, so thinner ducts are not visible.';
   var MSG_PENDING = 'Ducting forecast is being prepared';
   var MSG_ERROR = 'Ducting forecast unavailable';
+  var MSG_STALE = 'Forecast out of date \u2014 showing the last one received';
 
   // ── Pure helpers ──────────────────────────────────────────────────────────
 
@@ -650,7 +651,10 @@
         this._pane = fieldPane(map);
         this._addControls(map);
         this._watchAttribution(map);
-        this._renderLegend();
+        // Kept data is drawn at once, so a re-add never shows a blank map while
+        // the refetch is pending or failing; the refetch below replaces it.
+        if (this._data) this._show();
+        else this._renderLegend();
         this._load(gen);
         this._schedule(REFRESH_MS);
         var self = this;
@@ -796,6 +800,11 @@
           st.setAttribute('role', 'status');
           box.appendChild(st);
         } else {
+          if (this._stale) {
+            var old = el('div', 'mc-duct-legend-status', MSG_STALE);
+            old.setAttribute('role', 'status');
+            box.appendChild(old);
+          }
           box.appendChild(this._scale());
           var lrow = el('div', 'mc-duct-legend-row');
           lrow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-lora'));
@@ -873,7 +882,10 @@
       },
 
       _fail: function (state) {
-        if (this._data) return;            // keep the last good data
+        if (this._data) {                  // keep the last good data, and say so
+          if (!this._stale) { this._stale = true; this._renderLegend(); }
+          return;
+        }
         this._schedule(RETRY_MS);
         this._state = state;
         this._renderLegend();
@@ -883,10 +895,18 @@
         if (!d || typeof d !== 'object') return this._fail('error');
         if (d.status === 'pending') return this._fail('pending');
         if (d.status !== 'ok' || !Array.isArray(d.cells) || !Array.isArray(d.times) || !d.times.length) return this._fail('error');
-        var prevTime = (this._data && this._idx >= 0) ? this._data.times[this._idx] : null;
         this._data = d;
         this._state = 'ok';
+        this._stale = false;
         this._schedule(REFRESH_MS);
+        this._show();
+      },
+
+      // Draws the held forecast: cells, slider range, legend and the hour (a
+      // user-picked one while it is still in the forecast, else the latest <= now).
+      _show: function () {
+        var d = this._data;
+        var prevTime = this._shown != null ? this._shown : null;
         this._build();
         var idx = ductTimeIndex(d.times, Date.now() / 1000);
         if (this._userPicked && prevTime != null) {
@@ -952,6 +972,7 @@
         var d = this._data;
         if (!d || i < 0 || i >= d.times.length) return;
         this._idx = i;
+        this._shown = d.times[i];
         if (this._slider) this._slider.value = String(i);
         if (this._timeLabel) this._timeLabel.textContent = 'Forecast time: ' + fmtTime(d.times[i]);
         this._restyle();
