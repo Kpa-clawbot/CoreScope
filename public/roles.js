@@ -587,6 +587,10 @@
    * once remove() deletes _mapPane (_animateZoom checks it), and remove()
    * itself cancels _flyToFrame, _panAnim and _resizeRequest via _stop().
    * _sizeTimer (invalidateSize's debounced moveend) is the other unowned timer.
+   * Listeners are dropped only AFTER remove(): remove() fires 'unload', which
+   * Leaflet itself relies on (controls detach, the zoom-animation proxy and
+   * BoxZoom clean up) as do callers watching for disposal. Calling off()
+   * first skipped all of that.
    * Idempotent and null-safe; a failing remove() is logged, not thrown, since
    * the caller is leaving the page either way. */
   window.MC_safeRemoveMap = function (map) {
@@ -594,8 +598,8 @@
     map._mcRemoved = true;
     map._animatingZoom = false;
     if (map._sizeTimer) { clearTimeout(map._sizeTimer); map._sizeTimer = null; }
-    if (typeof map.off === 'function') map.off();
     try { map.remove(); } catch (e) { console.warn('[map] remove failed:', e); }
+    if (typeof map.off === 'function') { try { map.off(); } catch (_e) {} }
   };
 
 

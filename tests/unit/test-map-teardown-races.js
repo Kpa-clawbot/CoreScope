@@ -212,6 +212,27 @@ function deferred() {
     assert.strictEqual(offCalls, 1);
   });
 
+  await test('MC_safeRemoveMap fires unload (controls detach) and drops listeners afterwards', () => {
+    const { win, clock } = makeWindow();
+    const map = newMap(win);
+    let unloads = 0, moves = 0, removedControls = 0;
+    map.on('unload', () => unloads++);
+    map.on('moveend', () => moves++);
+    const ctl = win.L.control({ position: 'topleft' });
+    ctl.onAdd = () => win.document.createElement('div');
+    ctl.onRemove = () => { removedControls++; };
+    ctl.addTo(map);
+    win.MC_safeRemoveMap(map);
+    assert.strictEqual(unloads, 1, 'unload listeners must run (Leaflet and disposal watchers rely on it)');
+    assert.strictEqual(removedControls, 1, 'controls detach on unload');
+    assert.ok(!map._events || Object.keys(map._events).every(k => !map._events[k] || map._events[k].length === 0),
+      'listeners remain after removal');
+    map.fire('moveend');
+    clock.advance(500);
+    assert.strictEqual(moves, 0);
+    assert.deepStrictEqual(clock.errors.map(String), []);
+  });
+
   // ── map.js ──────────────────────────────────────────────────────────────
 
   function mapPageWindow(opts) {
