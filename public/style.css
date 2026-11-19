@@ -5687,12 +5687,14 @@ body { touch-action: pan-y; }
   --mc-duct-uhf:   #e8730c;
   --mc-duct-micro: #e6b800;
   --mc-duct-super: #5ab4f0;
+  --mc-duct-grid:  rgba(71, 85, 105, 0.45);
 }
 [data-theme="dark"] {
   --mc-duct-lora:  #ff3d8b;
   --mc-duct-uhf:   #ff9a3c;
   --mc-duct-micro: #ffd23f;
   --mc-duct-super: #7cc4f5;
+  --mc-duct-grid:  rgba(203, 213, 225, 0.4);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -5700,6 +5702,7 @@ body { touch-action: pan-y; }
     --mc-duct-uhf:   #ff9a3c;
     --mc-duct-micro: #ffd23f;
     --mc-duct-super: #7cc4f5;
+    --mc-duct-grid:  rgba(203, 213, 225, 0.4);
   }
 }
 .mc-duct-legend,
@@ -5713,7 +5716,22 @@ body { touch-action: pan-y; }
   line-height: 1.4;
   max-width: 260px;
 }
-.mc-duct-legend-title { font-weight: 600; margin-bottom: 4px; }
+.mc-duct-legend-title {
+  display: block;
+  width: 100%;
+  margin: 0 0 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.mc-duct-legend-title::after { content: " \25BE"; }
+.mc-duct-legend-title[aria-expanded="false"] { margin-bottom: 0; }
+.mc-duct-legend-title[aria-expanded="false"]::after { content: " \25B8"; }
 .mc-duct-legend-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
 .mc-duct-swatch {
   flex: none;
@@ -5726,11 +5744,14 @@ body { touch-action: pan-y; }
 .mc-duct-swatch-uhf   { background: var(--mc-duct-uhf); }
 .mc-duct-swatch-micro { background: var(--mc-duct-micro); }
 .mc-duct-swatch-super { background: var(--mc-duct-super); }
+.mc-duct-swatch-normal { background: transparent; border-color: var(--mc-duct-grid); }
 .mc-duct-legend-status { margin: 4px 0; font-weight: 600; }
 .mc-duct-legend-note,
 .mc-duct-legend-meta { margin-top: 4px; color: var(--mc-route-legend-fg); opacity: 0.8; }
 .mc-duct-time-label { display: block; font-weight: 600; margin-bottom: 4px; }
 .mc-duct-time input[type="range"] { width: 100%; min-width: 180px; }
+.leaflet-bottom.leaflet-left .mc-duct-legend,
+.leaflet-bottom.leaflet-left .mc-duct-time { max-width: min(260px, calc(100vw - 80px)); }
 .mc-duct-popup-title { font-weight: 600; margin-bottom: 2px; }
 
 .mc-route-marker-icon { background: transparent !important; border: none !important; }
@@ -6081,3 +6102,12 @@ body.embed #app.app-fixed {
 /* Global .btn-primary is white on --accent (2.75:1); same fix as .account-btn-primary. */
 .repeater-info-actions .btn-primary { background: var(--accent-strong); color: var(--text-on-accent); }
 .repeater-info-actions .btn-primary:hover { background: var(--palette-blue-700); }
+
+/* Ducting controls on the Live page: clear the VCR bar (the map runs under
+ * it) and, on desktop, the live feed panel pinned to the bottom-left. */
+.live-page .leaflet-bottom.leaflet-left {
+  bottom: calc(var(--vcr-bar-height, 58px) + 10px);
+}
+@media (min-width: 641px) {
+  .live-page .leaflet-bottom.leaflet-left { left: 384px; }
+}
