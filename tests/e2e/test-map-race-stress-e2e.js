@@ -494,8 +494,32 @@ const IGNORED_CONSOLE = [
 // opts.trace === false: never trace this context. Playwright tracing with
 // snapshots retains page heap (~0.75 MB per navigation), so a context whose
 // heap is measured must not be traced.
+// The #2428 groups are opt-in (off unless enabled:true); every page here
+// runs with them on so the scenarios keep exercising vector, EOX, OSM
+// France and hillshade. A group the config already sets is left as it is.
+const OPT_IN_GROUPS = ['eox', 'osmfr', 'openfreemap', 'versatiles', 'hillshade'];
+function withOptInGroups(cfg) {
+  cfg.map = cfg.map || {};
+  const tiles = cfg.map.tiles = cfg.map.tiles || {};
+  tiles.providers = tiles.providers || {};
+  for (const g of OPT_IN_GROUPS) {
+    if (!tiles.providers[g] || tiles.providers[g].enabled === undefined) tiles.providers[g] = Object.assign({}, tiles.providers[g], { enabled: true });
+  }
+  return cfg;
+}
+async function routeOptInConfig(target) {
+  await target.route('**/api/config/client', async (route) => {
+    try {
+      const resp = await route.fetch();
+      const body = JSON.stringify(withOptInGroups(JSON.parse(await resp.text())));
+      await route.fulfill({ status: resp.status(), headers: Object.assign({}, resp.headers(), { 'content-length': String(Buffer.byteLength(body)) }), body });
+    } catch (_) { /* page closed */ }
+  });
+}
+
 async function openContext(browser, label, opts) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+  await routeOptInConfig(context);
   context.__tracing = !!TRACE_DIR && !(opts && opts.trace === false);
   if (context.__tracing) await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
   context.__label = label;
@@ -721,11 +745,11 @@ async function scenarioA(browser) {
       await page.route('**/api/config/client', async (route) => {
         try {
           const resp = await route.fetch();
-          let body = await resp.text();
+          // route.fetch() bypasses the context's route: add the groups here too.
+          let body = JSON.stringify(withOptInGroups(JSON.parse(await resp.text())));
           if (mutate) {
             const cfg = JSON.parse(body);
-            cfg.map = cfg.map || {};
-            const tiles = cfg.map.tiles = cfg.map.tiles || {};
+            const tiles = cfg.map.tiles;
             tiles.providers = tiles.providers || {};
             tiles.providers.osmfr = Object.assign({}, tiles.providers.osmfr, { enabled: false });
             tiles.providers.eox = Object.assign({}, tiles.providers.eox, { enabled: false });
@@ -974,7 +998,8 @@ async function scenarioC(browser) {
       if (probs.length) probs.push('actions: ' + log.slice(-12).join(' | '));
       if (r.convergedMs > 2100) sc.details.slowConvergeMs = Math.max(sc.details.slowConvergeMs || 0, r.convergedMs);
       if (probs.length) return probs;
-      return returnCheck(page, land, first, { mode: 'auto', theme, overlays: Array.from(ov), pickers: 1 });
+      // The pick is saved: the picker comes back on it (or Auto if Auto was last).
+      return returnCheck(page, land, first, intent);
     });
   }
   sc.durationMs = Date.now() - t0;
@@ -1214,20 +1239,19 @@ async function scenarioF(browser) {
   const baseline = {};
   const KEYS = ['listeners', 'maps', 'pickers', 'controls', 'overlayPanes', 'autoLive', 'nodeTileRecs'];
 
-  // A visit to the route the page is already on fires no hashchange: the map
-  // and its picker survive, and so does a basemap picked on the last visit.
-  let lastExplicit = null;
+  // A basemap picked in any picker is saved (mc-tile-pinned): every picker
+  // page visited after it opens on it (nothing here picks Auto again).
+  let pinned = null;
   async function visit(def, cyc) {
     const probs = [];
-    const sameRoute = (await page.evaluate(() => location.hash)) === effectiveRoute(def.route);
     await hashNav(page, def.route);
-    let explicit = (sameRoute && def.picker) ? lastExplicit : null;
+    let explicit = def.picker ? pinned : null;
     if (def.picker) {
       await waitPicker(page);
       if (rng.chance(0.25)) {
         const ids = await page.evaluate(() => window.__mcStress.baseIds().filter(x => x !== '__auto__' && !window.__mcStress.vectorIds().includes(x)));
         const id = rng.pick(ids);
-        if ((await page.evaluate((x) => window.__mcStress.clickBase(x), id)) === 'ok') explicit = id;
+        if ((await page.evaluate((x) => window.__mcStress.clickBase(x), id)) === 'ok') { explicit = id; pinned = id; }
       }
       if (rng.chance(0.25)) {
         const ov = await page.evaluate(() => window.__mcStress.overlayIds());
@@ -1251,7 +1275,6 @@ async function scenarioF(browser) {
         return dark ? window.MC_setDarkTileProvider(id) : window.MC_setLightTileProvider(id);
       }, rng.next());
     }
-    lastExplicit = explicit;
     const intent = def.picker ? { mode: explicit ? 'explicit' : 'auto', id: explicit, overlays, pickers: 1 } : { pickers: 0 };
     const r = await settleCheck(page, intent, { minMs: 300, maxMs: 5000 });
     probs.push(...r.problems.map(p => `${def.key}: ${p}`));
