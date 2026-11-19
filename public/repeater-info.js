@@ -135,9 +135,14 @@
       var form = el.querySelector('[data-ri-form]');
       if (form) drafts[slot] = { pk: pk, values: rawForm(form) };
     }
+    // shown is the mode on screen, or '' while nothing is (the view before
+    // the GET answered).
+    var shown = '';
     function show(mode, values) {
       var user = auth.user();
       if (mode !== 'edit') delete drafts[slot];
+      if (mode === 'view' && !info) { shown = ''; el.innerHTML = ''; el.hidden = true; return; }
+      shown = mode;
       el.innerHTML = '<h4>Repeater info</h4>' +
         (mode === 'edit' ? formHtml(values || info) : mode === 'confirm' ? confirmHtml() : viewHtml(info, user));
       if (mode === 'edit' && !values) keep();
@@ -182,12 +187,17 @@
     return Promise.resolve(auth.ready()).then(function () {
       if (!auth.isEnabled()) return;
       bind();
+      // An open draft comes back at once, in the same task as the re-render:
+      // waiting for the GET would empty the section for a round trip.
+      var d = drafts[slot];
+      if (d && d.pk === pk) { show('edit', d.values); el.hidden = false; }
       return auth.request('GET', base + '/info').then(function (r) {
-        if (!r.ok) return;
+        // A section the node page already replaced must not touch the draft
+        // its successor owns.
+        if (!r.ok || el.isConnected === false) return;
+        if (info) return; // a save on the early form already brought newer data
         info = r.data;
-        var d = drafts[slot];
-        if (d && d.pk === pk && info.canEdit) show('edit', d.values);
-        else show('view');
+        if (shown !== 'edit' || !info.canEdit) show('view');
         el.hidden = false;
         var hash = String(window.location.hash || '');
         if (hash.indexOf('section=node-repeater-info') !== -1 && el.scrollIntoView) el.scrollIntoView();

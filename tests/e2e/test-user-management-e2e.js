@@ -742,7 +742,7 @@ async function until(fn, label) {
     await userA.click(row);
     const pane = '#node-repeater-info-pane';
     await userA.waitForSelector(pane + ':not([hidden]) .repeater-info-list');
-    const t = (await userA.innerText(pane)).replace(/s+/g, ' ');
+    const t = (await userA.innerText(pane)).replace(/\s+/g, ' ');
     assert(t.indexOf('25 m') !== -1, 'pane height missing: ' + t);
   });
 
