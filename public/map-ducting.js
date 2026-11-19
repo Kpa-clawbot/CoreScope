@@ -5,8 +5,9 @@
  * tropo-ducting forecast maps): transparent where propagation is normal, then
  * purple, blue, cyan, green, yellow, orange, red and pink as the gradient gets
  * stronger; each colour is one range of N/km. Cells where the model shows a
- * duct that may carry LoRa (lowest trapped frequency <= 868 MHz, so 868 and
- * 915 MHz) get a dashed outline (from the duct analysis: c and f, not n).
+ * duct that may carry LoRa (lowest trapped frequency, as shown, at most this
+ * site's LoRa frequency, or at most 915 MHz when the server sets none) get a
+ * dashed outline (from the duct analysis: c and f, not n).
  * Data: GET /api/ducting (hourly
  * forecast, one array entry per `times` entry, see cmd/server/ducting_types.go).
  *
@@ -83,10 +84,12 @@
   // While there is no data yet (server still preparing, or a failed fetch),
   // ask again every minute instead of waiting a full refresh period.
   var RETRY_MS = 60 * 1000;
-  // A duct "may carry LoRa" when its lowest trapped frequency is at most
-  // 868 MHz (then 915 MHz too). One threshold for the outline and the popup.
-  // With model levels ~200 m apart this is a model estimate, not a yes/no.
-  var LORA_MAX_MHZ = 868;
+  // A duct "may carry LoRa" at a frequency when its lowest trapped frequency
+  // (as shown, two significant figures) is at most that frequency: this
+  // site's LoRa frequency when the server sets one (los.frequencyMhz), else
+  // 868 and 915 MHz each. With model levels ~200 m apart it is an estimate.
+  var BAND_868 = 868;           // LoRa bands judged when the site's frequency is unknown
+  var BAND_915 = 915;
   var TYPE_NAME = { 0: 'No data', 1: 'Normal', 2: 'Super-refraction', 3: 'Elevated duct', 4: 'Surface-based duct' };
 
   // Colour bands: --mc-duct-sN colours n (mean dN/dh over the lowest 1.5 km,
@@ -129,7 +132,10 @@
   var MSG_PENDING = 'Ducting forecast is being prepared';
   var MSG_ERROR = 'Ducting forecast unavailable';
   var MSG_STALE = 'Forecast out of date \u2014 showing the last one received';
-  var MSG_LORA_ROW = 'Dashed outline: the model shows a duct that may carry LoRa 868/915 MHz';
+  // 'Dashed outline: … LoRa at 910.525 MHz' (this site) or '868 / 915 MHz'.
+  function msgLoraRow() {
+    return 'Dashed outline: the model shows a duct that may carry LoRa at ' + loraFreqs().map(function (f) { return Math.round(f * 1000) / 1000; }).join(' / ') + ' MHz';
+  }
   var HOUR_S = 3600;
 
   // ── Pure helpers ──────────────────────────────────────────────────────────
@@ -164,13 +170,33 @@
   // '-52' with a real minus sign.
   function fmtSigned(v) { return v < 0 ? MINUS + Math.abs(v) : String(v); }
 
-  function isLora(cell, i) {
-    var f = at(cell.f, i);
-    return at(cell.c, i) >= 3 && f > 0 && f <= LORA_MAX_MHZ;
-  }
-
   // Two significant figures: 78 -> 78, 380 -> 380, 868 -> 870, 1234 -> 1200.
   function sig2(v) { return Number(Number(v).toPrecision(2)); }
+
+  // The LoRa frequencies to judge a duct against: this site's own (the line
+  // of sight setting, /api/config/client los.frequencyMhz) when the server
+  // has one, else both common bands. In MHz, ascending.
+  function loraFreqs() {
+    var c = (typeof window !== 'undefined' && window.MC_LOS_CFG) || null;
+    var f = c ? Number(c.frequencyMhz) : NaN;
+    return (f >= 100 && f <= 6000) ? [f] : [BAND_868, BAND_915];
+  }
+
+  // A duct's lowest trapped frequency as shown (two significant figures):
+  // the verdicts compare this same value, so the number and the answer never
+  // disagree at a band edge. 0 = no duct.
+  function shownFmin(cell, i) {
+    var f = at(cell.f, i);
+    return (at(cell.c, i) >= 3 && f > 0) ? sig2(f) : 0;
+  }
+
+  // Dashed outline: the model's duct may trap at least one of loraFreqs().
+  function isLora(cell, i) {
+    var f = shownFmin(cell, i), fr = loraFreqs();
+    return f > 0 && f <= fr[fr.length - 1];
+  }
+
+  function fmtMHz(f) { return (Math.round(f * 1000) / 1000) + ' MHz'; }
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -189,16 +215,18 @@
     var n = fieldValue(cell, i);
     if (n === n) box.appendChild(el('div', null, 'Gradient, lowest 1.5 km: ' + fmtSigned(Math.round(n)) + ' N/km'));
     if (cls < 2) return box;
-    var fmin = at(cell.f, i);
     var rows = [];
     if (cls >= 3) {
-      rows.push('Trapping layer in the model (\u2265 ~200 m thick)');
+      rows.push('Trapping layer in the model (its levels are ~200 m apart, so thinner layers are not resolved)');
       rows.push('Base: ' + Math.round(at(cell.b, i)) + ' m above ground');
       rows.push('Top: ' + Math.round(at(cell.t, i)) + ' m above ground');
     }
     rows.push('Strength: ' + (at(cell.dm, i) / 10).toFixed(1) + ' M-units');
-    rows.push('Lowest trapped frequency: ' + (fmin > 0 ? '\u2248 ' + sig2(fmin) + ' MHz (model estimate)' : 'none'));
-    rows.push('LoRa 868/915 MHz: ' + (isLora(cell, i) ? 'possibly trapped (model estimate)' : 'not trapped by this layer'));
+    var shown = shownFmin(cell, i);
+    rows.push('Lowest trapped frequency: ' + (shown > 0 ? '\u2248 ' + shown + ' MHz (model estimate)' : 'none'));
+    loraFreqs().forEach(function (fr) {
+      rows.push('LoRa ' + fmtMHz(fr) + ': ' + (shown > 0 && shown <= fr ? 'possibly trapped (model estimate)' : 'not trapped by this layer'));
+    });
     for (var r = 0; r < rows.length; r++) box.appendChild(el('div', null, rows[r]));
     return box;
   }
@@ -944,7 +972,7 @@
           box.appendChild(this._scale());
           var lrow = el('div', 'mc-duct-legend-row');
           lrow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-lora'));
-          lrow.appendChild(el('span', null, MSG_LORA_ROW));
+          lrow.appendChild(el('span', null, msgLoraRow()));
           box.appendChild(lrow);
           var erow = el('div', 'mc-duct-legend-row');
           erow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-edge'));

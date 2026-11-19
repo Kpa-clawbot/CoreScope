@@ -48,8 +48,15 @@ const FAKE = require('./lib/fake-open-meteo');
 const BASE = (process.env.BASE_URL || 'http://localhost:13596').replace(/\/+$/, '');
 const FAKE_PORT = parseInt(process.env.FAKE_PORT || '13597', 10);
 const SCENARIO = 'mixed';
-// One LoRa threshold (map-ducting.js LORA_MAX_MHZ): f_min <= 868 MHz.
-const LORA_MAX_MHZ = 868;
+// The LoRa frequencies the overlay judges (map-ducting.js loraFreqs): the
+// site's los.frequencyMhz from /api/config/client when it is 100..6000 MHz,
+// else 868 and 915 MHz. Set once the client config is read.
+let LORA_FREQS = [868, 915];
+const loraFreqsOf = (cfg) => { const f = Number(cfg && cfg.los && cfg.los.frequencyMhz); return (f >= 100 && f <= 6000) ? [f] : [868, 915]; };
+// f_min as the popup shows it (2 significant figures); verdicts use this value.
+const sig2 = (v) => Number(Number(v).toPrecision(2));
+const shownFmin = (c, h) => (c.c[h] >= 3 && c.f[h] > 0) ? sig2(c.f[h]) : 0;
+const fmtFreq = (f) => String(Math.round(f * 1000) / 1000);
 // The field's colour bands start at these values of n, the mean dN/dh over
 // the lowest 1.5 km in N/km (map-ducting.js STOP_N).
 const STOP_N = [-44, -48, -54, -58, -62, -70, -80, -90];
@@ -64,7 +71,13 @@ async function test(name, fn) {
   try { await fn(); passed++; console.log(`  ✅ ${name}`); }
   catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
 }
-function skip(name, why) { skipped++; console.log(`  ⏭  ${name}: ${why}`); }
+// In CI (GitHub Actions sets CI=true) the server is set up with everything
+// these checks need, so a skip there means a broken setup: count it as a
+// failure instead.
+function skip(name, why) {
+  if (process.env.CI === 'true') { failed++; console.log(`  ❌ ${name}: skipped in CI (${why})`); return; }
+  skipped++; console.log(`  ⏭  ${name}: ${why}`);
+}
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'Assertion failed'); }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -335,10 +348,10 @@ async function fieldProblems(page, data, idx) {
 
 // Outline problems: one dashed, unfilled, non-interactive --mc-duct-lora
 // outline layer exactly on the cells where the model shows a duct that may
-// carry LoRa (0 < f_min <= 868 MHz) at hour idx.
+// carry LoRa at hour idx (0 < shown f_min <= the highest judged frequency).
 function outlineProblems(st, data, idx, lora) {
   const probs = [];
-  const want = new Set(data.cells.filter(c => c.c[idx] >= 3 && c.f[idx] > 0 && c.f[idx] <= LORA_MAX_MHZ).map(c => `${c.lat},${c.lon}`));
+  const want = new Set(data.cells.filter(c => { const v = shownFmin(c, idx); return v > 0 && v <= LORA_FREQS[LORA_FREQS.length - 1]; }).map(c => `${c.lat},${c.lon}`));
   if (st.lora.length > 1) probs.push(`${st.lora.length} LoRa outline layers`);
   const l = st.lora[0];
   if (!want.size) { if (l) probs.push(`outline drawn on ${l.cells.length} cells, none wanted`); return { probs, n: 0 }; }
@@ -414,6 +427,7 @@ async function run() {
       const txt = JSON.stringify(cfg);
       assert(!/baseUrl/i.test(txt) && !txt.includes('127.0.0.1:' + FAKE_PORT), 'client config leaks the ducting baseUrl');
     });
+    LORA_FREQS = loraFreqsOf(cfg);
     if (!cfg || !cfg.ducting) throw new Error('server has no ducting configured; see the header for how to start it');
 
     let data;
@@ -492,7 +506,7 @@ async function run() {
       assert(!st.interactive.length, 'interactive overlay layers: ' + st.interactive.join(','));
       assert(st.fields.length === 1 && st.fields[0].inDom && st.fields[0].pane === 'mcDuctFieldPane', 'field images: ' + JSON.stringify(st.fields));
       assert(st.legends === 1 && st.times === 1 && st.legendVisible && st.timeVisible, `legends=${st.legends} times=${st.times}`);
-      assert(/may carry LoRa 868\/915 MHz/.test(st.legendText) && /Above normal/.test(st.legendText) && /Very high/.test(st.legendText) && !/Enhanced|Strong/.test(st.legendText) && /lowest 1\.5 km \(N\/km\)/.test(st.legendText) && /Updated/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 200));
+      assert(st.legendText.includes('may carry LoRa at ' + LORA_FREQS.map(fmtFreq).join(' / ') + ' MHz') && /Above normal/.test(st.legendText) && /Very high/.test(st.legendText) && !/Enhanced|Strong/.test(st.legendText) && /lowest 1\.5 km \(N\/km\)/.test(st.legendText) && /Updated/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 200));
       const ov = await page.evaluate(inPageOverlaps);
       assert(ov.mine === 2, 'legend and time box not both visible');
       assert(!ov.hits.length, ov.hits.join('; '));
@@ -606,16 +620,18 @@ async function run() {
       }
       throw new Error(`could not open the popup of cell ${cell.lat},${cell.lon} (class ${wantClass})`);
     }
-    // f_min to 2 significant figures, as the popup shows it.
-    const sig2 = (v) => Number(Number(v).toPrecision(2));
+    // The popup's LoRa verdict lines for cell c at hour h: one per judged frequency.
+    const verdicts = (c, h) => LORA_FREQS.map(fr => `LoRa ${fmtFreq(fr)} MHz: ` + (shownFmin(c, h) > 0 && shownFmin(c, h) <= fr ? 'possibly trapped (model estimate)' : 'not trapped by this layer'));
 
     await test('clicking a surface-duct cell opens its popup: trapping layer, frequency estimate, LoRa possibly trapped', async () => {
       const r = await popupFor(4);
       const f = r.cell.f[idx0];
       assert(/Surface-based duct/.test(r.text), 'popup: ' + r.text);
-      assert(r.text.includes('Trapping layer in the model (\u2265 ~200 m thick)'), 'popup: ' + r.text);
+      assert(r.text.includes('Trapping layer in the model (its levels are ~200 m apart, so thinner layers are not resolved)'), 'popup: ' + r.text);
       assert(r.text.includes(`Lowest trapped frequency: \u2248 ${sig2(f)} MHz (model estimate)`), `popup (f=${f}): ` + r.text);
-      assert(r.text.includes('LoRa 868/915 MHz: possibly trapped (model estimate)'), 'popup: ' + r.text);
+      const lines = r.text.split('\n').filter(l => /^LoRa /.test(l));
+      assert(JSON.stringify(lines) === JSON.stringify(verdicts(r.cell, idx0)), `popup LoRa lines (f=${f}) ${JSON.stringify(lines)} want ${JSON.stringify(verdicts(r.cell, idx0))}`);
+      assert(lines.some(l => /possibly trapped/.test(l)), 'surface duct of the fake traps LoRa: ' + r.text);
       assert(!/Can carry|: yes|: no\b/.test(r.text), 'old yes/no wording: ' + r.text);
       assert(/Base: 0 m/.test(r.text), 'popup: ' + r.text);
       const n = fieldN(r.cell, idx0);
@@ -623,7 +639,9 @@ async function run() {
     });
     await test('clicking a super-refraction cell: no trapping layer, LoRa not trapped', async () => {
       const r = await popupFor(2);
-      assert(/Super-refraction/.test(r.text) && /LoRa 868\/915 MHz: not trapped by this layer/.test(r.text) && /Lowest trapped frequency: none/.test(r.text), 'popup: ' + r.text);
+      const lines = r.text.split('\n').filter(l => /^LoRa /.test(l));
+      assert(/Super-refraction/.test(r.text) && /Lowest trapped frequency: none/.test(r.text), 'popup: ' + r.text);
+      assert(lines.length === LORA_FREQS.length && lines.every(l => / MHz: not trapped by this layer$/.test(l)), 'popup LoRa lines: ' + JSON.stringify(lines));
       assert(!/Trapping layer/.test(r.text), 'popup: ' + r.text);
     });
     await test('a map click in the forecast area reaches the page\'s own map click listeners; the popup follows the slider', async () => {
