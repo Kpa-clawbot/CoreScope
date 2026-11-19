@@ -110,6 +110,28 @@
 
   // ── Layer ─────────────────────────────────────────────────────────────────
 
+  // Leaflet 1.9.4's canvas _updatePaths (run on every map move) redraws at
+  // once but leaves an already queued animation-frame redraw in place, its id
+  // dropped. If the overlay is switched off before that frame, removing the
+  // renderer cannot cancel it, and the orphaned callback draws to the deleted
+  // context ("reading 'clearRect'"). This renderer cancels the queued frame
+  // before redrawing.
+  var CanvasClass = null;
+  function newRenderer() {
+    if (!CanvasClass && L.Canvas && typeof L.Canvas.extend === 'function') {
+      CanvasClass = L.Canvas.extend({
+        _updatePaths: function () {
+          if (!this._postponeUpdatePaths && this._redrawRequest) {
+            L.Util.cancelAnimFrame(this._redrawRequest);
+            this._redrawRequest = null;
+          }
+          L.Canvas.prototype._updatePaths.call(this);
+        }
+      });
+    }
+    return CanvasClass ? new CanvasClass({ padding: 0.5 }) : L.canvas({ padding: 0.5 });
+  }
+
   function makeLayerClass() {
     return L.Layer.extend({
       initialize: function (opts) {
@@ -127,7 +149,7 @@
         var gen = ++this._gen;
         this._rects = [];
         try {
-          this._renderer = L.canvas({ padding: 0.5 });
+          this._renderer = newRenderer();
           this._group = L.layerGroup();
           map.addLayer(this._group);
         } catch (_) { this._group = null; }

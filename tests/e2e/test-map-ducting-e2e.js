@@ -454,6 +454,31 @@ async function run() {
       await MH.setTheme(page, 'light');
     });
 
+    // Leaflet 1.9.4: a map move redraws the canvas at once and orphans the
+    // queued frame; switching off before that frame used to throw from the
+    // orphan ("reading 'clearRect'", stress gate seed 303, scenario g).
+    await test('switching off right after a canvas move redraw throws nothing', async () => {
+      const before = page.__errors.length;
+      const queued = await page.evaluate(() => {
+        let rect = null;
+        window.__mcHarness.maps.forEach(m => { if (m._loaded) m.eachLayer(l => { if (!rect && l._mcCell && l._renderer) rect = l; }); });
+        if (!rect) return 'no cell';
+        const r = rect._renderer;
+        rect.setStyle({ fillOpacity: 0.5 });   // queues a frame redraw
+        if (!r._redrawRequest) return 'no redraw queued';
+        r._updatePaths();                      // what every moveend does
+        rect.setStyle({ fillOpacity: 0.4 });   // marks an area to redraw
+        window.MC_setTileOverlay('ducting', false);
+        return 'ok';
+      });
+      assert(queued === 'ok', queued);
+      await sleep(300);
+      const errs = page.__errors.slice(before);
+      assert(!errs.length, errs.join(' | '));
+      await page.evaluate(() => window.MC_setTileOverlay('ducting', true));
+      await waitRects(page, 1);
+    });
+
     await test('disabling the overlay removes legend, time slider and cells', async () => {
       await setOverlayUi(page, false);
       await page.waitForFunction(() => !document.querySelector('.mc-duct-legend') && !document.querySelector('.mc-duct-time'), null, { timeout: 5000 });
