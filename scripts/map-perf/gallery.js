@@ -107,6 +107,8 @@ for (const theme of ['light', 'dark']) {
 // Tropospheric ducting overlay (opt-in, server needs `ducting`). On the
 // keyless OSM Gray raster basemap: neutral under a colour field, and the
 // shots work on a server without a Carto key.
+// Groups off unless map.tiles.providers.<group>.enabled is true.
+const OPT_IN_GROUPS = ['eox', 'osmfr', 'openfreemap', 'versatiles', 'hillshade'];
 const DUCT_BASE = { light: 'osmfr-gray', dark: 'osmfr-gray-dark' };
 for (const theme of ['light', 'dark']) {
   add('ducting', `ducting-map-${theme}`, `Ducting overlay with legend (${theme})`, { theme, provider: DUCT_BASE[theme], overlays: ['ducting'], view: 'ducting', ducting: true });
@@ -295,6 +297,9 @@ async function capture(browser, e, views, outDir, base) {
     await MH.installCollectors(page);
     if (e.vector) await page.addInitScript(VECTOR_PROBE);
     await MH.installTileStub(page, { mode: 'live', baseUrl: base });
+    // The #2428 groups are opt-in: switch on the ones this shot shows.
+    const groups = [e.provider].concat(e.overlays || []).map((id) => String(id || '').split('-')[0]).filter((g) => OPT_IN_GROUPS.includes(g));
+    if (groups.length) e = Object.assign({}, e, { enable: (e.enable || []).concat(groups) });
     if (e.custom || e.enable) await installConfig(page, e);
     await MH.presetStorage(page, {
       theme: e.theme, provider: e.provider, overlays: e.overlays,
