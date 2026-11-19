@@ -131,7 +131,7 @@ func TestDuctingServiceSnapshotMatchesFixture(t *testing.T) {
 	if len(resp.Times) != 3 || resp.Times[0] != 1795046400 {
 		t.Errorf("times %v", resp.Times)
 	}
-	if c := resp.Cells[0]; c.Lat != 51.25 || c.Lon != -0.25 || len(c.C) != 3 || len(c.G) != 3 {
+	if c := resp.Cells[0]; c.Lat != 51.25 || c.Lon != -0.25 || len(c.C) != 3 || len(c.G) != 3 || len(c.N) != 3 {
 		t.Errorf("cell %+v", c)
 	}
 }
@@ -174,6 +174,10 @@ func TestDuctingServiceSurfaceDuct(t *testing.T) {
 	}
 	if c.G[0] != int(math.Round(grad)) {
 		t.Errorf("g %d, want %d", c.G[0], int(math.Round(grad)))
+	}
+	// The fake profile tops out at 100 m, below 1.5 km: no mean gradient.
+	if len(c.N) != len(c.G) || c.N[0] != 0 {
+		t.Errorf("n %v, want %d zeros", c.N, len(c.G))
 	}
 }
 
@@ -636,5 +640,34 @@ func TestDuctingServiceNodeAreaFallbackLogged(t *testing.T) {
 	}
 	if resp, _ := ductingServe(t, svc); len(resp.Cells) == 0 || len(resp.Cells) > 450 {
 		t.Errorf("%d cells", len(resp.Cells))
+	}
+}
+
+func TestDuctingAnalyzeColumnMeanGradient(t *testing.T) {
+	m, _ := ductingModel("gfs")
+	svc := &ductingService{model: m}
+	// Levels at 1000 and 850 hPa; geo heights put them at 2 < h and 1500 m AGL.
+	levels := m.LevelsHPa
+	hr := ductingHour{SurfP: 1013, T2m: 15, RH2m: 50}
+	for range levels {
+		hr.Temp, hr.RH, hr.Geo = append(hr.Temp, math.NaN()), append(hr.RH, math.NaN()), append(hr.Geo, math.NaN())
+	}
+	for i, p := range levels {
+		switch p {
+		case 850:
+			hr.Temp[i], hr.RH[i], hr.Geo[i] = 5, 60, 1600 // 100 m terrain
+		case 700:
+			hr.Temp[i], hr.RH[i], hr.Geo[i] = -5, 50, 3100
+		}
+	}
+	col := ductingColumn{Elevation: 100, Times: []int64{1, 2}, Hours: []ductingHour{hr, hr}}
+	cell := svc.analyzeColumn(col)
+	if len(cell.N) != 2 {
+		t.Fatalf("len(n) = %d, want 2", len(cell.N))
+	}
+	n0 := Refractivity(1013, 15, 50)
+	n850 := Refractivity(850, 5, 60) // at 1500 m AGL exactly
+	if want := int(math.Round((n850 - n0) / 1.5)); cell.N[0] != want || cell.N[1] != want || want == 0 {
+		t.Errorf("n %v, want %d", cell.N, want)
 	}
 }

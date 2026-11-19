@@ -119,6 +119,21 @@ func AnalyzeDucting(profile []DuctLevel) DuctResult {
 	return analyzeM(h, m, n)
 }
 
+// ductMeanGradient returns (N at ductMeanLayerM - N at the first point) /
+// ductMeanLayerM in N/km, with N at ductMeanLayerM linearly interpolated
+// between the two points that bracket it. 0 when none do (the profile top
+// is below ductMeanLayerM). h ascends; h[0] is the 2 m surface point.
+func ductMeanGradient(h, n []float64) float64 {
+	for i := 0; i+1 < len(h); i++ {
+		if h[i] > ductMeanLayerM || h[i+1] < ductMeanLayerM || h[i+1] <= h[i] {
+			continue
+		}
+		n1500 := n[i] + (n[i+1]-n[i])*(ductMeanLayerM-h[i])/(h[i+1]-h[i])
+		return (n1500 - n[0]) / ductMeanLayerM * 1000
+	}
+	return 0
+}
+
 // analyzeM finds trapping layers in an M profile (heights ascending) and
 // returns the strongest duct (lowest fmin) plus the most negative dN/dh.
 func analyzeM(h, m, n []float64) DuctResult {
@@ -140,6 +155,8 @@ func analyzeM(h, m, n []float64) DuctResult {
 			haveGrad = true
 		}
 	}
+
+	res.MeanGradNkm = ductMeanGradient(h[:cnt], n[:cnt])
 
 	found, surface := false, false
 	var bestF, bestBase, bestTop, bestDM float64

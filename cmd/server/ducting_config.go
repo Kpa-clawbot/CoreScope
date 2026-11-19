@@ -186,16 +186,19 @@ func ductingCallsPerPoint(m DuctingModel) float64 {
 }
 
 // ductingMaxPoints caps the point count so the daily call volume stays
-// within ductingDailyCallBudget. At least 1.
+// within ductingDailyCallBudget (public API only: a self-hosted baseUrl has
+// no call budget, so only c.MaxPoints applies). At least 1.
 func ductingMaxPoints(c DuctingConfig, m DuctingModel) int {
 	refresh := c.RefreshMinutes
 	if refresh <= 0 {
 		refresh = defaultDuctingRefreshMinutes
 	}
 	perDay := 1440.0 / float64(refresh)
-	n := int(math.Floor(ductingDailyCallBudget / (ductingCallsPerPoint(m) * perDay)))
-	if c.MaxPoints < n {
-		n = c.MaxPoints
+	n := c.MaxPoints
+	if ductingIsPublicAPI(c.BaseURL) {
+		if b := int(math.Floor(ductingDailyCallBudget / (ductingCallsPerPoint(m) * perDay))); b < n {
+			n = b
+		}
 	}
 	if n < 1 {
 		n = 1
@@ -228,6 +231,10 @@ func logDuctingConfig(c *DuctingConfig) {
 		log.Printf("[ducting] %s", w)
 	}
 	m, _ := ductingModel(r.Model)
-	log.Printf("[ducting] enabled (model=%s, step=%g deg, margin=%g deg, maxPoints=%d (budget cap %d), refresh=%d min, forecast=%d h)",
-		m.ID, r.GridStepDeg, r.marginDegOrDefault(), r.MaxPoints, ductingMaxPoints(r, m), r.RefreshMinutes, r.ForecastHours)
+	budget := "self-hosted: no call budget"
+	if ductingIsPublicAPI(r.BaseURL) {
+		budget = fmt.Sprintf("budget cap %d", ductingMaxPoints(r, m))
+	}
+	log.Printf("[ducting] enabled (model=%s, step=%g deg, margin=%g deg, maxPoints=%d (%s), refresh=%d min, forecast=%d h)",
+		m.ID, r.GridStepDeg, r.marginDegOrDefault(), r.MaxPoints, budget, r.RefreshMinutes, r.ForecastHours)
 }

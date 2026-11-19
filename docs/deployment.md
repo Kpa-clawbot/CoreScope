@@ -531,6 +531,8 @@ Enable it in `config.json`:
 "ducting": { "enabled": true }
 ```
 
+The map colours the mean refractivity gradient over the lowest 1.5 km above ground (N/km), the ITU-R P.453 style gradient, which tracks where radio signals bend most. `GET /api/ducting` carries it per cell and hour as `n` (N/km, rounded, 0 = no data) next to the duct class and the other fields.
+
 The defaults suit most sites. All keys are optional:
 
 | Key | Default | Allowed | Meaning |
@@ -559,6 +561,8 @@ By default the forecast covers the bounding box of all your nodes plus `marginDe
 
 **Call budget**
 
+This section applies to the public Open-Meteo API only; see *Self-hosting Open-Meteo* below.
+
 Open-Meteo counts a request with more than 10 variables as several calls. CoreScope asks for temperature, humidity and height at every level plus three surface values. For GFS that is 42 variables per point, so **4.2 calls per point per refresh** (ICON: 27 variables, 2.7 calls).
 
 The server limits the number of points so a day stays under 8,000 calls, leaving headroom below the 10,000 free limit: points <= 8,000 / (calls per point x refreshes per day). The effective limit is `min(maxPoints, that value)`, and is logged at startup. With the defaults, 450 points every 6 hours (4 refreshes a day) is 450 x 4.2 x 4 = about 7,600 calls a day (the GFS cap at that refresh is 476 points). A worked example: nodes spread over a region 20 x 15 degrees, with `gridStepDeg` 1, is 300 points, and 300 x 4.2 x 4 = about 5,000 calls a day. Refreshing hourly with GFS would cap you at about 79 points.
@@ -573,7 +577,7 @@ If the box has more cells than allowed, the step is doubled (0.5, 1, 2, 4, up to
 
 **Self-hosting Open-Meteo**
 
-Follow the upstream documentation at <https://github.com/open-meteo/open-meteo> to run your own instance with the model you chose, then point CoreScope at it. The 8,000 calls a day budget is still applied.
+Follow the upstream documentation at <https://github.com/open-meteo/open-meteo> to run your own instance with the model you chose, then point CoreScope at it. When `baseUrl` is anything other than the public `api.open-meteo.com`, the free-tier call budget does not apply: the 8,000 calls a day limit is not used to lower `maxPoints`, the hourly and daily hard caps are not enforced, and the startup log says `(self-hosted: no call budget)` instead of `(budget cap N)`. Requests are still paced to 400 calls per minute and a 429 answer is still backed off from.
 
 ```json
 "ducting": { "enabled": true, "baseUrl": "https://weather.example.org" }

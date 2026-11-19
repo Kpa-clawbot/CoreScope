@@ -15,6 +15,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,11 +36,29 @@ const (
 	ductingLedgerWindow   = 24 * time.Hour
 )
 
+// ductingPublicHost is the free public Open-Meteo API, the only host the
+// call caps below apply to; a self-hosted instance has no such limits.
+const ductingPublicHost = "api.open-meteo.com"
+
+// ductingIsPublicAPI reports whether baseURL is the public Open-Meteo API.
+// An empty or unparseable URL counts as public (the safe, capped side).
+func ductingIsPublicAPI(baseURL string) bool {
+	if baseURL == "" {
+		return true
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Hostname() == "" {
+		return true
+	}
+	return strings.EqualFold(u.Hostname(), ductingPublicHost)
+}
+
 // errDuctingRateLimited is returned when Open-Meteo answers 429.
 var errDuctingRateLimited = errors.New("open-meteo rate limit (HTTP 429)")
 
 // errDuctingBudget is returned, before any request is sent, when a fetch
 // would push the calls spent in the last hour or day past the hard caps.
+// Only the public API is capped (ductingSource.capped).
 // Regular refreshes never reach them (ductingMaxPoints sizes the grid for
 // ductingDailyCallBudget); repeated retries can.
 var errDuctingBudget = errors.New("open-meteo call budget exhausted")
@@ -86,6 +105,7 @@ type ductingSource struct {
 	sleep   func(ctx context.Context, d time.Duration) error
 	now     func() time.Time
 	maxBody int64
+	capped  bool // enforce the hourly/daily hard caps (public API only)
 
 	mu     sync.Mutex
 	ledger []ductingLedgerEntry // calls sent in the last ductingLedgerWindow
@@ -100,6 +120,7 @@ func newDuctingSource(baseURL string, model DuctingModel) *ductingSource {
 		sleep:   ductingSleep,
 		now:     time.Now,
 		maxBody: ductingMaxBodyBytes,
+		capped:  ductingIsPublicAPI(baseURL),
 	}
 }
 
@@ -169,7 +190,7 @@ func (s *ductingSource) fetch(ctx context.Context, cells [][2]float64, forecastH
 	s.mu.Lock()
 	hour, day := s.spentLocked(s.now())
 	s.mu.Unlock()
-	if hour+planned > ductingHourlyCallCap || day+planned > ductingDailyCallCap {
+	if s.capped && (hour+planned > ductingHourlyCallCap || day+planned > ductingDailyCallCap) {
 		return nil, errDuctingBudget
 	}
 

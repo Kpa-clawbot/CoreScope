@@ -249,3 +249,75 @@ func TestDuctProfile(t *testing.T) {
 		}
 	})
 }
+
+// Mean gradient over the lowest 1.5 km. Python, ITU-R P.453 N:
+//
+//	N(2 m,    1000 hPa, 15 C, 50 %) = 307.6179
+//	N(500 m,   950 hPa, 12 C, 55 %) = 293.9286  (not a bracketing level)
+//	N(1200 m,  870 hPa,  6 C, 60 %) = 268.7227
+//	N(1800 m,  820 hPa,  3 C, 70 %) = 256.3955
+//
+// 1500 m lies halfway between 1200 and 1800 m:
+// N(1500) = 268.7227 + (256.3955-268.7227)*300/600 = 262.5591
+// MeanGradNkm = (262.5591 - 307.6179) / 1500 * 1000 = -30.04 N/km.
+func TestDuctMeanGradientKnownAnswer(t *testing.T) {
+	prof := []DuctLevel{
+		{HeightAGL: 2, PressureHPa: 1000, TempC: 15, RHPct: 50},
+		{HeightAGL: 500, PressureHPa: 950, TempC: 12, RHPct: 55},
+		{HeightAGL: 1200, PressureHPa: 870, TempC: 6, RHPct: 60},
+		{HeightAGL: 1800, PressureHPa: 820, TempC: 3, RHPct: 70},
+	}
+	r := AnalyzeDucting(prof)
+	ductApprox(t, "MeanGradNkm", r.MeanGradNkm, -30.04, 0.01)
+	// MinGradNkm is the steepest consecutive pair, unchanged:
+	// (268.7227-293.9286)/0.7 = -36.01, (256.3955-268.7227)/0.6 = -20.55,
+	// (293.9286-307.6179)/0.498 = -27.49.
+	ductApprox(t, "MinGradNkm", r.MinGradNkm, -36.01, 0.01)
+}
+
+func TestDuctMeanGradientExactLevel(t *testing.T) {
+	// A level exactly at 1500 m is used as is (no interpolation needed).
+	prof := []DuctLevel{
+		{HeightAGL: 2, PressureHPa: 1000, TempC: 15, RHPct: 50},
+		{HeightAGL: 1500, PressureHPa: 850, TempC: 5, RHPct: 60},
+	}
+	want := (Refractivity(850, 5, 60) - Refractivity(1000, 15, 50)) / 1.5
+	ductApprox(t, "MeanGradNkm", AnalyzeDucting(prof).MeanGradNkm, want, 1e-9)
+}
+
+func TestDuctMeanGradientTopBelowLayer(t *testing.T) {
+	prof := []DuctLevel{
+		{HeightAGL: 2, PressureHPa: 1000, TempC: 15, RHPct: 50},
+		{HeightAGL: 500, PressureHPa: 950, TempC: 12, RHPct: 55},
+		{HeightAGL: 1499, PressureHPa: 850, TempC: 5, RHPct: 60},
+	}
+	r := AnalyzeDucting(prof)
+	if r.MeanGradNkm != 0 {
+		t.Errorf("MeanGradNkm = %v, want 0 (top below 1500 m)", r.MeanGradNkm)
+	}
+	if r.MinGradNkm == 0 {
+		t.Error("MinGradNkm should still be computed")
+	}
+	if g := AnalyzeDucting(nil).MeanGradNkm; g != 0 {
+		t.Errorf("no data: MeanGradNkm = %v, want 0", g)
+	}
+}
+
+func TestDuctMeanGradientStandardAtmosphere(t *testing.T) {
+	isaT := func(z float64) float64 { return 15 - 6.5*z/1000 }
+	isaZ := func(p float64) float64 { return (1 - math.Pow(p/1013.25, 1/5.25588)) / 2.25577e-5 }
+	const elev = 100.0
+	ps := 1013.25 * math.Pow(1-2.25577e-5*elev, 5.25588)
+	levels := []float64{1000, 925, 850, 800, 700}
+	var temps, rhs, zs []float64
+	for _, p := range levels {
+		z := isaZ(p)
+		zs = append(zs, z)
+		temps = append(temps, isaT(z))
+		rhs = append(rhs, 40)
+	}
+	r := AnalyzeDucting(DuctProfile(elev, ps, isaT(elev), 40, levels, temps, rhs, zs))
+	if r.MeanGradNkm < -50 || r.MeanGradNkm > -30 {
+		t.Errorf("MeanGradNkm = %.2f, want about -40 (-50..-30)", r.MeanGradNkm)
+	}
+}
