@@ -57,6 +57,12 @@ CoreScope uses URL hashes for deep linking. Copy the URL from your browser — i
 
 Yes. Use the layers button on the [Map](map.md#map-style-and-overlays) page (also on Live and the Repeater Planner) to pick a street, gray, topographic or satellite map, and tick **Hillshade** to add shaded relief on top. The choice is saved in your browser. Operators control which maps are offered: see [Map Tile Providers](../deployment.md#map-tile-providers).
 
+## 12. Why did a node far away hear my packet?
+
+Radio normally stops at the horizon, but in some weather a layer of air (often under a high-pressure system, or at the boundary of warm and cool air) acts like a pipe and carries signals far past it. This is called tropospheric ducting. It comes and goes over hours and can let you reach or hear nodes hundreds of kilometres away that you never see on an ordinary day. Packets that suddenly arrive from far outside your usual neighbours are a common sign.
+
+If your site operator has enabled it, the **Tropospheric ducting** overlay on the [Map](map.md#tropospheric-ducting) shows where a forecast duct could carry LoRa 868/915 MHz. It is a forecast and misses thin ducts, so treat it as a hint rather than proof. Other causes of surprise long hops are a high-site repeater or a path over water.
+
 ### Where is the API documentation?
 
 CoreScope auto-generates an OpenAPI 3.0 specification from its route definitions:

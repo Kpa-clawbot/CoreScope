@@ -8,6 +8,7 @@
 - **Overlays** - a hillshade overlay shaded in the browser from Terrarium elevation tiles (`map.tiles.providers.hillshade.url` can point at a mirror) and EOX place labels, ticked from a new Overlays group in the picker (each with its group turned on).
 - **The picked map is saved** - a map pinned in the picker survives a reload and applies on every page (the small maps without a picker use it when it suits the current theme); **Auto** clears it.
 - **MapLibre GL vendored** in `public/vendor/` and lazy-loaded (about 380 KB gzipped) only when a vector map is picked; without WebGL the map falls back to the default raster map.
+- **Tropospheric ducting overlay** - off by default; enable with `"ducting": { "enabled": true }`. The server fetches a pressure-level forecast from Open-Meteo (non-commercial use; self-host and set `ducting.baseUrl` for commercial sites), computes refractivity and duct type per grid cell, and serves it at `GET /api/ducting`. A new "Tropospheric ducting" overlay on the Map, Live and Repeater Planner pages colours cells by whether a duct can carry 868/915 MHz LoRa, with a forecast-time slider. Keys: `model` (`gfs`, `icon`, `rrfs-conus`), `area`, `gridStepDeg`, `maxPoints`, `refreshMinutes`, `forecastHours`, `baseUrl`. See docs/deployment.md.
 
 ### Changed
 - **Every map page follows the provider choice**, including the home page mini-map, with one shared picker (Auto, Street, Topographic, Satellite, Overlays).
