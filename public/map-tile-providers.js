@@ -1139,7 +1139,7 @@
 
     function _buildControl() {
       // Tear down existing control + explicit tile layers
-      if (_control) { try { _control.remove(); } catch (_) {} _control = null; }
+      if (_control) { try { _control.remove(); } catch (_) {} _control = null; map._mcLayerControl = null; }
       Object.keys(_layerMap).forEach(function (id) {
         try { map.removeLayer(_layerMap[id]); } catch (_) {}
       });
@@ -1202,6 +1202,8 @@
       if (!overlayIds.length) overlayMaps = null;
 
       _control = L.control.layers(baseMaps, overlayMaps, { position: controlPosition }).addTo(map);
+      // The overlay set defers its sync while this control handles a click.
+      map._mcLayerControl = _control;
       if (overlayMaps) {
         _control._mcOverlayIds = {};
         overlayIds.forEach(function (id) { _control._mcOverlayIds[id] = true; });
@@ -1304,7 +1306,7 @@
         map._mcBaselayerchangeHandler = null;
       }
       _offOverlayHandler();
-      if (_control) { try { _control.remove(); } catch (_) {} _control = null; }
+      if (_control) { try { _control.remove(); } catch (_) {} _control = null; map._mcLayerControl = null; }
       Object.keys(_layerMap).forEach(function (id) {
         try { map.removeLayer(_layerMap[id]); } catch (_) {}
       });
@@ -1440,7 +1442,20 @@
       return out;
     }
 
+    // A sync while this map's layer control handles a click is deferred to
+    // the next tick. Leaflet applies a click by walking every checkbox, and
+    // skips redrawing the list for layer changes it sees while doing so: a
+    // layer added mid-click (say, another tab's pick that is already in
+    // localStorage before its 'storage' event arrives) would be removed
+    // again by a later unchecked box, or leave a stale box that the next
+    // click removes, writing the removal back to every tab.
+    var deferred = null;
     function sync() {
+      var c = map._mcLayerControl;
+      if (c && c._handlingClick) {
+        if (!deferred) deferred = setTimeout(function () { deferred = null; sync(); }, 0);
+        return;
+      }
       _ensureHillshade();
       var want = {};
       _readOverlays().forEach(function (id) { want[id] = true; });
@@ -1466,6 +1481,7 @@
     } catch (_) {}
 
     function destroy() {
+      if (deferred) { clearTimeout(deferred); deferred = null; }
       try {
         window.removeEventListener(OVERLAYS_EVENT, sync);
         window.removeEventListener('storage', onStorage);
