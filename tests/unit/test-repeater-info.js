@@ -264,6 +264,73 @@ test('no draft after Cancel, a save, a hashchange, another repeater or lost edit
   l.auth.request = () => Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: false }) });
   assert(!(await remountShowsForm(l)), 'draft shown without edit rights');
 });
+// A re-mount with an open draft shows the form at once: waiting for the GET
+// left the section empty for a round trip, the form vanished from under the
+// user and the E2E read a missing notes field.
+function remountWithPendingGet() {
+  const opts = { info: INFO({ canEdit: true }), form: { heightM: '25', gainDbi: '0', status: '', power: '', notes: 'typed' } };
+  const l = load(opts);
+  const a = mountFlow(opts, l);
+  return l.R.mount(a.el, { public_key: PK, role: 'repeater' }).then(() => {
+    a.click('data-ri-edit');
+    a.el.handlers.input({});
+    const pend = [];
+    l.auth.request = (method) => new Promise((ok, fail) => { pend.push({ method, ok, fail }); });
+    const b = mountFlow(opts, l);
+    const done = l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+    return tick().then(() => ({ b, done, pend, answer: (res) => { pend[0].ok(res); return done; } }));
+  });
+}
+test('a re-mount shows the draft form before the GET answers', async () => {
+  const { b, answer } = await remountWithPendingGet();
+  assert(b.el.innerHTML.includes('data-ri-form') && b.el.innerHTML.includes('typed'), 'no form while the GET is out: ' + b.el.innerHTML);
+  assert.strictEqual(b.el.hidden, false);
+  b.el.innerHTML += '<!--user state-->';
+  await answer({ ok: true, status: 200, data: INFO({ canEdit: true }) });
+  assert(b.el.innerHTML.includes('<!--user state-->'), 'the GET re-rendered the open form');
+});
+test('the early draft form gives way to the view when the GET says no edit rights', async () => {
+  const { b, answer } = await remountWithPendingGet();
+  await answer({ ok: true, status: 200, data: INFO({ canEdit: false }) });
+  assert(!b.el.innerHTML.includes('data-ri-form'), b.el.innerHTML);
+  assert(b.el.innerHTML.includes('No details yet.'), b.el.innerHTML);
+});
+test('Cancel on the early draft form before the GET answers, then the view', async () => {
+  const { b, answer } = await remountWithPendingGet();
+  b.click('data-ri-cancel');
+  assert(!b.el.innerHTML.includes('data-ri-form'), b.el.innerHTML);
+  await answer({ ok: true, status: 200, data: INFO({ canEdit: true, heightM: 9, updatedAt: 'x' }) });
+  assert(b.el.innerHTML.includes('9 m'), b.el.innerHTML);
+});
+test('a failed GET hides the section unless the draft form is open', async () => {
+  let r = await remountWithPendingGet();
+  await r.answer({ ok: false, status: 500, data: {} });
+  assert(r.b.el.innerHTML.includes('data-ri-form') && r.b.el.hidden === false, 'open form dropped on a failed GET');
+  r = await remountWithPendingGet();
+  r.b.click('data-ri-cancel');
+  await r.answer({ ok: false, status: 500, data: {} });
+  assert.strictEqual(r.b.el.hidden, true);
+});
+test('a save on the early form is not overwritten by the older GET answer', async () => {
+  const { b, pend, answer } = await remountWithPendingGet();
+  b.click('data-ri-save');
+  assert.strictEqual(pend[1].method, 'PUT');
+  pend[1].ok({ ok: true, status: 200, data: INFO({ canEdit: true, heightM: 30, updatedAt: 'x' }) });
+  await tick();
+  await answer({ ok: true, status: 200, data: INFO({ canEdit: true, heightM: 5, updatedAt: 'x' }) });
+  assert(b.el.innerHTML.includes('30 m') && !b.el.innerHTML.includes('5 m'), b.el.innerHTML);
+});
+test('a network error on the GET hides the section unless the draft form is open', async () => {
+  let r = await remountWithPendingGet();
+  r.pend[0].fail(new Error('net'));
+  await r.done;
+  assert(r.b.el.innerHTML.includes('data-ri-form') && r.b.el.hidden === false, 'open form dropped on a network error');
+  r = await remountWithPendingGet();
+  r.b.click('data-ri-cancel');
+  r.pend[0].fail(new Error('net'));
+  await r.done;
+  assert.strictEqual(r.b.el.hidden, true);
+});
 test('anonymous visitor sees one login hint, a logged-in user does not', () => {
   const anon = load({ user: null }).R._test.viewHtml(INFO(), null);
   assert(anon.includes('Log in to claim or edit this repeater.'));
