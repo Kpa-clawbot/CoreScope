@@ -12,6 +12,7 @@ import (
 	"errors"
 	"log"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,6 +30,12 @@ const (
 	ductingNodeMaxAgeDays = 14
 	// ductingExpiryGrace: the last forecast hour stays current for this long.
 	ductingExpiryGrace = 3600 // seconds
+	// Against the public API the first fetch after start waits a random
+	// ductingStartDelayMin..ductingStartDelayMax, so restarts in a row (or
+	// several instances on one host, which share Open-Meteo's per-IP limits)
+	// do not all fetch at once.
+	ductingStartDelayMin = 60 * time.Second
+	ductingStartDelayMax = 300 * time.Second
 )
 
 var errDuctingBusy = errors.New("ducting refresh already running")
@@ -52,6 +59,10 @@ type ductingService struct {
 	snap   atomic.Pointer[ductingSnapshot]
 	now    func() time.Time
 	sleep  func(ctx context.Context, d time.Duration) error // between refreshes
+	// startDelay is the wait before the first refresh: random in
+	// ductingStartDelayMin..ductingStartDelayMax against the public API, 0
+	// for a self-hosted baseUrl.
+	startDelay time.Duration
 
 	refreshMu   sync.Mutex // one refresh at a time
 	emptyLogged bool       // the empty grid was logged; guarded by refreshMu
@@ -68,8 +79,18 @@ func newDuctingService(c *DuctingConfig, nodes func() ([][2]float64, error)) *du
 		now:    time.Now,
 		sleep:  ductingSleep,
 	}
+	if s.source.capped {
+		s.startDelay = ductingStartDelay(rand.Int64N)
+	}
 	s.snap.Store(s.statusSnapshot("pending", ""))
 	return s
+}
+
+// ductingStartDelay draws the first-refresh delay, uniform in
+// [ductingStartDelayMin, ductingStartDelayMax], from randN (rand.Int64N).
+func ductingStartDelay(randN func(n int64) int64) time.Duration {
+	span := int64(ductingStartDelayMax-ductingStartDelayMin) + 1
+	return ductingStartDelayMin + time.Duration(randN(span))
 }
 
 func (s *ductingService) attribution() string {
@@ -126,7 +147,7 @@ func (s *ductingService) refreshOnce(ctx context.Context) error {
 	}
 	defer s.refreshMu.Unlock()
 	started := time.Now()
-	resp, queried, err := s.build(ctx)
+	resp, queried, fetched, err := s.build(ctx)
 	if errors.Is(err, errDuctingNoCells) {
 		if !s.emptyLogged {
 			log.Printf("[ducting] no grid cells yet (no node positions from the last %d days, or none the model covers); retrying every %s",
@@ -151,20 +172,24 @@ func (s *ductingService) refreshOnce(ctx context.Context) error {
 		return err
 	}
 	s.snap.Store(encodeDuctingSnapshot(resp))
-	log.Printf("[ducting] refreshed: %d cells (%d dropped), %d hours, ~%.0f calls, %s",
-		len(resp.Cells), queried-len(resp.Cells), len(resp.Times),
+	failed := ""
+	if fetched.Failed > 0 {
+		failed = ", " + strconv.Itoa(fetched.Failed) + " of " + strconv.Itoa(fetched.Batches) + " batches failed"
+	}
+	log.Printf("[ducting] refreshed: %d cells (%d dropped%s), %d hours, ~%.0f calls, %s",
+		len(resp.Cells), queried-len(resp.Cells), failed, len(resp.Times),
 		float64(queried)*ductingCallsPerPoint(s.model), time.Since(started).Round(time.Millisecond))
 	return nil
 }
 
 // build fetches and analyses the grid. queried is the number of cells sent
-// to the API.
-func (s *ductingService) build(ctx context.Context) (DuctingResponse, int, error) {
+// to the API; fetched says how many batches failed.
+func (s *ductingService) build(ctx context.Context) (DuctingResponse, int, ductingFetch, error) {
 	var nodes [][2]float64
 	if s.cfg.Area == nil {
 		var err error
 		if nodes, err = s.nodes(); err != nil {
-			return DuctingResponse{}, 0, errors.New("node positions unavailable")
+			return DuctingResponse{}, 0, ductingFetch{}, errors.New("node positions unavailable")
 		}
 	}
 	cells, step, fellBack, info := ductingGridWithInfo(nodes, s.cfg.Area, s.cfg.GridStepDeg, ductingMaxPoints(s.cfg, s.model), s.cfg.marginDegOrDefault())
@@ -173,31 +198,27 @@ func (s *ductingService) build(ctx context.Context) (DuctingResponse, int, error
 	}
 	cells = s.inCoverage(cells)
 	if len(cells) == 0 {
-		return DuctingResponse{}, 0, errDuctingNoCells
+		return DuctingResponse{}, 0, ductingFetch{}, errDuctingNoCells
 	}
 	log.Print(ductingGridLogLine(info, step, len(cells)))
 
 	resp := s.baseResponse("ok", "")
 	resp.StepDeg = step
 	resp.GeneratedAt = s.now().Unix()
-	cols, err := s.source.fetch(ctx, cells, s.cfg.ForecastHours)
+	fetched, err := s.source.fetch(ctx, cells, s.cfg.ForecastHours)
 	if err != nil {
-		return DuctingResponse{}, len(cells), err
+		return DuctingResponse{}, len(cells), fetched, err
 	}
-	if len(cols) == 0 {
-		return DuctingResponse{}, len(cells), errors.New("no forecast data for any cell")
+	if len(fetched.Cols) == 0 {
+		return DuctingResponse{}, len(cells), fetched, errors.New("no forecast data for any cell")
 	}
-	// Every cell shares the first column's hours; a column with others is
-	// dropped (never seen in practice, but the arrays must line up).
-	resp.Times = cols[0].Times
-	resp.Cells = make([]DuctingCell, 0, len(cols))
-	for _, col := range cols {
-		if !ductingSameTimes(col.Times, resp.Times) {
-			continue
-		}
+	// Every column has exactly the window's hours (ductingTimeAxisValid).
+	resp.Times = fetched.Window.times()
+	resp.Cells = make([]DuctingCell, 0, len(fetched.Cols))
+	for _, col := range fetched.Cols {
 		resp.Cells = append(resp.Cells, s.analyzeColumn(col))
 	}
-	return resp, len(cells), nil
+	return resp, len(cells), fetched, nil
 }
 
 // ductingGridLogLine describes the grid of one refresh: where and how big,
@@ -233,18 +254,6 @@ func (s *ductingService) inCoverage(cells [][2]float64) [][2]float64 {
 		}
 	}
 	return out
-}
-
-func ductingSameTimes(a, b []int64) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func ductingRound(v float64) int {
@@ -304,11 +313,14 @@ func (s *ductingService) nextDelay(err error, failures int) time.Duration {
 
 // run starts the refresh loop in a goroutine and returns a channel closed
 // when it has exited (after ctx is cancelled). The first refresh starts
-// immediately; startup is never blocked.
+// after startDelay; startup is never blocked.
 func (s *ductingService) run(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		if s.startDelay > 0 && s.sleep(ctx, s.startDelay) != nil {
+			return
+		}
 		failures := 0
 		for {
 			err := s.refreshOnce(ctx)
@@ -333,9 +345,11 @@ func (s *ductingService) run(ctx context.Context) <-chan struct{} {
 
 // serveHTTP writes the snapshot. The forecast is expired once its last hour
 // is more than ductingExpiryGrace old. Only "ok" may be cached (5 minutes,
-// well under any refresh interval); "pending" and "error" are no-store so a
+// well under any refresh interval) and carries an ETag (a snapshot's body
+// never changes, and a new one has a new generatedAt); an If-None-Match
+// naming it gets 304 with no body. "pending" and "error" are no-store so a
 // cache never pins a transient state.
-func (s *ductingService) serveHTTP(w http.ResponseWriter) {
+func (s *ductingService) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	snap := s.snap.Load()
 	if snap == nil {
 		snap = s.statusSnapshot("pending", "")
@@ -347,12 +361,37 @@ func (s *ductingService) serveHTTP(w http.ResponseWriter) {
 		writeJSON(w, resp)
 		return
 	}
-	if snap.resp.Status == "ok" {
-		w.Header().Set("Cache-Control", "public, max-age=300")
-	} else {
+	if snap.resp.Status != "ok" {
 		w.Header().Set("Cache-Control", "no-store")
+		writeJSONBytes(w, snap.body)
+		return
+	}
+	etag := ductingETag(snap.resp)
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("ETag", etag)
+	if r != nil && ductingETagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
 	writeJSONBytes(w, snap.body)
+}
+
+// ductingETag is the strong ETag of an ok snapshot: "<generatedAt>-<model>".
+func ductingETag(resp DuctingResponse) string {
+	return `"` + strconv.FormatInt(resp.GeneratedAt, 10) + "-" + resp.Model + `"`
+}
+
+// ductingETagMatches reports whether an If-None-Match header names etag:
+// "*", or a comma-separated list compared weakly (a W/ prefix is ignored),
+// as RFC 9110 13.1.2 asks for If-None-Match.
+func ductingETagMatches(header, etag string) bool {
+	for _, t := range strings.Split(header, ",") {
+		t = strings.TrimSpace(t)
+		if t == "*" || strings.TrimPrefix(t, "W/") == etag {
+			return true
+		}
+	}
+	return false
 }
 
 // handleDucting is GET /api/ducting; 404 unless ducting.enabled.
@@ -361,7 +400,7 @@ func (s *Server) handleDucting(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "ducting disabled")
 		return
 	}
-	s.ducting.serveHTTP(w)
+	s.ducting.serveHTTP(w, r)
 }
 
 // ductingNodes returns the positions of the nodes /api/nodes shows, so the

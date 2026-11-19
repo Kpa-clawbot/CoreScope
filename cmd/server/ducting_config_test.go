@@ -100,8 +100,8 @@ func TestDuctingBoundaryValuesAccepted(t *testing.T) {
 	if len(warns) != 0 || r.GridStepDeg != 0.25 || r.MaxPoints != 1000 || r.RefreshMinutes != 60 || r.ForecastHours != 120 {
 		t.Fatalf("%+v %v", r, warns)
 	}
-	r, warns = (&DuctingConfig{GridStepDeg: 2, MaxPoints: 1, RefreshMinutes: 1440, ForecastHours: 25}).resolved()
-	if len(warns) != 0 || r.GridStepDeg != 2 || r.MaxPoints != 1 || r.RefreshMinutes != 1440 || r.ForecastHours != 25 {
+	r, warns = (&DuctingConfig{GridStepDeg: 2, MaxPoints: 1, RefreshMinutes: 1440, ForecastHours: 26}).resolved()
+	if len(warns) != 0 || r.GridStepDeg != 2 || r.MaxPoints != 1 || r.RefreshMinutes != 1440 || r.ForecastHours != 26 {
 		t.Fatalf("%+v %v", r, warns)
 	}
 }
@@ -334,10 +334,16 @@ func TestDuctingLogConfigSelfHosted(t *testing.T) {
 
 func TestDuctingForecastHoursCoversRefresh(t *testing.T) {
 	for _, tc := range []struct{ refresh, hours, want int }{
-		{360, 3, 7},    // 6 h refresh needs 7 h
-		{90, 1, 3},     // ceil(90/60)+1
-		{60, 2, 2},     // exactly enough
-		{1440, 24, 25}, // a day
+		// ceil(refresh/60) + 2: the next refresh lands up to a fetch, and
+		// the start of a new hour, after the refresh interval.
+		{360, 3, 8},    // 6 h refresh needs 8 h
+		{360, 7, 8},    // the old minimum (ceil+1) is now one short
+		{360, 8, 8},    // exactly enough
+		{90, 1, 4},     // ceil(90/60)+2
+		{60, 2, 3},     // hourly refresh needs 3 h
+		{60, 3, 3},     // exactly enough
+		{1440, 24, 26}, // a day
+		{1440, 26, 26}, // exactly enough
 		{360, 48, 48},  // default untouched
 	} {
 		r, warns := (&DuctingConfig{RefreshMinutes: tc.refresh, ForecastHours: tc.hours}).resolved()

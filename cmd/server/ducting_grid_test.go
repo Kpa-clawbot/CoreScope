@@ -27,9 +27,10 @@ func TestDuctingGridNodeCells(t *testing.T) {
 }
 
 func TestDuctingGridSortedDeduped(t *testing.T) {
-	nodes := [][2]float64{{10.1, 20.1}, {10.2, 20.2}, {10.1, 5.1}, {-5.1, 30.1}, {10.1, 20.4}}
+	// Four nodes: too few for the outlier trim, so all of them place the box.
+	nodes := [][2]float64{{10.1, 20.1}, {10.1, 5.1}, {-5.1, 30.1}, {10.1, 20.4}}
 	cells, _, _ := ductingGrid(nodes, nil, 0.5, 100000, 0)
-	// lat -5.1..10.2 -> 32 rows; lon 5.1..30.1 -> 51 columns
+	// lat -5.1..10.1 -> 32 rows; lon 5.1..30.1 -> 51 columns
 	if len(cells) != 32*51 {
 		t.Fatalf("%d cells", len(cells))
 	}
@@ -576,27 +577,78 @@ func TestDuctingGridTrimsOutlierNode(t *testing.T) {
 }
 
 func TestDuctingGridNoTrimBelowMinNodes(t *testing.T) {
-	// 10 Seattle nodes and London: too few to trim, London stays in the box.
-	nodes := append(ductingTestMesh(47.3, -122.6, 2, 5), [2]float64{51.5, -0.1})
+	// 3 Seattle nodes and London: too few to trim, London stays in the box.
+	nodes := append(ductingTestMesh(47.3, -122.6, 1, 3), [2]float64{51.5, -0.1})
 	kept, trimmed := ductingTrimOutliers(nodes)
 	if trimmed != 0 || len(kept) != len(nodes) {
 		t.Fatalf("trimmed %d of %d", trimmed, len(nodes))
 	}
 	cells, step, _, info := ductingGridWithInfo(nodes, nil, 0.5, 450, 0)
-	if info.trimmed != 0 || info.nodes != 11 {
+	if info.trimmed != 0 || info.nodes != 4 {
 		t.Errorf("info %+v", info)
 	}
 	if !hasCell(cells, ductingCentre(51.5, step), ductingCentre(-0.1, step)) {
 		t.Errorf("London not covered at step %v", step)
 	}
-	// 19 nodes: still untrimmed; 20: trimmed.
-	n19 := append(ductingTestMesh(47.3, -122.6, 3, 6), [2]float64{51.5, -0.1})
-	if _, tr := ductingTrimOutliers(n19); tr != 0 || len(n19) != 19 {
-		t.Errorf("19 nodes: trimmed %d", tr)
+	// 5 nodes: London is trimmed.
+	n5 := append(ductingTestMesh(47.3, -122.6, 1, 4), [2]float64{51.5, -0.1})
+	if kept, tr := ductingTrimOutliers(n5); len(n5) != 5 || tr != 1 || hasCell(kept, 51.5, -0.1) {
+		t.Errorf("5 nodes: trimmed %d, kept %v", tr, kept)
 	}
-	n20 := append(ductingTestMesh(47.3, -122.6, 1, 19), [2]float64{51.5, -0.1})
-	if kept, tr := ductingTrimOutliers(n20); len(n20) != 20 || tr < 1 || hasCell(kept, 51.5, -0.1) {
-		t.Errorf("20 nodes: trimmed %d, kept %v", tr, kept)
+}
+
+// Several nodes at the same wrong position (a shared bad fix, a default
+// coordinate) are dropped as surely as one: the median ignores them.
+func TestDuctingGridTrimCoLocatedOutliers(t *testing.T) {
+	var nodes [][2]float64
+	for i := 0; i < 18; i++ {
+		nodes = append(nodes, [2]float64{45 + 0.1*float64(i%6), 10 + 0.15*float64(i/6)})
+	}
+	nodes = append(nodes, [2]float64{-33, 151}, [2]float64{-33, 151})
+	kept, trimmed := ductingTrimOutliers(nodes)
+	if trimmed != 2 || len(kept) != 18 {
+		t.Fatalf("trimmed %d, kept %d; want the two at -33,151 dropped", trimmed, len(kept))
+	}
+	cells, step, fell, info := ductingGridWithInfo(nodes, nil, 0.5, 450, 2)
+	if step != 0.5 || fell || info.trimmed != 2 || info.nodes != 18 {
+		t.Fatalf("step %v fell %v info %+v", step, fell, info)
+	}
+	for _, c := range cells {
+		if c[0] < 42 || c[0] > 48.5 || c[1] < 7.5 || c[1] > 13 {
+			t.Fatalf("cell %v outside Europe", c)
+		}
+	}
+	// 8 of 20 at one far spot is more than ductingTrimMaxShare: by position
+	// alone that is indistinguishable from a real second area, so all are
+	// kept (the box, or its regions-around-nodes fallback, covers both).
+	many := append(append([][2]float64{}, nodes[:12]...), make([][2]float64, 0, 8)...)
+	for i := 0; i < 8; i++ {
+		many = append(many, [2]float64{-33, 151})
+	}
+	if kept, tr := ductingTrimOutliers(many); tr != 0 || len(kept) != 20 {
+		t.Errorf("8 of 20 far away: trimmed %d, kept %d; want all kept", tr, len(kept))
+	}
+}
+
+// A genuinely spread regional mesh is not trimmed: the limit scales with the
+// median distance from the median position.
+func TestDuctingGridTrimKeepsSpreadMesh(t *testing.T) {
+	// 24 nodes along the Gulf coast from west Texas to Florida, about
+	// 2,500 km end to end, denser near Houston.
+	var nodes [][2]float64
+	for i := 0; i < 24; i++ {
+		lon := -104 + 24*float64(i)/23
+		lat := 31 - 3*math.Sin(float64(i)/23*math.Pi)
+		nodes = append(nodes, [2]float64{lat, lon})
+	}
+	nodes = append(nodes, [2]float64{29.76, -95.37}, [2]float64{29.9, -95.5}, [2]float64{25.77, -80.19})
+	if kept, trimmed := ductingTrimOutliers(nodes); trimmed != 0 || len(kept) != len(nodes) {
+		t.Errorf("spread mesh: trimmed %d of %d", trimmed, len(nodes))
+	}
+	// A compact mesh keeps nodes up to the 500 km floor.
+	compact := append(ductingTestMesh(47.3, -122.6, 2, 5), [2]float64{45.5, -122.7}, [2]float64{49.3, -123.1})
+	if _, trimmed := ductingTrimOutliers(compact); trimmed != 0 {
+		t.Errorf("compact mesh with Portland and Vancouver: trimmed %d", trimmed)
 	}
 }
 
@@ -682,5 +734,29 @@ func TestDuctingGridLongitudeWrap(t *testing.T) {
 				t.Fatalf("step %v: dilated centre %v,%v outside [-180,180)", step, r.lat, r.lon)
 			}
 		}
+	}
+}
+
+func TestDuctingTrimKeepsARealSecondArea(t *testing.T) {
+	// Three nodes around Denver, two around Salt Lake City (~600 km): a
+	// two-city mesh, not bad positions. Nothing is trimmed.
+	nodes := [][2]float64{{39.7, -104.9}, {39.8, -105.0}, {39.6, -104.8}, {40.7, -111.9}, {40.8, -111.8}}
+	kept, trimmed := ductingTrimOutliers(nodes)
+	if trimmed != 0 || len(kept) != len(nodes) {
+		t.Fatalf("trimmed %d of %d, want 0", trimmed, len(nodes))
+	}
+}
+
+func TestDuctingTrimDropsAFewCoLocatedBadPositions(t *testing.T) {
+	// 18 nodes near (45, 10) and 2 at the same wrong fix: 10% of the nodes,
+	// within ductingTrimMaxShare, so both go.
+	var nodes [][2]float64
+	for i := 0; i < 18; i++ {
+		nodes = append(nodes, [2]float64{45 + float64(i%6)*0.05, 10 + float64(i/6)*0.05})
+	}
+	nodes = append(nodes, [2]float64{-33, 151}, [2]float64{-33, 151})
+	kept, trimmed := ductingTrimOutliers(nodes)
+	if trimmed != 2 || len(kept) != 18 {
+		t.Fatalf("trimmed %d, kept %d; want 2 and 18", trimmed, len(kept))
 	}
 }

@@ -16,8 +16,10 @@ import (
 )
 
 // fakeOpenMeteo answers /v1/forecast like Open-Meteo: one object per
-// requested location (an array when there are several). fill sets the
-// hourly values of location i; nil leaves every variable null.
+// requested location (an array when there are several). The time axis is
+// start_hour..end_hour (inclusive) when they are sent, else hours hours from
+// 1795046400. fill sets the hourly values of location i; nil leaves every
+// variable null.
 type fakeOpenMeteo struct {
 	t     *testing.T
 	hours int
@@ -25,6 +27,9 @@ type fakeOpenMeteo struct {
 	// status, when non-zero, is answered (with body) instead of data.
 	status int
 	body   string
+	// failReq, when set, is asked with the request's index (0-based); a
+	// non-zero answer is sent as that HTTP status instead of data.
+	failReq func(n int) int
 
 	mu   sync.Mutex
 	reqs []*http.Request
@@ -40,6 +45,11 @@ func (f *fakeOpenMeteo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.reqs = append(f.reqs, r)
 	status, body, fill, hours := f.status, f.body, f.fill, f.hours
+	if f.failReq != nil {
+		if st := f.failReq(len(f.reqs) - 1); st != 0 {
+			status, body = st, `{"error":true,"reason":"fake batch failure"}`
+		}
+	}
 	f.mu.Unlock()
 	if status != 0 {
 		w.WriteHeader(status)
@@ -47,6 +57,17 @@ func (f *fakeOpenMeteo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	first := int64(1795046400)
+	if q.Has("start_hour") || q.Has("end_hour") {
+		st, err1 := time.Parse("2006-01-02T15:04", q.Get("start_hour"))
+		en, err2 := time.Parse("2006-01-02T15:04", q.Get("end_hour"))
+		if err1 != nil || err2 != nil || en.Before(st) || q.Has("forecast_hours") {
+			f.t.Errorf("bad window start_hour=%q end_hour=%q forecast_hours=%q", q.Get("start_hour"), q.Get("end_hour"), q.Get("forecast_hours"))
+			w.WriteHeader(400)
+			return
+		}
+		first, hours = st.Unix(), int(en.Sub(st)/time.Hour)+1
+	}
 	lats := strings.Split(q.Get("latitude"), ",")
 	lons := strings.Split(q.Get("longitude"), ",")
 	vars := strings.Split(q.Get("hourly"), ",")
@@ -57,7 +78,7 @@ func (f *fakeOpenMeteo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hourly := map[string][]*float64{}
 		times := make([]*float64, hours)
 		for h := range times {
-			v := float64(1795046400 + 3600*h)
+			v := float64(first + int64(3600*h))
 			times[h] = &v
 		}
 		hourly["time"] = times
@@ -108,6 +129,12 @@ func newTestDuctingSource(t *testing.T, f *fakeOpenMeteo, model string) (*ductin
 	return src, srv, &waits
 }
 
+// ductingFetchCols is src.fetch returning only the columns.
+func ductingFetchCols(ctx context.Context, src *ductingSource, cells [][2]float64, hours int) ([]ductingColumn, error) {
+	res, err := src.fetch(ctx, cells, hours)
+	return res.Cols, err
+}
+
 func ductingTestCells(n int) [][2]float64 {
 	cells := make([][2]float64, n)
 	for i := range cells {
@@ -120,7 +147,7 @@ func TestDuctingSourceQuery(t *testing.T) {
 	f := &fakeOpenMeteo{t: t, hours: 2}
 	src, _, _ := newTestDuctingSource(t, f, "gfs")
 	cells := ductingTestCells(120)
-	cols, err := src.fetch(context.Background(), cells, 36)
+	cols, err := ductingFetchCols(context.Background(), src, cells, 36)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +169,10 @@ func TestDuctingSourceQuery(t *testing.T) {
 		}
 		q := r.URL.Query()
 		for k, want := range map[string]string{
-			"models": "gfs_global", "forecast_hours": "36", "timeformat": "unixtime", "timezone": "GMT",
+			// The fake's first hour, 1795046400, is 2026-11-19T00:00 UTC;
+			// end_hour is inclusive: 36 hours end at +35 h.
+			"models": "gfs_global", "start_hour": "2026-11-19T00:00", "end_hour": "2026-11-20T11:00",
+			"timeformat": "unixtime", "timezone": "GMT", "forecast_hours": "",
 		} {
 			if got := q.Get(k); got != want {
 				t.Errorf("%s=%q, want %q", k, got, want)
@@ -217,7 +247,7 @@ func TestDuctingSourceSingleObjectAndNulls(t *testing.T) {
 		h["temperature_1000hPa"][1] = ductF(12.5)
 	}}
 	src, _, _ := newTestDuctingSource(t, f, "gfs")
-	cols, err := src.fetch(context.Background(), [][2]float64{{51.25, -0.25}}, 3)
+	cols, err := ductingFetchCols(context.Background(), src, [][2]float64{{51.25, -0.25}}, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,8 +255,8 @@ func TestDuctingSourceSingleObjectAndNulls(t *testing.T) {
 		t.Fatalf("%d columns", len(cols))
 	}
 	c := cols[0]
-	if len(c.Times) != 3 || c.Times[0] != 1795046400 || c.Times[2] != 1795046400+7200 {
-		t.Errorf("times %v", c.Times)
+	if len(c.Hours) != 3 {
+		t.Errorf("%d hours, want 3", len(c.Hours))
 	}
 	if c.Elevation != 0 {
 		t.Errorf("elevation %v", c.Elevation)
@@ -257,7 +287,7 @@ func TestDuctingSourceDropsLocationErrors(t *testing.T) {
 	}}
 	src, _, _ := newTestDuctingSource(t, f, "rrfs-conus")
 	cells := ductingTestCells(6)
-	cols, err := src.fetch(context.Background(), cells, 1)
+	cols, err := ductingFetchCols(context.Background(), src, cells, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,13 +381,13 @@ func TestDuctingSourceOversizeBody(t *testing.T) {
 func TestDuctingSourceMalformed(t *testing.T) {
 	m, _ := ductingModel("gfs")
 	cells := ductingTestCells(2)
-	if _, err := parseDuctingResponse([]byte(`[{"hourly":{"time":[1]}}]`), cells, m, 48, ductNow); err == nil {
+	if _, err := parseDuctingResponse([]byte(`[{"hourly":{"time":[1]}}]`), cells, m, ductingWindow{Start: 1795046400, Hours: 48}); err == nil {
 		t.Error("location count mismatch accepted")
 	}
-	if _, err := parseDuctingResponse([]byte(`not json`), cells[:1], m, 48, ductNow); err == nil {
+	if _, err := parseDuctingResponse([]byte(`not json`), cells[:1], m, ductingWindow{Start: 1795046400, Hours: 48}); err == nil {
 		t.Error("invalid JSON accepted")
 	}
-	cols, err := parseDuctingResponse([]byte(`{"elevation":5,"hourly":{"time":[]}}`), cells[:1], m, 48, ductNow)
+	cols, err := parseDuctingResponse([]byte(`{"elevation":5,"hourly":{"time":[]}}`), cells[:1], m, ductingWindow{Start: 1795046400, Hours: 48})
 	if err != nil || len(cols) != 0 {
 		t.Errorf("no-times location: %v %d", err, len(cols))
 	}
@@ -488,8 +518,6 @@ func TestDuctingSourceSelfHostedNoCallCap(t *testing.T) {
 	}
 }
 
-var ductNow = time.Unix(1795046400, 0)
-
 func TestDuctingSourceTimeAxis(t *testing.T) {
 	m, _ := ductingModel("gfs")
 	cells := ductingTestCells(1)
@@ -502,32 +530,176 @@ func TestDuctingSourceTimeAxis(t *testing.T) {
 		return b
 	}
 	t0 := float64(1795046400)
+	w := ductingWindow{Start: 1795046400, Hours: 3}
 	for name, tc := range map[string]struct {
 		times []float64
-		hours int
 		ok    bool
 	}{
-		"well-formed":   {[]float64{t0, t0 + 3600, t0 + 7200}, 3, true},
-		"exact limit":   {[]float64{t0, t0 + 3600, t0 + 7200, t0 + 10800}, 3, true},
-		"too long":      {[]float64{t0, t0 + 3600, t0 + 7200, t0 + 10800, t0 + 14400}, 3, false},
-		"unsorted":      {[]float64{t0 + 3600, t0, t0 + 7200}, 3, false},
-		"duplicate":     {[]float64{t0, t0, t0 + 3600}, 3, false},
-		"not hourly":    {[]float64{t0, t0 + 1800, t0 + 3600}, 3, false},
-		"gap":           {[]float64{t0, t0 + 7200}, 3, false},
-		"fractional":    {[]float64{t0 + 0.5, t0 + 3600.5}, 3, false},
-		"before window": {[]float64{t0 - 25*3600, t0 - 24*3600}, 3, false},
-		"inside slack":  {[]float64{t0 - 24*3600, t0 - 23*3600}, 3, true},
-		"after window":  {[]float64{t0 + 28*3600, t0 + 29*3600}, 3, false},
-		"epoch zero":    {[]float64{0, 3600}, 3, false},
-		"far future":    {[]float64{4e12, 4e12 + 3600}, 3, false},
+		"the window":      {[]float64{t0, t0 + 3600, t0 + 7200}, true},
+		"one hour more":   {[]float64{t0, t0 + 3600, t0 + 7200, t0 + 10800}, false},
+		"one hour short":  {[]float64{t0, t0 + 3600}, false},
+		"empty":           {nil, false},
+		"next hour":       {[]float64{t0 + 3600, t0 + 7200, t0 + 10800}, false}, // the hour rolled over
+		"previous hour":   {[]float64{t0 - 3600, t0, t0 + 3600}, false},
+		"unsorted":        {[]float64{t0 + 3600, t0, t0 + 7200}, false},
+		"duplicate":       {[]float64{t0, t0, t0 + 3600}, false},
+		"not hourly":      {[]float64{t0, t0 + 1800, t0 + 3600}, false},
+		"fractional":      {[]float64{t0 + 0.5, t0 + 3600.5, t0 + 7200.5}, false},
+		"epoch zero":      {[]float64{0, 3600, 7200}, false},
+		"far future":      {[]float64{4e12, 4e12 + 3600, 4e12 + 7200}, false},
+		"gap then extend": {[]float64{t0, t0 + 7200, t0 + 10800}, false},
 	} {
-		cols, err := parseDuctingResponse(mk(tc.times...), cells, m, tc.hours, ductNow)
+		cols, err := parseDuctingResponse(mk(tc.times...), cells, m, w)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if got := len(cols) == 1; got != tc.ok {
 			t.Errorf("%s: accepted=%v, want %v", name, got, tc.ok)
 		}
+	}
+	// A null time is rejected too.
+	b := []byte(`{"elevation":1,"hourly":{"time":[1795046400,null,1795053600]}}`)
+	if cols, err := parseDuctingResponse(b, cells, m, w); err != nil || len(cols) != 0 {
+		t.Errorf("null time: %v %d", err, len(cols))
+	}
+}
+
+func TestDuctingWindow(t *testing.T) {
+	// Any instant inside an hour gives that UTC hour; zones do not matter.
+	at := time.Date(2026, 11, 19, 13, 59, 59, 999, time.FixedZone("x", 5*3600+1800))
+	w := newDuctingWindow(at, 4)
+	want := time.Date(2026, 11, 19, 8, 0, 0, 0, time.UTC).Unix() // 13:59 at +05:30 is 08:29 UTC
+	if w.Start != want || w.Hours != 4 {
+		t.Fatalf("window %+v, want start %d, 4 hours", w, want)
+	}
+	if ts := w.times(); len(ts) != 4 || ts[0] != want || ts[3] != want+3*3600 {
+		t.Errorf("times %v", ts)
+	}
+	if got := ductingHourParam(want); got != "2026-11-19T08:00" {
+		t.Errorf("hour param %q", got)
+	}
+}
+
+// A paced fetch whose batches straddle an hour boundary asks every batch for
+// the same window, so every column is kept (forecast_hours counted from each
+// request's own hour and lost the later batches).
+func TestDuctingSourceHourRolloverKeepsEveryBatch(t *testing.T) {
+	f := &fakeOpenMeteo{t: t}
+	src, _, _ := newTestDuctingSource(t, f, "gfs")
+	base := time.Unix(1795046400+3600-90, 0) // 90 s before the next hour
+	var mu sync.Mutex
+	calls := 0
+	src.now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		return base.Add(time.Duration(calls) * 40 * time.Second)
+	}
+	res, err := src.fetch(context.Background(), ductingTestCells(150), 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cols) != 150 || res.Failed != 0 || res.Batches != 3 {
+		t.Fatalf("%d columns, %d of %d batches failed; want all 150 kept", len(res.Cols), res.Failed, res.Batches)
+	}
+	if res.Window.Start != 1795046400 || res.Window.Hours != 6 {
+		t.Errorf("window %+v", res.Window)
+	}
+	reqs := f.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("%d requests", len(reqs))
+	}
+	if src.now().Unix() < 1795046400+3600 {
+		t.Fatal("the clock never crossed the hour; the test proves nothing")
+	}
+	for i, r := range reqs {
+		q := r.URL.Query()
+		if q.Get("start_hour") != "2026-11-19T00:00" || q.Get("end_hour") != "2026-11-19T05:00" || q.Has("forecast_hours") {
+			t.Errorf("request %d: start_hour=%q end_hour=%q", i, q.Get("start_hour"), q.Get("end_hour"))
+		}
+	}
+}
+
+func TestDuctingSourcePartialFailureKeepsOtherBatches(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, failReq: func(n int) int {
+		if n == 1 {
+			return http.StatusInternalServerError
+		}
+		return 0
+	}}
+	src, _, waits := newTestDuctingSource(t, f, "gfs")
+	cells := ductingTestCells(150)
+	res, err := src.fetch(context.Background(), cells, 2)
+	if err != nil {
+		t.Fatalf("one of three batches failed: %v", err)
+	}
+	if res.Failed != 1 || res.Batches != 3 || len(res.Cols) != 100 {
+		t.Fatalf("%d of %d failed, %d columns; want 1 of 3, 100", res.Failed, res.Batches, len(res.Cols))
+	}
+	// The failed batch's cells are absent; the others keep request order.
+	for i, c := range res.Cols {
+		want := cells[i]
+		if i >= 50 {
+			want = cells[i+50]
+		}
+		if c.Lat != want[0] || c.Lon != want[1] {
+			t.Fatalf("column %d at %v,%v, want %v", i, c.Lat, c.Lon, want)
+		}
+	}
+	// The failed batch was paid for, so the pace still waits after it.
+	if len(*waits) != 2 {
+		t.Errorf("waits %v, want 2", *waits)
+	}
+}
+
+func TestDuctingSourceMostBatchesFailed(t *testing.T) {
+	// Two of three fail: the fetch fails, and stops at the second failure
+	// (more than half) without sending the third.
+	f := &fakeOpenMeteo{t: t, failReq: func(n int) int {
+		if n < 2 {
+			return http.StatusBadGateway
+		}
+		return 0
+	}}
+	src, srv, _ := newTestDuctingSource(t, f, "gfs")
+	_, err := src.fetch(context.Background(), ductingTestCells(150), 2)
+	var he *ductingHTTPError
+	if !errors.As(err, &he) || he.Status != http.StatusBadGateway || !strings.Contains(err.Error(), "2 of 3 batches failed") {
+		t.Fatalf("err %v, want 2 of 3 failed wrapping HTTP 502", err)
+	}
+	ductingAssertNoURL(t, err, srv.URL)
+	if n := len(f.requests()); n != 2 {
+		t.Errorf("%d requests, want 2 (stop once more than half failed)", n)
+	}
+
+	// Exactly half (1 of 2) is still a success.
+	f2 := &fakeOpenMeteo{t: t, failReq: func(n int) int {
+		if n == 0 {
+			return http.StatusInternalServerError
+		}
+		return 0
+	}}
+	src2, _, _ := newTestDuctingSource(t, f2, "gfs")
+	res, err := src2.fetch(context.Background(), ductingTestCells(100), 2)
+	if err != nil || res.Failed != 1 || len(res.Cols) != 50 {
+		t.Errorf("half failed: err %v, %d failed, %d columns", err, res.Failed, len(res.Cols))
+	}
+}
+
+func TestDuctingSourceRateLimitAbortsFetch(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, failReq: func(n int) int {
+		if n == 1 {
+			return http.StatusTooManyRequests
+		}
+		return 0
+	}}
+	src, _, _ := newTestDuctingSource(t, f, "gfs")
+	_, err := src.fetch(context.Background(), ductingTestCells(250), 2)
+	if !errors.Is(err, errDuctingRateLimited) {
+		t.Fatalf("err %v, want errDuctingRateLimited", err)
+	}
+	if n := len(f.requests()); n != 2 {
+		t.Errorf("%d requests, want 2 (nothing after the 429)", n)
 	}
 }
 
@@ -548,7 +720,7 @@ func TestDuctingSourceHugeTimeAxisSkipped(t *testing.T) {
 	src, _, _ := newTestDuctingSource(t, f, "gfs")
 	src.maxBody = 64 << 20
 	cells := ductingTestCells(3)
-	cols, err := src.fetch(context.Background(), cells, 3)
+	cols, err := ductingFetchCols(context.Background(), src, cells, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,8 +728,8 @@ func TestDuctingSourceHugeTimeAxisSkipped(t *testing.T) {
 		t.Fatalf("%d columns, want the two well-formed locations (0 and 2)", len(cols))
 	}
 	for _, c := range cols {
-		if len(c.Times) != 3 || len(c.Hours) != 3 {
-			t.Errorf("column has %d times, %d hours", len(c.Times), len(c.Hours))
+		if len(c.Hours) != 3 {
+			t.Errorf("column has %d hours", len(c.Hours))
 		}
 	}
 }
