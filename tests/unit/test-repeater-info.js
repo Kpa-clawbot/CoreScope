@@ -331,6 +331,26 @@ test('a network error on the GET hides the section unless the draft form is open
   await r.done;
   assert.strictEqual(r.b.el.hidden, true);
 });
+test('a late GET of a replaced section leaves the draft of its successor alone', async () => {
+  const opts = { info: INFO({ canEdit: true }), form: { heightM: '25', gainDbi: '0', status: '', power: '', notes: 'typed' } };
+  const l = load(opts);
+  let answerA;
+  l.auth.request = () => new Promise((r) => { answerA = r; });
+  const a = mountFlow(opts, l);
+  const doneA = l.R.mount(a.el, { public_key: PK, role: 'repeater' });
+  await tick();
+  a.el.isConnected = false;
+  l.auth.request = () => Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: true }) });
+  const b = mountFlow(opts, l);
+  await l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+  b.click('data-ri-edit');
+  b.el.handlers.input({});
+  answerA({ ok: true, status: 200, data: INFO({ canEdit: true }) });
+  await doneA;
+  const c = mountFlow(opts, l);
+  await l.R.mount(c.el, { public_key: PK, role: 'repeater' });
+  assert(c.el.innerHTML.includes('data-ri-form'), 'the stale GET dropped the draft: ' + c.el.innerHTML);
+});
 test('anonymous visitor sees one login hint, a logged-in user does not', () => {
   const anon = load({ user: null }).R._test.viewHtml(INFO(), null);
   assert(anon.includes('Log in to claim or edit this repeater.'));

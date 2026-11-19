@@ -192,14 +192,16 @@
       var d = drafts[slot];
       if (d && d.pk === pk) { show('edit', d.values); el.hidden = false; }
       return auth.request('GET', base + '/info').then(function (r) {
-        if (!r.ok) { if (!shown) el.hidden = true; return; }
+        // A section the node page already replaced must not touch the draft
+        // its successor owns.
+        if (!r.ok || el.isConnected === false) return;
         if (info) return; // a save on the early form already brought newer data
         info = r.data;
         if (shown !== 'edit' || !info.canEdit) show('view');
         el.hidden = false;
         var hash = String(window.location.hash || '');
         if (hash.indexOf('section=node-repeater-info') !== -1 && el.scrollIntoView) el.scrollIntoView();
-      }, function () { if (!shown) el.hidden = true; });
+      }, function () {});
     });
   }
 
