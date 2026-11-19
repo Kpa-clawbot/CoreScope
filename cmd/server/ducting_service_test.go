@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -266,15 +269,36 @@ func TestDuctingServiceAreaAndCoverage(t *testing.T) {
 		t.Errorf("%d area cells, want 4", len(resp.Cells))
 	}
 
-	// A regional model is never asked for cells outside its bounds.
+	// A regional model is never asked for cells outside its bounds, even
+	// though the box between the nodes reaches far past them.
 	f2 := &fakeOpenMeteo{t: t, hours: 1}
 	svc2, _ := newTestDuctingService(t, f2, DuctingConfig{Model: "rrfs-conus"}, [][2]float64{{40.3, -100.3}, {51.3, -0.3}})
 	if err := svc2.refreshOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	reqs := f2.requests()
-	if len(reqs) != 1 || reqs[0].URL.Query().Get("latitude") != "40.2500" || reqs[0].URL.Query().Get("models") != "ncep_rrfs_conus" {
-		t.Errorf("regional request %v", reqs)
+	if len(reqs) == 0 {
+		t.Fatal("no regional request")
+	}
+	b := ductingModels["rrfs-conus"].Bounds
+	var asked int
+	for _, r := range reqs {
+		q := r.URL.Query()
+		if q.Get("models") != "ncep_rrfs_conus" {
+			t.Errorf("models %q", q.Get("models"))
+		}
+		lats, lons := strings.Split(q.Get("latitude"), ","), strings.Split(q.Get("longitude"), ",")
+		for i := range lats {
+			lat, _ := strconv.ParseFloat(lats[i], 64)
+			lon, _ := strconv.ParseFloat(lons[i], 64)
+			if lat < b[0] || lat > b[2] || lon < b[1] || lon > b[3] {
+				t.Errorf("cell %v,%v outside the model bounds", lat, lon)
+			}
+			asked++
+		}
+	}
+	if asked < 10 {
+		t.Errorf("only %d cells asked: the box between the nodes should be filled", asked)
 	}
 }
 
@@ -441,7 +465,7 @@ func TestDuctingServiceOneRefreshAtATime(t *testing.T) {
 
 func TestDuctingServiceConcurrentReads(t *testing.T) {
 	f := &fakeOpenMeteo{t: t, hours: 2, fill: ductingInversion}
-	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, [][2]float64{{51.3, -0.3}, {40.3, -70.3}})
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, [][2]float64{{51.3, -0.3}, {51.9, 0.1}})
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
@@ -461,7 +485,7 @@ func TestDuctingServiceConcurrentReads(t *testing.T) {
 					t.Errorf("torn response: %v", err)
 					return
 				}
-				if resp.Status == "ok" && len(resp.Cells) != 2 {
+				if resp.Status == "ok" && len(resp.Cells) != 4 {
 					t.Errorf("ok snapshot with %d cells", len(resp.Cells))
 					return
 				}
@@ -485,7 +509,7 @@ func TestDuctingNodesExcludeHidden(t *testing.T) {
 	for _, q := range []string{
 		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('` + visible + `', 'Repeater A', 51.3, -0.3)`,
 		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('` + black + `', 'Blacklisted', 40.3, -70.3)`,
-		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('` + hidden + `', 'secret-base', 30.3, 10.3)`,
+		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('` + hidden + `', 'secret-base', 30.3, 60.3)`,
 		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('dd44', NULL, 0, 0)`,
 		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('ee55', 'No fix', NULL, NULL)`,
 		`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('ff66', NULL, -33.9, 18.4)`,
@@ -505,19 +529,31 @@ func TestDuctingNodesExcludeHidden(t *testing.T) {
 		t.Fatalf("coords %v, want only the visible nodes", coords)
 	}
 
-	// End to end: the hidden nodes' cells are never requested.
+	// End to end: the hidden nodes never stretch the forecast box. The two
+	// visible nodes span lat -34..51, lon -0.3..18 (4-degree cells after two
+	// doublings: 22 x 6 cells, lat -36..52, lon -4..20); the
+	// blacklisted (lon -70) and hidden (lon 60) nodes would reach far past.
 	f := &fakeOpenMeteo{t: t, hours: 1}
 	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, nil)
 	svc.nodes = s.ductingNodes
 	if err := svc.refreshOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	reqs := f.requests()
-	if len(reqs) != 1 {
-		t.Fatalf("%d requests", len(reqs))
+	var asked int
+	for _, r := range f.requests() {
+		q := r.URL.Query()
+		lats, lons := strings.Split(q.Get("latitude"), ","), strings.Split(q.Get("longitude"), ",")
+		for i := range lats {
+			lat, _ := strconv.ParseFloat(lats[i], 64)
+			lon, _ := strconv.ParseFloat(lons[i], 64)
+			if lat < -36 || lat > 52 || lon < -4 || lon > 20 {
+				t.Errorf("requested %v,%v: a hidden node stretched the box", lat, lon)
+			}
+			asked++
+		}
 	}
-	if lats := reqs[0].URL.Query().Get("latitude"); lats != "-33.7500,51.2500" {
-		t.Errorf("requested latitudes %q", lats)
+	if asked != 22*6 {
+		t.Errorf("%d cells requested, want 132", asked)
 	}
 }
 
@@ -557,12 +593,48 @@ func TestDuctingServiceDefaultMarginCoversRegion(t *testing.T) {
 	f := &fakeOpenMeteo{t: t, hours: 2, fill: ductingInversion}
 	one := [][2]float64{{51.3, -0.3}}
 	svc, _ := newTestDuctingService(t, f, DuctingConfig{MarginDeg: nil}, one)
-	svc.cfg.MarginDeg = nil // unresolved: falls back to the 2 degree default
+	svc.cfg.MarginDeg = nil // unresolved: falls back to the 5 degree default
 	if err := svc.refreshOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	resp, _ := ductingServe(t, svc)
-	if got := len(resp.Cells); got != 81 { // 9x9 block at 0.5 degrees
-		t.Fatalf("%d cells, want 81", got)
+	// 10.6 degrees across is 21x21 = 441 cells at 0.5, within the default 450
+	// maxPoints: a single-region mesh keeps the 0.5 degree grid.
+	if got := len(resp.Cells); got != 441 || resp.StepDeg != 0.5 {
+		t.Fatalf("%d cells at step %v, want 441 at 0.5", got, resp.StepDeg)
+	}
+}
+
+func TestDuctingServiceBoundingBoxFilled(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, hours: 1, fill: ductingInversion}
+	// Two distant nodes: the whole box between them is forecast, no gaps.
+	nodes := [][2]float64{{50.1, 5.1}, {53.1, 9.1}}
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{GridStepDeg: 1}, nodes)
+	if err := svc.refreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := ductingServe(t, svc)
+	if resp.StepDeg != 1 || len(resp.Cells) != 4*5 { // lat 50..53, lon 5..9
+		t.Fatalf("step %v, %d cells, want 20 at step 1", resp.StepDeg, len(resp.Cells))
+	}
+}
+
+func TestDuctingServiceNodeAreaFallbackLogged(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	f := &fakeOpenMeteo{t: t, hours: 1, fill: ductingInversion}
+	// Worldwide spread: no 8 degree box fits in 450 points (the smallest
+	// longitude span is about 270 degrees: 17 x 34 cells at 8 degrees).
+	nodes := [][2]float64{{60.1, 100.1}, {-60.1, -100.1}, {0.1, 0.1}, {40.1, -100.1}, {10.1, 170.1}, {-10.1, -170.1}}
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{}, nodes)
+	if err := svc.refreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(buf.String(), "node area too large for maxPoints even at 8 deg; covering the regions around nodes instead"); n != 1 {
+		t.Errorf("fallback logged %d times: %s", n, buf.String())
+	}
+	if resp, _ := ductingServe(t, svc); len(resp.Cells) == 0 || len(resp.Cells) > 450 {
+		t.Errorf("%d cells", len(resp.Cells))
 	}
 }

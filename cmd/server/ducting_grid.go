@@ -39,12 +39,15 @@ const ductingDilateBound = 50
 
 // ductingGrid returns the cell centres to query, sorted (lat, lon) and
 // de-duplicated. nodes are [lat, lon]; area is [south, west, north, east].
-// With an area, all cells covering it (marginDeg is ignored); otherwise the
-// cells containing a node plus marginDeg of cells around each. If there are
-// more than maxPoints cells the step doubles (up to 8 degrees) and the margin
-// is recomputed in cells; past that the maxPoints best cells are kept: most
-// nodes first, then nearest a node cell. Returns the step actually used.
-func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints int, marginDeg float64) ([][2]float64, float64) {
+// With an area, all cells covering it (marginDeg is ignored). Otherwise the
+// bounding box of the nodes, grown by marginDeg on every side, is filled
+// edge to edge (marginDeg 0 = the bounding box itself). If there are more
+// than maxPoints cells the step doubles (up to 8 degrees). If the box still
+// does not fit at 8 degrees, it falls back to the cells containing a node plus
+// marginDeg of cells around each (recounted per step; past 8 degrees the
+// maxPoints best cells are kept: most nodes first, then nearest a node cell)
+// and fellBack is true. Returns the step actually used.
+func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints int, marginDeg float64) (cells [][2]float64, usedStep float64, fellBack bool) {
 	if !(step > 0) || math.IsInf(step, 0) {
 		step = defaultDuctingGridStepDeg
 	}
@@ -62,12 +65,28 @@ func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints i
 			valid = append(valid, [2]float64{math.Max(-ductingMaxAbsLat, math.Min(ductingMaxAbsLat, lat)), lon})
 		}
 	}
+	boxes := ductingNodeBoxes(valid, marginDeg)
+	startStep := step
+	useBox := area == nil && len(valid) > 0
 	for {
-		var cells [][2]float64
 		var ranked []ductingRanked
-		if area != nil {
+		switch {
+		case area != nil:
 			cells = ductingAreaCells(*area, step, maxPoints)
-		} else {
+		case useBox:
+			cells = ductingBoxCells(boxes, step, maxPoints)
+			if len(cells) > maxPoints {
+				if step*2 <= ductingMaxStep {
+					step *= 2
+				} else {
+					// Even at 8 degrees the box is too big: cover the regions
+					// around the nodes instead, from the configured step.
+					useBox, fellBack, step = false, true, startStep
+				}
+				continue
+			}
+			return cells, step, false
+		default:
 			k := 0
 			if marginDeg > 0 {
 				k = int(math.Ceil(marginDeg/step - 1e-9))
@@ -89,7 +108,7 @@ func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints i
 			ductingSortCells(cells)
 		}
 		if len(cells) <= maxPoints {
-			return cells, step
+			return cells, step, fellBack
 		}
 		if step*2 <= ductingMaxStep {
 			step *= 2
@@ -97,7 +116,7 @@ func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints i
 		}
 		if area != nil {
 			// Area grid has no node counts: keep the first maxPoints in order.
-			return cells[:maxPoints], step
+			return cells[:maxPoints], step, false
 		}
 		sort.Slice(ranked, func(i, j int) bool {
 			a, b := ranked[i], ranked[j]
@@ -117,8 +136,83 @@ func ductingGrid(nodes [][2]float64, area *[4]float64, step float64, maxPoints i
 			top[i] = [2]float64{ranked[i].lat, ranked[i].lon}
 		}
 		ductingSortCells(top)
-		return top, step
+		return top, step, fellBack
 	}
+}
+
+// ductingNodeBoxes returns the [south, west, north, east] boxes covering the
+// nodes plus margin degrees on every side: one box, or two when it crosses
+// the antimeridian (west..180 and -180..east). The longitude span is the
+// smallest one containing every node: the complement of the largest gap
+// between consecutive longitudes (the wrap gap included). Latitudes are
+// clamped to +-85; a span of 360 degrees or more becomes -180..180.
+func ductingNodeBoxes(valid [][2]float64, margin float64) [][4]float64 {
+	if len(valid) == 0 {
+		return nil
+	}
+	if !(margin > 0) {
+		margin = 0
+	}
+	south, north := valid[0][0], valid[0][0]
+	lons := make([]float64, len(valid))
+	for i, n := range valid {
+		south, north = math.Min(south, n[0]), math.Max(north, n[0])
+		lons[i] = n[1]
+	}
+	sort.Float64s(lons)
+	// Unwrapped box [west, east]; east may exceed 180 when it crosses.
+	last := len(lons) - 1
+	west, east := lons[0], lons[last]
+	best := lons[0] + 360 - lons[last] // the wrap gap: no crossing; wins ties
+	for i := 0; i < last; i++ {
+		if g := lons[i+1] - lons[i]; g > best {
+			best, west, east = g, lons[i+1], lons[i]+360
+		}
+	}
+	south = math.Max(-ductingMaxAbsLat, south-margin)
+	north = math.Min(ductingMaxAbsLat, north+margin)
+	west, east = west-margin, east+margin
+	if east-west >= 360 {
+		west, east = -180, 180
+	} else if west < -180 {
+		west, east = west+360, east+360
+	}
+	if east <= 180 {
+		return [][4]float64{{south, west, north, east}}
+	}
+	return [][4]float64{{south, west, north, 180}, {south, -180, north, east - 360}}
+}
+
+// ductingBoxCells fills the boxes with the area lattice (same cell centres as
+// ductingAreaCells), sorted and de-duplicated; a centre on 180 becomes -180. It stops once it has more than
+// limit cells. A zero-width box (one node, margin 0) still yields its cell.
+func ductingBoxCells(boxes [][4]float64, step float64, limit int) [][2]float64 {
+	var cells [][2]float64
+	for _, b := range boxes {
+		if !(b[2] > b[0]) {
+			b[2] = b[0] + 1e-6
+		}
+		if !(b[3] > b[1]) {
+			b[3] = b[1] + 1e-6
+		}
+		cells = append(cells, ductingAreaCells(b, step, limit)...)
+		if len(cells) > limit {
+			break
+		}
+	}
+	for i := range cells {
+		if cells[i][1] == 180 {
+			cells[i][1] = -180 // same meridian as a -180 centre from the east box
+		}
+	}
+	ductingSortCells(cells)
+	out := cells[:0]
+	for i, c := range cells {
+		if i == 0 || c != cells[i-1] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 type ductingIdx struct{ lat, lon int64 }

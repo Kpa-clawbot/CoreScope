@@ -141,7 +141,10 @@ func (s *ductingService) build(ctx context.Context) (DuctingResponse, int, error
 			return DuctingResponse{}, 0, errors.New("node positions unavailable")
 		}
 	}
-	cells, step := ductingGrid(nodes, s.cfg.Area, s.cfg.GridStepDeg, ductingMaxPoints(s.cfg, s.model), s.cfg.marginDegOrDefault())
+	cells, step, fellBack := ductingGrid(nodes, s.cfg.Area, s.cfg.GridStepDeg, ductingMaxPoints(s.cfg, s.model), s.cfg.marginDegOrDefault())
+	if fellBack {
+		log.Printf("[ducting] node area too large for maxPoints even at %g deg; covering the regions around nodes instead", ductingMaxStep)
+	}
 	cells = s.inCoverage(cells)
 
 	resp := s.baseResponse("ok", "")

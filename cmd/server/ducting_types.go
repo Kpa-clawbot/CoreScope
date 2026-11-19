@@ -74,10 +74,10 @@ type DuctingModel struct {
 type DuctingConfig struct {
 	Enabled        bool        `json:"enabled"`
 	Model          string      `json:"model,omitempty"`          // default "gfs"
-	Area           *[4]float64 `json:"area,omitempty"`           // [south, west, north, east]; nil = cells around nodes
-	MarginDeg      *float64    `json:"marginDeg,omitempty"`      // default 2, allowed 0..10; 0 = node cells only; ignored with area
+	Area           *[4]float64 `json:"area,omitempty"`           // [south, west, north, east]; nil = bounding box of the nodes + marginDeg
+	MarginDeg      *float64    `json:"marginDeg,omitempty"`      // default 5, allowed 0..10; 0 = just the nodes' bounding box; ignored with area
 	GridStepDeg    float64     `json:"gridStepDeg,omitempty"`    // default 0.5, allowed 0.25..2
-	MaxPoints      int         `json:"maxPoints,omitempty"`      // default 200, allowed 1..1000
+	MaxPoints      int         `json:"maxPoints,omitempty"`      // default 450, allowed 1..1000
 	RefreshMinutes int         `json:"refreshMinutes,omitempty"` // default 360, allowed 60..1440
 	ForecastHours  int         `json:"forecastHours,omitempty"`  // default 48, allowed 1..120
 	BaseURL        string      `json:"baseUrl,omitempty"`        // default https://api.open-meteo.com

@@ -12,8 +12,8 @@ import (
 const (
 	defaultDuctingModel          = "gfs"
 	defaultDuctingGridStepDeg    = 0.5
-	defaultDuctingMarginDeg      = 2.0
-	defaultDuctingMaxPoints      = 200
+	defaultDuctingMarginDeg      = 5.0
+	defaultDuctingMaxPoints      = 450
 	defaultDuctingRefreshMinutes = 360
 	defaultDuctingForecastHours  = 48
 	defaultDuctingBaseURL        = "https://api.open-meteo.com"
