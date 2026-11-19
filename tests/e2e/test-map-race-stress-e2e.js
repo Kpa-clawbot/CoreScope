@@ -1450,7 +1450,11 @@ async function scenarioG(browser) {
       const startOn = rng.chance(0.3);
       const page = await open({ preset: { theme: theme0, provider: 'auto', overlays: startOn ? ['ducting'] : [] } });
       // /api/ducting: delayed, sometimes pending or HTTP 500 during the random phase.
-      const st = { n: 0, lastReal: true, chaos: true, maxDelay: 2500 };
+      // real[n]: request n got the server's answer (false: a chaos 500 or
+      // pending). Handlers finish out of order, so the attached layer's answer
+      // is the one to the newest request, not the last one to finish.
+      const st = { n: 0, real: {}, chaos: true, maxDelay: 2500 };
+      const lastReal = () => st.real[st.n] !== false;
       await page.route('**/api/ducting', async (rt) => {
         const n = ++st.n;
         const rr = makeRng('g', it, 'req', n);
@@ -1458,9 +1462,9 @@ async function scenarioG(browser) {
         const roll = rr.next();
         await sleep(delay);
         try {
-          if (st.chaos && roll < 0.1) { st.lastReal = false; await rt.fulfill({ status: 500, json: { error: 'stress' } }); return; }
-          if (st.chaos && roll < 0.18) { st.lastReal = false; await rt.fulfill({ status: 200, json: { status: 'pending', times: [], cells: [] } }); return; }
-          st.lastReal = true;
+          if (st.chaos && roll < 0.1) { st.real[n] = false; await rt.fulfill({ status: 500, json: { error: 'stress' } }); return; }
+          if (st.chaos && roll < 0.18) { st.real[n] = false; await rt.fulfill({ status: 200, json: { status: 'pending', times: [], cells: [] } }); return; }
+          st.real[n] = true;
           await rt.continue();
         } catch (_) { /* page closed */ }
       });
@@ -1512,7 +1516,7 @@ async function scenarioG(browser) {
         }
         await sleep(rng.chance(0.1) ? rng.int(300, 1200) : rng.int(0, 150));
       }
-      Object.assign(meta, { route, wantOn, requests: st.n, lastReal: st.lastReal });
+      Object.assign(meta, { route, wantOn, requests: st.n, lastReal: lastReal() });
       await waitPicker(page);
 
       // Settle (the slowest delayed answer has landed), then judge.
@@ -1537,7 +1541,7 @@ async function scenarioG(browser) {
         return probs.map(x => (extra || '') + x);
       };
       await sleep(st.maxDelay + 500);
-      let probs = await judge(wantOn, (wantOn && st.lastReal) ? expectRects : null, 'after random phase: ');
+      let probs = await judge(wantOn, (wantOn && lastReal()) ? expectRects : null, 'after random phase: ');
       if (probs.length) return probs.concat(['actions: ' + log.slice(-14).join(' | ')]);
 
       // Differential phase, real answers: listeners +1 while on, no growth.
