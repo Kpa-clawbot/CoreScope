@@ -59,6 +59,25 @@
   }
   window.NodeAnalyticsCoverage = { notice: coverageNotice, rateText: rateText };
 
+  // The server sends only the hours that hold packets. Put every hour of the
+  // covered window (dataFrom when partial, else from) on the axis, silent
+  // ones as 0, or an outage collapses into two neighbouring bars.
+  function fillTimeline(tl, tr) {
+    if (!tr || !tr.to) return tl;
+    const start = Date.parse(tr.dataFrom || tr.from);
+    const end = Date.parse(tr.to);
+    if (isNaN(start) || isNaN(end) || end < start) return tl;
+    const HOUR = 3600000;
+    const key = ms => new Date(ms).toISOString().slice(0, 13) + ':00:00Z';
+    const byKey = {};
+    tl.forEach(b => { byKey[b.bucket] = b; });
+    for (let ms = Math.floor(start / HOUR) * HOUR; ms <= end; ms += HOUR) {
+      const k = key(ms);
+      if (!byKey[k]) byKey[k] = { bucket: k, count: 0, certain: 0 };
+    }
+    return Object.keys(byKey).sort().map(k => byKey[k]);
+  }
+
   // #2260: split each timeline bucket into packets that can only be this
   // node (certain) and packets attributed to it through a hop prefix it
   // shares with other nodes (uncertain). A server without the certain field
@@ -73,7 +92,7 @@
     });
     return { certain, uncertain };
   }
-  window.NodeAnalyticsTimeline = { series: timelineSeries };
+  window.NodeAnalyticsTimeline = { series: timelineSeries, fill: fillTimeline };
 
   async function loadAnalytics(container, pubkey, days) {
     const gen = viewGeneration();
@@ -228,7 +247,7 @@
   function buildActivityChart(data) {
     const ctx = document.getElementById('activityChart');
     if (!ctx) return;
-    const tl = data.activityTimeline;
+    const tl = fillTimeline(data.activityTimeline, data.timeRange);
     const series = timelineSeries(tl);
     const style = getComputedStyle(document.documentElement);
     const certainColor = style.getPropertyValue('--accent').trim();
