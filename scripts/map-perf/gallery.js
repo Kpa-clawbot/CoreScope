@@ -156,21 +156,28 @@ async function resolveDuctingViews(baseUrl) {
     await new Promise((r) => setTimeout(r, 500));
   }
   if (!d || d.status !== 'ok' || !d.cells || !d.cells.length) { out.reason = `/api/ducting has no data (status ${d && d.status}${d && d.error ? ': ' + d.error : ''})`; return out; }
-  // The forecast hour with the most ducting cells (dN/dh <= -157): the shots
-  // set the slider there and say which time they show.
+  // The field's value per cell and hour: `n` (mean gradient, lowest 1.5 km),
+  // or `g` from a server that predates it. A cell counts as coloured from the
+  // first band (-44 N/km for n) and as strong from -54 (n) / -157 (g).
+  const hasN = d.cells.some((c) => Array.isArray(c.n));
+  const val = (c, i) => (hasN ? (c.n && c.n[i]) || 0 : c.g[i]);
+  const strong = (c, i) => c.c[i] >= 1 && val(c, i) !== 0 && val(c, i) <= (hasN ? -54 : -157);
+  const tinted = (c, i) => c.c[i] >= 1 && val(c, i) !== 0 && val(c, i) <= (hasN ? -44 : -79);
+  // The forecast hour with the most strong cells: the shots set the slider
+  // there and say which time they show.
   const idx = (() => {
     let b = 0, most = -1;
     d.times.forEach((t, i) => {
-      const n = d.cells.filter((c) => c.c[i] >= 1 && c.g[i] <= -157).length;
+      const n = d.cells.filter((c) => strong(c, i)).length;
       if (n > most) { most = n; b = i; }
     });
     return b;
   })();
-  // Centre on the densest cluster of coloured cells (class >= 2) at the
+  // Centre on the densest cluster of coloured cells (tinted, see above) at the
   // current hour: with nodes worldwide, the median of all cells is often in
   // an empty area. Falls back to that median when nothing is coloured.
   const step = Number(d.stepDeg) || 0.5;
-  const coloured = d.cells.filter((c) => c.c[idx] >= 2);
+  const coloured = d.cells.filter((c) => tinted(c, idx));
   let lat = median(d.cells.map((c) => c.lat)), lon = median(d.cells.map((c) => c.lon));
   let best = null;
   coloured.forEach((c) => {
