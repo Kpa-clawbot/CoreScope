@@ -349,6 +349,25 @@ test('failed or pending refresh keeps the last good data', async () => {
   assert.strictEqual(s.layer._group.layers.length, 3);
 });
 
+test('no data yet: retries every minute until data arrives, then every 30 minutes', async () => {
+  const s = await mount({ status: 'pending' });
+  assert.strictEqual(s.timers.length, 1);
+  assert.strictEqual(s.timers[0].ms, 60 * 1000, 'pending -> retry in a minute');
+  s.timers[0].fn();
+  s.api.calls[1].fail();
+  await tick(); await tick();
+  assert.strictEqual(s.timers.length, 1, 'still one timer after a failure');
+  assert.strictEqual(s.timers[0].ms, 60 * 1000);
+  s.timers[0].fn();
+  s.api.calls[2].ok(clone(SAMPLE));
+  await tick(); await tick();
+  assert.strictEqual(s.stats.rects.length, 3);
+  assert.strictEqual(s.timers.length, 1);
+  assert.strictEqual(s.timers[0].ms, 30 * 60 * 1000, 'back to the normal refresh');
+  s.layer.onRemove(s.map);
+  assert.strictEqual(s.timers.length, 0);
+});
+
 test('a good refresh rebuilds cells and keeps a user-picked time', async () => {
   const s = await mount(SAMPLE, T1 + 60);
   s.layer._slider.value = '2';
