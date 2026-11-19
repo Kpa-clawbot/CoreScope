@@ -263,8 +263,9 @@ func (s *ductingSource) fetch(ctx context.Context, cells [][2]float64, forecastH
 			end = len(cells)
 		}
 		batch := cells[start:end]
-		if prevCalls > 0 {
-			// The previous batch's calls at ductingCallsPerMinute.
+		if s.capped && prevCalls > 0 {
+			// The previous batch's calls at ductingCallsPerMinute (the
+			// public API's per-minute limit; a self-hosted one has none).
 			wait := time.Duration(prevCalls / ductingCallsPerMinute * float64(time.Minute))
 			if err := s.sleep(ctx, wait); err != nil {
 				return res, err
