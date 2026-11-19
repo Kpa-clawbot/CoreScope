@@ -2,10 +2,14 @@
  * E2E for the tropospheric-ducting map overlay, against a real CoreScope
  * server whose ducting source is a fake Open-Meteo (tests/e2e/lib/
  * fake-open-meteo.js, scenario 'mixed'). Nothing here reaches the real
- * Open-Meteo or a real tile host. Local only: not part of the GitHub Actions
- * E2E job.
+ * Open-Meteo or a real tile host.
  *
- * Start the pieces in this order (the server's first refresh runs at startup;
+ * CI: runs in the GitHub Actions E2E job (.github/workflows/deploy.yml, e2e
+ * shard 1): the fake Open-Meteo on 13597, then a ducting + planner server on
+ * 13596, then `suite 1 test-map-ducting-e2e.js` with CHROMIUM_REQUIRE=1
+ * BASE_URL=http://localhost:13596.
+ *
+ * Locally, start the pieces in this order (the server's first refresh runs at startup;
  * if the fake is not listening yet it fails and the server retries only
  * after 5 minutes):
  *
@@ -44,7 +48,8 @@ const FAKE = require('./lib/fake-open-meteo');
 const BASE = (process.env.BASE_URL || 'http://localhost:13596').replace(/\/+$/, '');
 const FAKE_PORT = parseInt(process.env.FAKE_PORT || '13597', 10);
 const SCENARIO = 'mixed';
-const LORA_MAX_MHZ = 1000;
+// One LoRa threshold (map-ducting.js LORA_MAX_MHZ): f_min <= 868 MHz.
+const LORA_MAX_MHZ = 868;
 // The field's colour bands start at these values of n, the mean dN/dh over
 // the lowest 1.5 km in N/km (map-ducting.js STOP_N).
 const STOP_N = [-44, -48, -54, -58, -62, -70, -80, -90];
@@ -143,22 +148,24 @@ async function setOverlayUi(page, on) {
   if ((await inp.isChecked()) !== on) await inp.evaluate((el) => el.click());
 }
 
-// What the page shows right now: rectangles (with their outline) and field
-// images of every live map, legend/time boxes.
+// What the page shows right now, for every live map: the cells the ducting
+// layers hold, the LoRa outline layers (cells, style), edge lines, field
+// images, any interactive layer of the overlay (there must be none), and
+// the legend/time boxes.
 function inPageState() {
   const maps = ((window.__mcHarness && window.__mcHarness.maps) || [])
     .filter(m => m && m._container && m._container.isConnected && m._loaded);
-  const rects = [], fields = [], edges = [];
+  let cells = 0;
+  const lora = [], fields = [], edges = [], interactive = [];
   maps.forEach((m, mi) => {
     m.eachLayer((l) => {
+      if (l._mcDuct) cells += (l._cells || []).length;
       if (l._mcEdge) {
         const parts = l.getLatLngs().map(p => p.map(ll => [ll.lat, ll.lng]));
         edges.push({ map: mi, parts, color: l.options.color, dash: l.options.dashArray, weight: l.options.weight, interactive: l.options.interactive });
       }
-      if (l._mcCell) {
-        const c = l._mcCell;
-        rects.push({ map: mi, lat: c.lat, lon: c.lon, stroke: !!l.options.stroke, color: l.options.stroke ? l.options.color : null, dash: l.options.stroke ? l.options.dashArray : null, fillOpacity: l.options.fillOpacity });
-      }
+      if (l._mcLora) lora.push({ map: mi, cells: l._mcCells.map(c => [c.lat, c.lon]), color: l.options.color, dash: l.options.dashArray, fill: l.options.fill, interactive: l.options.interactive, pane: l._renderer && l._renderer.options.pane });
+      if ((l._mcEdge || l._mcLora || l._mcCell) && l.options.interactive !== false) interactive.push(l._mcEdge ? 'edge' : l._mcLora ? 'lora' : 'cell');
       if (l._mcField) fields.push({ map: mi, inDom: !!(l._image && l._image.isConnected), pane: l.options.pane });
     });
   });
@@ -166,7 +173,9 @@ function inPageState() {
   const q = (sel) => Array.prototype.slice.call(document.querySelectorAll(sel));
   return {
     maps: maps.length,
-    rects,
+    cells,
+    lora,
+    interactive,
     fields,
     edges,
     legends: q('.mc-duct-legend').length,
@@ -177,10 +186,11 @@ function inPageState() {
   };
 }
 const pageState = (page) => page.evaluate(inPageState);
-async function waitRects(page, min) {
+// Waits until the ducting layers of the live maps hold at least min cells.
+async function waitCells(page, min) {
   await page.waitForFunction((n) => {
     const maps = ((window.__mcHarness && window.__mcHarness.maps) || []).filter(m => m && m._container && m._container.isConnected && m._loaded);
-    let c = 0; maps.forEach(m => m.eachLayer(l => { if (l._mcCell) c++; }));
+    let c = 0; maps.forEach(m => m.eachLayer(l => { if (l._mcDuct) c += (l._cells || []).length; }));
     return c >= n;
   }, min || 1, { timeout: 25000, polling: 100 });
 }
@@ -323,22 +333,57 @@ async function fieldProblems(page, data, idx) {
   return { probs, r, ducts: ducts.length, calm: calm.length };
 }
 
-// Outline problems: a dashed --mc-duct-lora outline exactly on cells where a
-// duct can carry 868/915 MHz at hour idx.
-function outlineProblems(rects, data, idx, lora) {
-  const byKey = new Map(data.cells.map(c => [`${c.lat},${c.lon}`, c]));
+// Outline problems: one dashed, unfilled, non-interactive --mc-duct-lora
+// outline layer exactly on the cells where the model shows a duct that may
+// carry LoRa (0 < f_min <= 868 MHz) at hour idx.
+function outlineProblems(st, data, idx, lora) {
   const probs = [];
-  let n = 0;
-  rects.forEach((r) => {
-    const c = byKey.get(`${r.lat},${r.lon}`);
-    if (!c) { probs.push(`rect at ${r.lat},${r.lon} has no cell`); return; }
-    const want = c.c[idx] >= 3 && c.f[idx] > 0 && c.f[idx] <= LORA_MAX_MHZ;
-    if (want) n++;
-    if (r.fillOpacity !== 0) probs.push(`${r.lat},${r.lon}: filled (${r.fillOpacity})`);
-    if (want && !(r.stroke && r.dash === '4 3' && String(r.color).toLowerCase() === String(lora).toLowerCase())) probs.push(`${r.lat},${r.lon}: LoRa duct without the dashed outline (${r.color}/${r.dash})`);
-    if (!want && r.stroke) probs.push(`${r.lat},${r.lon}: class ${c.c[idx]} f=${c.f[idx]} has an outline`);
+  const want = new Set(data.cells.filter(c => c.c[idx] >= 3 && c.f[idx] > 0 && c.f[idx] <= LORA_MAX_MHZ).map(c => `${c.lat},${c.lon}`));
+  if (st.lora.length > 1) probs.push(`${st.lora.length} LoRa outline layers`);
+  const l = st.lora[0];
+  if (!want.size) { if (l) probs.push(`outline drawn on ${l.cells.length} cells, none wanted`); return { probs, n: 0 }; }
+  if (!l) { probs.push(`no outline layer, ${want.size} LoRa cells`); return { probs, n: want.size }; }
+  if (!(l.dash === '4 3' && l.fill === false && l.interactive === false && String(l.color).toLowerCase() === String(lora).toLowerCase())) probs.push('outline style ' + JSON.stringify([l.color, l.dash, l.fill, l.interactive]));
+  if (l.pane !== 'mcDuctLinePane') probs.push('outline renderer pane ' + l.pane);
+  const got = new Set(l.cells.map(([a, b]) => `${a},${b}`));
+  want.forEach(k => { if (!got.has(k)) probs.push(`${k}: LoRa duct without the dashed outline`); });
+  got.forEach((k) => {
+    if (want.has(k)) return;
+    const c = data.cells.find(x => `${x.lat},${x.lon}` === k);
+    probs.push(`${k}: class ${c && c.c[idx]} f=${c && c.f[idx]} has an outline`);
   });
-  return { probs, n };
+  return { probs, n: want.size };
+}
+
+// The first live map's container point of (lat, lon) in page coordinates,
+// and whether a marker, interactive path, control or popup covers it.
+function inPagePoint(a) {
+  const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
+  const p = m.latLngToContainerPoint([a.lat, a.lon]);
+  const r = m.getContainer().getBoundingClientRect();
+  const x = r.left + p.x, y = r.top + p.y;
+  const el = document.elementFromPoint(x, y);
+  const blocked = !el || !!el.closest('.leaflet-marker-icon, .leaflet-interactive, .leaflet-control, .leaflet-popup, #mapControls, .mc-duct-legend, .mc-duct-time, .leaflet-marker-pane, .leaflet-tooltip')
+    || x < r.left + 40 || y < r.top + 40 || x > r.right - 40 || y > r.bottom - 40;
+  return { x, y, blocked };
+}
+
+// Centres the first live map on cell c and returns up to `max` clickable
+// points inside the cell (a node marker or control may sit on the centre).
+async function pointsIn(page, c, step, max) {
+  await page.evaluate((a) => {
+    const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
+    m.closePopup();
+    m.setView([a.lat, a.lon], 9, { animate: false });
+  }, c);
+  await sleep(400);
+  const d = step * 0.3, out = [];
+  for (const [dy, dx] of [[0, 0], [d, d], [-d, d], [d, -d], [-d, -d], [0, d], [d, 0], [-d, 0], [0, -d]]) {
+    const pt = await page.evaluate(inPagePoint, { lat: c.lat + dy, lon: c.lon + dx });
+    if (!pt.blocked) out.push(pt);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
 async function setSlider(page, idx) {
@@ -434,19 +479,20 @@ async function run() {
       assert(/ducting/i.test(await lab.textContent()), 'label text: ' + (await lab.textContent()));
       assert(!(await lab.locator('input').isChecked()), 'ducting is on by default');
       const st = await pageState(page);
-      assert(st.legends === 0 && st.times === 0 && !st.rects.length && !st.fields.length, 'legend/time/cells/field present with the overlay off');
+      assert(st.legends === 0 && st.times === 0 && !st.cells && !st.lora.length && !st.fields.length, 'legend/time/cells/field present with the overlay off');
     });
 
     await test('enabling it draws cells, with a visible, unobstructed legend and time slider', async () => {
       await setOverlayUi(page, true);
-      await waitRects(page, 1);
+      await waitCells(page, 1);
       await page.mouse.move(5, 5);
       await page.waitForSelector('.mc-duct-legend', { state: 'visible' });
       const st = await pageState(page);
-      assert(st.maps === 1 && st.rects.length === data.cells.length, `maps=${st.maps} rects=${st.rects.length} cells=${data.cells.length}`);
+      assert(st.maps === 1 && st.cells === data.cells.length, `maps=${st.maps} cells drawn=${st.cells} cells=${data.cells.length}`);
+      assert(!st.interactive.length, 'interactive overlay layers: ' + st.interactive.join(','));
       assert(st.fields.length === 1 && st.fields[0].inDom && st.fields[0].pane === 'mcDuctFieldPane', 'field images: ' + JSON.stringify(st.fields));
       assert(st.legends === 1 && st.times === 1 && st.legendVisible && st.timeVisible, `legends=${st.legends} times=${st.times}`);
-      assert(/LoRa 868\/915/.test(st.legendText) && /Enhanced/.test(st.legendText) && /Very strong/.test(st.legendText) && /lowest 1\.5 km \(N\/km\)/.test(st.legendText) && /Updated/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 160));
+      assert(/may carry LoRa 868\/915 MHz/.test(st.legendText) && /Above normal/.test(st.legendText) && /Very high/.test(st.legendText) && !/Enhanced|Strong/.test(st.legendText) && /lowest 1\.5 km \(N\/km\)/.test(st.legendText) && /Updated/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 200));
       const ov = await page.evaluate(inPageOverlaps);
       assert(ov.mine === 2, 'legend and time box not both visible');
       assert(!ov.hits.length, ov.hits.join('; '));
@@ -516,12 +562,14 @@ async function run() {
       const f = await fieldProblems(page, data, idx0);
       assert(!f.probs.length, f.probs.slice(0, 5).join(' | '));
       assert(f.calm > 0, 'no calm cell to check for transparency');
-      const pane = await page.evaluate(() => { const p = document.querySelector('.leaflet-mcDuctField-pane'); const cs = p && getComputedStyle(p); return cs ? { z: +cs.zIndex, pe: cs.pointerEvents } : null; });
-      assert(pane && pane.z > 200 && pane.z < 400 && pane.pe === 'none', 'field pane ' + JSON.stringify(pane));
+      const panes = await page.evaluate(() => ['mcDuctField', 'mcDuctLine'].map((n) => { const p = document.querySelector('.leaflet-' + n + '-pane'); const cs = p && getComputedStyle(p); return cs ? { z: +cs.zIndex, pe: cs.pointerEvents, canvases: p.querySelectorAll('canvas').length } : null; }));
+      assert(panes[0] && panes[0].z > 200 && panes[0].z < 400 && panes[0].pe === 'none', 'field pane ' + JSON.stringify(panes[0]));
+      assert(panes[1] && panes[1].z > panes[0].z && panes[1].z < 400 && panes[1].pe === 'none' && panes[1].canvases === 1, 'line pane ' + JSON.stringify(panes[1]));
+      assert(!(await page.evaluate(() => document.querySelectorAll('.leaflet-overlay-pane canvas').length)), 'the overlay put a canvas in the overlay pane');
     });
 
     await test('LoRa cells, and only they, have the dashed outline', async () => {
-      const o = outlineProblems((await pageState(page)).rects, data, idx0, (await cssVars(page)).lora);
+      const o = outlineProblems(await pageState(page), data, idx0, (await cssVars(page)).lora);
       assert(!o.probs.length, o.probs.slice(0, 5).join(' | '));
       assert(o.n > 0, 'no LoRa duct at hour ' + idx0);
     });
@@ -535,7 +583,7 @@ async function run() {
       const after = await fieldProblems(page, data, max);
       assert(after.r.sum !== before, 'field image did not change');
       assert(!after.probs.length, after.probs.slice(0, 5).join(' | '));
-      const o = outlineProblems((await pageState(page)).rects, data, max, (await cssVars(page)).lora);
+      const o = outlineProblems(await pageState(page), data, max, (await cssVars(page)).lora);
       assert(!o.probs.length, o.probs.slice(0, 5).join(' | '));
       assert((await page.locator('.mc-duct-time-label').first().textContent()) !== label0, 'label did not change');
       assert((await pageState(page)).fields.length === 1, 'slider added a field image');
@@ -544,29 +592,12 @@ async function run() {
       assert(!back.probs.length && back.r.sum === before, 'after moving back: ' + back.probs.slice(0, 3).join(' | '));
     });
 
+    // A real mouse click at a free point of a cell of class wantClass at the
+    // shown hour; the popup comes from the overlay's map click handler.
     async function popupFor(wantClass) {
       const cell = data.cells.find(c => c.c[idx0] === wantClass);
       assert(cell, `no class ${wantClass} cell at hour ${idx0}`);
-      await page.evaluate((c) => {
-        const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
-        m.closePopup();
-        m.setView([c.lat, c.lon], 9, { animate: false });
-      }, cell);
-      await sleep(400);
-      const step = data.stepDeg * 0.3;
-      // A few interior points: a node marker or control may sit on the centre.
-      const offsets = [[0, 0], [step, step], [-step, step], [step, -step], [-step, -step], [0, step], [step, 0]];
-      for (const [dy, dx] of offsets) {
-        const pt = await page.evaluate((a) => {
-          const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
-          const p = m.latLngToContainerPoint([a.lat + a.dy, a.lon + a.dx]);
-          const r = m.getContainer().getBoundingClientRect();
-          const x = r.left + p.x, y = r.top + p.y;
-          const el = document.elementFromPoint(x, y);
-          const blocked = !el || el.closest('.leaflet-marker-icon, .leaflet-control, .leaflet-popup, #mapControls, .mc-duct-legend, .mc-duct-time, .leaflet-marker-pane');
-          return { x, y, blocked: !!blocked };
-        }, { lat: cell.lat, lon: cell.lon, dy, dx });
-        if (pt.blocked) continue;
+      for (const pt of await pointsIn(page, cell, data.stepDeg, 6)) {
         await page.mouse.click(pt.x, pt.y);
         try {
           await page.waitForSelector('.leaflet-popup .mc-duct-popup', { timeout: 2500 });
@@ -575,25 +606,60 @@ async function run() {
       }
       throw new Error(`could not open the popup of cell ${cell.lat},${cell.lon} (class ${wantClass})`);
     }
+    // f_min to 2 significant figures, as the popup shows it.
+    const sig2 = (v) => Number(Number(v).toPrecision(2));
 
-    await test('clicking a surface-duct cell opens a popup that says 868 and 915 MHz: yes', async () => {
+    await test('clicking a surface-duct cell opens its popup: trapping layer, frequency estimate, LoRa possibly trapped', async () => {
       const r = await popupFor(4);
+      const f = r.cell.f[idx0];
       assert(/Surface-based duct/.test(r.text), 'popup: ' + r.text);
-      assert(/Can carry 868 MHz: yes/.test(r.text) && /Can carry 915 MHz: yes/.test(r.text), 'popup: ' + r.text);
-      assert(/Base: 0 m/.test(r.text) && /Lowest trapped frequency: \d+ MHz/.test(r.text), 'popup: ' + r.text);
+      assert(r.text.includes('Trapping layer in the model (\u2265 ~200 m thick)'), 'popup: ' + r.text);
+      assert(r.text.includes(`Lowest trapped frequency: \u2248 ${sig2(f)} MHz (model estimate)`), `popup (f=${f}): ` + r.text);
+      assert(r.text.includes('LoRa 868/915 MHz: possibly trapped (model estimate)'), 'popup: ' + r.text);
+      assert(!/Can carry|: yes|: no\b/.test(r.text), 'old yes/no wording: ' + r.text);
+      assert(/Base: 0 m/.test(r.text), 'popup: ' + r.text);
       const n = fieldN(r.cell, idx0);
       if (n != null) assert(r.text.includes('Gradient, lowest 1.5 km: ' + (n < 0 ? '\u2212' + -n : n) + ' N/km'), 'popup gradient (n=' + n + '): ' + r.text);
     });
-    await test('clicking a super-refraction cell says no duct, 868 MHz: no', async () => {
+    await test('clicking a super-refraction cell: no trapping layer, LoRa not trapped', async () => {
       const r = await popupFor(2);
-      assert(/Super-refraction/.test(r.text) && /Can carry 868 MHz: no/.test(r.text) && /Lowest trapped frequency: none/.test(r.text), 'popup: ' + r.text);
+      assert(/Super-refraction/.test(r.text) && /LoRa 868\/915 MHz: not trapped by this layer/.test(r.text) && /Lowest trapped frequency: none/.test(r.text), 'popup: ' + r.text);
+      assert(!/Trapping layer/.test(r.text), 'popup: ' + r.text);
+    });
+    await test('a map click in the forecast area reaches the page\'s own map click listeners; the popup follows the slider', async () => {
+      const cell = data.cells.find(c => c.c[idx0] === 4);
+      const pts = await pointsIn(page, cell, data.stepDeg, 1);
+      assert(pts.length, 'no free point in the cell');
+      await page.evaluate(() => {
+        const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
+        window.__ductTestClicks = 0;
+        window.__ductTestOn = () => { window.__ductTestClicks++; };
+        m.on('click', window.__ductTestOn);
+      });
+      await page.mouse.click(pts[0].x, pts[0].y);
+      await page.waitForSelector('.leaflet-popup .mc-duct-popup', { timeout: 2500 });
+      const got = await page.evaluate(() => {
+        const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
+        m.off('click', window.__ductTestOn);
+        return window.__ductTestClicks;
+      });
+      assert(got === 1, 'map click listeners saw ' + got + ' clicks');
+      // Another hour: the open popup shows that hour's analysis of the same cell.
+      const other = cell.c.findIndex((v, h) => h !== idx0 && v >= 1 && v !== 4);
+      if (other >= 0) {
+        await setSlider(page, other);
+        const t = await page.locator('.leaflet-popup .mc-duct-popup').first().innerText().catch(() => '');
+        assert(t && !/Surface-based duct/.test(t), `popup at hour ${other} (class ${cell.c[other]}): ${t}`);
+        await setSlider(page, idx0);
+      }
+      await page.evaluate(() => window.__mcHarness.maps.forEach(m => m.closePopup && m.closePopup()));
     });
 
     await test('theme toggle redraws the field and outlines from the CSS variables', async () => {
       await page.evaluate(() => window.__mcHarness.maps.forEach(m => m.closePopup && m.closePopup()));
       const light = await cssVars(page);
       const before = (await page.evaluate(inPageFieldProbe, { idx: idx0, cells: [] })).sum;
-      const rects0 = (await pageState(page)).rects.length;
+      const cells0 = (await pageState(page)).cells;
       await MH.setTheme(page, 'dark');
       await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark');
       const dark = await cssVars(page);
@@ -607,9 +673,9 @@ async function run() {
       assert(f.r.sum !== before, 'field image unchanged after the theme change');
       assert(!f.probs.length, 'after theme change: ' + f.probs.slice(0, 4).join(' | '));
       const st = await pageState(page);
-      const o = outlineProblems(st.rects, data, idx0, dark.lora);
+      const o = outlineProblems(st, data, idx0, dark.lora);
       assert(!o.probs.length, 'dark outlines: ' + o.probs.slice(0, 3).join(' | '));
-      assert(st.rects.length === rects0 && st.fields.length === 1, `rects ${rects0}->${st.rects.length}, fields ${st.fields.length}`);
+      assert(st.cells === cells0 && st.fields.length === 1, `cells ${cells0}->${st.cells}, fields ${st.fields.length}`);
       const ov = await page.evaluate(inPageOverlaps);
       assert(!ov.hits.length, 'dark: ' + ov.hits.join('; '));
       await MH.setTheme(page, 'light');
@@ -621,14 +687,14 @@ async function run() {
     await test('switching off right after a canvas move redraw throws nothing', async () => {
       const before = page.__errors.length;
       const queued = await page.evaluate(() => {
-        let rect = null;
-        window.__mcHarness.maps.forEach(m => { if (m._loaded) m.eachLayer(l => { if (!rect && l._mcCell && l._renderer) rect = l; }); });
-        if (!rect) return 'no cell';
-        const r = rect._renderer;
-        rect.setStyle({ fillOpacity: 0.5 });   // queues a frame redraw
+        let line = null;
+        window.__mcHarness.maps.forEach(m => { if (m._loaded) m.eachLayer(l => { if (!line && l._mcEdge && l._renderer) line = l; }); });
+        if (!line) return 'no edge line';
+        const r = line._renderer;
+        line.setStyle({ opacity: 0.5 });       // queues a frame redraw
         if (!r._redrawRequest) return 'no redraw queued';
         r._updatePaths();                      // what every moveend does
-        rect.setStyle({ fillOpacity: 0.4 });   // marks an area to redraw
+        line.setStyle({ opacity: 0.4 });       // marks an area to redraw
         window.MC_setTileOverlay('ducting', false);
         return 'ok';
       });
@@ -637,14 +703,15 @@ async function run() {
       const errs = page.__errors.slice(before);
       assert(!errs.length, errs.join(' | '));
       await page.evaluate(() => window.MC_setTileOverlay('ducting', true));
-      await waitRects(page, 1);
+      await waitCells(page, 1);
     });
 
     await test('disabling the overlay removes legend, time slider and cells', async () => {
       await setOverlayUi(page, false);
       await page.waitForFunction(() => !document.querySelector('.mc-duct-legend') && !document.querySelector('.mc-duct-time'), null, { timeout: 5000 });
       const st = await pageState(page);
-      assert(!st.rects.length, `${st.rects.length} cells still drawn`);
+      assert(!st.cells && !st.lora.length && !st.edges.length, `${st.cells} cells, ${st.lora.length} outlines, ${st.edges.length} edges still drawn`);
+      assert(!(await page.evaluate(() => document.querySelectorAll('.leaflet-mcDuctLine-pane canvas').length)), 'line canvas left in the DOM');
       assert(!st.fields.length, 'field image left on the map');
       assert(!(await page.evaluate(() => document.querySelectorAll('.mc-duct-field').length)), 'field canvas left in the DOM');
       assert(st.legends === 0 && st.times === 0, 'legend/time boxes left');
@@ -653,13 +720,13 @@ async function run() {
 
     await test('re-enabling after a disable draws one legend and one slider, no duplicates', async () => {
       await setOverlayUi(page, true);
-      await waitRects(page, 1);
+      await waitCells(page, 1);
       await setOverlayUi(page, false);
       await setOverlayUi(page, true);
-      await waitRects(page, data.cells.length);
+      await waitCells(page, data.cells.length);
       await sleep(300);
       const st = await pageState(page);
-      assert(st.legends === 1 && st.times === 1 && st.rects.length === data.cells.length, `legends=${st.legends} times=${st.times} rects=${st.rects.length}`);
+      assert(st.legends === 1 && st.times === 1 && st.cells === data.cells.length && st.edges.length === 1 && st.lora.length <= 1, `legends=${st.legends} times=${st.times} cells=${st.cells} edges=${st.edges.length} outlines=${st.lora.length}`);
       assert(st.fields.length === 1 && await page.evaluate(() => document.querySelectorAll('.mc-duct-field').length) === 1, 'field images: ' + st.fields.length);
       await setOverlayUi(page, false);
     });
@@ -667,19 +734,77 @@ async function run() {
     await test('map page has no page errors', async () => { assert(!page.__errors.length, page.__errors.slice(0, 3).join(' | ')); });
 
     // ── Live ──
+    let livePage = null;
     await test('live page: entry present, enabling draws cells and an unobstructed legend', async () => {
       const lp = await track({ theme: 'light', overlays: ['ducting'] });
       await gotoRoute(lp.page, '#/live');
       await lp.page.waitForSelector('label[data-tile-overlay-id="ducting"]', { state: 'attached', timeout: 25000 });
-      await waitRects(lp.page, data.cells.length);
+      await waitCells(lp.page, data.cells.length);
       await lp.page.waitForSelector('.mc-duct-legend', { state: 'visible' });
       await lp.page.mouse.move(5, 5);
       const st = await pageState(lp.page);
       assert(st.legends === 1 && st.times === 1, `legends=${st.legends} times=${st.times}`);
       assert(st.fields.length === 1 && st.fields[0].inDom, 'live field images: ' + st.fields.length);
+      assert(!st.interactive.length, 'interactive overlay layers: ' + st.interactive.join(','));
       const ov = await lp.page.evaluate(inPageOverlaps);
       assert(!ov.hits.length, ov.hits.join('; '));
       assert(!lp.page.__errors.length, lp.page.__errors.slice(0, 3).join(' | '));
+      livePage = lp.page;
+    });
+
+    // Live draws its clickable packet paths on its own canvas (preferCanvas)
+    // in the overlay pane. The overlay must not put a canvas above it, and a
+    // click inside the forecast area must reach Live's map and its paths.
+    await test('live page: a click inside the forecast area reaches Live\'s map and canvas paths; no ducting popup over them', async () => {
+      assert(livePage, 'live page did not load');
+      const lpg = livePage;
+      const cell = data.cells.find(c => c.c.some(v => v >= 1));
+      const pts = await pointsIn(lpg, cell, data.stepDeg, 3);
+      assert(pts.length, 'no free point in a forecast cell on Live');
+      const pt = pts[0];
+      // Nothing of the overlay is hit-tested at the click point.
+      const top = await lpg.evaluate((p) => {
+        const el = document.elementFromPoint(p.x, p.y);
+        return { inDuct: !!(el && el.closest('.leaflet-mcDuctLine-pane, .leaflet-mcDuctField-pane')), tag: el && el.tagName };
+      }, pt);
+      assert(!top.inDuct, 'a ducting pane is hit-tested at the click point: ' + JSON.stringify(top));
+      // A clickable path like Live's (interactive, transparent, on the map's
+      // canvas renderer, a popup on click) through the click point, plus a map listener.
+      const added = await lpg.evaluate((p) => {
+        const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
+        const r = m.getContainer().getBoundingClientRect();
+        const a = m.containerPointToLatLng([p.x - r.left - 60, p.y - r.top]), b = m.containerPointToLatLng([p.x - r.left + 60, p.y - r.top]);
+        window.__ductLive = { path: 0, map: 0 };
+        const poly = L.polyline([a, b], { weight: 12, opacity: 0, interactive: true }).addTo(m);
+        poly.on('click', (e) => { window.__ductLive.path++; L.popup({ className: 'path-info-popup' }).setLatLng(e.latlng).setContent('<div class="duct-test-path">path</div>').openOn(m); });
+        window.__ductLive.poly = poly;
+        window.__ductLive.onMap = () => { window.__ductLive.map++; };
+        m.on('click', window.__ductLive.onMap);
+        return { canvas: !!(poly._renderer && poly._renderer._container && poly._renderer._container.tagName === 'CANVAS'), pane: poly._renderer && poly._renderer.options.pane };
+      }, pt);
+      assert(added.canvas && added.pane === 'overlayPane', 'test path not on Live\'s overlay-pane canvas: ' + JSON.stringify(added));
+      await lpg.mouse.move(pt.x, pt.y - 2);
+      await lpg.mouse.move(pt.x, pt.y);
+      await sleep(100);
+      await lpg.mouse.click(pt.x, pt.y);
+      await sleep(400);
+      const res = await lpg.evaluate(() => {
+        const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
+        m.off('click', window.__ductLive.onMap);
+        const out = { path: window.__ductLive.path, map: window.__ductLive.map, pathPopup: !!document.querySelector('.leaflet-popup .duct-test-path'), ductPopup: !!document.querySelector('.leaflet-popup .mc-duct-popup') };
+        window.__ductLive.poly.remove();
+        m.closePopup();
+        return out;
+      });
+      assert(res.path === 1, 'Live\'s canvas path did not get the click: ' + JSON.stringify(res));
+      assert(res.map === 1, 'the map click did not propagate past the overlay: ' + JSON.stringify(res));
+      assert(res.pathPopup && !res.ductPopup, 'the path\'s popup must stay, no ducting popup over it: ' + JSON.stringify(res));
+      // A click on free map (no path) opens the ducting popup there.
+      await lpg.mouse.move(5, 5);
+      await lpg.mouse.click(pt.x, pt.y);
+      await lpg.waitForSelector('.leaflet-popup .mc-duct-popup', { timeout: 2500 });
+      await lpg.evaluate(() => window.__mcHarness.maps.forEach(m => m.closePopup && m.closePopup()));
+      assert(!lpg.__errors.length, lpg.__errors.slice(0, 3).join(' | '));
     });
 
     // ── Planner (opt-in) ──
@@ -690,7 +815,35 @@ async function run() {
         await pp.page.waitForSelector('label[data-tile-overlay-id="ducting"]', { state: 'attached', timeout: 25000 });
         assert(!pp.page.__errors.length, pp.page.__errors.slice(0, 3).join(' | '));
       });
-    } else skip('planner page: entry present', 'planner disabled on this server');
+      // Planner places a site on a map click (map.on('click') in planner.js).
+      // Interactive cells with popups used to stop that click everywhere in
+      // the forecast area.
+      await test('planner page: with the overlay on, a click inside the forecast area places a site (and opens no ducting popup)', async () => {
+        const pp = await track({ theme: 'light', overlays: ['ducting'] });
+        await gotoRoute(pp.page, '#/tools/planner?mode=coverage');
+        await waitCells(pp.page, data.cells.length);
+        await pp.page.waitForSelector('.mc-duct-legend', { state: 'visible' });
+        await pp.page.mouse.move(5, 5);
+        assert(!(await pp.page.locator('path.mc-pl-cov-site').count()), 'a site before any click');
+        const idx = await pp.page.evaluate(() => parseInt(document.querySelector('.mc-duct-time input[type=range]').value, 10));
+        // A cell with data at the shown hour, so its popup would open if the click went to the overlay.
+        const cell = data.cells.find(c => c.c[idx] >= 3) || data.cells.find(c => c.c[idx] >= 1);
+        const pts = await pointsIn(pp.page, cell, data.stepDeg, 4);
+        assert(pts.length, 'no free point in the cell');
+        await pp.page.mouse.click(pts[0].x, pts[0].y);
+        await pp.page.waitForSelector('path.mc-pl-cov-site', { timeout: 5000 }).catch(() => {});
+        await sleep(300);
+        const res = await pp.page.evaluate(() => ({ site: document.querySelectorAll('path.mc-pl-cov-site').length, duct: !!document.querySelector('.leaflet-popup .mc-duct-popup') }));
+        assert(res.site === 1, `no site placed by a click at ${cell.lat},${cell.lon} (overlay on): ` + JSON.stringify(res));
+        assert(!res.duct, 'the click placed a site and also opened the ducting popup over it');
+        const st = await pageState(pp.page);
+        assert(!st.interactive.length, 'interactive overlay layers: ' + st.interactive.join(','));
+        assert(!pp.page.__errors.length, pp.page.__errors.slice(0, 3).join(' | '));
+      });
+    } else {
+      skip('planner page: entry present', 'planner disabled on this server');
+      skip('planner page: a click inside the forecast area places a site', 'planner disabled on this server');
+    }
 
     // ── Config / API states ──
     await test('without ducting in the client config there is no overlay entry', async () => {
@@ -701,7 +854,7 @@ async function run() {
       assert((await np.page.locator('label[data-tile-overlay-id="ducting"]').count()) === 0, 'entry present');
       await sleep(400);
       const st = await pageState(np.page);
-      assert(!st.rects.length && !st.fields.length && !st.legends && !st.times, 'overlay drawn although the server has none');
+      assert(!st.cells && !st.fields.length && !st.legends && !st.times, 'overlay drawn although the server has none');
       assert(!np.page.__errors.length, np.page.__errors.slice(0, 3).join(' | '));
     });
 
@@ -717,7 +870,7 @@ async function run() {
         await sp.page.waitForSelector('.mc-duct-legend', { state: 'visible', timeout: 25000 });
         await sp.page.waitForFunction((src) => new RegExp(src).test((document.querySelector('.mc-duct-legend') || {}).textContent || ''), want.source, { timeout: 10000 });
         const st = await pageState(sp.page);
-        assert(!st.rects.length && !st.fields.length, 'cells or field drawn');
+        assert(!st.cells && !st.lora.length && !st.fields.length, 'cells or field drawn');
         const errs = sp.page.__errors.filter(e => !/Failed to load resource/.test(e));
         assert(!errs.length, errs.slice(0, 3).join(' | '));
       });

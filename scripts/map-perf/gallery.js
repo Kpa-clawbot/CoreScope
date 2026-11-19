@@ -313,7 +313,7 @@ async function capture(browser, e, views, outDir, base) {
     if (e.ducting) {
       const drawn = await page.waitForFunction(() => {
         const maps = ((window.__mcHarness && window.__mcHarness.maps) || []).filter((m) => m && m._container && m._container.isConnected && m._loaded);
-        let n = 0; maps.forEach((m) => m.eachLayer((l) => { if (l._mcCell) n++; }));
+        let n = 0; maps.forEach((m) => m.eachLayer((l) => { if (l._mcDuct) n += (l._cells || []).length; }));
         return n > 0 && !!document.querySelector('.mc-duct-legend');
       }, null, { timeout: 20000 }).then(() => true, () => false);
       if (!drawn) rec.failures.push('ducting cells or legend not drawn');
@@ -344,16 +344,19 @@ async function capture(browser, e, views, outDir, base) {
         const s = document.querySelector('.mc-duct-time input[type=range]');
         const idx = s ? parseInt(s.value, 10) : 0;
         // The duct cell nearest the view centre (the view's own cell; the
-        // restored view need not be exactly on the cell centre).
+        // restored view need not be exactly on the cell centre), opened the
+        // way a map click opens it.
         const c = m.getCenter();
-        let hit = null, best = Infinity;
-        m.eachLayer((l) => {
-          if (!l._mcCell || l._mcCell.c[idx] < 3) return;
-          const d = Math.pow(l._mcCell.lat - c.lat, 2) + Math.pow(l._mcCell.lon - c.lng, 2);
-          if (d < best) { best = d; hit = l; }
+        let layer = null, hit = null, best = Infinity;
+        m.eachLayer((l) => { if (l._mcDuct) layer = l; });
+        if (!layer) return false;
+        (layer._cells || []).forEach((cell) => {
+          if (cell.c[idx] < 3) return;
+          const d = Math.pow(cell.lat - c.lat, 2) + Math.pow(cell.lon - c.lng, 2);
+          if (d < best) { best = d; hit = cell; }
         });
         if (!hit) return false;
-        hit.openPopup([hit._mcCell.lat, hit._mcCell.lon]);
+        layer.openCellPopup(L.latLng(hit.lat, hit.lon));
         return !!document.querySelector('.leaflet-popup .mc-duct-popup');
       });
       if (!opened) rec.failures.push('no duct cell popup could be opened');
