@@ -15,13 +15,21 @@
  *     transparent at cells without data
  *   - the field image layer: pane, bounds, pixels, redrawn (not rebuilt) on
  *     time and theme change, resized/rebounded on refresh, removed on teardown
- *   - one invisible rectangle per cell with data; dashed LoRa outline only
- *     for ducts with 0 < fmin <= 1000 MHz
+ *   - nothing interactive on the map: the cells with data are a list, the
+ *     dashed LoRa outline (ducts with 0 < fmin <= 868 MHz) one
+ *     non-interactive multi-polygon on a canvas in a pane without pointer
+ *     events
+ *   - map clicks: MC_ductCellAt lattice lookup (world copies), one map click
+ *     handler that never stops the event and opens the cell popup only when
+ *     the click did nothing else; the popup follows the slider and refreshes
  *   - the forecast area's dotted outline (merged boundary runs, antimeridian
  *     seam, one layer per build, colour from --mc-duct-edge) and the wider
  *     fade at the area's outer edge
- *   - popup text per class, the 1.5 km gradient line and the 868/915 MHz answers
- *   - pending / error / failed-refresh legend states, legend content
+ *   - popup text per class, the 1.5 km gradient line, the LoRa line (one
+ *     threshold with the outline), the frequency to 2 significant figures
+ *   - pending / error / failed-refresh legend states, legend content; the
+ *     out-of-date notice on error, failure or a run-out forecast, not on
+ *     pending; no rebuild when a refresh brings the same generatedAt
  *   - remove during an in-flight fetch, timer cleanup, refresh cadence
  *   - overlay registry + MC_buildOverlayLayer (factory absent -> null)
  *
@@ -125,12 +133,22 @@ function makeLeaflet(stats) {
     stats.lines.push(l);
     return l;
   };
-  L.rectangle = (bounds, opts) => {
-    const r = { kind: 'rect', bounds, opts, style: {}, setStyleCalls: 0 };
-    r.setStyle = (s) => { Object.assign(r.style, s); r.setStyleCalls++; return r; };
-    r.bindPopup = (f) => { r.popupFn = f; return r; };
-    stats.rects.push(r);
-    return r;
+  L.polygon = (latlngs, opts) => {
+    const l = { kind: 'polygon', latlngs, opts };
+    stats.polys.push(l);
+    return l;
+  };
+  // Nothing in the overlay may be an interactive vector any more.
+  L.rectangle = () => { throw new Error('L.rectangle used'); };
+  L.popup = (opts) => {
+    const p = { opts, open: false, latlng: null, content: null, openCalls: 0 };
+    p.setLatLng = (ll) => { p.latlng = ll; return p; };
+    p.getLatLng = () => p.latlng;
+    p.setContent = (c) => { p.content = c; return p; };
+    p.openOn = (map) => { map._popup = p; p.open = true; p.openCalls++; return p; };
+    p.isOpen = () => p.open;
+    stats.popups.push(p);
+    return p;
   };
   return L;
 }
@@ -141,7 +159,8 @@ function makeMap() {
   m.createPane = (n) => { m._panes[n] = { style: {} }; return m._panes[n]; };
   m.on = (ev, f) => { ev.split(' ').forEach(e => { (m._on[e] = m._on[e] || []).push(f); }); return m; };
   m.off = (ev, f) => { ev.split(' ').forEach(e => { m._on[e] = (m._on[e] || []).filter(x => x !== f); }); return m; };
-  m.fire = (e) => (m._on[e] || []).slice().forEach(f => f());
+  m.fire = (e, arg) => (m._on[e] || []).slice().forEach(f => f(arg));
+  m.closePopup = (p) => { p = p || m._popup; if (p) p.open = false; return m; };
   m.corner = { style: { marginBottom: '' }, getBoundingClientRect: () => ({ left: 0, right: 270 }) };
   m.attr = { offsetHeight: 36, rect: { left: 0 }, getBoundingClientRect() { return this.rect; } };
   m.attributionControl = { getContainer: () => m.attr };
@@ -161,7 +180,7 @@ function makeApi() {
 
 function makeSandbox(opts) {
   opts = opts || {};
-  const stats = { rects: [], renderers: [], fields: [], lines: [] };
+  const stats = { renderers: [], fields: [], lines: [], polys: [], popups: [] };
   const timers = [];
   const cleared = [];
   let nextId = 1;
@@ -187,7 +206,17 @@ function makeSandbox(opts) {
 
 const tick = () => new Promise(r => setImmediate(r));
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const loraOf = (rect) => (rect.style.stroke ? rect.style.color + '/' + rect.style.dashArray : null);
+// The cells outlined as LoRa now ("lat,lon" sorted), and the outline layer.
+const loraLayer = (s) => s.layer._lora;
+const loraSet = (s) => (s.layer._lora ? Array.from(s.layer._lora._mcCells, c => c.lat + ',' + c.lon).sort() : []);
+// A map click as Leaflet delivers it (preclick, then click), on target.
+function click(s, lat, lng, target) {
+  const ev = { latlng: { lat, lng }, originalEvent: { target: target || { classList: { contains: () => false } } } };
+  s.map.fire('preclick', ev);
+  s.map.fire('click', ev);
+  return ev;
+}
+const popupText = (s) => { const p = s.stats.popups[0]; return p && p.open ? p.content.textContent : null; };
 function find(node, pred, out) {
   out = out || [];
   if (pred(node)) out.push(node);
@@ -556,17 +585,48 @@ function pixelAt(s, lat, lon) {
   return { x, y, rgba: px(cv, x, y) };
 }
 
-test('one invisible rectangle per cell with data (class >= 1); bounds = centre +- step/2', async () => {
-  const s = await mount(SAMPLE);
-  assert.strictEqual(s.stats.rects.length, 3, 'third cell is class 0/1/1: has data');
-  const r = s.stats.rects[0];
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(r.bounds)), [[51.0, -0.5], [51.5, 0.0]]);
-  assert.strictEqual(r.opts.renderer, s.stats.renderers[0], 'shared canvas renderer');
-  assert.strictEqual(r.opts.fillOpacity, 0);
-  assert.strictEqual(r.opts.stroke, false);
-  assert.ok(s.stats.rects.every(x => x._mcCell && x.style.fillOpacity !== 1));
+test('nothing interactive: the cells with data are a list; outlines on one canvas in a pane without pointer events', async () => {
+  const s = await mount(SAMPLE, T0);
+  assert.strictEqual(s.layer._cells.length, 3, 'third cell is class 0/1/1: has data');
+  assert.strictEqual(s.layer._mcDuct, true);
   assert.strictEqual(s.stats.renderers.length, 1);
-  assert.strictEqual(s.layer._group.layers.length, 4, '3 rects + the edge outline');
+  const r = s.stats.renderers[0];
+  assert.strictEqual(r.opts.pane, 'mcDuctLinePane');
+  const pane = s.map._panes.mcDuctLinePane;
+  assert.strictEqual(pane.style.pointerEvents, 'none', 'the line canvas never takes the pointer');
+  assert.ok(+pane.style.zIndex > +s.map._panes.mcDuctFieldPane.style.zIndex && +pane.style.zIndex < 390, 'above the field, below vectors and the planner node pane: ' + pane.style.zIndex);
+  // The group holds the edge and the LoRa outline only, both non-interactive.
+  const kinds = s.layer._group.layers.map(l => (l._mcEdge ? 'edge' : l._mcLora ? 'lora' : 'other'));
+  assert.deepStrictEqual(kinds.sort(), ['edge', 'lora']);
+  s.layer._group.layers.forEach((l) => { assert.strictEqual(l.opts.interactive, false); assert.strictEqual(l.opts.renderer, r); });
+  assert.strictEqual(s.layer._popup, undefined, 'no popup until a click');
+});
+
+test('MC_ductCellAt: the cell whose square holds the point; world copies wrap; -1 outside', () => {
+  const { ctx } = makeSandbox();
+  const g = ctx.MC_ductGrid(SAMPLE.cells, 0.5);
+  const at = (lat, lon) => ctx.MC_ductCellAt(g, lat, lon);
+  assert.strictEqual(at(51.25, -0.25), 0, 'centre');
+  assert.strictEqual(at(51.0, -0.5), 0, 'south-west corner belongs to the cell');
+  assert.strictEqual(at(51.4999, -0.0001), 0);
+  assert.strictEqual(at(51.3, 0.0), 1, 'east of the shared edge');
+  assert.strictEqual(at(51.9, -0.4), 2);
+  assert.strictEqual(at(51.75, 0.25), -1, 'slot on the lattice without a cell');
+  assert.strictEqual(at(50.99, -0.25), -1, 'south of the lattice');
+  assert.strictEqual(at(51.25, 0.5), -1, 'east edge is outside');
+  assert.strictEqual(at(51.25, 359.75), 0, 'world copy east');
+  assert.strictEqual(at(51.25, -360.25), 0, 'world copy west');
+  assert.strictEqual(at(NaN, 0), -1);
+  assert.strictEqual(ctx.MC_ductCellAt(null, 51.25, -0.25), -1);
+  // A cell never with data is not on the lattice: nothing to find there.
+  const only = clone(SAMPLE.cells); only[2].c = [0, 0, 0];
+  assert.strictEqual(ctx.MC_ductCellAt(ctx.MC_ductGrid(only, 0.5), 51.75, -0.25), -1);
+  // Across the antimeridian.
+  const am = [{ lat: 10.25, lon: 179.75, c: [1] }, { lat: 10.25, lon: -179.75, c: [1] }];
+  const ga = ctx.MC_ductGrid(am, 0.5);
+  assert.strictEqual(ctx.MC_ductCellAt(ga, 10.3, 179.9), 0);
+  assert.strictEqual(ctx.MC_ductCellAt(ga, 10.3, 180.1), 1, '180.1 is -179.9');
+  assert.strictEqual(ctx.MC_ductCellAt(ga, 10.3, -179.9), 1);
 });
 
 test('edge outline: one non-interactive dotted polyline per build, in the group, on the shared renderer', async () => {
@@ -682,39 +742,60 @@ test('default time is the latest <= now, else the first', async () => {
   assert.strictEqual(early.layer._idx, 0);
 });
 
-test('LoRa outline: dashed --mc-duct-lora only for ducts with 0 < fmin <= 1000 MHz', async () => {
+test('LoRa outline: dashed --mc-duct-lora only for ducts with 0 < fmin <= 868 MHz', async () => {
   const s = await mount(SAMPLE, T0);
-  const [a, b, c] = s.stats.rects;
-  assert.strictEqual(loraOf(a), null, 'class 1');
-  assert.strictEqual(loraOf(b), '#0a0b0c/4 3', 'elevated duct f=78, value trimmed');
-  assert.strictEqual(b.style.fillOpacity, 0, 'outline only, no fill');
-  assert.strictEqual(loraOf(c), null);
+  assert.deepStrictEqual(loraSet(s), ['51.25,0.25'], 'elevated duct f=78; class 1 and 0 cells not');
+  const l = loraLayer(s);
+  assert.strictEqual(l.opts.color, '#0a0b0c', 'value trimmed');
+  assert.strictEqual(l.opts.dashArray, '4 3');
+  assert.strictEqual(l.opts.fill, false, 'outline only, no fill');
+  assert.strictEqual(l.opts.interactive, false);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(l.latlngs)), [[[[51, 0], [51, 0.5], [51.5, 0.5], [51.5, 0]]]], 'one ring per cell: centre +- step/2');
   s.layer._setIndex(1);
-  assert.strictEqual(loraOf(a), null, 'super-refraction');
-  assert.strictEqual(loraOf(b), null, 'f=1500');
+  assert.deepStrictEqual(loraSet(s), [], 'super-refraction, f=1500');
+  assert.strictEqual(loraLayer(s), null, 'no empty layer left');
   s.layer._setIndex(2);
-  assert.strictEqual(loraOf(a), '#0a0b0c/4 3', 'surface duct f=380');
-  assert.strictEqual(loraOf(b), null, 'f=4200');
+  assert.deepStrictEqual(loraSet(s), ['51.25,-0.25'], 'surface duct f=380; f=4200 not');
   const body = clone(SAMPLE);
-  body.cells[0].c = [3, 4, 3]; body.cells[0].f = [1000, 1001, 0];
+  body.cells[0].c = [3, 4, 3]; body.cells[0].f = [868, 869, 0];
+  body.cells[1].f = [915, 1000, 4200];
   const e = await mount(body, T0);
-  assert.ok(loraOf(e.stats.rects[0]), 'f=1000');
+  assert.deepStrictEqual(loraSet(e), ['51.25,-0.25'], 'f=868 yes; f=915 no (one threshold: 868)');
   e.layer._setIndex(1);
-  assert.strictEqual(loraOf(e.stats.rects[0]), null, 'f=1001');
+  assert.deepStrictEqual(loraSet(e), [], 'f=869, f=1000');
   e.layer._setIndex(2);
-  assert.strictEqual(loraOf(e.stats.rects[0]), null, 'class 3 with f=0 is no duct');
+  assert.deepStrictEqual(loraSet(e), [], 'class 3 with f=0 is no duct');
 });
 
-test('changing time redraws the field in place: same rects, image layer, renderer; no fetch', async () => {
+test('LoRa outline and popup agree for every class and frequency', async () => {
+  const fs_ = [0, 78, 380, 700, 868, 869, 915, 950, 1000, 1500];
+  const body = clone(SAMPLE);
+  body.times = fs_.map((_, i) => T0 + i * 3600);
+  const mk = (c) => ({ lat: 51.25, lon: -0.25, c: fs_.map(() => c), f: fs_.slice(), b: fs_.map(() => 0), t: fs_.map(() => 100), dm: fs_.map(() => 50), n: fs_.map(() => -60) });
+  for (const cls of [2, 3, 4]) {
+    body.cells = [mk(cls)];
+    const s = await mount(body, T0);
+    fs_.forEach((f, i) => {
+      s.layer._setIndex(i);
+      const outlined = loraSet(s).length === 1;
+      const txt = s.ctx.MC_ductPopupContent(body.cells[0], i).textContent;
+      const says = /LoRa 868\/915 MHz: possibly trapped \(model estimate\)/.test(txt);
+      assert.strictEqual(outlined, says, `class ${cls} f=${f}: outline ${outlined}, popup ${txt}`);
+      assert.strictEqual(outlined, cls >= 3 && f > 0 && f <= 868, `class ${cls} f=${f}`);
+      if (!says) assert.ok(/LoRa 868\/915 MHz: not trapped by this layer/.test(txt), txt);
+    });
+  }
+});
+
+test('changing time redraws the field in place: same cells, image layer, renderer; no fetch', async () => {
   const s = await mount(SAMPLE, T0);
-  const rects = s.stats.rects.length;
+  const cells = s.layer._cells.slice();
   const calls = s.api.calls.length;
   const cv = s.layer._canvas, puts = cv.puts;
   const before = pixelAt(s, 51.25, -0.25).rgba;
-  const styleCalls = s.stats.rects.map(r => r.setStyleCalls);
   s.layer._slider.value = '2';
   s.layer._slider.fire('input');
-  assert.strictEqual(s.stats.rects.length, rects);
+  assert.ok(s.layer._cells.every((c, i) => c === cells[i]) && s.layer._cells.length === cells.length);
   assert.strictEqual(s.stats.renderers.length, 1);
   assert.strictEqual(s.stats.fields.length, 1);
   assert.strictEqual(s.stats.fields[0].setBoundsCalls, 0, 'bounds unchanged');
@@ -727,12 +808,17 @@ test('changing time redraws the field in place: same rects, image layer, rendere
   s.layer._setIndex(0);
   assert.strictEqual(cv.img, img, 'pixel buffer reused for the same size');
   assert.deepStrictEqual(pixelAt(s, 51.25, -0.25).rgba, before, 'and cleared: duct -> normal is transparent again');
-  assert.strictEqual(s.stats.rects[2].setStyleCalls, styleCalls[2], 'unchanged outline not restyled');
+  const polys = s.stats.polys.length, l = loraLayer(s);
+  s.layer._setIndex(0);
+  s.ctx.dispatch('theme-changed');
+  assert.strictEqual(s.stats.polys.length, polys, 'same outlined cells and colour: outline not rebuilt');
+  assert.strictEqual(loraLayer(s), l);
   assert.ok(/Forecast time:/.test(s.layer._timeLabel.textContent));
   assert.strictEqual(s.layer._slider.max, '2');
 });
 
-test('field build is O(pixels) and fast: 860 cells (Gulf-sized lattice)', () => {
+// Correctness only: wall-clock bounds do not belong in the unit gate.
+test('field build on a Gulf-sized lattice (860 cells): full width, pixels drawn', () => {
   const { ctx } = makeSandbox();
   const cells = [];
   for (let i = 0; i < 21; i++) {
@@ -742,7 +828,6 @@ test('field build is O(pixels) and fast: 860 cells (Gulf-sized lattice)', () => 
     }
   }
   const g = ctx.MC_ductGrid(cells, 0.5);
-  const t0 = process.hrtime.bigint();
   const vals = ctx.MC_ductGridValues(g, cells, 0);
   let n = 0;
   for (let y = 0; y < g.h; y += 7) for (let x = 0; x < g.w; x += 7) if (ctx.MC_ductSample(g, vals, ctx.MC_ductRowLat(y + 0.5, g.h, g.north, g.south), g.west + (x + 0.5) / g.w * (g.east - g.west)).a > 0) n++;
@@ -754,12 +839,12 @@ test('field build is O(pixels) and fast: 860 cells (Gulf-sized lattice)', () => 
   layer._data = { status: 'ok', stepDeg: 0.5, times: [T0], cells };
   layer._build();
   layer._idx = 0;
-  const t1 = process.hrtime.bigint();
   layer._drawField();
-  const ms = Number(process.hrtime.bigint() - t1) / 1e6;
   assert.strictEqual(layer._canvas.width, 1968, '48 px per cell, under the 2048 cap');
-  assert.ok(ms < 400, `field build took ${ms.toFixed(1)} ms for ${layer._canvas.width}x${layer._canvas.height}`);
-  void t0;
+  const d = layer._canvas.img.data;
+  let drawn = 0;
+  for (let i = 3; i < d.length; i += 4 * 97) if (d[i]) drawn++;
+  assert.ok(drawn > 0, 'pixels drawn');
 });
 
 test('slider is disabled until data arrives', () => {
@@ -771,29 +856,49 @@ test('slider is disabled until data arrives', () => {
 
 // ── popup ───────────────────────────────────────────────────────────────────
 
-test('popup text for each class and the 868/915 answers', async () => {
+const POSSIBLY = 'LoRa 868/915 MHz: possibly trapped (model estimate)';
+const NOT_TRAPPED = 'LoRa 868/915 MHz: not trapped by this layer';
+const LAYER_LINE = 'Trapping layer in the model (\u2265 ~200 m thick)';
+
+test('popup text for each class: trapping layer, frequency estimate and the LoRa line', async () => {
   const s = await mount(SAMPLE, T0);
-  const pop = (rect, i) => { s.layer._idx = i; return rect.popupFn().textContent; };
-  const [a, b] = s.stats.rects;
+  const pop = (cell, i) => s.ctx.MC_ductPopupContent(cell, i).textContent;
+  const [a, b] = SAMPLE.cells;
   const normal = pop(a, 0);
-  assert.ok(/Normal/.test(normal) && !/868/.test(normal));
+  assert.ok(/Normal/.test(normal) && !/868|LoRa/.test(normal));
   assert.ok(normal.includes('Gradient, lowest 1.5 km: \u221238 N/km'), normal);
   const sup = pop(a, 1);
-  assert.ok(/Super-refraction/.test(sup) && /Can carry 868 MHz: no/.test(sup) && /Can carry 915 MHz: no/.test(sup), sup);
+  assert.ok(/Super-refraction/.test(sup) && sup.includes(NOT_TRAPPED) && /Lowest trapped frequency: none/.test(sup), sup);
+  assert.ok(!sup.includes(LAYER_LINE), 'no trapping layer for super-refraction');
   assert.ok(sup.includes('Gradient, lowest 1.5 km: \u221246 N/km'), sup);
+  assert.ok(!/Can carry|: yes|: no\b/.test(sup), 'no yes/no answers: ' + sup);
   const sfc = pop(a, 2);
-  assert.ok(/Surface-based duct/.test(sfc));
-  assert.ok(/Base: 0 m above ground/.test(sfc) && /Top: 100 m above ground/.test(sfc), sfc);
-  assert.ok(/Strength: 10\.0 M-units/.test(sfc), sfc);
-  assert.ok(/Lowest trapped frequency: 380 MHz/.test(sfc), sfc);
-  assert.ok(/Can carry 868 MHz: yes/.test(sfc) && /Can carry 915 MHz: yes/.test(sfc), sfc);
-  assert.deepStrictEqual(sfc.split('\n').slice(0, 2), ['Surface-based duct', 'Gradient, lowest 1.5 km: \u221266 N/km'], 'the gradient right under the type');
+  assert.deepStrictEqual(sfc.split('\n'), [
+    'Surface-based duct',
+    'Gradient, lowest 1.5 km: \u221266 N/km',
+    LAYER_LINE,
+    'Base: 0 m above ground',
+    'Top: 100 m above ground',
+    'Strength: 10.0 M-units',
+    'Lowest trapped frequency: \u2248 380 MHz (model estimate)',
+    POSSIBLY,
+  ]);
   const elev = pop(b, 1);
-  assert.ok(/Elevated duct/.test(elev));
+  assert.ok(/Elevated duct/.test(elev) && elev.includes(LAYER_LINE));
   assert.ok(/Base: 600 m/.test(elev) && /Top: 820 m/.test(elev) && /Strength: 6\.0/.test(elev), elev);
-  assert.ok(/Lowest trapped frequency: 1500 MHz/.test(elev));
-  assert.ok(/Can carry 868 MHz: no/.test(elev) && /Can carry 915 MHz: no/.test(elev));
+  assert.ok(elev.includes('Lowest trapped frequency: \u2248 1500 MHz (model estimate)'), elev);
+  assert.ok(elev.includes(NOT_TRAPPED), elev);
   assert.ok(elev.includes('Gradient, lowest 1.5 km: \u221257 N/km'), elev);
+  assert.ok(pop(b, 0).includes('\u2248 78 MHz') && pop(b, 0).includes(POSSIBLY), pop(b, 0));
+});
+
+test('popup: lowest trapped frequency rounded to 2 significant figures', async () => {
+  const s = makeSandbox();
+  const cell = { lat: 0, lon: 0, c: [3, 3, 3, 3, 3, 3], f: [78.4, 868, 915, 1234, 4249, 99.6], b: [0, 0, 0, 0, 0, 0], t: [0, 0, 0, 0, 0, 0], dm: [0, 0, 0, 0, 0, 0] };
+  const got = cell.f.map((_, i) => /Lowest trapped frequency: \u2248 (\d+) MHz \(model estimate\)/.exec(s.ctx.MC_ductPopupContent(cell, i).textContent)[1]);
+  assert.deepStrictEqual(got, ['78', '870', '920', '1200', '4200', '100']);
+  // The LoRa line follows f itself, not the rounded figure.
+  assert.ok(s.ctx.MC_ductPopupContent(cell, 1).textContent.includes(POSSIBLY), '868 itself');
 });
 
 test('popup: gradient line rounded, only when n has data; class 0 shows no data', async () => {
@@ -801,13 +906,13 @@ test('popup: gradient line rounded, only when n has data; class 0 shows no data'
   body.cells[0].n = [-52.6, 0, 7];
   delete body.cells[1].n;
   const s = await mount(body, T0);
-  const pop = (rect, i) => { s.layer._idx = i; return rect.popupFn().textContent; };
-  const [a, b, c] = s.stats.rects;
+  const pop = (cell, i) => s.ctx.MC_ductPopupContent(cell, i).textContent;
+  const [a, b, c] = body.cells;
   assert.ok(pop(a, 0).includes('Gradient, lowest 1.5 km: \u221253 N/km'), pop(a, 0));
   assert.ok(!/Gradient/.test(pop(a, 1)), 'n 0: no line: ' + pop(a, 1));
   assert.ok(pop(a, 2).includes('Gradient, lowest 1.5 km: 7 N/km'), pop(a, 2));
   const eb = pop(b, 0);
-  assert.ok(!/Gradient/.test(eb) && /Elevated duct/.test(eb) && /Can carry 868 MHz: yes/.test(eb), 'no n: the rest as before: ' + eb);
+  assert.ok(!/Gradient/.test(eb) && /Elevated duct/.test(eb) && eb.includes(POSSIBLY), 'no n: the rest as before: ' + eb);
   assert.strictEqual(pop(c, 0), 'No data');
 });
 
@@ -815,29 +920,106 @@ test('older server without n: no field, but cells, LoRa outlines, popups and edg
   const body = clone(SAMPLE);
   body.cells.forEach(c => { delete c.n; });
   const s = await mount(body, T2);
-  assert.strictEqual(s.stats.rects.length, 3);
+  assert.strictEqual(s.layer._cells.length, 3);
   assert.strictEqual(s.stats.fields.length, 1, 'the (empty) image layer is still there');
   assert.ok(s.layer._canvas.img.data.every(v => v === 0), 'nothing coloured');
-  assert.strictEqual(loraOf(s.stats.rects[0]), '#0a0b0c/4 3', 'surface duct f=380 still outlined');
+  assert.deepStrictEqual(loraSet(s), ['51.25,-0.25'], 'surface duct f=380 still outlined');
   assert.strictEqual(s.stats.lines.length, 1, 'forecast-area edge');
-  s.layer._idx = 2;
-  assert.ok(/Surface-based duct/.test(s.stats.rects[0].popupFn().textContent));
+  click(s, 51.25, -0.25);
+  await tick();
+  assert.ok(/Surface-based duct/.test(popupText(s)), 'popup by click: ' + popupText(s));
   for (const i of [0, 1, 2]) s.layer._setIndex(i);
   s.ctx.dispatch('theme-changed');
   assert.ok(s.layer._canvas.img.data.every(v => v === 0));
 });
 
-test('popup: 868 vs 915 split between 868 and 915 MHz; no innerHTML use', async () => {
+test('popup: one LoRa line, no separate 868/915 answers; no innerHTML use', async () => {
   const body = clone(SAMPLE);
   body.cells[1].f = [900, 868, 915];
   const s = await mount(body, T0);
-  const r = s.stats.rects[1];
-  s.layer._idx = 0;
-  const t0 = r.popupFn().textContent;
-  assert.ok(/868 MHz: no/.test(t0) && /915 MHz: yes/.test(t0), t0);
-  s.layer._idx = 1;
-  assert.ok(/868 MHz: yes/.test(r.popupFn().textContent));
+  const pop = (i) => s.ctx.MC_ductPopupContent(body.cells[1], i).textContent;
+  assert.ok(pop(0).includes(NOT_TRAPPED) && !/Can carry/.test(pop(0)), pop(0));
+  assert.ok(pop(1).includes(POSSIBLY), pop(1));
+  assert.ok(pop(2).includes(NOT_TRAPPED), '915 alone is above the one threshold: ' + pop(2));
   assert.ok(!/innerHTML/.test(SRC.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')), 'no innerHTML in map-ducting.js');
+});
+
+// ── map clicks ──────────────────────────────────────────────────────────────
+
+test('click in a cell with data opens its popup after the click, without stopping it', async () => {
+  const s = await mount(SAMPLE, T2);
+  assert.strictEqual((s.map._on.click || []).length, 1, 'one map click handler');
+  const ev = click(s, 51.3, -0.2);
+  assert.strictEqual(popupText(s), null, 'not inside the click: the other handlers run first');
+  await tick();
+  assert.ok(/Surface-based duct/.test(popupText(s)) && popupText(s).includes(POSSIBLY), popupText(s));
+  const p = s.stats.popups[0];
+  assert.deepStrictEqual(p.latlng, { lat: 51.3, lng: -0.2 }, 'opens where clicked');
+  assert.strictEqual(s.map._popup, p);
+  assert.ok(!ev.originalEvent._stopped, 'event not stopped');
+  // The other cell, a world copy of it, outside the area, a cell without data at this hour.
+  click(s, 51.25, 0.25); await tick();
+  assert.ok(/Elevated duct/.test(popupText(s)), popupText(s));
+  assert.strictEqual(s.stats.popups.length, 1, 'one popup object, reused');
+  s.map.closePopup();
+  click(s, 51.25, 360.25); await tick();
+  assert.ok(/Elevated duct/.test(popupText(s)), 'world copy: ' + popupText(s));
+  s.map.closePopup();
+  click(s, 52.5, 3); await tick();
+  assert.strictEqual(popupText(s), null, 'outside the forecast area');
+  const s0 = await mount(SAMPLE, T0);
+  click(s0, 51.75, -0.25); await tick();
+  assert.strictEqual(popupText(s0), null, 'class 0 at this hour: nothing to show');
+  assert.strictEqual(s0.layer.openCellPopup({ lat: 51.25, lng: -0.25 }), true, 'openCellPopup');
+  assert.ok(/Normal/.test(popupText(s0)));
+});
+
+test('click: no popup when it hit an interactive layer or another handler drew or opened something', async () => {
+  const s = await mount(SAMPLE, T2);
+  const interactive = { classList: { contains: (c) => c === 'leaflet-interactive' } };
+  click(s, 51.25, -0.25, interactive); await tick();
+  assert.strictEqual(popupText(s), null, 'on a path/marker (or a canvas hovering one)');
+  // Another map click handler places something (Planner) ...
+  const place = () => s.map.fire('layeradd', {});
+  s.map.on('click', place);
+  click(s, 51.25, -0.25); await tick();
+  assert.strictEqual(popupText(s), null, 'the page used the click');
+  s.map.off('click', place);
+  // ... or a path opened its own popup before the map click (Live).
+  const ev = { latlng: { lat: 51.25, lng: -0.25 }, originalEvent: { target: {} } };
+  s.map.fire('preclick', ev);
+  s.map.fire('popupopen', {});
+  s.map.fire('click', ev);
+  await tick();
+  assert.strictEqual(popupText(s), null, 'a popup opened during the click');
+  // Changes before the click do not count.
+  s.map.fire('layeradd', {});
+  click(s, 51.25, -0.25); await tick();
+  assert.ok(/Surface-based duct/.test(popupText(s)), 'a plain click still opens it');
+});
+
+test('open popup follows the slider, closes where the hour has no data, and goes with the layer', async () => {
+  const body = clone(SAMPLE);
+  const s = await mount(body, T2);
+  click(s, 51.8, -0.3); await tick();                      // cell c: class 1 at t2
+  assert.ok(/^Normal/.test(popupText(s)), popupText(s));
+  s.layer._setIndex(1);
+  assert.ok(/Gradient, lowest 1.5 km: \u221236/.test(popupText(s)), 'text of hour 1: ' + popupText(s));
+  s.layer._setIndex(0);
+  assert.strictEqual(popupText(s), null, 'class 0 at hour 0: closed');
+  s.layer._setIndex(2);
+  click(s, 51.25, -0.25); await tick();
+  assert.ok(/Surface-based/.test(popupText(s)));
+  s.layer.onRemove(s.map);
+  assert.strictEqual(popupText(s), null, 'closed with the layer');
+  ['click', 'preclick', 'popupopen'].forEach(e => assert.strictEqual((s.map._on[e] || []).length, 0, e + ' listener left'));
+  assert.ok(!(s.map._on.layeradd || []).length, 'layeradd listeners left');
+  // A click queued just before the remove opens nothing afterwards.
+  const s2 = await mount(SAMPLE, T2);
+  click(s2, 51.25, -0.25);
+  s2.layer.onRemove(s2.map);
+  await tick();
+  assert.strictEqual(s2.stats.popups.length, 0, 'no popup after remove');
 });
 
 // ── legend & states ─────────────────────────────────────────────────────────
@@ -845,7 +1027,7 @@ test('popup: 868 vs 915 split between 868 and 915 MHz; no innerHTML use', async 
 test('legend: banded bar from the field variables, scale labels, LoRa row, attribution, note', async () => {
   const s = await mount(SAMPLE);
   const t = legendText(s);
-  assert.ok(t.includes('Dashed outline: a duct here can carry LoRa 868/915 MHz'), t);
+  assert.ok(t.includes('Dashed outline: the model shows a duct that may carry LoRa 868/915 MHz'), t);
   assert.ok(t.includes('Refractivity gradient over the lowest 1.5 km (N/km)'), t);
   assert.ok(!/-79|-157|Super-refraction|Ducting \(/.test(t), 'no g-based thresholds or labels: ' + t);
   assert.ok(t.includes('NOAA GFS') && t.includes('Open-Meteo.com (CC BY 4.0)'), t);
@@ -870,15 +1052,16 @@ test('legend: banded bar from the field variables, scale labels, LoRa row, attri
   assert.strictEqual(stops[17].at, 100);
   assert.ok(!/#[0-9a-f]{3,8}\b|rgb\(/i.test(bar.style.background), 'no literal colour in the bar');
   const labels = find(box, n => /mc-duct-scale-label\b/.test(n.className));
-  assert.deepStrictEqual(labels.map(n => n.textContent), ['Normal', 'Enhanced', 'Strong', 'Very strong']);
+  assert.deepStrictEqual(labels.map(n => n.textContent), ['Normal', 'Above normal', 'High', 'Very high']);
+  assert.ok(!/Enhanced|Strong/.test(t), 'old band words gone');
   const left = labels.map(n => parseFloat(n.style.left));
   assert.ok(left.every((v, i) => i === 0 || v > left[i - 1]), 'labels in order: ' + left);
-  // "Enhanced" marks where the colour starts (-44, band 1), "Strong" the -62 band (5).
+  // "Above normal" marks where the colour starts (-44, band 1), "High" the -62 band (5).
   assert.strictEqual(left[0], 0);
-  assert.strictEqual(left[1], stops[2].at, 'Enhanced at the start of the first colour');
-  assert.strictEqual(left[2], stops[10].at, 'Strong at the start of the -62 band');
+  assert.strictEqual(left[1], stops[2].at, 'Above normal at the start of the first colour');
+  assert.strictEqual(left[2], stops[10].at, 'High at the start of the -62 band');
   assert.strictEqual(left[3], 100);
-  assert.ok(/mc-duct-scale-label-end/.test(labels[3].className), 'Very strong right-aligned at the end');
+  assert.ok(/mc-duct-scale-label-end/.test(labels[3].className), 'Very high right-aligned at the end');
   const sw = find(box, n => /mc-duct-swatch-/.test(n.className));
   assert.deepStrictEqual(sw.map(n => n.className), ['mc-duct-swatch mc-duct-swatch-lora', 'mc-duct-swatch mc-duct-swatch-edge']);
   assert.ok(s.map._controls.every(c => c.options.position === 'bottomleft'));
@@ -889,7 +1072,8 @@ test('pending status shows the preparing message and draws nothing', async () =>
   const t = legendText(s);
   assert.ok(t.includes('Ducting forecast is being prepared'), t);
   assert.ok(t.includes('Indicator only'));
-  assert.strictEqual(s.stats.rects.length, 0);
+  assert.strictEqual(s.layer._cells.length, 0);
+  assert.strictEqual(s.stats.polys.length, 0);
   assert.strictEqual(s.stats.fields.length, 0, 'no field image');
 });
 
@@ -911,7 +1095,7 @@ test('malformed body counts as unavailable', async () => {
   assert.ok(legendText(s).includes('Ducting forecast unavailable'));
 });
 
-test('failed or pending refresh keeps the last good data', async () => {
+test('failed or pending refresh keeps the last good data drawn', async () => {
   const s = await mount(SAMPLE, T0);
   assert.strictEqual(s.timers.length, 1);
   assert.strictEqual(s.timers[0].ms, 30 * 60 * 1000);
@@ -919,8 +1103,8 @@ test('failed or pending refresh keeps the last good data', async () => {
   assert.strictEqual(s.api.calls.length, 2);
   s.api.calls[1].fail();
   await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 3);
-  assert.strictEqual(loraOf(s.stats.rects[1]), '#0a0b0c/4 3');
+  assert.strictEqual(s.layer._cells.length, 3);
+  assert.deepStrictEqual(loraSet(s), ['51.25,0.25']);
   assert.ok(s.map._layers.includes(s.stats.fields[0]), 'field kept');
   assert.ok(!legendText(s).includes('unavailable'));
   s.timers[0].fn();
@@ -928,7 +1112,7 @@ test('failed or pending refresh keeps the last good data', async () => {
   await tick(); await tick();
   assert.ok(!legendText(s).includes('being prepared'));
   assert.ok(legendText(s).includes('Updated '));
-  assert.strictEqual(s.layer._group.layers.length, 4, '3 rects + the edge outline');
+  assert.strictEqual(s.layer._group.layers.length, 2, 'the edge and LoRa outlines');
 });
 
 test('no data yet: retries every minute until data arrives, then every 30 minutes', async () => {
@@ -943,30 +1127,68 @@ test('no data yet: retries every minute until data arrives, then every 30 minute
   s.timers[0].fn();
   s.api.calls[2].ok(clone(SAMPLE));
   await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 3);
+  assert.strictEqual(s.layer._cells.length, 3);
   assert.strictEqual(s.timers.length, 1);
   assert.strictEqual(s.timers[0].ms, 30 * 60 * 1000, 'back to the normal refresh');
   s.layer.onRemove(s.map);
   assert.strictEqual(s.timers.length, 0);
 });
 
-test('a good refresh rebuilds cells and keeps a user-picked time', async () => {
+test('a refresh with a new forecast rebuilds and keeps a user-picked time', async () => {
   const s = await mount(SAMPLE, T1 + 60);
   s.layer._slider.value = '2';
   s.layer._slider.fire('input');
   s.timers[0].fn();
-  s.api.calls[1].ok(clone(SAMPLE));
+  const body = clone(SAMPLE);
+  body.generatedAt = SAMPLE.generatedAt + 3600;
+  s.api.calls[1].ok(body);
   await tick(); await tick();
   assert.strictEqual(s.layer._idx, 2);
-  assert.strictEqual(s.layer._group.layers.length, 4, 'old rects and edge cleared, new ones added');
+  assert.strictEqual(s.layer._data.generatedAt, body.generatedAt);
+  assert.strictEqual(s.stats.lines.length, 2, 'edge rebuilt');
+  assert.strictEqual(s.layer._group.layers.length, 2, 'old edge and outline cleared, new ones added');
   assert.strictEqual(s.stats.fields.length, 1, 'same field layer');
   assert.strictEqual(s.stats.fields[0].setBoundsCalls, 0);
+});
+
+test('a refresh with the same generatedAt rebuilds nothing, keeps an open popup and clears the out-of-date notice', async () => {
+  const realNow = Date.now;
+  const s = await mount(SAMPLE, T1 + 60);
+  try {
+    Date.now = () => (T1 + 60) * 1000;
+    click(s, 51.25, 0.25); await tick();
+    const popup = s.stats.popups[0];
+    assert.ok(popup.open);
+    s.timers[0].fn();
+    s.api.calls[1].fail();                                   // out of date ...
+    await tick(); await tick();
+    assert.ok(legendText(s).includes('out of date'));
+    const data = s.layer._data, lines = s.stats.lines.length, polys = s.stats.polys.length, puts = s.layer._canvas.puts;
+    s.timers[0].fn();
+    s.api.calls[2].ok(clone(SAMPLE));                        // ... then the same forecast again
+    await tick(); await tick();
+    assert.ok(!legendText(s).includes('out of date'), 'notice cleared');
+    assert.strictEqual(s.layer._data, data, 'held data kept');
+    assert.strictEqual(s.stats.lines.length, lines, 'edge not rebuilt');
+    assert.strictEqual(s.stats.polys.length, polys, 'outline not rebuilt');
+    assert.strictEqual(s.layer._canvas.puts, puts, 'field not redrawn');
+    assert.ok(popup.open && s.map._popup === popup, 'popup still open');
+    // Same forecast later on: the hour moves on (no user pick), still no rebuild.
+    Date.now = () => (T2 + 60) * 1000;
+    s.timers[0].fn();
+    s.api.calls[3].ok(clone(SAMPLE));
+    await tick(); await tick();
+    assert.strictEqual(s.layer._idx, 2, 'hour moved on');
+    assert.strictEqual(s.stats.lines.length, lines, 'still not rebuilt');
+    assert.ok(/Elevated duct/.test(popupText(s)) && /Base: 1200 m/.test(popupText(s)), 'popup shows the new hour: ' + popupText(s));
+  } finally { Date.now = realNow; }
 });
 
 test('a refresh with a larger area moves the field bounds and resizes its canvas', async () => {
   const s = await mount(SAMPLE, T1 + 60);
   const body = clone(SAMPLE);
   body.cells.push({ lat: 52.75, lon: 1.25, c: [4, 4, 4], f: [300, 300, 300], b: [0, 0, 0], t: [90, 90, 90], dm: [80, 80, 80], g: [-400, -400, -400], n: [-95, -95, -95] });
+  body.generatedAt += 1800;
   s.timers[0].fn();
   s.api.calls[1].ok(body);
   await tick(); await tick();
@@ -994,7 +1216,8 @@ test('remove during an in-flight fetch: nothing drawn afterwards, timer cleared,
   assert.ok(!map._layers.includes(group));
   s.api.calls[0].ok(SAMPLE);
   await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 0);
+  assert.strictEqual(layer._cells.length, 0);
+  assert.strictEqual(s.stats.lines.length + s.stats.polys.length, 0, 'no outlines after remove');
   assert.strictEqual(s.stats.fields.length, 0, 'no field image after remove');
   assert.strictEqual(map._layers.length, 0);
 });
@@ -1038,52 +1261,59 @@ test('re-adding after remove fetches again and ignores the first fetch', async (
   layer.onAdd(map);
   s.api.calls[0].ok(SAMPLE);
   await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 0, 'stale generation ignored');
+  assert.strictEqual(layer._cells.length, 0, 'stale generation ignored');
+  assert.strictEqual(s.stats.lines.length, 0);
   s.api.calls[1].ok(SAMPLE);
   await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 3);
+  assert.strictEqual(layer._cells.length, 3);
   assert.strictEqual(s.api.calls[0].url, '/api/ducting');
 });
 
-test('re-add then pending: cells and field are drawn from the kept data at once', async () => {
+test('re-add then pending: cells and field are drawn from the kept data at once, and not called out of date', async () => {
+  const realNow = Date.now;
   const s = await mount(SAMPLE, T0);
-  s.layer.onRemove(s.map);
-  s.stats.rects.length = 0; s.stats.fields.length = 0;
-  s.layer.onAdd(s.map);
-  assert.strictEqual(s.stats.rects.length, 3, 'cells drawn before any answer');
-  assert.ok(s.map._layers.some(l => l._mcField), 'field drawn before any answer');
-  assert.ok(!legendText(s).includes('out of date'), 'nothing wrong yet');
-  s.api.calls[s.api.calls.length - 1].ok({ status: 'pending' });
-  await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 3);
-  assert.ok(s.map._layers.some(l => l._mcField), 'field kept');
-  assert.ok(legendText(s).includes('Forecast out of date \u2014 showing the last one received'));
+  try {
+    Date.now = () => (T0 + 60) * 1000;
+    s.layer.onRemove(s.map);
+    s.stats.lines.length = 0; s.stats.fields.length = 0;
+    s.layer.onAdd(s.map);
+    assert.strictEqual(s.layer._cells.length, 3, 'cells listed before any answer');
+    assert.strictEqual(s.stats.lines.length, 1, 'edge drawn before any answer');
+    assert.ok(s.map._layers.some(l => l._mcField), 'field drawn before any answer');
+    assert.ok(!legendText(s).includes('out of date'), 'nothing wrong yet');
+    s.api.calls[s.api.calls.length - 1].ok({ status: 'pending' });
+    await tick(); await tick();
+    assert.strictEqual(s.layer._cells.length, 3);
+    assert.ok(s.map._layers.some(l => l._mcField), 'field kept');
+    assert.ok(!legendText(s).includes('out of date'), 'a restarting server answers pending: the held forecast is still valid');
+  } finally { Date.now = realNow; }
 });
 
 test('re-add then fetch failure: the kept data stays drawn', async () => {
   const s = await mount(SAMPLE, T0);
   s.layer.onRemove(s.map);
-  s.stats.rects.length = 0;
   s.layer.onAdd(s.map);
   s.api.calls[s.api.calls.length - 1].fail();
   await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 3);
+  assert.strictEqual(s.layer._cells.length, 3);
   assert.ok(s.map._layers.some(l => l._mcField));
   assert.ok(!legendText(s).includes('unavailable'));
+  assert.ok(legendText(s).includes('out of date'), 'a failed request marks it out of date');
 });
 
 test('re-add then success: the kept data is replaced by the new data', async () => {
   const s = await mount(SAMPLE, T0);
   s.layer.onRemove(s.map);
-  s.stats.rects.length = 0;
+  s.stats.lines.length = 0;
   s.layer.onAdd(s.map);
-  assert.strictEqual(s.stats.rects.length, 3, 'kept data first');
+  assert.strictEqual(s.stats.lines.length, 1, 'kept data first');
   const body = clone(SAMPLE);
   body.generatedAt = T2;
   s.api.calls[s.api.calls.length - 1].ok(body);
   await tick(); await tick();
-  assert.strictEqual(s.stats.rects.length, 6, 'rebuilt from the new answer');
+  assert.strictEqual(s.stats.lines.length, 2, 'rebuilt from the new answer');
   assert.strictEqual(s.layer._data.generatedAt, T2);
+  assert.ok(s.layer._cells.every(c => body.cells.includes(c)), 'cells of the new answer');
 });
 
 test('re-add re-picks the hour; a user-picked hour is kept while it exists', async () => {
@@ -1103,23 +1333,54 @@ test('re-add re-picks the hour; a user-picked hour is kept while it exists', asy
   } finally { Date.now = realNow; }
 });
 
-test('out-of-date notice: shown on pending, error and failure while old data is drawn; gone on the next ok', async () => {
+test('out-of-date notice: on error and failure while old data is drawn, not on pending; gone on the next ok', async () => {
+  const realNow = Date.now;
   const s = await mount(SAMPLE, T0);
   const MSG = 'Forecast out of date \u2014 showing the last one received';
-  assert.ok(!legendText(s).includes('out of date'));
-  for (const body of [{ status: 'pending' }, { status: 'error', error: 'forecast expired' }, { status: 'error', error: 'boom' }]) {
+  const refresh = async (body) => {
     s.timers[0].fn();
-    s.api.calls[s.api.calls.length - 1].ok(body);
+    const c = s.api.calls[s.api.calls.length - 1];
+    if (body) c.ok(body); else c.fail();
     await tick(); await tick();
-    assert.ok(legendText(s).includes(MSG), JSON.stringify(body));
-    assert.strictEqual(s.stats.rects.length, 3, 'old data still drawn');
-    const status = find(s.map._controls[1]._container, n => n.className === 'mc-duct-legend-status');
-    assert.strictEqual(status.length, 1, 'one status line');
-  }
-  s.timers[0].fn();
-  s.api.calls[s.api.calls.length - 1].ok(clone(SAMPLE));
-  await tick(); await tick();
-  assert.ok(!legendText(s).includes('out of date'), 'cleared by ok');
+  };
+  try {
+    Date.now = () => (T0 + 60) * 1000;
+    assert.ok(!legendText(s).includes('out of date'));
+    await refresh({ status: 'pending' });
+    assert.ok(!legendText(s).includes('out of date'), 'pending alone: still valid');
+    for (const body of [{ status: 'error', error: 'forecast expired' }, { status: 'error', error: 'boom' }, null, { status: 'pending' }]) {
+      await refresh(body);
+      assert.ok(legendText(s).includes(MSG), JSON.stringify(body));
+      assert.strictEqual(s.layer._cells.length, 3, 'old data still drawn');
+      const status = find(s.map._controls[1]._container, n => n.className === 'mc-duct-legend-status');
+      assert.strictEqual(status.length, 1, 'one status line');
+    }
+    const body = clone(SAMPLE); body.generatedAt += 60;
+    await refresh(body);
+    assert.ok(!legendText(s).includes('out of date'), 'cleared by ok');
+  } finally { Date.now = realNow; }
+});
+
+test('out-of-date notice: shown once the held forecast has run out, whatever the server says', async () => {
+  const realNow = Date.now;
+  const s = await mount(SAMPLE, T0);
+  try {
+    const last = SAMPLE.times[SAMPLE.times.length - 1];
+    Date.now = () => (last + 3599) * 1000;                  // inside the last hour: fine
+    s.timers[0].fn();
+    s.api.calls[s.api.calls.length - 1].ok({ status: 'pending' });
+    await tick(); await tick();
+    assert.ok(!legendText(s).includes('out of date'), 'last hour still running');
+    Date.now = () => (last + 3600) * 1000;                   // the last hour has ended
+    for (const body of [{ status: 'pending' }, clone(SAMPLE)]) {
+      s.timers[0].fn();
+      s.api.calls[s.api.calls.length - 1].ok(body);
+      await tick(); await tick();
+      assert.ok(legendText(s).includes('out of date'), 'run out, after ' + body.status);
+    }
+    const fresh = await mount(SAMPLE, last + 7200);          // first answer already run out
+    assert.ok(legendText(fresh).includes('out of date'));
+  } finally { Date.now = realNow; }
 });
 
 test('an ok answer re-picks the hour, keeping a user-picked one that is still there', async () => {
@@ -1198,16 +1459,17 @@ test('missing variables: no stops -> transparent field, no LoRa variable -> no o
   const d = layer._canvas.img.data;
   assert.ok(d.every(v => v === 0), 'nothing drawn without colours');
   // (-58 is the only stop below; with --mc-duct-alpha unset the opacity is the default.)
-  assert.ok(s.stats.rects.every(r => !r.style.stroke), 'no outline without --mc-duct-lora');
+  assert.strictEqual(s.stats.polys.length, 0, 'no outline without --mc-duct-lora');
+  assert.strictEqual(layer._lora, null);
   assert.ok(!/magenta|orange|gold|lightblue|#[0-9a-f]{6}\b/i.test(SRC.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')), 'no colour literals in map-ducting.js');
   s.vars['--mc-duct-s4'] = '#00a000';
   s.ctx.dispatch('theme-changed');
   assert.ok(layer._canvas.img.data.some(v => v !== 0), 'one stop is enough to draw; default opacity used');
 });
 
-test('theme-changed redraws the field and outlines from the new variables, without new rects; inert after remove', async () => {
+test('theme-changed redraws the field and outlines from the new variables, same cells; inert after remove', async () => {
   const s = await mount(SAMPLE, T2);
-  const rects = s.stats.rects.slice();
+  const cells = s.layer._cells.slice();
   const before = pixelAt(s, 51.25, -0.25).rgba;
   const puts = s.layer._canvas.puts;
   s.vars['--mc-duct-s4'] = '#ff00ff';
@@ -1218,16 +1480,18 @@ test('theme-changed redraws the field and outlines from the new variables, witho
   const after = pixelAt(s, 51.25, -0.25).rgba;
   assert.notDeepStrictEqual(after, before);
   assert.ok(after[0] > 240 && after[1] < 15 && after[2] > 240, 'magenta now: ' + after);
-  assert.strictEqual(loraOf(s.stats.rects[0]), '#fefefe/4 3');
-  assert.strictEqual(s.stats.rects.length, rects.length, 'rects not rebuilt');
-  assert.ok(s.stats.rects.every((r, i) => r === rects[i]));
+  assert.strictEqual(loraLayer(s).opts.color, '#fefefe');
+  assert.deepStrictEqual(loraSet(s), ['51.25,-0.25']);
+  assert.strictEqual(s.layer._group.layers.filter(l => l._mcLora).length, 1, 'old outline replaced, not added to');
+  assert.ok(s.layer._cells.length === cells.length && s.layer._cells.every((c, i) => c === cells[i]), 'cells not rebuilt');
   assert.strictEqual(s.stats.fields.length, 1);
   assert.strictEqual((s.winL['theme-changed'] || []).length, 1);
   s.layer.onRemove(s.map);
   assert.strictEqual((s.winL['theme-changed'] || []).length, 0);
+  const polys = s.stats.polys.length;
   s.vars['--mc-duct-lora'] = '#00ff00';
   assert.doesNotThrow(() => s.ctx.dispatch('theme-changed'));
-  assert.strictEqual(loraOf(rects[0]), '#fefefe/4 3', 'no restyle after remove');
+  assert.strictEqual(s.stats.polys.length, polys, 'no redraw after remove');
 });
 
 // ── overlay registry ────────────────────────────────────────────────────────

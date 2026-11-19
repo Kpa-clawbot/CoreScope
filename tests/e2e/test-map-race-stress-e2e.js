@@ -321,9 +321,23 @@ function stressInit() {
       var l = c.querySelectorAll('.mc-duct-legend').length, t = c.querySelectorAll('.mc-duct-time').length;
       inLeg += l; inTime += t;
       if (l > 1 || t > 1) p.push('map has ' + l + ' legends and ' + t + ' time boxes');
-      var cells = 0, fields = 0, edges = 0;
-      m.eachLayer(function (ly) { if (ly._mcCell) cells++; if (ly._mcField) fields++; if (ly._mcEdge) edges++; });
+      var cells = 0, fields = 0, edges = 0, loras = 0, live = 0;
+      m.eachLayer(function (ly) {
+        if (ly._mcDuct) cells += (ly._cells || []).length;
+        if (ly._mcField) fields++;
+        if (ly._mcEdge) edges++;
+        if (ly._mcLora) loras++;
+        // Nothing of the overlay may take clicks (they belong to the page: Planner, Live paths).
+        if ((ly._mcEdge || ly._mcLora || ly._mcCell) && ly.options.interactive !== false) p.push('interactive ducting layer on the map');
+        if (ly._mcDuct && ly._map === m) live++;
+      });
       if (edges > 1 || (!wantOn && edges)) p.push('map has ' + edges + ' edge outlines (overlay ' + (wantOn ? 'on' : 'off') + ')');
+      if (loras > 1 || (!wantOn && loras)) p.push('map has ' + loras + ' LoRa outline layers (overlay ' + (wantOn ? 'on' : 'off') + ')');
+      var lineCv = c.querySelectorAll('.leaflet-mcDuctLine-pane canvas').length;
+      if (lineCv > live) p.push('map has ' + lineCv + ' ducting line canvases for ' + live + ' ducting layers');
+      var clicks = (m._events && m._events.click) || [];
+      var ductClicks = clicks.filter(function (h) { return S.ductRecs.some(function (r) { return r.layer._onMapClick === h.fn; }); }).length;
+      if (ductClicks !== live) p.push('map has ' + ductClicks + ' ducting click handlers for ' + live + ' ducting layers');
       var fieldDom = c.querySelectorAll('.mc-duct-field').length;
       if (!wantOn && (l || t || cells || fields || fieldDom)) p.push('overlay off but map has legend=' + l + ' time=' + t + ' cells=' + cells + ' fields=' + fields + '/' + fieldDom);
       if (wantOn && pickers && (l !== 1 || t !== 1)) p.push('overlay on but map has legend=' + l + ' time=' + t);
@@ -346,16 +360,16 @@ function stressInit() {
         if (ly._map && !wantOn) p.push('ducting layer #' + i + ' attached although the overlay is off');
       } else {
         if (ly._timer != null) p.push('ducting layer #' + i + ' removed with its refresh timer running');
-        if (ly._rects && ly._rects.length) p.push('ducting layer #' + i + ' removed but holds ' + ly._rects.length + ' cells');
-        if (ly._group || ly._renderer || ly._field) p.push('ducting layer #' + i + ' removed but keeps its group/renderer/field');
+        if (ly._cells && ly._cells.length) p.push('ducting layer #' + i + ' removed but holds ' + ly._cells.length + ' cells');
+        if (ly._group || ly._renderer || ly._field || ly._lora || ly._onMapClick) p.push('ducting layer #' + i + ' removed but keeps its group/renderer/field/outline/click handler');
       }
     });
     if (wantOn && live !== pickers) p.push('live ducting layers=' + live + ' maps=' + pickers);
     S.maps.forEach(function (m) {
       if (isLive(m)) return;
       var n = 0;
-      try { m.eachLayer(function (ly) { if (ly._mcCell || ly._mcField) n++; }); } catch (_) {}
-      if (n) p.push('removed map still holds ' + n + ' ducting cells/field images');
+      try { m.eachLayer(function (ly) { if (ly._mcDuct || ly._mcField || ly._mcEdge || ly._mcLora) n++; }); } catch (_) {}
+      if (n) p.push('removed map still holds ' + n + ' ducting layers/field images/outlines');
     });
     return p;
   };

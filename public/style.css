@@ -5692,7 +5692,8 @@ body { touch-action: pan-y; }
  * 1.5 km, from -44 N/km (s1), -48, -54, -58, -62, -70, -80 and -90 N/km (s8)
  * down to the next stop (s8: -90 and beyond); weaker is transparent. Flat, no
  * blending; hex or rgb() only (read by JS). alpha = field opacity, the same for every band. lora = dashed outline of cells where a duct
- * can carry 868/915 MHz. edge = dotted line around the forecast area. */
+ * may carry LoRa 868/915 MHz (lowest trapped frequency <= 868 MHz). edge =
+ * dotted line around the forecast area. */
 :root {
   --mc-duct-s1: #8e3fd0;
   --mc-duct-s2: #3d5ee6;
@@ -5777,16 +5778,19 @@ body { touch-action: pan-y; }
   border-radius: 3px;
   border: 1px solid var(--mc-route-legend-border);
 }
-.mc-duct-scale-labels { position: relative; height: 16px; font-size: 11px; }
+/* Two lines: a label wraps within its band span (max-width set by JS). */
+.mc-duct-scale-labels { position: relative; height: 30px; font-size: 11px; }
 .mc-duct-scale-label {
   position: absolute;
   top: 0;
+  box-sizing: border-box;
   padding: 2px 0 0 3px;
   border-left: 1px solid var(--mc-route-legend-fg);
-  white-space: nowrap;
+  white-space: normal;
   line-height: 1.2;
 }
 .mc-duct-scale-label-end {
+  white-space: nowrap;
   padding: 2px 3px 0 0;
   border-left: 0;
   border-right: 1px solid var(--mc-route-legend-fg);

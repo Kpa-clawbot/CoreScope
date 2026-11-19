@@ -4,17 +4,27 @@
  * cells' `n`) as a semi-transparent field of colour bands (like the usual
  * tropo-ducting forecast maps): transparent where propagation is normal, then
  * purple, blue, cyan, green, yellow, orange, red and pink as the gradient gets
- * stronger; each colour is one range of N/km. Cells where a duct can carry
- * LoRa (868/915 MHz) get a dashed outline (from the duct analysis: c and f,
- * not n). Data: GET /api/ducting (hourly
+ * stronger; each colour is one range of N/km. Cells where the model shows a
+ * duct that may carry LoRa (lowest trapped frequency <= 868 MHz, so 868 and
+ * 915 MHz) get a dashed outline (from the duct analysis: c and f, not n).
+ * Data: GET /api/ducting (hourly
  * forecast, one array entry per `times` entry, see cmd/server/ducting_types.go).
  *
  *   window.MC_createDuctingLayer(opts) -> L.Layer
  *       Fetches /api/ducting when added to a map, refreshes every 30 min while
  *       on it (every minute until it has data), draws the field as one canvas
- *       image overlay, one invisible clickable rectangle per cell with data
- *       (popups, LoRa outline), a legend and a forecast-time slider.
+ *       image overlay, the LoRa outlines and the forecast-area edge as
+ *       non-interactive lines, a legend and a forecast-time slider.
  *       A layer removed mid-fetch never touches the map afterwards.
+ *       Nothing it draws takes pointer events: a click on the map is looked
+ *       up in the lattice (MC_ductCellAt) by one map click handler, which
+ *       never stops the event, so the page's own map clicks (Planner sites,
+ *       Live paths) work inside the forecast area. The cell popup opens only
+ *       when the click did nothing else (see _watchClicks).
+ *   layer.openCellPopup(latlng) -> true when a cell with data at the shown
+ *       hour is there and its popup opened
+ *   window.MC_ductCellAt(grid, lat, lon) -> index into the cells of the cell
+ *       whose square contains (lat, lon), or -1
  *   window.MC_ductTimeIndex(times, now) -> index of the latest time <= now
  *   window.MC_ductFieldColor(v, stops)  -> [r, g, b, a] (band colour) for a field value (N/km)
  *   window.MC_ductFieldStops()          -> stops read from the CSS variables
@@ -73,9 +83,10 @@
   // While there is no data yet (server still preparing, or a failed fetch),
   // ask again every minute instead of waiting a full refresh period.
   var RETRY_MS = 60 * 1000;
-  var LORA_MAX_MHZ = 1000;   // duct with fmin <= 1 GHz carries 868/915 MHz
-  var BAND_868 = 868;
-  var BAND_915 = 915;
+  // A duct "may carry LoRa" when its lowest trapped frequency is at most
+  // 868 MHz (then 915 MHz too). One threshold for the outline and the popup.
+  // With model levels ~200 m apart this is a model estimate, not a yes/no.
+  var LORA_MAX_MHZ = 868;
   var TYPE_NAME = { 0: 'No data', 1: 'Normal', 2: 'Super-refraction', 3: 'Elevated duct', 4: 'Surface-based duct' };
 
   // Colour bands: --mc-duct-sN colours n (mean dN/dh over the lowest 1.5 km,
@@ -94,17 +105,23 @@
   var MAX_LAT = 85.0511287798;  // Web Mercator limit
   var FIELD_PANE = 'mcDuctFieldPane';
   var FIELD_Z = '245';          // above tiles (200), below the tile overlays (250) and vectors (400)
+  // The LoRa outlines and the forecast-area edge: their own canvas in their
+  // own pane, above the tile overlays, below every page's vectors (400) and
+  // Planner's node pane (390), and never hit by the pointer, so the canvas
+  // never sits over another page's clickable paths.
+  var LINE_PANE = 'mcDuctLinePane';
+  var LINE_Z = '380';
   var LORA_VAR = '--mc-duct-lora';
   var ALPHA_VAR = '--mc-duct-alpha';
   var EDGE_VAR = '--mc-duct-edge';
   var EDGE_STYLE = { stroke: true, weight: 1, opacity: 0.7, dashArray: '1 5', interactive: false };
-  var LORA_STYLE = { stroke: true, weight: 1.5, opacity: 0.95, dashArray: '4 3' };
+  var LORA_STYLE = { stroke: true, weight: 1.5, opacity: 0.95, dashArray: '4 3', fill: false, interactive: false };
 
   // Legend: where each band starts (0..1 along the bar; the last runs to the
   // end, transparent before the first). Spread out instead of linear in n,
-  // so the labels have room. "Very strong" sits right-aligned at the end.
+  // so the labels have room. "Very high" sits right-aligned at the end.
   var BAR_POS = [0.19, 0.26, 0.34, 0.41, 0.48, 0.6, 0.73, 0.86];
-  var BAR_LABELS = [[0, 'Normal'], [BAR_POS[0], 'Enhanced'], [BAR_POS[4], 'Strong'], [1, 'Very strong', true]];
+  var BAR_LABELS = [[0, 'Normal'], [BAR_POS[0], 'Above normal'], [BAR_POS[4], 'High'], [1, 'Very high', true]];
   var CAPTION = 'Refractivity gradient over the lowest 1.5 km (N/km)';
   var MINUS = '\u2212';
 
@@ -112,6 +129,8 @@
   var MSG_PENDING = 'Ducting forecast is being prepared';
   var MSG_ERROR = 'Ducting forecast unavailable';
   var MSG_STALE = 'Forecast out of date \u2014 showing the last one received';
+  var MSG_LORA_ROW = 'Dashed outline: the model shows a duct that may carry LoRa 868/915 MHz';
+  var HOUR_S = 3600;
 
   // ── Pure helpers ──────────────────────────────────────────────────────────
 
@@ -150,6 +169,9 @@
     return at(cell.c, i) >= 3 && f > 0 && f <= LORA_MAX_MHZ;
   }
 
+  // Two significant figures: 78 -> 78, 380 -> 380, 868 -> 870, 1234 -> 1200.
+  function sig2(v) { return Number(Number(v).toPrecision(2)); }
+
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -170,13 +192,13 @@
     var fmin = at(cell.f, i);
     var rows = [];
     if (cls >= 3) {
+      rows.push('Trapping layer in the model (\u2265 ~200 m thick)');
       rows.push('Base: ' + Math.round(at(cell.b, i)) + ' m above ground');
       rows.push('Top: ' + Math.round(at(cell.t, i)) + ' m above ground');
     }
     rows.push('Strength: ' + (at(cell.dm, i) / 10).toFixed(1) + ' M-units');
-    rows.push('Lowest trapped frequency: ' + (fmin > 0 ? Math.round(fmin) + ' MHz' : 'none'));
-    rows.push('Can carry 868 MHz: ' + (fmin > 0 && fmin <= BAND_868 ? 'yes' : 'no'));
-    rows.push('Can carry 915 MHz: ' + (fmin > 0 && fmin <= BAND_915 ? 'yes' : 'no'));
+    rows.push('Lowest trapped frequency: ' + (fmin > 0 ? '\u2248 ' + sig2(fmin) + ' MHz (model estimate)' : 'none'));
+    rows.push('LoRa 868/915 MHz: ' + (isLora(cell, i) ? 'possibly trapped (model estimate)' : 'not trapped by this layer'));
     for (var r = 0; r < rows.length; r++) box.appendChild(el('div', null, rows[r]));
     return box;
   }
@@ -257,6 +279,7 @@
 
   // Lattice of the cells that have data (class >= 1) at some hour:
   // { step, i0, j0, rows, cols, slot (cell index -> lattice slot, -1 = none),
+  //   cell (lattice slot -> cell index, -1 = none),
   //   south, west, north, east (outer cell edges), w, h (image px) }, or null.
   function ductGrid(cells, step) {
     step = Number(step);
@@ -279,12 +302,14 @@
     var rows = i1 - i0 + 1, cols = j1 - j0 + 1;
     if (rows * cols > MAX_GRID) return null;
     var present = new Uint8Array(rows * cols);
+    var owner = new Int32Array(rows * cols).fill(-1);
     for (k = 0; k < cells.length; k++) {
       if (slot[k] !== 0) continue;
       slot[k] = (ii[k] - i0) * cols + (jj[k] - j0);
       present[slot[k]] = 1;
+      owner[slot[k]] = k;
     }
-    var g = { step: step, i0: i0, j0: j0, rows: rows, cols: cols, slot: slot, soft: areaSoft(present, rows, cols),
+    var g = { step: step, i0: i0, j0: j0, rows: rows, cols: cols, slot: slot, cell: owner, soft: areaSoft(present, rows, cols),
       south: Math.max(-MAX_LAT, i0 * step), north: Math.min(MAX_LAT, (i1 + 1) * step),
       west: j0 * step, east: (j1 + 1) * step };
     if (!(g.north > g.south)) return null;
@@ -296,6 +321,18 @@
     g.w = Math.max(1, Math.round(w * scale));
     g.h = Math.max(1, Math.round(h * scale));
     return g;
+  }
+
+  // The cell (index into the cells) whose square [i*step, (i+1)*step) x
+  // [j*step, (j+1)*step) contains (lat, lon), or -1. Longitude is wrapped to
+  // -180..180 first (a click on a world copy). O(1).
+  function ductCellAt(grid, lat, lon) {
+    lat = Number(lat); lon = Number(lon);
+    if (!grid || !grid.cell || !isFinite(lat) || !isFinite(lon)) return -1;
+    lon = ((lon + 180) % 360 + 360) % 360 - 180;
+    var i = Math.floor(lat / grid.step) - grid.i0, j = Math.floor(lon / grid.step) - grid.j0;
+    if (i < 0 || i >= grid.rows || j < 0 || j >= grid.cols) return -1;
+    return grid.cell[i * grid.cols + j];
   }
 
   // Per lattice slot: 0 outside the forecast area, 1 on its outer edge (some
@@ -570,7 +607,7 @@
   // context ("reading 'clearRect'"). This renderer cancels the queued frame
   // before redrawing.
   var CanvasClass = null;
-  function newRenderer() {
+  function newRenderer(pane) {
     if (!CanvasClass && L.Canvas && typeof L.Canvas.extend === 'function') {
       CanvasClass = L.Canvas.extend({
         _updatePaths: function () {
@@ -582,7 +619,9 @@
         }
       });
     }
-    return CanvasClass ? new CanvasClass({ padding: 0.5 }) : L.canvas({ padding: 0.5 });
+    var o = { padding: 0.5 };
+    if (pane) o.pane = pane;
+    return CanvasClass ? new CanvasClass(o) : L.canvas(o);
   }
 
   // An image overlay whose image is a canvas: the field is drawn straight
@@ -610,16 +649,26 @@
     return f;
   }
 
-  // The field's own pane: above the tiles, below the tile overlays (labels,
-  // hillshade), vectors and markers; never takes pointer events.
-  function fieldPane(map) {
+  // A pane of the overlay's own at z-index z that never takes pointer
+  // events: FIELD_PANE (the field: above the tiles, below the tile overlays,
+  // vectors and markers) and LINE_PANE (the outlines).
+  function inertPane(map, name, z) {
     try {
-      if (map.getPane(FIELD_PANE)) return FIELD_PANE;
-      var p = map.createPane(FIELD_PANE);
-      p.style.zIndex = FIELD_Z;
+      if (map.getPane(name)) return name;
+      var p = map.createPane(name);
+      p.style.zIndex = z;
       p.style.pointerEvents = 'none';
-      return FIELD_PANE;
+      return name;
     } catch (_) { return null; }
+  }
+
+  // True when the click landed on another layer's interactive element: an
+  // SVG path or marker, or a canvas that is hovering one of its interactive
+  // paths (Leaflet marks both with leaflet-interactive; it is also what
+  // shows the pointer cursor).
+  function hitInteractive(e) {
+    var t = e && e.originalEvent && e.originalEvent.target;
+    return !!(t && t.classList && typeof t.classList.contains === 'function' && t.classList.contains('leaflet-interactive'));
   }
 
   function gridBounds(g) { return [[g.south, g.west], [g.north, g.east]]; }
@@ -628,7 +677,9 @@
     return L.Layer.extend({
       initialize: function (opts) {
         L.setOptions(this, opts || {});
+        this._mcDuct = true;
         this._gen = 0;
+        this._cells = [];
         this._data = null;
         this._state = 'loading';   // loading | pending | error | ok
         this._timer = null;
@@ -639,18 +690,19 @@
       onAdd: function (map) {
         this._map = map;
         var gen = ++this._gen;
-        this._rects = [];
-        this._edge = null;
-        this._edgeColor = '';
+        this._cells = [];
+        this._edge = this._lora = null;
+        this._edgeColor = this._loraKey = '';
         this._grid = null;
+        this._pane = inertPane(map, FIELD_PANE, FIELD_Z);
         try {
-          this._renderer = newRenderer();
+          this._renderer = newRenderer(inertPane(map, LINE_PANE, LINE_Z));
           this._group = L.layerGroup();
           map.addLayer(this._group);
         } catch (_) { this._group = null; }
-        this._pane = fieldPane(map);
         this._addControls(map);
         this._watchAttribution(map);
+        this._watchClicks(map, gen);
         // Kept data is drawn at once, so a re-add never shows a blank map while
         // the refetch is pending or failing; the refetch below replaces it.
         if (this._data) this._show();
@@ -674,6 +726,7 @@
           try { this._slider.removeEventListener('input', this._onSlide); } catch (_) {}
         }
         this._unwatchAttribution(m);
+        this._unwatchClicks(m);
         if (this._legendCtl) { try { this._legendCtl.remove(); } catch (_) {} }
         if (this._timeCtl) { try { this._timeCtl.remove(); } catch (_) {} }
         if (this._group && m) { try { m.removeLayer(this._group); } catch (_) {} }
@@ -682,8 +735,91 @@
         this._map = this._group = this._renderer = this._field = this._canvas = this._grid = this._img = null;
         this._legendCtl = this._timeCtl = this._legendEl = this._statusEl = this._metaEl = null;
         this._slider = this._timeLabel = this._onSlide = null;
-        this._rects = [];
-        this._edge = null;
+        this._cells = [];
+        this._edge = this._lora = null;
+        this._loraKey = '';
+      },
+
+      // ── map clicks ──
+      // One map click handler instead of interactive cells: an interactive
+      // layer with a popup stops the click (Leaflet's popup opener does), so
+      // the page's own map click handlers would never run in the forecast
+      // area. This one never stops anything; it runs after every other
+      // handler of the same click (a microtask, so the whole synchronous
+      // Leaflet dispatch is over) and opens the cell popup only when the
+      // click did nothing else:
+      //   - not on another layer's interactive element (hitInteractive);
+      //   - no layer was added and no popup opened since the click's
+      //     preclick: Planner placing a site or chain point, Live opening a
+      //     path popup. Clicks the page uses keep the map to themselves.
+      _watchClicks: function (map, gen) {
+        var self = this, changes = 0, mark = -1;
+        this._onMapChange = function () { changes++; };
+        this._onPreclick = function () { mark = changes; };
+        this._onMapClick = function (e) {
+          var since = mark >= 0 ? mark : changes;
+          mark = -1;
+          if (!e || !e.latlng || hitInteractive(e)) return;
+          var latlng = e.latlng;
+          Promise.resolve().then(function () {
+            if (gen !== self._gen || changes !== since) return;
+            self.openCellPopup(latlng);
+          });
+        };
+        try {
+          map.on('layeradd popupopen', this._onMapChange);
+          map.on('preclick', this._onPreclick);
+          map.on('click', this._onMapClick);
+        } catch (_) {}
+      },
+
+      _unwatchClicks: function (map) {
+        if (map && this._onMapClick) {
+          try {
+            map.off('layeradd popupopen', this._onMapChange);
+            map.off('preclick', this._onPreclick);
+            map.off('click', this._onMapClick);
+          } catch (_) {}
+        }
+        if (map && this._popup) { try { map.closePopup(this._popup); } catch (_) {} }
+        this._onMapChange = this._onPreclick = this._onMapClick = null;
+        this._popup = this._popupCell = null;
+      },
+
+      // Opens the popup of the cell under latlng at the shown hour; false
+      // (nothing opened) outside the forecast area or where that cell has no
+      // data at this hour.
+      openCellPopup: function (latlng) {
+        var map = this._map, d = this._data;
+        if (!map || !d || !latlng || !L.popup) return false;
+        var k = ductCellAt(this._grid, latlng.lat, latlng.lng);
+        var cell = k >= 0 ? d.cells[k] : null;
+        if (!cell || at(cell.c, this._idx) < 1) return false;
+        try {
+          if (!this._popup) this._popup = L.popup({ maxWidth: 280 });
+          this._popupCell = cell;
+          this._popup.setLatLng(latlng).setContent(popupContent(cell, this._idx)).openOn(map);
+          return true;
+        } catch (_) { return false; }
+      },
+
+      _popupOpen: function () {
+        try { return !!(this._popup && this._popup.isOpen()); } catch (_) { return false; }
+      },
+
+      // Keeps an open cell popup in step with the shown hour and data: new
+      // text for the cell under it, closed where there is no data any more.
+      _syncPopup: function () {
+        if (!this._popupOpen()) return;
+        var d = this._data, ll = this._popup.getLatLng();
+        var k = ll ? ductCellAt(this._grid, ll.lat, ll.lng) : -1;
+        var cell = (d && k >= 0) ? d.cells[k] : null;
+        if (!cell || at(cell.c, this._idx) < 1) {
+          try { this._map.closePopup(this._popup); } catch (_) {}
+          return;
+        }
+        this._popupCell = cell;
+        this._popup.setContent(popupContent(cell, this._idx));
       },
 
       // ── controls ──
@@ -808,7 +944,7 @@
           box.appendChild(this._scale());
           var lrow = el('div', 'mc-duct-legend-row');
           lrow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-lora'));
-          lrow.appendChild(el('span', null, 'Dashed outline: a duct here can carry LoRa 868/915 MHz'));
+          lrow.appendChild(el('span', null, MSG_LORA_ROW));
           box.appendChild(lrow);
           var erow = el('div', 'mc-duct-legend-row');
           erow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-edge'));
@@ -839,6 +975,9 @@
           var b = BAR_LABELS[i];
           var lab = el('span', 'mc-duct-scale-label' + (b[2] ? ' mc-duct-scale-label-end' : ''), b[1]);
           lab.style.left = pct(b[0]);
+          // A label wraps rather than run into the next one ("Above normal").
+          var next = BAR_LABELS[i + 1];
+          if (!b[2] && next && !next[2]) lab.style.maxWidth = pct(next[0] - b[0]);
           labels.appendChild(lab);
         }
         wrap.appendChild(labels);
@@ -881,9 +1020,13 @@
         this._timer = setInterval(function () { self._load(self._gen); }, ms);
       },
 
+      // With data held, the last good forecast stays drawn: an error answer
+      // (the server's forecast failed or expired) or a failed request marks
+      // it out of date; pending does not (a restarting server answers
+      // pending while the forecast held here is still valid).
       _fail: function (state) {
-        if (this._data) {                  // keep the last good data, and say so
-          if (!this._stale) { this._stale = true; this._renderLegend(); }
+        if (this._data) {
+          this._setStale(state === 'error' || this._stale);
           return;
         }
         this._schedule(RETRY_MS);
@@ -891,14 +1034,40 @@
         this._renderLegend();
       },
 
+      // The held forecast has run out: its last hour has ended.
+      _expired: function () {
+        var t = this._data && this._data.times;
+        return !!(t && t.length && Number(t[t.length - 1]) + HOUR_S <= Date.now() / 1000);
+      },
+
+      // Out-of-date flag (always on once the forecast has run out); the
+      // legend is redrawn only when it changes.
+      _setStale: function (on) {
+        on = !!on || this._expired();
+        if (on === !!this._stale) return;
+        this._stale = on;
+        this._renderLegend();
+      },
+
       _apply: function (d) {
         if (!d || typeof d !== 'object') return this._fail('error');
         if (d.status === 'pending') return this._fail('pending');
         if (d.status !== 'ok' || !Array.isArray(d.cells) || !Array.isArray(d.times) || !d.times.length) return this._fail('error');
-        this._data = d;
         this._state = 'ok';
-        this._stale = false;
         this._schedule(REFRESH_MS);
+        var held = this._data;
+        if (held && d.generatedAt != null && held.generatedAt === d.generatedAt) {
+          // The forecast already drawn: no rebuild (an open popup stays
+          // open); only the hour moves on, unless the user picked one.
+          this._setStale(false);
+          if (!this._userPicked) {
+            var idx = ductTimeIndex(held.times, Date.now() / 1000);
+            if (idx !== this._idx) this._setIndex(idx);
+          }
+          return;
+        }
+        this._data = d;
+        this._stale = this._expired();
         this._show();
       },
 
@@ -921,29 +1090,21 @@
         this._setIndex(idx);
       },
 
-      // One invisible, clickable rectangle per cell that has data (class >= 1)
-      // at some hour, and the lattice the field is drawn on.
+      // The cells that have data (class >= 1) at some hour, the lattice the
+      // field is drawn on and clicks are looked up in, and the area's edge.
+      // The LoRa outlines follow in _restyle.
       _build: function () {
         var d = this._data, group = this._group;
         if (!group) return;
         try { group.clearLayers(); } catch (_) {}
-        this._rects = [];
-        this._edge = null;
+        this._cells = [];
+        this._edge = this._lora = null;
+        this._loraKey = '';
         this._grid = ductGrid(d.cells, Number(d.stepDeg) || 0.5);
-        var h = (Number(d.stepDeg) || 0.5) / 2;
         for (var i = 0; i < d.cells.length; i++) {
           var cell = d.cells[i];
-          if (!cell || !Array.isArray(cell.c)) continue;
-          var any = false;
-          for (var t = 0; t < cell.c.length; t++) if (cell.c[t] >= 1) { any = true; break; }
-          if (!any) continue;
-          var rect = L.rectangle([[cell.lat - h, cell.lon - h], [cell.lat + h, cell.lon + h]],
-            { renderer: this._renderer, stroke: false, fill: true, fillOpacity: 0, interactive: true });
-          rect._mcCell = cell;
-          rect._mcLora = '';
-          rect.bindPopup(this._popupFn(cell));
-          group.addLayer(rect);
-          this._rects.push(rect);
+          if (!cell || !Array.isArray(cell.c) || !isFinite(cell.lat) || !isFinite(cell.lon)) continue;
+          for (var t = 0; t < cell.c.length; t++) if (cell.c[t] >= 1) { this._cells.push(cell); break; }
         }
         this._buildEdge(group);
       },
@@ -963,11 +1124,6 @@
         } catch (_) { this._edge = null; }
       },
 
-      _popupFn: function (cell) {
-        var self = this;
-        return function () { return popupContent(cell, self._idx); };
-      },
-
       _setIndex: function (i) {
         var d = this._data;
         if (!d || i < 0 || i >= d.times.length) return;
@@ -976,10 +1132,11 @@
         if (this._slider) this._slider.value = String(i);
         if (this._timeLabel) this._timeLabel.textContent = 'Forecast time: ' + fmtTime(d.times[i]);
         this._restyle();
+        this._syncPopup();
       },
 
-      // Redraws the field image, the edge colour and the LoRa outlines for the current hour
-      // and theme; the rectangles themselves are kept.
+      // Redraws the field image, the edge colour and the LoRa outlines for
+      // the current hour and theme.
       _restyle: function () {
         this._drawField();
         var edgeColor = cssVar(EDGE_VAR);
@@ -987,16 +1144,39 @@
           this._edgeColor = edgeColor;
           this._edge.setStyle(edgeColor ? { stroke: true, color: edgeColor } : { stroke: false });
         }
-        var i = this._idx, lora = cssVar(LORA_VAR);
-        for (var r = 0; r < this._rects.length; r++) {
-          var rect = this._rects[r];
-          var want = (lora && isLora(rect._mcCell, i)) ? lora : '';
-          if (want === rect._mcLora) continue;   // only changed cells redraw
-          rect._mcLora = want;
-          var st = want ? L.extend({ color: want }, LORA_STYLE) : { stroke: false };
-          st.fillOpacity = 0;
-          rect.setStyle(st);
+        this._drawLora();
+      },
+
+      // The dashed outlines of the cells that may carry LoRa at the shown
+      // hour: one non-interactive multi-polygon (a ring per cell) on the
+      // line canvas, replaced only when the set of cells or the colour
+      // changes. O(cells). No --mc-duct-lora: no outline.
+      _drawLora: function () {
+        var group = this._group;
+        if (!group || !L.polygon) return;
+        var i = this._idx, color = cssVar(LORA_VAR), h = (Number(this._data && this._data.stepDeg) || 0.5) / 2;
+        var cells = [], rings = [], ids = [];
+        if (color) {
+          for (var k = 0; k < this._cells.length; k++) {
+            var c = this._cells[k];
+            if (!isLora(c, i)) continue;
+            cells.push(c);
+            ids.push(k);
+            rings.push([[[c.lat - h, c.lon - h], [c.lat - h, c.lon + h], [c.lat + h, c.lon + h], [c.lat + h, c.lon - h]]]);
+          }
         }
+        var key = color + '|' + ids.join(',');
+        if (key === this._loraKey) return;
+        this._loraKey = key;
+        if (this._lora) { try { group.removeLayer(this._lora); } catch (_) {} this._lora = null; }
+        if (!rings.length) return;
+        try {
+          var poly = L.polygon(rings, L.extend({ renderer: this._renderer, color: color }, LORA_STYLE));
+          poly._mcLora = true;
+          poly._mcCells = cells;
+          group.addLayer(poly);
+          this._lora = poly;
+        } catch (_) { this._lora = null; }
       },
 
       _drawField: function () {
@@ -1047,6 +1227,7 @@
   window.MC_ductFieldStops = fieldStops;
   window.MC_ductGrid = ductGrid;
   window.MC_ductEdges = ductEdges;
+  window.MC_ductCellAt = ductCellAt;
   window.MC_ductGridValues = ductGridValues;
   window.MC_ductSample = sample;
   window.MC_ductFieldValues = fieldValues;
