@@ -48,11 +48,12 @@ const VIEWS = {
 };
 
 // Views for the ducting entries, resolved from /api/ducting (resolveDuctingViews).
-// 'ducting' = the densest cluster of coloured cells, 'ducting-surface' = a
-// surface-duct cell (one that can carry LoRa when there is one).
+// 'ducting' = the densest cluster of coloured cells at continental zoom (the
+// whole field and its surroundings), 'ducting-surface' = a duct cell that can
+// carry LoRa (surface-based when there is one), close enough for its outline.
 const DUCTING_VIEWS = {
-  ducting: { label: 'Ducting cells', zoom: 7 },
-  'ducting-surface': { label: 'A surface-duct cell', zoom: 8 },
+  ducting: { label: 'Ducting field', zoom: 5 },
+  'ducting-surface': { label: 'A LoRa duct cell', zoom: 7 },
 };
 
 // ── Data table ──────────────────────────────────────────────────────────────
@@ -103,13 +104,16 @@ for (const theme of ['light', 'dark']) {
 for (const theme of ['light', 'dark']) {
   add('picker', `picker-${theme}`, `Layer picker open (${theme})`, { theme, provider: 'auto', picker: true });
 }
-// Tropospheric ducting overlay (opt-in, server needs `ducting`).
+// Tropospheric ducting overlay (opt-in, server needs `ducting`). On the
+// keyless OSM Gray raster basemap: neutral under a colour field, and the
+// shots work on a server without a Carto key.
+const DUCT_BASE = { light: 'osmfr-gray', dark: 'osmfr-gray-dark' };
 for (const theme of ['light', 'dark']) {
-  add('ducting', `ducting-map-${theme}`, `Ducting overlay with legend (${theme})`, { theme, provider: 'auto', overlays: ['ducting'], view: 'ducting', ducting: true });
+  add('ducting', `ducting-map-${theme}`, `Ducting overlay with legend (${theme})`, { theme, provider: DUCT_BASE[theme], overlays: ['ducting'], view: 'ducting', ducting: true });
 }
-add('ducting', 'ducting-zoom-light', 'Ducting overlay, zoomed on coloured cells (light)', { theme: 'light', provider: 'auto', overlays: ['ducting'], view: 'ducting-surface', ducting: true });
-add('ducting', 'ducting-popup-light', 'Ducting overlay, popup on a surface duct (light)', { theme: 'light', provider: 'auto', overlays: ['ducting'], view: 'ducting-surface', ducting: true, ductPopup: true });
-add('ducting', 'ducting-live-light', 'Live page with the ducting overlay (light)', { theme: 'light', route: '#/live', provider: 'auto', overlays: ['ducting'], view: 'ducting', ducting: true });
+add('ducting', 'ducting-zoom-light', 'Ducting overlay, zoomed on a LoRa duct (light)', { theme: 'light', provider: DUCT_BASE.light, overlays: ['ducting'], view: 'ducting-surface', ducting: true });
+add('ducting', 'ducting-popup-light', 'Ducting overlay, popup on a duct (light)', { theme: 'light', provider: DUCT_BASE.light, overlays: ['ducting'], view: 'ducting-surface', ducting: true, ductPopup: true });
+add('ducting', 'ducting-live-light', 'Live page with the ducting overlay (light)', { theme: 'light', route: '#/live', provider: DUCT_BASE.light, overlays: ['ducting'], view: 'ducting', ducting: true });
 add('custom', 'custom-map', 'Custom raster provider on the map', { theme: 'light', provider: 'custom-' + CUSTOM.id, custom: true });
 add('custom', 'custom-picker', 'Custom raster provider in the picker', { theme: 'light', provider: 'custom-' + CUSTOM.id, custom: true, picker: true });
 
@@ -152,7 +156,16 @@ async function resolveDuctingViews(baseUrl) {
     await new Promise((r) => setTimeout(r, 500));
   }
   if (!d || d.status !== 'ok' || !d.cells || !d.cells.length) { out.reason = `/api/ducting has no data (status ${d && d.status}${d && d.error ? ': ' + d.error : ''})`; return out; }
-  const idx = (() => { const now = Date.now() / 1000; let b = 0; d.times.forEach((t, i) => { if (t <= now) b = i; }); return b; })();
+  // The forecast hour with the most ducting cells (dN/dh <= -157): the shots
+  // set the slider there and say which time they show.
+  const idx = (() => {
+    let b = 0, most = -1;
+    d.times.forEach((t, i) => {
+      const n = d.cells.filter((c) => c.c[i] >= 1 && c.g[i] <= -157).length;
+      if (n > most) { most = n; b = i; }
+    });
+    return b;
+  })();
   // Centre on the densest cluster of coloured cells (class >= 2) at the
   // current hour: with nodes worldwide, the median of all cells is often in
   // an empty area. Falls back to that median when nothing is coloured.
@@ -168,11 +181,32 @@ async function resolveDuctingViews(baseUrl) {
     lat = best.reduce((a, c) => a + c.lat, 0) / best.length;
     lon = best.reduce((a, c) => a + c.lon, 0) / best.length;
   }
-  out.views.ducting = { label: DUCTING_VIEWS.ducting.label, lat: +lat.toFixed(4), lon: +lon.toFixed(4), zoom: DUCTING_VIEWS.ducting.zoom, nodes: best ? best.length : d.cells.length };
-  // A surface duct that can carry LoRa (fmin <= 1000 MHz) when there is one.
-  const surf = d.cells.find((c) => c.c[idx] === 4 && c.f[idx] > 0 && c.f[idx] <= 1000) ||
+  // Frame the coverage when it is regional (else the cells within 12 degrees
+  // of that centre): fit its bounding box into the 1280x800 map with Map
+  // Controls collapsed, like a regional forecast map, instead of a fixed zoom.
+  const span = (k) => Math.max(...d.cells.map((c) => c[k])) - Math.min(...d.cells.map((c) => c[k]));
+  const region = (span('lon') <= 40 && span('lat') <= 30) ? d.cells
+    : d.cells.filter((c) => Math.abs(c.lat - lat) <= 12 && Math.abs(c.lon - lon) <= 12);
+  let zoom = DUCTING_VIEWS.ducting.zoom;
+  if (region.length > 1) {
+    const h = step / 2;
+    const s = Math.min(...region.map((c) => c.lat)) - h, n = Math.max(...region.map((c) => c.lat)) + h;
+    const w = Math.min(...region.map((c) => c.lon)) - h, e = Math.max(...region.map((c) => c.lon)) + h;
+    const merc = (a) => Math.log(Math.tan(Math.PI / 4 + a * Math.PI / 360));
+    const fit = (px, frac) => Math.log2(px / (256 * frac));
+    zoom = Math.max(3, Math.min(7, Math.floor(Math.min(fit(1180, (e - w) / 360), fit(700, (merc(n) - merc(s)) / (2 * Math.PI))))));
+    lat = Math.atan(Math.sinh((merc(n) + merc(s)) / 2)) * 180 / Math.PI;
+    // The legend covers x 10..270 at the bottom left: put the field's centre
+    // 110 px right of the map centre, so its west edge clears the legend.
+    lon = (w + e) / 2 - 110 * 360 / (256 * Math.pow(2, zoom));
+  }
+  out.views.ducting = { label: DUCTING_VIEWS.ducting.label, lat: +lat.toFixed(4), lon: +lon.toFixed(4), zoom, nodes: best ? best.length : d.cells.length, ductIdx: idx };
+  // A duct that can carry LoRa (fmin <= 1000 MHz, so it has the dashed
+  // outline), surface-based when there is one, else any surface duct.
+  const lora = (c) => c.c[idx] >= 3 && c.f[idx] > 0 && c.f[idx] <= 1000;
+  const surf = d.cells.find((c) => c.c[idx] === 4 && lora(c)) || d.cells.find(lora) ||
     d.cells.find((c) => c.c[idx] === 4) || d.cells.find((c) => c.c.indexOf(4) >= 0) || d.cells[0];
-  out.views['ducting-surface'] = { label: DUCTING_VIEWS['ducting-surface'].label, lat: surf.lat, lon: surf.lon, zoom: DUCTING_VIEWS['ducting-surface'].zoom, nodes: 1 };
+  out.views['ducting-surface'] = { label: DUCTING_VIEWS['ducting-surface'].label, lat: surf.lat, lon: surf.lon, zoom: DUCTING_VIEWS['ducting-surface'].zoom, nodes: 1, ductIdx: idx };
   return out;
 }
 
@@ -277,6 +311,22 @@ async function capture(browser, e, views, outDir, base) {
         return n > 0 && !!document.querySelector('.mc-duct-legend');
       }, null, { timeout: 20000 }).then(() => true, () => false);
       if (!drawn) rec.failures.push('ducting cells or legend not drawn');
+      // A forecast-map shot: Map Controls collapsed, slider at the chosen hour.
+      await page.evaluate(() => {
+        const b = document.getElementById('mapControlsToggle');
+        if (b && b.getAttribute('aria-expanded') === 'true') b.click();
+      });
+      if (v.ductIdx != null) {
+        rec.ductTime = await page.evaluate((i) => {
+          const s = document.querySelector('.mc-duct-time input[type=range]');
+          if (!s) return null;
+          s.value = String(i);
+          s.dispatchEvent(new Event('input', { bubbles: true }));
+          const l = document.querySelector('.mc-duct-time');
+          return l ? l.textContent.trim() : null;
+        }, v.ductIdx);
+      }
+      await page.waitForTimeout(400);
     }
     if (e.vector) {
       await page.waitForFunction(() => { const p = window.__mcVector; return p && (p.glIdleMs != null || p.fallback); }, null, { timeout: 45000, polling: 100 }).catch(() => {});
@@ -287,12 +337,12 @@ async function capture(browser, e, views, outDir, base) {
         const m = window.__mcHarness.maps.filter((x) => x._container && x._container.isConnected && x._loaded)[0];
         const s = document.querySelector('.mc-duct-time input[type=range]');
         const idx = s ? parseInt(s.value, 10) : 0;
-        // The surface-duct cell nearest the view centre (the restored view
-        // need not be exactly on the cell centre).
+        // The duct cell nearest the view centre (the view's own cell; the
+        // restored view need not be exactly on the cell centre).
         const c = m.getCenter();
         let hit = null, best = Infinity;
         m.eachLayer((l) => {
-          if (!l._mcCell || l._mcCell.c[idx] !== 4) return;
+          if (!l._mcCell || l._mcCell.c[idx] < 3) return;
           const d = Math.pow(l._mcCell.lat - c.lat, 2) + Math.pow(l._mcCell.lon - c.lng, 2);
           if (d < best) { best = d; hit = l; }
         });
@@ -300,7 +350,7 @@ async function capture(browser, e, views, outDir, base) {
         hit.openPopup([hit._mcCell.lat, hit._mcCell.lon]);
         return !!document.querySelector('.leaflet-popup .mc-duct-popup');
       });
-      if (!opened) rec.failures.push('no surface-duct cell popup could be opened');
+      if (!opened) rec.failures.push('no duct cell popup could be opened');
       await page.waitForTimeout(300);
     }
     if (e.picker) await openPicker(page);
