@@ -4,7 +4,7 @@
  * Covers, against the real public/map-tile-providers.js in a vm sandbox:
  *   - entry `filter`: resolver, MC_applyTileFilter and explicit picks, both themes
  *   - gray built-ins, style:'gray' tags, picker order (plain before gray)
- *   - the 10 vector built-ins; defaultOn group gating
+ *   - the 10 vector built-ins; optIn group gating
  *   - MC_buildTileLayer -> MC_buildVectorLayer with a raster fallback factory
  *   - MC_TILE_OVERLAYS (hillshade gated on MC_createHillshadeLayer, EOX labels,
  *     custom overlays), MC_buildOverlayLayer, the overlay pane
@@ -165,6 +165,11 @@ function makeMap(opts) {
   return m;
 }
 
+// The #2428 groups are opt-in (off unless enabled:true); the suites that
+// exercise them start from a config that turns them all on.
+const ALL_ON = () => ({ eox: { enabled: true }, osmfr: { enabled: true }, openfreemap: { enabled: true },
+  versatiles: { enabled: true }, hillshade: { enabled: true } });
+
 function makeSandbox(opts) {
   opts = opts || {};
   const listeners = {};
@@ -199,7 +204,7 @@ function makeSandbox(opts) {
   ctx.L = ctx.window.L = makeLeaflet(stats);
   vm.createContext(ctx);
   ctx.window.document = ctx.document;
-  if (opts.mapCfg !== undefined) ctx.window.MC_MAP_CFG = opts.mapCfg;
+  ctx.window.MC_MAP_CFG = opts.mapCfg !== undefined ? opts.mapCfg : { tiles: { providers: ALL_ON() } };
   if (opts.before) opts.before(ctx.window);
   vm.runInContext(SRC, ctx);
   for (const k of Object.keys(ctx.window)) if (!(k in ctx)) ctx[k] = ctx.window[k];
@@ -245,7 +250,7 @@ const VECTOR = {
 const VECTOR_ATTR = { openfreemap: '© OpenMapTiles Data from OpenStreetMap', versatiles: '© OpenStreetMap contributors, VersaTiles' };
 
 function custom(entries, extra) {
-  return { tiles: Object.assign({ providers: {}, custom: entries }, extra || {}) };
+  return { tiles: Object.assign({ providers: ALL_ON(), custom: entries }, extra || {}) };
 }
 
 console.log('── #2428 sprint 3: gray, overlays, vector ──');
@@ -315,7 +320,7 @@ test('attach: a gray pick filters its own pane in light mode too', () => {
 
 test('gray raster built-ins have the exact fields', () => {
   const reg = makeSandbox().w.MC_TILE_PROVIDERS;
-  const common = { provider: 'osmfr', category: 'street', style: 'gray', subdomains: 'abc', maxZoom: 19, defaultOn: true,
+  const common = { provider: 'osmfr', category: 'street', style: 'gray', subdomains: 'abc', maxZoom: 19, optIn: true,
     url: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
     attribution: '© OpenStreetMap contributors, tiles by OpenStreetMap France' };
   const want = {
@@ -371,26 +376,37 @@ test('all 10 vector built-ins have the exact fields', () => {
     assert.strictEqual(p.format, 'vector', id);
     assert.strictEqual(p.category, 'street', id);
     assert.strictEqual(p.maxZoom, 19, id);
-    assert.strictEqual(p.defaultOn, true, id);
+    assert.strictEqual(p.optIn, true, id);
     assert.strictEqual(p.attribution, VECTOR_ATTR[group], id);
     assert.ok(!p.invertFilter && !p.filter, id + ' unfiltered');
   }
 });
 
-test('enabled:false removes a defaultOn group (openfreemap, versatiles, osmfr gray, eox labels, hillshade)', () => {
+test('the optIn groups are off by default; each turns on only with enabled:true (openfreemap, versatiles, osmfr gray, eox labels, hillshade)', () => {
   const calls = [];
-  const s = makeSandbox({ before: (w) => hillshadeStub(w, calls) });
-  const ovl = () => Object.keys(s.w.MC_TILE_OVERLAYS);
-  assert.deepStrictEqual(ovl(), ['hillshade', 'eox-labels', 'eox-labels-dark']);
-  let reg = s.load({ tiles: { providers: { openfreemap: { enabled: false } } } });
-  assert.ok(Object.keys(VECTOR).every(id => (id.indexOf('openfreemap') === 0) !== !!reg[id]), 'only openfreemap off');
-  reg = s.load({ tiles: { providers: { versatiles: { enabled: false } } } });
-  assert.ok(Object.keys(VECTOR).every(id => (id.indexOf('versatiles') === 0) !== !!reg[id]), 'only versatiles off');
-  reg = s.load({ tiles: { providers: { osmfr: { enabled: false } } } });
-  assert.ok(!reg['osmfr-gray'] && !reg['osmfr-gray-dark']);
-  reg = s.load({ tiles: { providers: { eox: { enabled: false }, hillshade: { enabled: false } } } });
+  const s = makeSandbox({ mapCfg: null, before: (w) => hillshadeStub(w, calls) });
+  const ovl = () => Object.keys(s.w.MC_TILE_OVERLAYS || {});
+  const vec = (reg, g) => Object.keys(VECTOR).every(id => (id.indexOf(g) === 0) === !!reg[id]);
+  assert.deepStrictEqual(ovl(), [], 'no overlays by default');
+  let reg = s.w.MC_TILE_PROVIDERS;
+  assert.ok(Object.keys(VECTOR).every(id => !reg[id]) && !reg['osmfr-gray'] && !reg['osmfr-gray-dark'], 'no new base by default');
+  for (const off of [{}, { enabled: false }, { enabled: 'true' }, { enabled: 1 }]) {
+    reg = s.load({ tiles: { providers: { openfreemap: off, versatiles: off, osmfr: off, eox: off, hillshade: off } } });
+    assert.ok(Object.keys(VECTOR).every(id => !reg[id]) && !reg['osmfr-gray'], 'still off for ' + JSON.stringify(off));
+    assert.deepStrictEqual(ovl(), [], 'no overlays for ' + JSON.stringify(off));
+  }
+  reg = s.load({ tiles: { providers: { openfreemap: { enabled: true } } } });
+  assert.ok(vec(reg, 'openfreemap'), 'only openfreemap on');
+  reg = s.load({ tiles: { providers: { versatiles: { enabled: true } } } });
+  assert.ok(vec(reg, 'versatiles'), 'only versatiles on');
+  reg = s.load({ tiles: { providers: { osmfr: { enabled: true } } } });
+  assert.ok(reg['osmfr-gray'] && reg['osmfr-gray-dark']);
   assert.deepStrictEqual(ovl(), []);
-  reg = s.load({ tiles: { providers: { hillshade: { enabled: true } } } });
+  s.load({ tiles: { providers: { eox: { enabled: true } } } });
+  assert.deepStrictEqual(ovl(), ['eox-labels', 'eox-labels-dark']);
+  s.load({ tiles: { providers: { hillshade: { enabled: true } } } });
+  assert.deepStrictEqual(ovl(), ['hillshade']);
+  s.load({ tiles: { providers: ALL_ON() } });
   assert.deepStrictEqual(ovl(), ['hillshade', 'eox-labels', 'eox-labels-dark']);
 });
 
@@ -586,16 +602,16 @@ test('hillshade is registered when the factory exists, even if it loads after th
 test('providers.hillshade.url is used when valid; a hostile one falls back to the default', () => {
   const calls = [];
   const s = makeSandbox({ before: (w) => hillshadeStub(w, calls) });
-  s.load({ tiles: { providers: { hillshade: { url: 'https://dem.example.org/{z}/{x}/{y}.png' } } } });
+  s.load({ tiles: { providers: { hillshade: { enabled: true, url: 'https://dem.example.org/{z}/{x}/{y}.png' } } } });
   assert.strictEqual(s.w.MC_TILE_OVERLAYS.hillshade.url, 'https://dem.example.org/{z}/{x}/{y}.png');
-  s.load({ tiles: { providers: { hillshade: { url: '/dem/{z}/{x}/{y}.png' } } } });
+  s.load({ tiles: { providers: { hillshade: { enabled: true, url: '/dem/{z}/{x}/{y}.png' } } } });
   assert.strictEqual(s.w.MC_TILE_OVERLAYS.hillshade.url, '/dem/{z}/{x}/{y}.png');
   const same = s.w.MC_TILE_OVERLAYS.hillshade;
   s.w.MC_initTileRegistry(true);
   assert.strictEqual(s.w.MC_TILE_OVERLAYS.hillshade, same, 'same url -> same entry (layer kept)');
   for (const bad of ['javascript:alert(1)//{z}/{x}/{y}', '//evil.example/{z}/{x}/{y}.png', 'https://u:SECRET@h/{z}/{x}/{y}.png',
     'https://h/{z}/{x}/{y}.png?{SECRET}', 'https://h/static.png', 42]) {
-    s.load({ tiles: { providers: { hillshade: { url: bad } } } });
+    s.load({ tiles: { providers: { hillshade: { enabled: true, url: bad } } } });
     assert.strictEqual(s.w.MC_TILE_OVERLAYS.hillshade.url, TERRARIUM, String(bad));
   }
   assert.ok(s.warns.length >= 1);
@@ -606,12 +622,12 @@ test('providers.hillshade.url is used when valid; a hostile one falls back to th
 // repeated one) would request a literal '{s}' and draw a silently blank layer.
 test('providers.hillshade.url must use exactly {z} {x} {y} once each; else the default', () => {
   const s = makeSandbox({ before: (w) => hillshadeStub(w, []) });
-  s.load({ tiles: { providers: { hillshade: { url: 'https://dem.example.org/{y}/{x}/{z}.png?k=SECRET' } } } });
+  s.load({ tiles: { providers: { hillshade: { enabled: true, url: 'https://dem.example.org/{y}/{x}/{z}.png?k=SECRET' } } } });
   assert.strictEqual(s.w.MC_TILE_OVERLAYS.hillshade.url, 'https://dem.example.org/{y}/{x}/{z}.png?k=SECRET', 'any order is fine');
   for (const bad of ['https://{s}.dem.example.org/{z}/{x}/{y}.png?k=SECRET', 'https://dem.example.org/{z}/{x}/{y}{r}.png?k=SECRET',
     'https://dem.example.org/{z}/{x}/{-y}.png?k=SECRET', 'https://dem.example.org/{z}/{x}/{y}/{z}.png?k=SECRET',
     'https://dem.example.org/{z}/{x}.png?k=SECRET']) {
-    s.load({ tiles: { providers: { hillshade: { url: bad } } } });
+    s.load({ tiles: { providers: { hillshade: { enabled: true, url: bad } } } });
     assert.strictEqual(s.w.MC_TILE_OVERLAYS.hillshade.url, TERRARIUM, bad);
   }
   assert.ok(s.warns.some(w => /hillshade\.url rejected/.test(w)), 'warned: ' + JSON.stringify(s.warns));

@@ -38,12 +38,14 @@
  *   maxNativeZoom number?  (new) highest zoom the server has; Leaflet
  *                 upsamples above it up to maxZoom
  *   subdomains    string?  (new) for {s}; default 'abc'
- *   defaultOn     boolean  (new) true = enabled unless the group's config says
- *                 enabled:false. Every provider added for #2428 is defaultOn;
+ *   optIn         boolean  (new) true = off unless the group's config says
+ *                 enabled:true. Every provider added for #2428 is optIn, so
+ *                 an upgrade changes nothing until the operator turns a group
+ *                 on (licences and volunteer servers are the operator's call);
  *                 existing groups keep their current opt-in/opt-out rules.
  *
  * Overlay entry (new; window.MC_TILE_OVERLAYS[id]), stacked above any base:
- *   provider, label, attribution, maxZoom, maxNativeZoom, subdomains, defaultOn
+ *   provider, label, attribution, maxZoom, maxNativeZoom, subdomains, optIn
  *   kind     'raster' | 'hillshade'
  *   url      raster: XYZ template; hillshade: Terrarium-encoded elevation PNG
  *            template (elevation m = R*256 + G + B/256 - 32768)
@@ -75,7 +77,8 @@
  *
  * Operator config, map.tiles:
  *   providers.<group>.enabled   unchanged; new groups: eox, osmfr,
- *                               openfreemap, hillshade (all defaultOn)
+ *                               openfreemap, versatiles, hillshade (all
+ *                               optIn: on only with enabled:true)
  *   providers.hillshade.url     elevation tiles; default AWS Open Data
  *                               terrarium (the planner's terrain bucket)
  *   custom: [ { id, label, type, category, format, url, attribution,
@@ -128,7 +131,7 @@
  *   Entry field `style: 'gray'` (optional tag) marks gray basemaps; the
  *     picker shows them inside their category after the plain entries of
  *     the same type. No new `type` value.
- *   New groups, all defaultOn: openfreemap (vector), versatiles (vector),
+ *   New groups, all optIn: openfreemap (vector), versatiles (vector),
  *     and the raster gray pair lives in osmfr.
  *   Split across files (each sets window globals; loaded after this file):
  *     map-hillshade.js  MC_createHillshadeLayer(opts) -> L.GridLayer
@@ -167,6 +170,10 @@
   var DEFAULT_ID   = 'carto-dark';
   var DEFAULT_ID_LIGHT = 'carto-light';
   var EVENT_NAME   = 'mc-tile-provider-changed';
+  // A map pinned in a layer picker (any theme), or absent for Auto. Untrusted:
+  // honoured only while it names a registered entry.
+  var PIN_KEY      = 'mc-tile-pinned';
+  var _pinMemo     = null;   // last value written, for when localStorage throws
   
   var _serverDefault = null;
   var _serverDefaultLight = null;
@@ -195,13 +202,13 @@
     return 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
   };
 
-  // Keyless vector built-ins (defaultOn). Attribution is plain text (S1).
+  // Keyless vector built-ins (optIn). Attribution is plain text (S1).
   var _VECTOR_ATTRIBUTION = {
     openfreemap: '© OpenMapTiles Data from OpenStreetMap',
     versatiles: '© OpenStreetMap contributors, VersaTiles'
   };
   function _vector(group, label, type, style, url) {
-    var e = { provider: group, defaultOn: true, label: label, category: 'street', type: type, format: 'vector',
+    var e = { provider: group, optIn: true, label: label, category: 'street', type: type, format: 'vector',
       invertFilter: null, url: url, attribution: _VECTOR_ATTRIBUTION[group], maxZoom: 19 };
     if (style) e.style = style;
     return e;
@@ -223,39 +230,39 @@
     'usgs-imagery': { provider: 'usgs', label: 'USGS Imagery', url: function() { return 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}'; }, invertFilter: null, type: 'light', category: 'satellite', attribution: 'U.S. Geological Survey, National Geospatial Program', maxZoom: 16 },
     'esri-darkgray-labels': { provider: 'esri', style: 'gray', label: 'Esri Dark Gray Canvas', url: function() { return 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'; }, refUrl: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', invertFilter: null, type: 'dark', attribution: 'Tiles © Esri', maxZoom: 19 },
 
-    // ── #2428 keyless built-ins: defaultOn (on unless the group says enabled:false) ──
+    // ── #2428 keyless built-ins: optIn (off unless the group says enabled:true) ──
     // Their attribution is plain text stored HTML-escaped (S1), hence '&amp;'.
     // maxNativeZoom is the deepest level with real detail, measured against EOX
     // (z+1 tiles compared with their upsampled parent): Sentinel-2 is 10 m
     // imagery, so deeper EOX levels are resampled and Leaflet upsamples instead.
-    'eox-s2-2025': { provider: 'eox', defaultOn: true, label: 'Satellite 2025 (EOX Sentinel-2)', category: 'satellite', type: 'any', invertFilter: null,
+    'eox-s2-2025': { provider: 'eox', optIn: true, label: 'Satellite 2025 (EOX Sentinel-2)', category: 'satellite', type: 'any', invertFilter: null,
       url: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}.jpg',
       attribution: 'Sentinel-2 cloudless 2025 - s2maps.eu by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2025), CC BY-NC-SA 4.0',
       maxZoom: 19, maxNativeZoom: 15 },
-    'eox-s2-2016': { provider: 'eox', defaultOn: true, label: 'Satellite 2016 (EOX Sentinel-2)', category: 'satellite', type: 'any', invertFilter: null,
+    'eox-s2-2016': { provider: 'eox', optIn: true, label: 'Satellite 2016 (EOX Sentinel-2)', category: 'satellite', type: 'any', invertFilter: null,
       url: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg',
       attribution: 'Sentinel-2 cloudless - s2maps.eu by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 &amp; 2017), CC BY 4.0',
       maxZoom: 19, maxNativeZoom: 14 },
-    'eox-terrain-light': { provider: 'eox', defaultOn: true, label: 'Terrain Light (EOX)', category: 'topo', type: 'light', invertFilter: null,
+    'eox-terrain-light': { provider: 'eox', optIn: true, label: 'Terrain Light (EOX)', category: 'topo', type: 'light', invertFilter: null,
       url: 'https://tiles.maps.eox.at/wmts/1.0.0/terrain-light_3857/default/g/{z}/{y}/{x}.jpg',
       attribution: 'Terrain Light: Data © OpenStreetMap contributors and others, Rendering © EOX',
       maxZoom: 19, maxNativeZoom: 15 },
-    'osmfr-hot': { provider: 'osmfr', defaultOn: true, label: 'Humanitarian (OSM France)', category: 'street', type: 'light', invertFilter: null,
+    'osmfr-hot': { provider: 'osmfr', optIn: true, label: 'Humanitarian (OSM France)', category: 'street', type: 'light', invertFilter: null,
       url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', subdomains: 'abc',
       attribution: '© OpenStreetMap contributors, style by Humanitarian OpenStreetMap Team, hosted by OpenStreetMap France',
       maxZoom: 19 },
-    'osmfr-cyclosm': { provider: 'osmfr', defaultOn: true, label: 'CyclOSM (topographic)', category: 'topo', type: 'light', invertFilter: null,
+    'osmfr-cyclosm': { provider: 'osmfr', optIn: true, label: 'CyclOSM (topographic)', category: 'topo', type: 'light', invertFilter: null,
       url: 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', subdomains: 'abc',
       attribution: 'CyclOSM, map data © OpenStreetMap contributors',
       maxZoom: 19 },
 
     // ── Sprint 3: gray rasters (OSM France tiles + a CSS `filter`, both themes) ──
-    'osmfr-gray': { provider: 'osmfr', defaultOn: true, label: 'OSM Gray', category: 'street', type: 'light', style: 'gray', invertFilter: null,
+    'osmfr-gray': { provider: 'osmfr', optIn: true, label: 'OSM Gray', category: 'street', type: 'light', style: 'gray', invertFilter: null,
       filter: 'grayscale(1) contrast(0.92) brightness(1.04)',
       url: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', subdomains: 'abc',
       attribution: '© OpenStreetMap contributors, tiles by OpenStreetMap France',
       maxZoom: 19 },
-    'osmfr-gray-dark': { provider: 'osmfr', defaultOn: true, label: 'OSM Gray Dark', category: 'street', type: 'dark', style: 'gray', invertFilter: null,
+    'osmfr-gray-dark': { provider: 'osmfr', optIn: true, label: 'OSM Gray Dark', category: 'street', type: 'dark', style: 'gray', invertFilter: null,
       filter: 'grayscale(1) invert(1) contrast(0.9) brightness(0.95)',
       url: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', subdomains: 'abc',
       attribution: '© OpenStreetMap contributors, tiles by OpenStreetMap France',
@@ -288,11 +295,11 @@
   // overlay_bright draws light text with a dark halo (for imagery);
   // overlay draws dark text with a light halo (for light basemaps).
   var OVERLAY_STYLES = {
-    'eox-labels': { provider: 'eox', defaultOn: true, kind: 'raster', label: 'Place labels (EOX)',
+    'eox-labels': { provider: 'eox', optIn: true, kind: 'raster', label: 'Place labels (EOX)',
       url: _eoxOverlay('overlay_bright_3857'),
       attribution: 'Overlay: Data © OpenStreetMap contributors, Rendering © EOX',
       maxZoom: 19, maxNativeZoom: 14, opacity: 1, zIndex: OVERLAY_Z },
-    'eox-labels-dark': { provider: 'eox', defaultOn: true, kind: 'raster', label: 'Place labels, dark text (EOX)',
+    'eox-labels-dark': { provider: 'eox', optIn: true, kind: 'raster', label: 'Place labels, dark text (EOX)',
       url: _eoxOverlay('overlay_3857'),
       attribution: 'Overlay: Data © OpenStreetMap contributors, Rendering © EOX',
       maxZoom: 19, maxNativeZoom: 14, opacity: 1, zIndex: OVERLAY_Z }
@@ -470,11 +477,11 @@
     }
   }
 
-  // A defaultOn group is on unless map.tiles.providers.<group>.enabled === false.
+  // An optIn group is on only when map.tiles.providers.<group>.enabled === true.
   function _groupOn(group) {
     var p = _cfg && _cfg.providers;
     var g = (p && typeof p === 'object') ? _own(p, group) : null;
-    return !(g && typeof g === 'object' && g.enabled === false);
+    return !!(g && typeof g === 'object' && g.enabled === true);
   }
 
   // map-hillshade.js fills in only {z}, {x} and {y}: a hillshade url must use
@@ -500,7 +507,7 @@
     // Same url -> same entry object, so maps keep their hillshade layer when
     // the registry is rebuilt (config arriving async) instead of redrawing it.
     if (_hillshade && _hillshade.url === url) return _hillshade;
-    _hillshade = { provider: 'hillshade', defaultOn: true, kind: 'hillshade', label: 'Hillshade (terrain)', url: url,
+    _hillshade = { provider: 'hillshade', optIn: true, kind: 'hillshade', label: 'Hillshade (terrain)', url: url,
       attribution: 'Terrain: Mapzen/AWS Open Data (SRTM, USGS and others)',
       maxZoom: _DEFAULT_MAX_ZOOM, maxNativeZoom: 15, opacity: 0.35, zIndex: OVERLAY_Z };
     return _hillshade;
@@ -542,7 +549,7 @@
     REGISTRY = {};
     for (var key in BASE_STYLES) {
       var style = BASE_STYLES[key];
-      if (style.defaultOn) { if (_groupOn(style.provider)) REGISTRY[key] = style; continue; }
+      if (style.optIn) { if (_groupOn(style.provider)) REGISTRY[key] = style; continue; }
       if (style.provider === 'carto' && HAS_CARTO) REGISTRY[key] = style;
       if (style.provider === 'osm' && HAS_OSM) REGISTRY[key] = style;
       if (style.provider === 'opentopomap' && HAS_OPENTOPOMAP) REGISTRY[key] = style;
@@ -634,6 +641,43 @@
   }
 
 
+  // The pinned map: the stored id while it is registered, else null (Auto).
+  function getPinnedId() {
+    var v = _pinMemo;
+    try { if (window.localStorage) v = window.localStorage.getItem(PIN_KEY); } catch (_) {}
+    return _hasId(v) ? v : null;
+  }
+
+  // Pin `id` (a registered entry, any theme), or clear the pin with null.
+  // Every map follows: the event makes MC_attachAutoTiles re-sync.
+  function setPinned(id) {
+    if (id !== null && !_hasId(id)) return false;
+    _pinMemo = id;
+    try {
+      if (window.localStorage) {
+        if (id === null) window.localStorage.removeItem(PIN_KEY);
+        else window.localStorage.setItem(PIN_KEY, id);
+      }
+    } catch (_) { }
+    var detail = { pinned: id };
+    try {
+      var ev = (typeof CustomEvent === 'function')
+        ? new CustomEvent(EVENT_NAME, { detail: detail })
+        : { type: EVENT_NAME, detail: detail };
+      window.dispatchEvent(ev);
+    } catch (_) { }
+    return true;
+  }
+
+  // The entry a map without an explicit layer shows for a theme: the pin
+  // when it suits the theme (an 'any' entry, e.g. satellite, always does),
+  // else that theme's choice.
+  function _themeId(isDark) {
+    var pin = getPinnedId();
+    if (pin && _fitsTheme(REGISTRY[pin], isDark ? 'dark' : 'light')) return pin;
+    return isDark ? getActiveId() : getActiveLightId();
+  }
+
   function setServerDefault(id) { if (_hasId(id)) _serverDefault = id; }
   function setServerDefaultLight(id) { if (_hasId(id)) _serverDefaultLight = id; }
 
@@ -659,8 +703,7 @@
     }
 
     var isDark = _isDarkEffective();
-    var id = isDark ? getActiveId() : getActiveLightId();
-    pane.style.filter = _paneFilter(REGISTRY[id], isDark);
+    pane.style.filter = _paneFilter(REGISTRY[_themeId(isDark)], isDark);
   }
 
   // The tile-pane CSS filter for an entry: its `filter` in both themes, else
@@ -680,6 +723,8 @@
   window.MC_setLightTileProvider        = function(id) { return setActive(id, 'light'); };
   window.MC_getDarkTileProvider         = getActiveId;
   window.MC_getLightTileProvider        = getActiveLightId;
+  window.MC_getPinnedTileProvider       = getPinnedId;
+  window.MC_setPinnedTileProvider       = setPinned;
   window.MC_setServerDefaultTileProvider = setServerDefault;
   window.MC_setServerDefaultLightTileProvider = setServerDefaultLight;
   window.MC_applyTileFilter             = applyTileFilter;
@@ -784,7 +829,14 @@
     // MC_initTileRegistry after every rebuild) and they let test sandboxes
     // inject mocks the same way the #1614 harness does.
     var id = null;
+    var reg0 = null;
+    try { reg0 = window.MC_TILE_PROVIDERS || REGISTRY; } catch (_e) { reg0 = REGISTRY; }
+    // 2a. A map pinned in a picker, when it suits this theme.
     try {
+      var pin = (typeof window.MC_getPinnedTileProvider === 'function') ? window.MC_getPinnedTileProvider() : null;
+      if (pin && Object.prototype.hasOwnProperty.call(reg0, pin) && _fitsTheme(reg0[pin], desc.type)) id = pin;
+    } catch (_e) { id = null; }
+    if (!id) try {
       if (isDark && typeof window.MC_getDarkTileProvider === 'function') id = window.MC_getDarkTileProvider();
       else if (!isDark && typeof window.MC_getLightTileProvider === 'function') id = window.MC_getLightTileProvider();
     } catch (_e) { id = null; }
@@ -880,6 +932,17 @@
     if (!fb || fb.format === 'vector') fb = (_hasId(defFallback) && REGISTRY[defFallback]) || BASE_STYLES[defFallback];
     return fb;
   }
+
+  // A raster XYZ url for a descriptor: its own url, or, for a vector entry
+  // (a MapLibre style JSON, which L.tileLayer can't use), the raster it falls
+  // back to. For callers that only want a tile template (getTileUrl).
+  window.MC_rasterTileUrl = function (desc) {
+    if (!desc) return null;
+    if (desc.format !== 'vector') return desc.url;
+    var fb = _vectorFallback(desc);
+    var u = fb && (fb.url || fb.baseUrl);
+    return (typeof u === 'function') ? u() : (u || null);
+  };
 
   // The raster standing in for a vector entry keeps that entry's maxZoom, so
   // the map's zoom limit doesn't change when the fallback appears; past the
@@ -1221,6 +1284,12 @@
         };
       }
 
+      // The pinned map, saved by a pick here or on another page, wins; a
+      // pin that is gone (or none) means Auto.
+      var pinned = getPinnedId();
+      _isAuto = !pinned;
+      _explicitId = pinned;
+
       // Decide initial active layer
       if (_isAuto) {
         // Ensure autoLayerGroup is on the map; explicit layers are off
@@ -1238,6 +1307,7 @@
 
       map._mcBaselayerchangeHandler = function (e) {
         if (e.name === AUTO_KEY) {
+          setPinned(null); // before _activateAuto, whose sync resolves the theme map
           _activateAuto();
           return;
         }
@@ -1248,6 +1318,7 @@
 
         _isAuto = false;
         _explicitId = selectedId;
+        setPinned(selectedId); // saved: this and every other map follow it
         try { 
           var pane = map.getPane('tilePane');
           // Contract: mark the pane as explicit so applyTileFilter skips auto-theme CSS filters

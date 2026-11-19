@@ -6,6 +6,10 @@
  * elevation request is answered by tests/e2e/lib/map-harness.js; nothing
  * reaches a real tile host.
  *
+ * The #2428 groups (eox, osmfr, openfreemap, versatiles, hillshade) are opt-in,
+ * so newPage rewrites the client config to enable them (providers: null leaves
+ * the config untouched). Section 7 covers the saved pick (mc-tile-pinned).
+ *
  * Usage: BASE_URL=http://localhost:13581 node tests/e2e/test-map-providers-e2e.js
  */
 'use strict';
@@ -30,7 +34,14 @@ const CUSTOM_ENTRIES = [
     url: 'javascript:alert(1)', attribution: '<img src=x onerror=window.__x=1>' },
 ];
 
-async function newPage(browser, { theme, provider, overlays, custom, planner } = {}) {
+// map.tiles.providers that turns every opt-in #2428 group on.
+const OPT_IN_ON = { eox: { enabled: true }, osmfr: { enabled: true }, openfreemap: { enabled: true },
+  versatiles: { enabled: true }, hillshade: { enabled: true } };
+const OPT_IN_IDS = ['eox-s2-2025', 'eox-s2-2016', 'eox-terrain-light', 'osmfr-hot', 'osmfr-cyclosm', 'osmfr-gray', 'osmfr-gray-dark',
+  'openfreemap-liberty', 'openfreemap-bright', 'openfreemap-positron', 'openfreemap-dark', 'openfreemap-fiord',
+  'versatiles-colorful', 'versatiles-muted', 'versatiles-gray', 'versatiles-colorful-dark', 'versatiles-gray-dark'];
+
+async function newPage(browser, { theme, provider, overlays, custom, planner, providers } = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
@@ -49,6 +60,7 @@ async function newPage(browser, { theme, provider, overlays, custom, planner } =
     const json = await res.json();
     json.map = json.map || {};
     json.map.tiles = Object.assign({}, json.map.tiles || {});
+    if (providers !== null) json.map.tiles.providers = Object.assign({}, json.map.tiles.providers || {}, providers || OPT_IN_ON);
     if (custom) json.map.tiles.custom = custom;
     if (planner) json.planner = { enabled: true, defaultRangeKm: 30, newAntennaM: 10, existingAntennaM: 20, maxAreaKm: 100, nodeMarginKm: 20, maxLegKm: 100 };
     await route.fulfill({ response: res, json });
@@ -324,6 +336,104 @@ async function run() {
           assert(r.pickers === 1, 'pickers: ' + r.pickers);
           assert(r.grids === 1, 'tile layers on map: ' + r.grids);
           assert(r.containers === 1, 'tile pane layers: ' + r.containers);
+          assert(c.errors.length === 0, 'page errors: ' + c.errors);
+        });
+      } finally { await c.context.close(); }
+    }
+
+    // ── 7. Saved pick (mc-tile-pinned) ──────────────────────────────────
+    const pinned = (page) => page.evaluate(() => localStorage.getItem('mc-tile-pinned'));
+    const radioOn = async (page, id) => {
+      await page.locator('.leaflet-control-layers').first().hover();
+      return page.locator(`label[data-tile-id="${id}"] input`).isChecked();
+    };
+    const reloadMap = async (page) => {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('.leaflet-control-layers', { state: 'attached' });
+      await page.waitForSelector('.leaflet-tile-pane .leaflet-tile-loaded', { timeout: 15000 });
+    };
+    const drawn = (page, re, scope) => page.waitForFunction(([src, sel]) =>
+      Array.from(document.querySelectorAll(sel + ' .leaflet-tile-pane img.leaflet-tile-loaded')).some(i => new RegExp(src).test(i.src)),
+      [re, scope || ''], { timeout: 15000 });
+    {
+      const c = await newPage(browser, { theme: 'light' });
+      try {
+        await gotoMap(c.page);
+        await test('7a picking a base map saves it, and a reload keeps it selected and drawn', async () => {
+          assert(await pinned(c.page) === null, 'pinned before any pick: ' + await pinned(c.page));
+          await pick(c.page, 'osmfr-hot');
+          await drawn(c.page, 'openstreetmap\\.fr/hot');
+          assert(await pinned(c.page) === 'osmfr-hot', 'mc-tile-pinned: ' + await pinned(c.page));
+          await reloadMap(c.page);
+          await drawn(c.page, 'openstreetmap\\.fr/hot');
+          assert(await radioOn(c.page, 'osmfr-hot'), 'osmfr-hot radio not selected after reload');
+          assert(!(await radioOn(c.page, '__auto__')), 'Auto still selected after reload');
+          assert(await c.page.locator('label[data-tile-id="osmfr-hot"]').count() === 1, 'label[data-tile-id] missing');
+          assert(!(await tileKeys(c.page)).some(u => /cartocdn/.test(u)), 'Auto (carto) tiles still on the map');
+        });
+        await test('7a the saved pick also shows on a page without a picker (node detail map)', async () => {
+          const pk = await c.page.evaluate(async () => {
+            const r = await fetch('/api/nodes?limit=200'); const j = await r.json();
+            const n = (j.nodes || []).find(x => x.lat && x.lon);
+            return n ? n.public_key : null;
+          });
+          assert(pk, 'the fixture has no node with a location');
+          await c.page.evaluate((k) => { location.hash = '#/nodes/' + k; }, pk);
+          await c.page.waitForSelector('#nodeFullMap .leaflet-tile-loaded', { timeout: 15000 });
+          assert(await c.page.locator('#nodeFullMap .leaflet-control-layers').count() === 0, 'the node map has a picker');
+          await drawn(c.page, 'openstreetmap\\.fr/hot', '#nodeFullMap');
+        });
+        await test('7a a pin that does not fit the theme is kept but not drawn on a picker-less page', async () => {
+          // osmfr-hot is a light map: in dark the node map shows the dark choice, the pick stays saved.
+          await MH.setTheme(c.page, 'dark');
+          await c.page.waitForFunction(() => Array.from(document.querySelectorAll('#nodeFullMap .leaflet-tile-pane img.leaflet-tile-loaded')).some(i => /cartocdn/.test(i.src)), null, { timeout: 15000 });
+          assert(await c.page.locator('#nodeFullMap .leaflet-tile-pane img[src*="openstreetmap.fr"]').count() === 0, 'light pin drawn in dark');
+          assert(await pinned(c.page) === 'osmfr-hot', 'pin was dropped: ' + await pinned(c.page));
+          assert(c.errors.length === 0, 'page errors: ' + c.errors);
+        });
+      } finally { await c.context.close(); }
+    }
+    {
+      const c = await newPage(browser, { theme: 'light' });
+      try {
+        await gotoMap(c.page);
+        await test('7b picking Auto clears the saved pick; a reload shows Auto selected', async () => {
+          await pick(c.page, 'osmfr-hot');
+          await drawn(c.page, 'openstreetmap\\.fr/hot');
+          assert(await pinned(c.page) === 'osmfr-hot', 'not saved');
+          await pick(c.page, '__auto__');
+          await drawn(c.page, 'cartocdn');
+          assert(await pinned(c.page) === null, 'key still there: ' + await pinned(c.page));
+          await reloadMap(c.page);
+          assert(await radioOn(c.page, '__auto__'), 'Auto not selected after reload');
+          assert(!(await radioOn(c.page, 'osmfr-hot')), 'osmfr-hot selected after reload');
+          assert(await pinned(c.page) === null, 'key came back after reload');
+          assert(c.errors.length === 0, 'page errors: ' + c.errors);
+        });
+        await test('7b a saved id that is not registered (junk) is ignored: Auto, no error', async () => {
+          await c.page.evaluate(() => localStorage.setItem('mc-tile-pinned', '<img src=x onerror=window.__x=1>'));
+          await reloadMap(c.page);
+          assert(await radioOn(c.page, '__auto__'), 'Auto not selected');
+          assert(await c.page.evaluate(() => window.__x) === undefined, 'junk was executed');
+          assert(c.errors.length === 0, 'page errors: ' + c.errors);
+        });
+      } finally { await c.context.close(); }
+    }
+
+    // ── 7c. Untouched config: the opt-in groups are not offered ─────────
+    {
+      const c = await newPage(browser, { theme: 'light', providers: null });
+      try {
+        await gotoMap(c.page);
+        await test('7c with no map.tiles.providers the picker lists none of the opt-in groups', async () => {
+          await c.page.locator('.leaflet-control-layers').first().hover();
+          const ids = await c.page.$$eval('.leaflet-control-layers label[data-tile-id], .leaflet-control-layers label[data-tile-overlay-id]',
+            els => els.map(e => e.getAttribute('data-tile-id') || e.getAttribute('data-tile-overlay-id')));
+          assert(ids.indexOf('carto-light') >= 0 && ids.indexOf('__auto__') >= 0, 'picker looks empty: ' + ids);
+          const leaked = ids.filter(i => OPT_IN_IDS.indexOf(i) >= 0 || /^(hillshade|eox-labels)/.test(i));
+          assert(leaked.length === 0, 'opt-in entries offered: ' + leaked);
+          const reg = (await MH.listProviders(c.page)).map(p => p.id);
+          assert(OPT_IN_IDS.every(i => reg.indexOf(i) < 0), 'registered: ' + reg.filter(i => OPT_IN_IDS.indexOf(i) >= 0));
           assert(c.errors.length === 0, 'page errors: ' + c.errors);
         });
       } finally { await c.context.close(); }

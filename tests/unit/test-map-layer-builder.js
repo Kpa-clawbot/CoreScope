@@ -590,12 +590,23 @@ test('picker: an explicit pick survives the fromConfig rebuild (light entry in d
   const c3 = s.stats.controls[s.stats.controls.length - 1];
   assert.ok(!c3.baseMaps['carto-light'], 'carto disabled');
   assert.ok(map._layers.includes(h.group), 'back to Auto');
-  // Once it fell back to Auto, a config that registers it again keeps Auto.
+  // The saved pick (mc-tile-pinned) outlives the config that dropped it, so a
+  // config that registers it again restores it: the pin only ever clears when
+  // the user picks Auto.
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), null, 'unregistered pin reads as nothing');
+  assert.strictEqual(s.ctx.localStorage.getItem('mc-tile-pinned'), 'carto-light', 'but stays stored');
   s.w.MC_MAP_CFG = null;
   s.w.MC_initTileRegistry(true);
   const c4 = s.stats.controls[s.stats.controls.length - 1];
-  assert.ok(map._layers.includes(h.group));
-  assert.ok(!map.hasLayer(c4.baseMaps['carto-light']));
+  assert.ok(map.hasLayer(c4.baseMaps['carto-light']), 'registered again: the saved pick is restored');
+  assert.ok(!map._layers.includes(h.group), 'Auto off while a pick is restored');
+  // Picking Auto clears the pin; a later rebuild then keeps Auto.
+  map._handlers.baselayerchange({ name: '__auto__', layer: h.group });
+  assert.strictEqual(s.ctx.localStorage.getItem('mc-tile-pinned'), null, 'Auto clears the pin');
+  s.w.MC_initTileRegistry(true);
+  const c5 = s.stats.controls[s.stats.controls.length - 1];
+  assert.ok(map._layers.includes(h.group), 'Auto after the pin was cleared');
+  assert.ok(!map.hasLayer(c5.baseMaps['carto-light']));
 });
 
 // Static/secondary maps pass { raster: true }: a vector desc builds its

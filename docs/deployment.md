@@ -366,7 +366,7 @@ Map tiles are configured under `map.tiles` in `config.json`. Several providers a
 
 #### How the picker works for visitors
 
-The Map, Live and Repeater Planner pages show the layer picker. Every other map (node detail, node reach, RX coverage, the Analytics route map and the home mini-map) has no picker but follows the same choice; because those maps never load MapLibre, a vector choice shows the theme's default raster map there. **Auto** is the default: it picks the light or dark map to match the current theme, using `lightDefault` / `darkDefault`. A visitor can instead pin a specific map. Pinned maps are listed in **Street**, **Topographic** and **Satellite** groups (gray styles follow the plain ones inside each group), and a separate **Overlays** group has checkboxes for layers drawn on top of the map (place labels, hillshade). Choices are saved per browser in `localStorage`; nothing is stored on the server.
+The Map, Live and Repeater Planner pages show the layer picker. Every other map (node detail, node reach, RX coverage, the Analytics route map and the home mini-map) has no picker but follows the same choice; because those maps never load MapLibre, a vector choice shows the theme's default raster map there. **Auto** is the default: it picks the light or dark map to match the current theme, using `lightDefault` / `darkDefault`. A visitor can instead pin a specific map. Pinned maps are listed in **Street**, **Topographic** and **Satellite** groups (gray styles follow the plain ones inside each group), and a separate **Overlays** group has checkboxes for layers drawn on top of the map (place labels, hillshade). A pin is saved per browser in `localStorage` (`mc-tile-pinned`) and survives a reload: every picker opens on it until the visitor picks **Auto** again, and the maps without a picker show it whenever it suits the current theme (satellite always does), otherwise the theme's map. Ticked overlays are saved the same way. Nothing is stored on the server.
 
 #### Built-in providers
 
@@ -380,13 +380,13 @@ The group is the key under `map.tiles.providers`. "Default" is the state when th
 | `stamen` | `stamen-toner-lite`, `stamen-toner-dark` | street | light / dark | Yes (`token`, Stadia Maps); not offered without one | Off | Stadia Maps terms |
 | `usgs` | `usgs-topo`, `usgs-imagery` | topographic, satellite | light | No | Off | US coverage, zoom up to 16 |
 | `esri` | `esri-darkgray-labels` | street | dark | No | Always on | Esri terms |
-| `eox` | `eox-s2-2025`, `eox-s2-2016` (Sentinel-2 satellite), `eox-terrain-light`; overlays `eox-labels`, `eox-labels-dark` | satellite, topographic | any (satellite), light (terrain) | No | On | 2016 imagery CC BY 4.0; 2025 imagery CC BY-NC-SA 4.0 (non-commercial) |
-| `osmfr` | `osmfr-hot` (Humanitarian), `osmfr-cyclosm` (CyclOSM), `osmfr-gray` (OSM Gray), `osmfr-gray-dark` (OSM Gray Dark) | street, topographic | light / dark | No | On | OSM France community servers, donation-funded fair use |
-| `openfreemap` | `openfreemap-liberty`, `-bright`, `-positron` (light); `openfreemap-dark`, `-fiord` (dark) | street (vector) | light / dark | No | On | Free, no limits |
-| `versatiles` | `versatiles-colorful`, `-muted`, `-gray` (light); `versatiles-colorful-dark`, `-gray-dark` (dark) | street (vector) | light / dark | No | On | Free |
-| `hillshade` | overlay `hillshade` | overlay | any | No | On | Elevation tiles from AWS Open Data by default |
+| `eox` | `eox-s2-2025`, `eox-s2-2016` (Sentinel-2 satellite), `eox-terrain-light`; overlays `eox-labels`, `eox-labels-dark` | satellite, topographic | any (satellite), light (terrain) | No | Off | 2016 imagery CC BY 4.0; 2025 imagery CC BY-NC-SA 4.0 (non-commercial) |
+| `osmfr` | `osmfr-hot` (Humanitarian), `osmfr-cyclosm` (CyclOSM), `osmfr-gray` (OSM Gray), `osmfr-gray-dark` (OSM Gray Dark) | street, topographic | light / dark | No | Off | OSM France community servers, donation-funded fair use |
+| `openfreemap` | `openfreemap-liberty`, `-bright`, `-positron` (light); `openfreemap-dark`, `-fiord` (dark) | street (vector) | light / dark | No | Off | Free, no limits |
+| `versatiles` | `versatiles-colorful`, `-muted`, `-gray` (light); `versatiles-colorful-dark`, `-gray-dark` (dark) | street (vector) | light / dark | No | Off | Free |
+| `hillshade` | overlay `hillshade` | overlay | any | No | Off | Elevation tiles from AWS Open Data by default |
 
-**EOX licensing.** The 2016 Sentinel-2 imagery is CC BY 4.0. The later years (including 2025) are CC BY-NC-SA 4.0, which excludes commercial use. A commercial deployment must set `"eox": { "enabled": false }` or license the imagery from EOX. The EOX group also carries Terrain Light and the place-label overlays, so disabling it removes those too.
+**EOX licensing.** The 2016 Sentinel-2 imagery is CC BY 4.0. The later years (including 2025) are CC BY-NC-SA 4.0, which excludes commercial use. The group is off by default; a commercial deployment should leave it off or license the imagery from EOX. The EOX group also carries Terrain Light and the place-label overlays, so leaving it off leaves those out too.
 
 **Be a good neighbour.** OSM France, OpenTopoMap and the OSM community server are volunteer-run. Keep your instance's traffic modest, or self-host (see [Self-hosting](#self-hosting-tiles)).
 
@@ -399,15 +399,14 @@ Set `enabled` on a group:
   "tiles": {
     "providers": {
       "osm":         { "enabled": true },
-      "eox":         { "enabled": false },
-      "versatiles":  { "enabled": false }
+      "openfreemap": { "enabled": true },
+      "hillshade":   { "enabled": true }
     }
   }
 }
 ```
 
-- The new groups (`eox`, `osmfr`, `openfreemap`, `versatiles`, `hillshade`) are on unless you set `"enabled": false`.
-- `osm`, `opentopomap`, `stamen` and `usgs` are off until you set `"enabled": true`. `stamen` additionally needs a `token`.
+- `eox`, `osmfr`, `openfreemap`, `versatiles`, `hillshade`, `osm`, `opentopomap`, `stamen` and `usgs` are off until you set `"enabled": true` (the boolean; a string does not count). `stamen` additionally needs a `token`. Upgrading therefore changes nothing in the picker until you turn a group on: check the group's terms in the table above first.
 - `carto` is on unless `"enabled": false`; `esri` is always available.
 - Disabling a group removes its maps from the picker. If a visitor had saved one, or `darkDefault` / `lightDefault` names one, it falls back to the default.
 
@@ -506,7 +505,7 @@ To make a custom map the default, name it in `darkDefault` / `lightDefault`, for
 
 #### Vector maps
 
-OpenFreeMap, VersaTiles and custom `vector` entries are drawn with MapLibre GL, which is vendored in `public/vendor/` (no third-party script host). It is about 380 KB gzipped and is downloaded only the first time a vector map is shown; visitors who stay on raster maps never fetch it. If WebGL is unavailable, the library fails to load within 15 seconds, or the GL context is lost, the map falls back to the shipped default raster map for the current theme (Carto Positron or Carto Dark).
+OpenFreeMap, VersaTiles and custom `vector` entries are drawn with MapLibre GL, which is vendored in `public/vendor/` (no third-party script host). It is about 380 KB gzipped and is downloaded only the first time a vector map is shown; visitors who stay on raster maps never fetch it. The scripts are loaded with Subresource Integrity, so a proxy or CDN that rewrites JavaScript (minifying, injecting) makes them fail the check: vector maps then fall back to the raster map with only a console warning. Serve `public/vendor/` unmodified. If WebGL is unavailable, the library fails to load within 15 seconds, or the GL context is lost, the map falls back to the shipped default raster map for the current theme (Carto Positron or Carto Dark).
 
 #### Hillshade overlay
 

@@ -146,14 +146,14 @@ Which maps visitors can pick (street, gray, topographic, satellite, vector), the
     "providers": {
       "carto": { "key": "YOUR_CARTO_KEY" },
       "opentopomap": { "enabled": true },
-      "eox": { "enabled": false }
+      "openfreemap": { "enabled": true }
     },
     "custom": []
   }
 }
 ```
 
-Everything under `map.tiles` is sent to every visitor's browser, so only put keys there that are meant to be public (domain-restricted). The full list of maps, their licences and examples for custom and self-hosted tile servers are in [Map Tile Providers](../deployment.md#map-tile-providers).
+Everything under `map.tiles` is sent to every visitor's browser, so only put keys there that are meant to be public (domain-restricted). Of the built-in groups only `carto` and `esri` are on unless you say otherwise; every other group (including the newer `eox`, `osmfr`, `openfreemap`, `versatiles` and `hillshade`) needs `"enabled": true`. The full list of maps, their licences and examples for custom and self-hosted tile servers are in [Map Tile Providers](../deployment.md#map-tile-providers).
 
 ## Regions
 

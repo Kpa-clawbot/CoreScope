@@ -119,25 +119,25 @@
         "usgs": {
           "enabled": false
         },
-        "_comment_eox": "EOX Sentinel-2 cloudless satellite (latest year and 2016), EOX Terrain Light, and the EOX place-labels overlay. No key. On unless enabled is false. The 2016 imagery is CC BY 4.0; later years are CC BY-NC-SA 4.0 (non-commercial only) - a commercial deployment must set enabled to false or license them from EOX.",
+        "_comment_eox": "EOX Sentinel-2 cloudless satellite (latest year and 2016), EOX Terrain Light, and the EOX place-labels overlay. No key. Off unless enabled is true. The 2016 imagery is CC BY 4.0; later years are CC BY-NC-SA 4.0 (non-commercial only) - a commercial deployment must leave it off or license them from EOX.",
         "eox": {
-          "enabled": true
+          "enabled": false
         },
-        "_comment_osmfr": "OpenStreetMap France community servers: Humanitarian (HOT), CyclOSM (topographic, with hillshading and contours), and OSM Gray / OSM Gray Dark (the OSM France style shown in grayscale). No key, donation-funded fair use. On unless enabled is false.",
+        "_comment_osmfr": "OpenStreetMap France community servers: Humanitarian (HOT), CyclOSM (topographic, with hillshading and contours), and OSM Gray / OSM Gray Dark (the OSM France style shown in grayscale). No key, donation-funded fair use. Off unless enabled is true.",
         "osmfr": {
-          "enabled": true
+          "enabled": false
         },
-        "_comment_openfreemap": "OpenFreeMap vector styles (Liberty, Bright, Positron, Dark, Fiord). No key, no limits. Loads the vendored MapLibre GL only when one of these is picked. On unless enabled is false.",
+        "_comment_openfreemap": "OpenFreeMap vector styles (Liberty, Bright, Positron, Dark, Fiord). No key, no limits. Loads the vendored MapLibre GL only when one of these is picked. Off unless enabled is true.",
         "openfreemap": {
-          "enabled": true
+          "enabled": false
         },
-        "_comment_versatiles": "VersaTiles vector styles (Gray, Gray Dark, Muted, Colorful, Colorful Dark). No key. Loads the vendored MapLibre GL only when one of these is picked. On unless enabled is false.",
+        "_comment_versatiles": "VersaTiles vector styles (Gray, Gray Dark, Muted, Colorful, Colorful Dark). No key. Loads the vendored MapLibre GL only when one of these is picked. Off unless enabled is true.",
         "versatiles": {
-          "enabled": true
+          "enabled": false
         },
-        "_comment_hillshade": "Hillshade overlay, shaded in the browser from Terrarium elevation tiles. url defaults to AWS Open Data (the same bucket as terrain.tileUrl); point it at a mirror to self-host. On unless enabled is false.",
+        "_comment_hillshade": "Hillshade overlay, shaded in the browser from Terrarium elevation tiles. url defaults to AWS Open Data (the same bucket as terrain.tileUrl); point it at a mirror to self-host. Off unless enabled is true.",
         "hillshade": {
-          "enabled": true,
+          "enabled": false,
           "url": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
         }
       },

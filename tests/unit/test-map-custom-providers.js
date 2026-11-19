@@ -2,7 +2,7 @@
  * custom tile entries (map.tiles.custom, S1/S3) and the grouped picker.
  *
  * Runs the real public/map-tile-providers.js in a vm sandbox:
- *   - defaultOn groups (eox, osmfr) vs the unchanged opt-in/opt-out groups
+ *   - optIn groups (eox, osmfr) vs the unchanged opt-in/opt-out groups
  *   - fields of each new built-in, categories of the existing ones
  *   - the S3 URL gate (table-driven, hostile inputs) and the field whitelist
  *   - S1: custom attribution stored HTML-escaped; labels stay text
@@ -150,6 +150,11 @@ function makeMap() {
   return m;
 }
 
+// The #2428 groups are opt-in (off unless enabled:true); the suites that
+// exercise them start from a config that turns them all on.
+const ALL_ON = () => ({ eox: { enabled: true }, osmfr: { enabled: true }, openfreemap: { enabled: true },
+  versatiles: { enabled: true }, hillshade: { enabled: true } });
+
 function makeSandbox(mapCfg) {
   const listeners = {};
   const warns = [];
@@ -176,7 +181,7 @@ function makeSandbox(mapCfg) {
   ctx.L = ctx.window.L = makeLeaflet(stats);
   vm.createContext(ctx);
   ctx.window.document = ctx.document;
-  if (mapCfg !== undefined) ctx.window.MC_MAP_CFG = mapCfg;
+  ctx.window.MC_MAP_CFG = mapCfg !== undefined ? mapCfg : { tiles: { providers: ALL_ON() } };
   vm.runInContext(SRC, ctx);
   for (const k of Object.keys(ctx.window)) if (!(k in ctx)) ctx[k] = ctx.window[k];
   const w = ctx.window;
@@ -189,7 +194,7 @@ function makeSandbox(mapCfg) {
 }
 
 function custom(entries, extra) {
-  return { tiles: Object.assign({ providers: {}, custom: entries }, extra || {}) };
+  return { tiles: Object.assign({ providers: ALL_ON(), custom: entries }, extra || {}) };
 }
 const OK_URL = 'https://tiles.example.org/{z}/{x}/{y}.png';
 
@@ -199,29 +204,63 @@ const OSMFR_IDS = NEW_IDS.slice(3);
 
 console.log('── #2428 custom + keyless providers ──');
 
-// ─── defaultOn semantics ────────────────────────────────────────────────────
+// ─── optIn semantics ────────────────────────────────────────────────────────
 
-test('defaultOn groups are on with no config, an empty config and a config without the group', () => {
-  const s = makeSandbox();
-  for (const id of NEW_IDS) assert.ok(s.reg()[id], id + ' on without MC_MAP_CFG');
+test('optIn groups are off with no config, an empty config and a config without the group', () => {
+  const s = makeSandbox(null);
+  for (const id of NEW_IDS) assert.ok(!s.reg()[id], id + ' off without MC_MAP_CFG');
   for (const cfg of [{ tiles: {} }, { tiles: { providers: {} } }, { tiles: { providers: { carto: { enabled: true } } } },
-    { tiles: { providers: { eox: {}, osmfr: { enabled: true } } } }]) {
+    { tiles: { providers: { eox: {} } } }, { tiles: { providers: { eox: { enabled: false }, osmfr: { enabled: false } } } }]) {
     const reg = s.load(cfg);
-    for (const id of NEW_IDS) assert.ok(reg[id], id + ' on for ' + JSON.stringify(cfg));
+    for (const id of NEW_IDS) assert.ok(!reg[id], id + ' off for ' + JSON.stringify(cfg));
   }
 });
 
-test('enabled:false turns a defaultOn group off, and only that group', () => {
-  const s = makeSandbox();
-  let reg = s.load({ tiles: { providers: { eox: { enabled: false } } } });
-  for (const id of EOX_IDS) assert.ok(!reg[id], id + ' off');
-  for (const id of OSMFR_IDS) assert.ok(reg[id], id + ' still on');
-  reg = s.load({ tiles: { providers: { osmfr: { enabled: false } } } });
-  for (const id of OSMFR_IDS) assert.ok(!reg[id], id + ' off');
-  for (const id of EOX_IDS) assert.ok(reg[id], id + ' still on');
-  // Only the literal false turns it off.
-  reg = s.load({ tiles: { providers: { eox: { enabled: 0 }, osmfr: { enabled: 'false' } } } });
-  for (const id of NEW_IDS) assert.ok(reg[id], id + ' on for a non-false value');
+test('only the literal enabled:true turns an optIn group on, and only that group', () => {
+  const s = makeSandbox(null);
+  let reg = s.load({ tiles: { providers: { eox: { enabled: true } } } });
+  for (const id of EOX_IDS) assert.ok(reg[id], id + ' on');
+  for (const id of OSMFR_IDS) assert.ok(!reg[id], id + ' still off');
+  reg = s.load({ tiles: { providers: { osmfr: { enabled: true } } } });
+  for (const id of OSMFR_IDS) assert.ok(reg[id], id + ' on');
+  for (const id of EOX_IDS) assert.ok(!reg[id], id + ' still off');
+  // Any other value stays off.
+  for (const v of ['true', 1, 'yes', null, {}, [], undefined]) {
+    reg = s.load({ tiles: { providers: { eox: { enabled: v }, osmfr: { enabled: v } } } });
+    for (const id of NEW_IDS) assert.ok(!reg[id], id + ' off for enabled:' + JSON.stringify(v));
+  }
+  // A non-object group entry is off too.
+  reg = s.load({ tiles: { providers: { eox: true, osmfr: 'true' } } });
+  for (const id of NEW_IDS) assert.ok(!reg[id], id + ' off for a non-object group');
+});
+
+test('each new group follows its own flag: eox, osmfr, openfreemap, versatiles, hillshade (base, vector, overlays)', () => {
+  const s = makeSandbox(null);
+  const groups = { eox: ['eox-s2-2025', 'eox-terrain-light'], osmfr: ['osmfr-hot', 'osmfr-gray'],
+    openfreemap: ['openfreemap-liberty'], versatiles: ['versatiles-colorful'] };
+  for (const g of Object.keys(groups)) {
+    for (const v of [undefined, {}, { enabled: false }, { enabled: 'true' }]) {
+      const cfg = { tiles: { providers: {} } };
+      if (v !== undefined) cfg.tiles.providers[g] = v;
+      const reg = s.load(cfg);
+      for (const id of groups[g]) assert.ok(!reg[id], id + ' off for ' + JSON.stringify(v));
+      assert.ok(!s.w.MC_TILE_OVERLAYS || !s.w.MC_TILE_OVERLAYS.hillshade, 'no hillshade overlay');
+      if (g === 'eox') assert.ok(!s.w.MC_TILE_OVERLAYS || !s.w.MC_TILE_OVERLAYS['eox-labels'], 'no eox label overlay');
+    }
+    const cfg = { tiles: { providers: {} } };
+    cfg.tiles.providers[g] = { enabled: true };
+    const reg = s.load(cfg);
+    for (const id of groups[g]) assert.ok(reg[id], id + ' on for enabled:true');
+    for (const other of Object.keys(groups)) {
+      if (other !== g) for (const id of groups[other]) assert.ok(!reg[id], id + ' stays off');
+    }
+  }
+  // Overlays follow the same flag.
+  s.load({ tiles: { providers: { eox: { enabled: true } } } });
+  assert.ok(s.w.MC_TILE_OVERLAYS && s.w.MC_TILE_OVERLAYS['eox-labels'], 'eox-labels with eox on');
+  assert.ok(!s.w.MC_TILE_OVERLAYS.hillshade, 'hillshade only with its own flag');
+  s.load({ tiles: { providers: { hillshade: { enabled: true } } } });
+  assert.ok(!s.w.MC_TILE_OVERLAYS['eox-labels'], 'no eox-labels with eox off');
 });
 
 test('existing groups keep their rules: osm/usgs/opentopomap/stamen opt-in, carto opt-out, esri always', () => {
@@ -266,7 +305,7 @@ test('each new built-in has the exact fields', () => {
     const p = reg[id];
     assert.ok(p, id + ' registered');
     for (const k of Object.keys(want[id])) assert.strictEqual(p[k], want[id][k], id + '.' + k);
-    assert.strictEqual(p.defaultOn, true, id + ' defaultOn');
+    assert.strictEqual(p.optIn, true, id + ' optIn');
     assert.ok(!p.invertFilter, id + ' never inverted');
   }
 });
@@ -404,10 +443,10 @@ test('S1: custom attribution is stored HTML-escaped once; label markup stays tex
   assert.strictEqual(s.w.MC_resolveTile(false).attribution, 'A &amp; B');
 });
 
-test('unknown keys are never copied (refUrl, invertFilter, provider, defaultOn, ...)', () => {
+test('unknown keys are never copied (refUrl, invertFilter, provider, optIn, ...)', () => {
   const s = makeSandbox();
   const p = s.load(custom([{ id: 'x', url: OK_URL, type: 'dark', refUrl: 'https://evil/{z}/{x}/{y}', invertFilter: 'url(javascript:1)',
-    provider: 'carto', defaultOn: false, baseUrl: 'javascript:1', onload: 'x', __proto__: { polluted: 1 } }]))['custom-x'];
+    provider: 'carto', defaultOn: false, optIn: false, baseUrl: 'javascript:1', onload: 'x', __proto__: { polluted: 1 } }]))['custom-x'];
   assert.deepStrictEqual(Object.keys(p).sort(),
     ['attribution', 'category', 'format', 'invertFilter', 'label', 'maxZoom', 'provider', 'type', 'url']);
   assert.strictEqual(p.provider, 'custom');
@@ -602,7 +641,7 @@ test('picker: Auto first, then Street, Topographic, Satellite with legends; ligh
   const s = makeSandbox(custom([
     { id: 'sat', url: OK_URL, type: 'any', category: 'satellite', label: 'Our sat' },
     { id: 'night', url: OK_URL, type: 'dark', category: 'topo' },
-  ], { providers: { usgs: { enabled: true } } }));
+  ], { providers: Object.assign(ALL_ON(), { usgs: { enabled: true } }) }));
   s.w.MC_createLayerControl(makeMap(), s.ctx.L.layerGroup(), 'topleft');
   const c = s.stats.controls[0];
   const st = pickerStructure(c);
