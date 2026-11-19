@@ -231,7 +231,8 @@ func (s *ductingSource) record(calls float64) {
 // fetch returns the forecast for cells ([lat, lon]) over forecastHours hours
 // from the current UTC hour, in request order, minus the locations the API
 // answered with a per-location error. Requests carry at most
-// ductingBatchSize locations and are paced to ductingCallsPerMinute.
+// ductingBatchSize locations; against the public API (capped) they are
+// paced to ductingCallsPerMinute, a self-hosted instance is not paced.
 //
 // A failed batch (transport error, non-2xx other than 429, bad body) is
 // logged and its cells are left out; the other batches are kept. Once more

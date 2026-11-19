@@ -644,7 +644,7 @@ jobs:
         # must listen before the server starts: the server's first refresh
         # runs at startup and a failed one is retried only after 5 minutes. A
         # loopback baseUrl counts as self-hosted, so that first fetch starts at
-        # once; paced over the fixture's cells it takes about 2 minutes.
+        # once and is not paced: it takes well under a second.
         if: matrix.shard == 1
         run: |
           fuser -k 13596/tcp 13597/tcp 2>/dev/null || true
