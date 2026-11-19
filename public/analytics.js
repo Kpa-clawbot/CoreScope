@@ -3232,6 +3232,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     window._distanceIsBuilding = _distanceIsBuilding;
   window._distanceRetryDelayMs = _distanceRetryDelayMs;
   window._analyticsDecorateChannels = decorateAnalyticsChannels;
+    window._analyticsBuildHashKeyMap = buildHashKeyMap;
     window._analyticsSortChannels = sortChannels;
     window._analyticsLoadChannelSort = loadChannelSort;
     window._analyticsSaveChannelSort = saveChannelSort;
