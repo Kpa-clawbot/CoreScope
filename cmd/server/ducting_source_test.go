@@ -399,6 +399,7 @@ func TestDuctingSourceContextCancel(t *testing.T) {
 func TestDuctingSourceCallBudget(t *testing.T) {
 	f := &fakeOpenMeteo{t: t, hours: 1}
 	src, _, _ := newTestDuctingSource(t, f, "gfs")
+	src.capped = true // the fake runs on a loopback URL; exercise the public-API caps
 	now := time.Unix(1795046400, 0)
 	src.now = func() time.Time { return now }
 	// 1000 points = 4200 calls: fits the hourly cap once, not twice.
@@ -432,5 +433,54 @@ func TestDuctingSourceCallBudget(t *testing.T) {
 	src.mu.Unlock()
 	if entries > 2*1000/ductingBatchSize {
 		t.Errorf("ledger kept %d entries; old ones are not pruned", entries)
+	}
+}
+
+func TestDuctingIsPublicAPI(t *testing.T) {
+	for u, want := range map[string]bool{
+		"":                                        true,
+		"https://api.open-meteo.com":              true,
+		"https://API.Open-Meteo.com/":             true,
+		"https://api.open-meteo.com:443":          true,
+		"https://om.example.com":                  false,
+		"http://localhost:8080":                   false,
+		"http://127.0.0.1:8080":                   false,
+		"https://api.open-meteo.com.evil.example": false,
+	} {
+		if got := ductingIsPublicAPI(u); got != want {
+			t.Errorf("ductingIsPublicAPI(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
+
+func TestDuctingSourceSelfHostedNoCallCap(t *testing.T) {
+	f := &fakeOpenMeteo{t: t, hours: 1}
+	src, srv, _ := newTestDuctingSource(t, f, "gfs")
+	if src.capped {
+		t.Fatalf("source for %s is capped; a non-public host must not be", srv.URL)
+	}
+	// 1500 points = 6300 calls: over the public hourly cap of 4500.
+	cells := ductingTestCells(1500)
+	if _, err := src.fetch(context.Background(), cells, 1); err != nil {
+		t.Fatalf("self-hosted fetch above the hourly cap: %v", err)
+	}
+	if len(f.requests()) != 1500/ductingBatchSize {
+		t.Errorf("%d requests, want %d", len(f.requests()), 1500/ductingBatchSize)
+	}
+	// Pacing still applies.
+	src2, _, waits := newTestDuctingSource(t, &fakeOpenMeteo{t: t, hours: 1}, "gfs")
+	if _, err := src2.fetch(context.Background(), ductingTestCells(100), 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(*waits) != 1 {
+		t.Errorf("waits %v, want one paced wait", *waits)
+	}
+	// The same fetch is refused for the public host.
+	src.capped = true
+	if _, err := src.fetch(context.Background(), cells, 1); !errors.Is(err, errDuctingBudget) {
+		t.Fatalf("public: err %v, want errDuctingBudget", err)
+	}
+	if !newDuctingSource("https://api.open-meteo.com", src.model).capped {
+		t.Error("public API source is not capped")
 	}
 }

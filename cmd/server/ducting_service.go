@@ -213,7 +213,7 @@ func (s *ductingService) analyzeColumn(col ductingColumn) DuctingCell {
 	cell := DuctingCell{
 		Lat: col.Lat, Lon: col.Lon,
 		C: make([]int, n), F: make([]int, n), B: make([]int, n),
-		T: make([]int, n), DM: make([]int, n), G: make([]int, n),
+		T: make([]int, n), DM: make([]int, n), G: make([]int, n), N: make([]int, n),
 	}
 	for i, h := range col.Hours {
 		r := AnalyzeDucting(DuctProfile(col.Elevation, h.SurfP, h.T2m, h.RH2m,
@@ -224,6 +224,7 @@ func (s *ductingService) analyzeColumn(col ductingColumn) DuctingCell {
 		cell.T[i] = ductingRound(r.TopM)
 		cell.DM[i] = ductingRound(r.DeltaM * 10)
 		cell.G[i] = ductingRound(r.MinGradNkm)
+		cell.N[i] = ductingRound(r.MeanGradNkm)
 	}
 	return cell
 }

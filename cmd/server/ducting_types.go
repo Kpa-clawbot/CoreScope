@@ -34,6 +34,7 @@ const (
 	ductSuperGradientNk = -79.0  // N/km: super-refraction threshold
 	ductSurfaceHeightM  = 2.0    // m AGL of the 2 m surface point
 	ductFminConstMHz    = 120000.0
+	ductMeanLayerM      = 1500.0 // m: depth of the layer MeanGradNkm averages over
 )
 
 // DuctLevel is one point of a vertical profile, ascending by HeightAGL.
@@ -53,6 +54,13 @@ type DuctResult struct {
 	TopM       float64 // top of the trapping layer (M minimum)
 	DeltaM     float64 // duct strength, M units
 	MinGradNkm float64 // most negative dN/dh between consecutive levels, N/km
+	// MeanGradNkm is the mean refractivity gradient over the lowest
+	// ductMeanLayerM above ground: (N at ductMeanLayerM - N at the 2 m
+	// surface point) / ductMeanLayerM, in N/km (ITU-R P.453 style). The map
+	// field is coloured by it: averaged over the layer that matters for
+	// propagation, it is far less noisy than MinGradNkm, which a single thin
+	// layer can dominate. 0 when the profile does not reach ductMeanLayerM.
+	MeanGradNkm float64
 }
 
 // DuctingModel describes one allowed weather model. Regional models must be
@@ -103,6 +111,7 @@ type DuctingCell struct {
 	T   []int   `json:"t"`  // duct top m AGL, rounded
 	DM  []int   `json:"dm"` // ΔM x10, rounded
 	G   []int   `json:"g"`  // min dN/dh N/km, rounded
+	N   []int   `json:"n"`  // mean dN/dh over the lowest 1.5 km, N/km, rounded; 0 = no data
 }
 
 // DuctingResponse is GET /api/ducting.

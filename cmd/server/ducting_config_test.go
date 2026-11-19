@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"log"
 	"math"
+	"os"
 	"strings"
 	"testing"
 )
@@ -292,5 +295,38 @@ func TestDuctingMarginDeg(t *testing.T) {
 	}
 	if (DuctingConfig{}).marginDegOrDefault() != 5 {
 		t.Fatal("unresolved default")
+	}
+}
+
+func TestDuctingMaxPointsSelfHosted(t *testing.T) {
+	gfs, _ := ductingModel("gfs")
+	// Public API: lowered to the 8,000 calls/day budget (see the test above).
+	pub := DuctingConfig{MaxPoints: 1000, RefreshMinutes: 360, BaseURL: "https://api.open-meteo.com"}
+	if got := ductingMaxPoints(pub, gfs); got != 476 {
+		t.Errorf("public: %d, want 476", got)
+	}
+	// Self-hosted: only maxPoints applies.
+	self := DuctingConfig{MaxPoints: 1000, RefreshMinutes: 60, BaseURL: "http://localhost:8080"}
+	if got := ductingMaxPoints(self, gfs); got != 1000 {
+		t.Errorf("self-hosted: %d, want 1000", got)
+	}
+	self.MaxPoints = 0
+	if got := ductingMaxPoints(self, gfs); got != 1 {
+		t.Errorf("self-hosted maxPoints 0: %d, want 1", got)
+	}
+}
+
+func TestDuctingLogConfigSelfHosted(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	logDuctingConfig(&DuctingConfig{Enabled: true, Model: "gfs", BaseURL: "http://localhost:8080"})
+	if !strings.Contains(buf.String(), "self-hosted: no call budget") || strings.Contains(buf.String(), "budget cap") {
+		t.Errorf("log %q", buf.String())
+	}
+	buf.Reset()
+	logDuctingConfig(&DuctingConfig{Enabled: true, Model: "gfs"})
+	if !strings.Contains(buf.String(), "budget cap") {
+		t.Errorf("public log %q", buf.String())
 	}
 }

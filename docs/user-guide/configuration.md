@@ -165,7 +165,7 @@ Everything under `map.tiles` is sent to every visitor's browser, so only put key
 }
 ```
 
-Turns on the tropospheric ducting overlay on the Map, Live and Repeater Planner pages. It is off by default and, when on, the server downloads a weather forecast from Open-Meteo. Open-Meteo's free service is for non-commercial use only. By default it forecasts the bounding box of your nodes plus `marginDeg` (5 degrees), up to `maxPoints` (450) cells. Every key (`model`, `area`, `marginDeg`, `gridStepDeg`, `maxPoints`, `refreshMinutes`, `forecastHours`, `baseUrl`), the call budget and self-hosting are described in [Tropospheric ducting overlay](../deployment.md#tropospheric-ducting-overlay).
+Turns on the tropospheric ducting overlay on the Map, Live and Repeater Planner pages. It is off by default and, when on, the server downloads a weather forecast from Open-Meteo. Open-Meteo's free service is for non-commercial use only. By default it forecasts the bounding box of your nodes plus `marginDeg` (5 degrees), up to `maxPoints` (450) cells. Every key (`model`, `area`, `marginDeg`, `gridStepDeg`, `maxPoints`, `refreshMinutes`, `forecastHours`, `baseUrl`), the call budget (which applies to the public API only; a self-hosted `baseUrl` has no call budget) and self-hosting are described in [Tropospheric ducting overlay](../deployment.md#tropospheric-ducting-overlay).
 
 ## Regions
 
