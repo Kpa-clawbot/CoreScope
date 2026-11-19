@@ -517,6 +517,80 @@ The `hillshade` overlay shades terrain in the visitor's browser from Terrarium-e
 
 The tile host must allow cross-origin image reads (`Access-Control-Allow-Origin`); without it the browser cannot read pixels and the overlay stays blank. It is off for visitors until they tick it.
 
+#### Tropospheric ducting overlay
+
+Under some weather conditions a layer of the lower atmosphere traps radio waves and carries them far beyond the horizon. The ducting overlay forecasts where that can happen and whether the duct is able to carry LoRa. It shows up as an **Overlays** entry named "Tropospheric ducting" on the Map, Live and Repeater Planner pages, but only when you enable it. It is off by default.
+
+**It makes outbound requests.** The server downloads a pressure-level weather forecast from [Open-Meteo](https://open-meteo.com) (`api.open-meteo.com`). Visitors' browsers never contact Open-Meteo; they only read the result from `GET /api/ducting` on your server. Nothing is written to the database. The forecast is held in memory and rebuilt after a restart.
+
+Open-Meteo's free API is for **non-commercial use only** (data licence CC BY 4.0), and has limits of 600 calls per minute, 5,000 per hour and 10,000 per day. For a commercial deployment, self-host Open-Meteo (open source, AGPL) and point `baseUrl` at it, see below. There is no API-key setting.
+
+Enable it in `config.json`:
+
+```json
+"ducting": { "enabled": true }
+```
+
+The defaults suit most sites. All keys are optional:
+
+| Key | Default | Allowed | Meaning |
+|-----|---------|---------|---------|
+| `enabled` | `false` | `true` / `false` | Turns the feature on. When off, `GET /api/ducting` returns 404 and the overlay is not offered. |
+| `model` | `"gfs"` | `gfs`, `icon`, `rrfs-conus` | Weather model, see the table below. |
+| `area` | none | `[south, west, north, east]` in degrees | Forecast this box instead of only the places with nodes. `-90 <= south < north <= 90`, `-180 <= west < east <= 180`. An invalid value is ignored with a warning. |
+| `gridStepDeg` | `0.5` | `0.25` to `2` | Grid cell size in degrees. |
+| `maxPoints` | `200` | `1` to `1000` | Most grid cells (forecast points) to fetch. The server may lower this further to stay inside the daily call budget. |
+| `refreshMinutes` | `360` | `60` to `1440` | How often to fetch a new forecast. GFS itself only runs every 6 hours. |
+| `forecastHours` | `48` | `1` to `120` | How many hours ahead the time slider can go. |
+| `baseUrl` | `"https://api.open-meteo.com"` | absolute `http(s)` URL, no credentials | Open-Meteo server to use. |
+
+A value outside its allowed range is replaced by the default and a warning naming the key is logged at startup (`[ducting] ...`). Warnings never print `baseUrl`.
+
+By default the grid covers only the cells that contain at least one node. Nodes that are hidden or blacklisted are left out, so they cannot influence which cells are fetched. Set `area` to forecast a fixed region instead.
+
+**Models**
+
+| `model` | Coverage | Pressure levels (1000 hPa up to) | Notes |
+|---------|----------|-----------------------------------|-------|
+| `gfs` (default) | Worldwide, NOAA GFS | 700 hPa, every 25 hPa (13 levels) | Best vertical detail of the global models. |
+| `icon` | Worldwide, DWD ICON | 700 hPa, 8 levels (1000, 975, 950, 925, 900, 850, 800, 700) | Fewer low levels, so thin ducts are more likely to be missed. Cheaper per point. |
+| `rrfs-conus` | Contiguous United States only | 700 hPa, every 25 hPa (13 levels) | Explicit opt-in, never the default. If `area` is unset, or reaches outside the contiguous US, a warning is logged and cells outside have no data. |
+
+**Call budget**
+
+Open-Meteo counts a request with more than 10 variables as several calls. CoreScope asks for temperature, humidity and height at every level plus three surface values. For GFS that is 42 variables per point, so **4.2 calls per point per refresh** (ICON: 27 variables, 2.7 calls).
+
+The server limits the number of points so a day stays under 8,000 calls, leaving headroom below the 10,000 free limit: points <= 8,000 / (calls per point x refreshes per day). The effective limit is `min(maxPoints, that value)`, and is logged at startup. With the defaults, 200 points every 6 hours (4 refreshes a day) is 200 x 4.2 x 4 = about 3,400 calls a day. Refreshing hourly with GFS would cap you at about 79 points.
+
+If the grid has more cells than allowed, the step is doubled (0.5, 1, 2, 4, up to 8 degrees) until it fits, so the map gets coarser rather than the budget being exceeded.
+
+**How refreshing behaves**
+
+- The first fetch runs shortly after start, then every `refreshMinutes`, in the background. Until it finishes the overlay says the forecast is being prepared.
+- Points are requested in batches of 50 and paced to at most 400 calls per minute.
+- If a refresh fails, the last good forecast stays on the map. The server retries with a growing delay, and waits at least an hour after Open-Meteo answers that a rate limit was hit.
+
+**Self-hosting Open-Meteo**
+
+Follow the upstream documentation at <https://github.com/open-meteo/open-meteo> to run your own instance with the model you chose, then point CoreScope at it. The 8,000 calls a day budget is still applied.
+
+```json
+"ducting": { "enabled": true, "baseUrl": "https://weather.example.org" }
+```
+
+**What is public.** `/api/config/client` tells browsers only the model, its label, the grid step and the attribution text. `baseUrl` is never sent. The forecast cells themselves are public through `GET /api/ducting`.
+
+**How it is calculated.** For each cell and hour, humidity is turned into water-vapour pressure, then into radio refractivity `N = 77.6 / T x (P + 4810 e / T)` (ITU-R P.453) and modified refractivity `M = N + 0.157 h` (h in metres above ground). Where M decreases with height in the lowest 3 km, the layer traps radio waves. Its thickness `d` (metres) and strength `ΔM` (M units) give the lowest frequency it can trap, `fmin ≈ 120000 / (d x √ΔM)` MHz. A 868 MHz LoRa signal needs `d x √ΔM` of at least about 138, for example a 44 m thick duct with ΔM of 10. Each cell is classed as normal, super-refraction (the refractivity gradient reaches -79 N/km or steeper, which stretches range without trapping), elevated duct (the layer starts above the ground) or surface-based duct.
+
+**Limitations.** Say these to your users:
+
+- The model levels are roughly 200 to 250 m apart near the ground, so thinner ducts are invisible. That includes most evaporation ducts over the sea.
+- The grid is tens of kilometres across; a cell says nothing about local terrain or a single link.
+- It is a forecast indicator, not a guarantee that a path will open or stay closed.
+- An elevated duct mostly matters for nodes that sit inside it, such as high sites. A node on the ground below it usually does not benefit.
+
+**Attribution.** Open-Meteo data is CC BY 4.0. The legend shows the required text ("Weather data by Open-Meteo.com (CC BY 4.0)" plus the model name); do not hide it. Weather models: NOAA (GFS, RRFS) and DWD (ICON).
+
 #### Self-hosting tiles
 
 Self-hosting removes the third-party dependency and keeps visitors' requests on your infrastructure. Follow the upstream documentation rather than any steps here:

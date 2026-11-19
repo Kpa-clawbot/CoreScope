@@ -155,6 +155,18 @@ Which maps visitors can pick (street, gray, topographic, satellite, vector), the
 
 Everything under `map.tiles` is sent to every visitor's browser, so only put keys there that are meant to be public (domain-restricted). Of the built-in groups only `carto` and `esri` are on unless you say otherwise; every other group (including the newer `eox`, `osmfr`, `openfreemap`, `versatiles` and `hillshade`) needs `"enabled": true`. The full list of maps, their licences and examples for custom and self-hosted tile servers are in [Map Tile Providers](../deployment.md#map-tile-providers).
 
+## Ducting
+
+```json
+"ducting": {
+  "enabled": true,
+  "model": "gfs",
+  "refreshMinutes": 360
+}
+```
+
+Turns on the tropospheric ducting overlay on the Map, Live and Repeater Planner pages. It is off by default and, when on, the server downloads a weather forecast from Open-Meteo. Open-Meteo's free service is for non-commercial use only. Every key (`model`, `area`, `gridStepDeg`, `maxPoints`, `refreshMinutes`, `forecastHours`, `baseUrl`), the call budget and self-hosting are described in [Tropospheric ducting overlay](../deployment.md#tropospheric-ducting-overlay).
+
 ## Regions
 
 ```json

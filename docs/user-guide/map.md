@@ -25,6 +25,22 @@ Some maps in the Street group are vector maps, drawn by your browser rather than
 
 Which maps appear in the list is up to the site operator, who can turn groups of maps on and off and add their own tile server. See [Map Tile Providers](../deployment.md#map-tile-providers).
 
+### Tropospheric ducting
+
+When the site operator has turned it on, the layers button has an extra **Tropospheric ducting** checkbox under Overlays (on the Map, Live and Repeater Planner pages). If you do not see it, this site does not offer it.
+
+Ducting is when a layer of air traps radio signals and carries them far beyond the normal range, so a distant node may suddenly be heard. The overlay shows a forecast, one coloured square per grid cell of the weather model:
+
+- **Can carry LoRa 868/915 MHz**: a duct that can trap signals at 1 GHz or lower. Mesh links can stretch over long distances here.
+- **1-3 GHz only** and **Above 3 GHz only**: a duct exists, but it is too thin to trap LoRa. It matters for other radio services.
+- **Super-refraction**: signals bend more than usual, which extends range a little, but there is no duct.
+- A **lighter shade** means an elevated duct (a layer above the ground). A stronger shade means a surface-based duct, which reaches the ground. An elevated duct mostly helps nodes that sit inside it, such as repeaters on high sites.
+- Cells with nothing of interest are not drawn.
+
+Use the **Forecast time** slider to move through the coming hours. Click a square for its details: type, base and top of the duct (metres above ground), strength, the lowest frequency it can trap and whether it can carry 868 and 915 MHz. The legend shows the weather model, the data attribution and when the forecast was last updated.
+
+It is an indicator only. The weather model sees layers about 200 m or thicker, so thinner ducts, such as most over the sea, do not appear, and each square covers tens of kilometres. A clear map does not mean no long-distance reception, and a coloured square does not promise it. See also [Why did a node far away hear my packet?](faq.md#12-why-did-a-node-far-away-hear-my-packet)
+
 ## Marker shapes and colors
 
 Each node role has a distinct shape and color:
