@@ -1241,6 +1241,13 @@
     var keyMap = hashByteToKeyName || {};
     var lab = labels || {};
     var out = [];
+    // Channels the server decrypted, by byte and name: an undecrypted packet
+    // on that byte is one their key did not open, so a local key with the
+    // same name must not claim it.
+    var decrypted = {};
+    for (var di = 0; di < (channels || []).length; di++) {
+      if (!channels[di].encrypted) decrypted[channels[di].hash + '|' + channels[di].name] = true;
+    }
     for (var i = 0; i < (channels || []).length; i++) {
       var c = channels[i];
       var copy = Object.assign({}, c);
@@ -1249,6 +1256,7 @@
       var isPlaceholder = /^ch(\d+|\?)$/.test(rawName);
       if (c.encrypted) {
         var keyName = !isNaN(hashNum) ? keyMap[hashNum] : null;
+        if (keyName && decrypted[c.hash + '|' + keyName]) keyName = null;
         if (keyName) {
           copy.displayName = lab[keyName] || keyName;
           copy.group = 'mine';
