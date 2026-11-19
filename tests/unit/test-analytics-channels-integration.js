@@ -249,9 +249,36 @@ async function localKeyChecks() {
     const h = i.toString(16).padStart(32, 'f');
     if (await hb(h) === bDrive) mateHex = h;
   }
+  assert(mateHex, 'found a second key on the #coredrive byte');
   out = await run({ 'drive-mate': mateHex, '#coredrive': driveHex }, {});
   assert(enc(out, bDrive).displayName === 'drive-mate' && enc(out, bDrive).group === 'mine',
     'another local key on that byte still names the bucket when the server key was saved last');
+  out = await run({ '#coredrive': driveHex, 'drive-mate': mateHex }, {});
+  assert(enc(out, bDrive).displayName === 'drive-mate',
+    '... and when it was saved first');
+
+  // Compared per byte: a server #name row is matched against local keys on
+  // that row's byte only. Here the server shows "#coredrive" on the private
+  // key's byte (an operator key under a hashtag name that does not derive
+  // it); the local #coredrive key sits on its own byte and must stay.
+  const oddRows = [
+    { hash: String(bPriv), name: '#coredrive', messages: 5, senders: 1, encrypted: false },
+    { hash: String(bPriv), name: 'ch' + bPriv, messages: 2, senders: 0, encrypted: true },
+    { hash: String(bDrive), name: 'ch' + bDrive, messages: 9, senders: 0, encrypted: true },
+  ];
+  localStorage.setItem('corescope_channel_keys', JSON.stringify({ '#coredrive': driveHex, 'private-room': privHex }));
+  const oddMap = await build(oddRows, CD);
+  assert(oddMap[bDrive] === '#coredrive',
+    'a server #name on another byte does not drop the local key of that name');
+
+  // Not covered, by design: a channel the operator configured under a private
+  // name. The client cannot know that key, so a local copy keeps naming the
+  // bucket (the behaviour from before this fix).
+  const privRows = rows.map(r => r.hash === String(bPriv) && !r.encrypted ? Object.assign({}, r, { name: 'Club' }) : r);
+  localStorage.setItem('corescope_channel_keys', JSON.stringify({ ['psk:' + privHex.slice(0, 8)]: privHex }));
+  out = decorate(privRows, await build(privRows, CD), {});
+  assert(enc(out, bPriv).group === 'mine',
+    'operator key under a private name: a local copy still names the bucket (known limit)');
 
   localStorage.removeItem('corescope_channel_keys');
 }

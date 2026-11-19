@@ -1241,13 +1241,6 @@
     var keyMap = hashByteToKeyName || {};
     var lab = labels || {};
     var out = [];
-    // Channels the server decrypted, by byte and name: an undecrypted packet
-    // on that byte is one their key did not open, so a local key with the
-    // same name must not claim it.
-    var decrypted = {};
-    for (var di = 0; di < (channels || []).length; di++) {
-      if (!channels[di].encrypted) decrypted[channels[di].hash + '|' + channels[di].name] = true;
-    }
     for (var i = 0; i < (channels || []).length; i++) {
       var c = channels[i];
       var copy = Object.assign({}, c);
@@ -1256,7 +1249,6 @@
       var isPlaceholder = /^ch(\d+|\?)$/.test(rawName);
       if (c.encrypted) {
         var keyName = !isNaN(hashNum) ? keyMap[hashNum] : null;
-        if (keyName && decrypted[c.hash + '|' + keyName]) keyName = null;
         if (keyName) {
           copy.displayName = lab[keyName] || keyName;
           copy.group = 'mine';
@@ -1291,21 +1283,51 @@
     return out;
   }
 
+  // The Public channel's key is fixed (the ingestor carries the same value).
+  var PUBLIC_CHANNEL_KEY = '8b3387e9c5cdea6ac9e5edbaa115cd72';
+
   // Build the (hash byte → key name) map from ChannelDecrypt's stored keys.
   // Async because computeChannelHash uses subtle.digest. Returns {} if the
   // module or its keys are unavailable (graceful fallback).
-  async function buildHashKeyMap() {
-    if (typeof ChannelDecrypt === 'undefined' || !ChannelDecrypt.getStoredKeys) return {};
-    var keys = ChannelDecrypt.getStoredKeys();
-    var map = {};
+  //
+  // A stored key the server already decrypts with is left out: undecrypted
+  // packets on its byte are ones that key did not open, so it must not name
+  // their bucket. Compared by key, not by name, because a key added as hex
+  // or by QR is stored as "psk:<hex8>". Server keys are only derived for the
+  // bytes a stored key lands on, and compared per byte.
+  //
+  // The client can only know the server's key for Public and for #hashtag
+  // names (the key derives from the name). A channel an operator configured
+  // in channelKeys under a private name is not covered: a local copy of that
+  // key still names the undecrypted bucket.
+  async function buildHashKeyMap(channels, cd) {
+    if (!cd || !cd.getStoredKeys) return {};
+    var keys = cd.getStoredKeys();
+    var local = []; // { name, hex, hb }
+    var bytes = {};
     var names = Object.keys(keys || {});
     for (var ni = 0; ni < names.length; ni++) {
-      var name = names[ni];
       try {
-        var bytes = ChannelDecrypt.hexToBytes(keys[name]);
-        var hb = await ChannelDecrypt.computeChannelHash(bytes);
-        if (typeof hb === 'number') map[hb] = name;
+        var hb = await cd.computeChannelHash(cd.hexToBytes(keys[names[ni]]));
+        if (typeof hb !== 'number') continue;
+        local.push({ name: names[ni], hex: String(keys[names[ni]]).toLowerCase(), hb: hb });
+        bytes[hb] = true;
       } catch (e) { /* skip bad key */ }
+    }
+    var serverKeys = {};
+    for (var ci = 0; ci < (channels || []).length; ci++) {
+      var c = channels[ci];
+      var n = String(c.name || '');
+      var cb = parseInt(c.hash, 10);
+      if (c.encrypted || !bytes[cb]) continue;
+      try {
+        if (n === 'Public') serverKeys[cb + '|' + PUBLIC_CHANNEL_KEY] = true;
+        else if (n.charAt(0) === '#') serverKeys[cb + '|' + cd.bytesToHex(await cd.deriveKey(n))] = true;
+      } catch (e) { /* no key for this name */ }
+    }
+    var map = {};
+    for (var li = 0; li < local.length; li++) {
+      if (!serverKeys[local[li].hb + '|' + local[li].hex]) map[local[li].hb] = local[li].name;
     }
     return map;
   }
@@ -1406,7 +1428,8 @@
     }
     applyDecorate({});
     ranOnce = true;
-    buildHashKeyMap().then(applyDecorate).catch(function () { /* graceful */ });
+    buildHashKeyMap(rawChannels, typeof ChannelDecrypt !== 'undefined' ? ChannelDecrypt : null)
+      .then(applyDecorate).catch(function () { /* graceful */ });
 
     var timelineHtml = renderChannelTimeline(ch.channelTimeline);
     var topSendersHtml = renderTopSenders(ch.topSenders);
@@ -3232,7 +3255,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     window._distanceIsBuilding = _distanceIsBuilding;
   window._distanceRetryDelayMs = _distanceRetryDelayMs;
   window._analyticsDecorateChannels = decorateAnalyticsChannels;
-    window._analyticsBuildHashKeyMap = buildHashKeyMap;
+  window._analyticsBuildHashKeyMap = buildHashKeyMap;
     window._analyticsSortChannels = sortChannels;
     window._analyticsLoadChannelSort = loadChannelSort;
     window._analyticsSaveChannelSort = saveChannelSort;
