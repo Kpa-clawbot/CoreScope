@@ -96,7 +96,7 @@ type DuctingClientConfig struct {
 type DuctingCell struct {
 	Lat float64 `json:"lat"` // cell centre
 	Lon float64 `json:"lon"`
-	C   []uint8 `json:"c"`  // class (DuctClass*)
+	C   []int   `json:"c"`  // class (DuctClass*); []int, not []uint8, which encodes as base64
 	F   []int   `json:"f"`  // fmin MHz, rounded; 0 = no duct
 	B   []int   `json:"b"`  // duct base m AGL, rounded
 	T   []int   `json:"t"`  // duct top m AGL, rounded
