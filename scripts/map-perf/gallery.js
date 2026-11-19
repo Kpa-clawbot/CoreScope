@@ -48,10 +48,11 @@ const VIEWS = {
 };
 
 // Views for the ducting entries, resolved from /api/ducting (resolveDuctingViews).
-// 'ducting' = the whole grid, 'ducting-surface' = the first surface-duct cell.
+// 'ducting' = the densest cluster of coloured cells, 'ducting-surface' = a
+// surface-duct cell (one that can carry LoRa when there is one).
 const DUCTING_VIEWS = {
-  ducting: { label: 'Ducting grid', zoom: 7 },
-  'ducting-surface': { label: 'A surface-duct cell', zoom: 9 },
+  ducting: { label: 'Ducting cells', zoom: 7 },
+  'ducting-surface': { label: 'A surface-duct cell', zoom: 8 },
 };
 
 // ── Data table ──────────────────────────────────────────────────────────────
@@ -152,9 +153,25 @@ async function resolveDuctingViews(baseUrl) {
   }
   if (!d || d.status !== 'ok' || !d.cells || !d.cells.length) { out.reason = `/api/ducting has no data (status ${d && d.status}${d && d.error ? ': ' + d.error : ''})`; return out; }
   const idx = (() => { const now = Date.now() / 1000; let b = 0; d.times.forEach((t, i) => { if (t <= now) b = i; }); return b; })();
-  const lat = median(d.cells.map((c) => c.lat)), lon = median(d.cells.map((c) => c.lon));
-  out.views.ducting = { label: DUCTING_VIEWS.ducting.label, lat: +lat.toFixed(4), lon: +lon.toFixed(4), zoom: DUCTING_VIEWS.ducting.zoom, nodes: d.cells.length };
-  const surf = d.cells.find((c) => c.c[idx] === 4) || d.cells.find((c) => c.c.indexOf(4) >= 0) || d.cells[0];
+  // Centre on the densest cluster of coloured cells (class >= 2) at the
+  // current hour: with nodes worldwide, the median of all cells is often in
+  // an empty area. Falls back to that median when nothing is coloured.
+  const step = Number(d.stepDeg) || 0.5;
+  const coloured = d.cells.filter((c) => c.c[idx] >= 2);
+  let lat = median(d.cells.map((c) => c.lat)), lon = median(d.cells.map((c) => c.lon));
+  let best = null;
+  coloured.forEach((c) => {
+    const near = coloured.filter((o) => Math.abs(o.lat - c.lat) <= 4 * step && Math.abs(o.lon - c.lon) <= 4 * step);
+    if (!best || near.length > best.length) best = near;
+  });
+  if (best) {
+    lat = best.reduce((a, c) => a + c.lat, 0) / best.length;
+    lon = best.reduce((a, c) => a + c.lon, 0) / best.length;
+  }
+  out.views.ducting = { label: DUCTING_VIEWS.ducting.label, lat: +lat.toFixed(4), lon: +lon.toFixed(4), zoom: DUCTING_VIEWS.ducting.zoom, nodes: best ? best.length : d.cells.length };
+  // A surface duct that can carry LoRa (fmin <= 1000 MHz) when there is one.
+  const surf = d.cells.find((c) => c.c[idx] === 4 && c.f[idx] > 0 && c.f[idx] <= 1000) ||
+    d.cells.find((c) => c.c[idx] === 4) || d.cells.find((c) => c.c.indexOf(4) >= 0) || d.cells[0];
   out.views['ducting-surface'] = { label: DUCTING_VIEWS['ducting-surface'].label, lat: surf.lat, lon: surf.lon, zoom: DUCTING_VIEWS['ducting-surface'].zoom, nodes: 1 };
   return out;
 }
@@ -270,9 +287,15 @@ async function capture(browser, e, views, outDir, base) {
         const m = window.__mcHarness.maps.filter((x) => x._container && x._container.isConnected && x._loaded)[0];
         const s = document.querySelector('.mc-duct-time input[type=range]');
         const idx = s ? parseInt(s.value, 10) : 0;
-        let hit = null;
-        m.eachLayer((l) => { if (!hit && l._mcCell && l._mcCell.c[idx] === 4 && Math.abs(l._mcCell.lat - m.getCenter().lat) < 1e-6) hit = l; });
-        if (!hit) m.eachLayer((l) => { if (!hit && l._mcCell && l._mcCell.c[idx] === 4) hit = l; });
+        // The surface-duct cell nearest the view centre (the restored view
+        // need not be exactly on the cell centre).
+        const c = m.getCenter();
+        let hit = null, best = Infinity;
+        m.eachLayer((l) => {
+          if (!l._mcCell || l._mcCell.c[idx] !== 4) return;
+          const d = Math.pow(l._mcCell.lat - c.lat, 2) + Math.pow(l._mcCell.lon - c.lng, 2);
+          if (d < best) { best = d; hit = l; }
+        });
         if (!hit) return false;
         hit.openPopup([hit._mcCell.lat, hit._mcCell.lon]);
         return !!document.querySelector('.leaflet-popup .mc-duct-popup');
