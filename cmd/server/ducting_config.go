@@ -12,6 +12,7 @@ import (
 const (
 	defaultDuctingModel          = "gfs"
 	defaultDuctingGridStepDeg    = 0.5
+	defaultDuctingMarginDeg      = 2.0
 	defaultDuctingMaxPoints      = 200
 	defaultDuctingRefreshMinutes = 360
 	defaultDuctingForecastHours  = 48
@@ -55,6 +56,14 @@ func ductingModel(id string) (DuctingModel, bool) {
 	return m, ok
 }
 
+// marginDegOrDefault is the effective margin; safe on an unresolved config.
+func (c DuctingConfig) marginDegOrDefault() float64 {
+	if c.MarginDeg == nil {
+		return defaultDuctingMarginDeg
+	}
+	return *c.MarginDeg
+}
+
 func (c *DuctingConfig) enabled() bool { return c != nil && c.Enabled }
 
 // resolved applies defaults and validates. Invalid values fall back to the
@@ -83,6 +92,17 @@ func (c *DuctingConfig) resolved() (DuctingConfig, []string) {
 		warns = append(warns, fmt.Sprintf("ducting.gridStepDeg must be 0.25..2, using %g", defaultDuctingGridStepDeg))
 		r.GridStepDeg = defaultDuctingGridStepDeg
 	}
+
+	// MarginDeg is always non-nil once resolved.
+	margin := defaultDuctingMarginDeg
+	if c.MarginDeg != nil {
+		if m := *c.MarginDeg; math.IsNaN(m) || m < 0 || m > 10 {
+			warns = append(warns, fmt.Sprintf("ducting.marginDeg must be 0..10, using %g", defaultDuctingMarginDeg))
+		} else {
+			margin = m
+		}
+	}
+	r.MarginDeg = &margin
 
 	r.MaxPoints = c.MaxPoints
 	if r.MaxPoints == 0 {
@@ -208,6 +228,6 @@ func logDuctingConfig(c *DuctingConfig) {
 		log.Printf("[ducting] %s", w)
 	}
 	m, _ := ductingModel(r.Model)
-	log.Printf("[ducting] enabled (model=%s, step=%g deg, maxPoints=%d (budget cap %d), refresh=%d min, forecast=%d h)",
-		m.ID, r.GridStepDeg, r.MaxPoints, ductingMaxPoints(r, m), r.RefreshMinutes, r.ForecastHours)
+	log.Printf("[ducting] enabled (model=%s, step=%g deg, margin=%g deg, maxPoints=%d (budget cap %d), refresh=%d min, forecast=%d h)",
+		m.ID, r.GridStepDeg, r.marginDegOrDefault(), r.MaxPoints, ductingMaxPoints(r, m), r.RefreshMinutes, r.ForecastHours)
 }

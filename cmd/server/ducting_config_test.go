@@ -262,3 +262,31 @@ func TestDuctingLogConfig(t *testing.T) {
 	logDuctingConfig(&DuctingConfig{})
 	logDuctingConfig(&DuctingConfig{Enabled: true, Model: "rrfs-conus", BaseURL: "ftp://x"})
 }
+
+func TestDuctingMarginDeg(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	r, warns := (&DuctingConfig{Enabled: true}).resolved()
+	if len(warns) != 0 || r.MarginDeg == nil || *r.MarginDeg != 2 || r.marginDegOrDefault() != 2 {
+		t.Fatalf("default: %v %v", r.MarginDeg, warns)
+	}
+	for _, v := range []float64{0, 0.5, 10} {
+		r, warns = (&DuctingConfig{MarginDeg: f(v)}).resolved()
+		if len(warns) != 0 || *r.MarginDeg != v {
+			t.Fatalf("explicit %v: %v %v", v, *r.MarginDeg, warns)
+		}
+	}
+	for _, v := range []float64{-1, 11, math.NaN(), math.Inf(1)} {
+		r, warns = (&DuctingConfig{MarginDeg: f(v)}).resolved()
+		if !hasWarn(warns, "ducting.marginDeg must be 0..10, using 2") || *r.MarginDeg != 2 {
+			t.Fatalf("invalid %v: %v %v", v, *r.MarginDeg, warns)
+		}
+	}
+	// area set: margin is kept as given but never warned about
+	r, warns = (&DuctingConfig{MarginDeg: f(5), Area: &[4]float64{10, 20, 12, 22}}).resolved()
+	if len(warns) != 0 || r.Area == nil {
+		t.Fatalf("area: %v", warns)
+	}
+	if (DuctingConfig{}).marginDegOrDefault() != 2 {
+		t.Fatal("unresolved default")
+	}
+}
