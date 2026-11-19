@@ -29,19 +29,19 @@ Which maps appear in the list is up to the site operator, who can turn groups of
 
 When the site operator has turned it on, the layers button has an extra **Tropospheric ducting** checkbox under Overlays (on the Map, Live and Repeater Planner pages). If you do not see it, this site does not offer it.
 
-Ducting is when a layer of air traps radio signals and carries them far beyond the normal range, so a distant node may suddenly be heard. The overlay shows a forecast as a smooth colour field over the area around the mesh, like the usual tropospheric ducting forecast maps. The colour follows how quickly the air's refractivity drops with height (dN/dh, in N units per km): the faster it drops, the more signals bend back toward the ground.
+Ducting is when a layer of air traps radio signals and carries them far beyond the normal range, so a distant node may suddenly be heard. The overlay shows a forecast as colour bands over the area around the mesh, like the usual tropospheric ducting forecast maps. The colour follows how quickly the air's refractivity drops with height (dN/dh, in N units per km): the faster it drops, the more signals bend back toward the ground. Each colour is one range of dN/dh, not a point on a continuous gradient: a whole band has the same colour and the colour changes at the band's edge, so you can read the strength off the legend.
 
-- **No colour**: normal propagation (dN/dh above about -60 N/km).
-- **Faint purple and blue**: super-refraction (from -79 N/km), drawn faintly because it is common. Signals bend more than usual, which extends range a little, but there is no duct.
-- **Green, then yellow, orange and red**: ducting (from -157 N/km). The air traps signals in a layer; the further along the scale, the stronger the trapping.
-- **Pink**: very strong ducting (around -600 N/km and beyond).
+- **No colour**: normal propagation (dN/dh above -79 N/km).
+- **Purple, blue and cyan**: super-refraction (-79 to -100, -100 to -130 and -130 to -157 N/km). Signals bend more than usual, which extends range a little, but there is no duct.
+- **Green, then yellow, orange and red**: ducting (-157 to -220, -220 to -300, -300 to -400 and -400 to -600 N/km). The air traps signals in a layer; the further along the scale, the stronger the trapping.
+- **Pink**: very strong ducting (-600 N/km and beyond).
 - A **dashed outline** marks a grid cell where a duct can carry LoRa 868/915 MHz (it traps signals at 1 GHz or lower). Mesh links can stretch over long distances there. A duct without the outline is too thin for LoRa and matters only for higher frequencies.
 - A faint **dotted line** marks the edge of the forecast area. There is no forecast beyond it, and the colours fade out towards it, so a blank map outside the line means "not covered", not "no ducting".
 - Areas without forecast data are not drawn; the field fades out at their edge.
 
-The legend shows the colour scale with these thresholds. Use the **Forecast time** slider to move through the coming hours. Click anywhere in the field for the details of that grid cell: type (normal, super-refraction, elevated duct or surface-based duct), base and top of the duct (metres above ground), strength, the lowest frequency it can trap and whether it can carry 868 and 915 MHz. An elevated duct is a layer above the ground and mostly helps nodes that sit inside it, such as repeaters on high sites; a surface-based duct reaches the ground. The legend also shows the weather model, the data attribution and when the forecast was last updated.
+The legend shows the same bands as a bar with these thresholds. Use the **Forecast time** slider to move through the coming hours. Click anywhere in the field for the details of that grid cell: type (normal, super-refraction, elevated duct or surface-based duct), base and top of the duct (metres above ground), strength, the lowest frequency it can trap and whether it can carry 868 and 915 MHz. An elevated duct is a layer above the ground and mostly helps nodes that sit inside it, such as repeaters on high sites; a surface-based duct reaches the ground. The legend also shows the weather model, the data attribution and when the forecast was last updated.
 
-It is an indicator only. The weather model sees layers about 200 m or thicker, so thinner ducts, such as most over the sea, do not appear, and each grid cell covers tens of kilometres: the smooth field is interpolated between cell centres and shows no detail finer than that. A clear map does not mean no long-distance reception, and a coloured area does not promise it. See also [Why did a node far away hear my packet?](faq.md#12-why-did-a-node-far-away-hear-my-packet)
+It is an indicator only. The weather model sees layers about 200 m or thicker, so thinner ducts, such as most over the sea, do not appear, and each grid cell covers tens of kilometres: the band edges are interpolated between cell centres and show no detail finer than that. A clear map does not mean no long-distance reception, and a coloured area does not promise it. See also [Why did a node far away hear my packet?](faq.md#12-why-did-a-node-far-away-hear-my-packet)
 
 ## Marker shapes and colors
 

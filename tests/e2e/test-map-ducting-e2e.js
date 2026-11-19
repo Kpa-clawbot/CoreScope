@@ -45,6 +45,11 @@ const BASE = (process.env.BASE_URL || 'http://localhost:13596').replace(/\/+$/, 
 const FAKE_PORT = parseInt(process.env.FAKE_PORT || '13597', 10);
 const SCENARIO = 'mixed';
 const LORA_MAX_MHZ = 1000;
+// The field's colour bands start at these dN/dh values (map-ducting.js STOP_G).
+const STOP_G = [-79, -100, -130, -157, -220, -300, -400, -600];
+// A stop between a and b (within 0.5 N/km): the two may legitimately sit in
+// different bands, so their colours are not compared.
+const stopBetween = (a, b) => STOP_G.some(s => s >= Math.min(a, b) - 0.5 && s <= Math.max(a, b) + 0.5);
 
 let passed = 0, failed = 0, skipped = 0;
 async function test(name, fn) {
@@ -269,7 +274,10 @@ function ringFactor(data, c) {
 /**
  * Checks the field at hour idx: duct cells coloured like their g, a normal
  * cell (with only normal or missing neighbours) transparent, and every probed
- * pixel equal to the field sampled at Leaflet's position of that pixel.
+ * pixel equal to the field sampled at Leaflet's position of that pixel. The
+ * colours are flat bands, so a probe within 0.5 N/km of a band boundary (its
+ * pixel's float rounding may land on either side) has its colour checks
+ * skipped; the alpha check always applies.
  */
 async function fieldProblems(page, data, idx) {
   const ducts = data.cells.filter(c => c.c[idx] >= 3 && c.g[idx] <= -157).slice(0, 12);
@@ -282,12 +290,15 @@ async function fieldProblems(page, data, idx) {
   r.probes.forEach((p, i) => {
     const where = `${p.lat},${p.lon} g=${p.g}`;
     // Colour only where opaque enough: the canvas stores premultiplied alpha.
-    const bad = Math.abs(p.px[3] - p.exp[3]) > 3 || (p.exp[3] >= 64 && p.px.slice(0, 3).some((v, k) => Math.abs(v - p.exp[k]) > 4));
+    const edge = stopBetween(p.smp.g, p.smp.g);
+    const bad = Math.abs(p.px[3] - p.exp[3]) > 3 || (!edge && p.exp[3] >= 64 && p.px.slice(0, 3).some((v, k) => Math.abs(v - p.exp[k]) > 4));
     if (bad) probs.push(`${where}: pixel ${p.px} but the field there is ${p.exp}`);
     if (i < ducts.length) {
       // Full opacity inside the forecast area, half on its outer ring (the wider edge fade).
       if (p.px[3] < 0.8 * r.alpha * 255 * ringFactor(data, ducts[i])) probs.push(`${where}: duct centre alpha ${p.px[3]}`);
-      if (p.px.slice(0, 3).some((v, k) => Math.abs(v - p.own[k]) > 60)) probs.push(`${where}: pixel ${p.px} far from its own colour ${p.own}`);
+      // The pixel centre is a fraction of a cell from the cell centre, so it
+      // has the cell's own band colour unless a band boundary lies between.
+      if (!stopBetween(p.g, p.smp.g) && p.px.slice(0, 3).some((v, k) => Math.abs(v - p.own[k]) > 4)) probs.push(`${where}: pixel ${p.px} not its own band colour ${p.own} (sampled g ${p.smp.g})`);
     } else if (p.px[3] !== 0) probs.push(`${where}: normal cell centre not transparent (${p.px})`);
   });
   return { probs, r, ducts: ducts.length, calm: calm.length };
