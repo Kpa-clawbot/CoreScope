@@ -5687,10 +5687,11 @@ body { touch-action: pan-y; }
   --mc-route-legend-border: #94a3b8;
 }
 
-/* Tropospheric ducting overlay (map-ducting.js). The field colour scale:
- * s1..s8 at dN/dh -79 (super-refraction starts), -100, -130, -157 (ducting
- * starts), -220, -300, -400 and -600 N/km and beyond; hex or rgb() only (read
- * by JS). alpha = field opacity. lora = dashed outline of cells where a duct
+/* Tropospheric ducting overlay (map-ducting.js). The field colour bands:
+ * s1..s8 each colour dN/dh from -79 (super-refraction starts), -100, -130,
+ * -157 (ducting starts), -220, -300, -400 and -600 N/km down to the next
+ * stop (s8: -600 and beyond), flat, no blending; hex or rgb() only (read by
+ * JS). alpha = field opacity, the same for every band. lora = dashed outline of cells where a duct
  * can carry 868/915 MHz. edge = dotted line around the forecast area. */
 :root {
   --mc-duct-s1: #8e3fd0;
@@ -5701,7 +5702,7 @@ body { touch-action: pan-y; }
   --mc-duct-s6: #f5900f;
   --mc-duct-s7: #e3242b;
   --mc-duct-s8: #f03cc8;
-  --mc-duct-alpha: 0.6;
+  --mc-duct-alpha: 0.8;
   --mc-duct-lora: #111827;
   --mc-duct-edge: rgba(71, 85, 105, 0.85);
 }
@@ -5714,7 +5715,7 @@ body { touch-action: pan-y; }
   --mc-duct-s6: #ff9d2a;
   --mc-duct-s7: #ff3d3d;
   --mc-duct-s8: #ff5ad8;
-  --mc-duct-alpha: 0.62;
+  --mc-duct-alpha: 0.8;
   --mc-duct-lora: #f8fafc;
   --mc-duct-edge: rgba(148, 163, 184, 0.9);
 }
@@ -5728,7 +5729,7 @@ body { touch-action: pan-y; }
     --mc-duct-s6: #ff9d2a;
     --mc-duct-s7: #ff3d3d;
     --mc-duct-s8: #ff5ad8;
-    --mc-duct-alpha: 0.62;
+    --mc-duct-alpha: 0.8;
     --mc-duct-lora: #f8fafc;
     --mc-duct-edge: rgba(148, 163, 184, 0.9);
   }

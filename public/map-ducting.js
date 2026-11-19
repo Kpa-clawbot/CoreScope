@@ -1,9 +1,9 @@
 /* map-ducting.js — tropospheric ducting map overlay.
  *
- * Draws the forecast refractivity gradient as a smooth, semi-transparent
- * colour field (like the usual tropo-ducting forecast maps): transparent where
- * propagation is normal, then purple, blue, green, yellow, orange, red and
- * pink as the gradient gets stronger. Cells where a duct can carry LoRa
+ * Draws the forecast refractivity gradient as a semi-transparent field of
+ * colour bands (like the usual tropo-ducting forecast maps): transparent where
+ * propagation is normal, then purple, blue, cyan, green, yellow, orange, red
+ * and pink as the gradient gets stronger; each colour is one range of dN/dh. Cells where a duct can carry LoRa
  * (868/915 MHz) get a dashed outline. Data: GET /api/ducting (hourly
  * forecast, one array entry per `times` entry, see cmd/server/ducting_types.go).
  *
@@ -14,11 +14,13 @@
  *       (popups, LoRa outline), a legend and a forecast-time slider.
  *       A layer removed mid-fetch never touches the map afterwards.
  *   window.MC_ductTimeIndex(times, now) -> index of the latest time <= now
- *   window.MC_ductFieldColor(g, stops)  -> [r, g, b, a] for a dN/dh value
+ *   window.MC_ductFieldColor(g, stops)  -> [r, g, b, a] (band colour) for a dN/dh value
  *   window.MC_ductFieldStops()          -> stops read from the CSS variables
  *   window.MC_ductGrid(cells, step)     -> the cells' lattice (see ductGrid)
  *   window.MC_ductGridValues(grid, cells, i) -> Float32Array, NaN = no data
  *   window.MC_ductSample(grid, vals, lat, lon) -> { g, a }
+ *   window.MC_ductFieldValues(grid, vals) -> { g, a } Float32Arrays, one entry
+ *       per image pixel: what the field image is coloured from
  *   window.MC_ductRowLat(y, h, north, south)   -> latitude of image row y
  *
  * The field image:
@@ -27,21 +29,31 @@
  *     hour (the cells' outer edges), so its bounds stay put while the slider
  *     moves. Several separate regions share one image; its long side is
  *     capped at MAX_SIDE px, so far-apart regions get fewer pixels per cell
- *     (the browser smooths the upscaling). Cells on both sides of the
+ *     (the browser smooths the upscaling). PX_PER_CELL is high so the band
+ *     edges stay smooth curves at the zoom a region is usually viewed at. Cells on both sides of the
  *     antimeridian are drawn where Leaflet puts them (lon -180..180); the
  *     image then spans the whole width, nothing is wrapped.
  *   - Rows are sampled in Web Mercator (row -> latitude by the inverse
  *     projection), so the field lines up with the basemap at every zoom.
- *   - The value is the cell's min dN/dh (g), bilinearly interpolated between
- *     cell centres over the cells that have data. Where a neighbour has no
- *     data the field fades to transparent by the cell's edge, so there are no
+ *   - The value is the cell's min dN/dh (g), interpolated between cell
+ *     centres with Catmull-Rom bicubic over the 4x4 neighbourhood (lattice
+ *     indices clamped at its border), so band edges are smooth curves rather
+ *     than the straight segments bilinear gives. Next to a cell without data
+ *     (any of the 16 missing) it falls back to bilinear over the cells that
+ *     have data. Where a neighbour has no data the field fades to
+ *     transparent by the cell's edge (coverage, bilinear), so there are no
  *     hard square edges. At the outer edge of the forecast area (the lattice
  *     slots that have data at some hour) the fade is twice as wide: it starts
  *     a full cell inside the edge (see areaSoft).
  *   - The area's outer boundary is drawn as thin dotted lines (ductEdges),
  *     one segment per run of cell edges, so users see where the forecast ends.
+ *   - Colour: the flat colour of the band g falls in (no blending between
+ *     stops), every band at the same field opacity, times the coverage.
  *   - Built only when the data, the forecast hour or the theme changes,
- *     O(image pixels); pan and zoom only move/scale the image.
+ *     O(image pixels): the interpolation is separable (per image column the
+ *     lattice taps and weights are computed once per grid, per image row the
+ *     vertical sums once per lattice column), so a pixel costs a handful of
+ *     multiply-adds. Pan and zoom only move/scale the image.
  *
  * Colours come from the --mc-duct-s1..s8 CSS variables (hex or rgb()), the
  * field opacity from --mc-duct-alpha and the LoRa outline from
@@ -62,18 +74,17 @@
   var BAND_915 = 915;
   var TYPE_NAME = { 0: 'No data', 1: 'Normal', 2: 'Super-refraction', 3: 'Elevated duct', 4: 'Surface-based duct' };
 
-  // Colour scale: dN/dh (N/km) at each --mc-duct-sN variable. -79 starts
-  // super-refraction, -157 is a trapping layer (duct).
+  // Colour bands: --mc-duct-sN colours dN/dh (N/km) from STOP_G[N-1] down to
+  // (not including) the next stop; the last one everything below it. Above
+  // the first (-79, where super-refraction starts) is transparent; -157 is a
+  // trapping layer (duct). Whole numbers: the colour table relies on it.
   var STOP_G = [-79, -100, -130, -157, -220, -300, -400, -600];
-  var FADE_FROM = -60;          // above: transparent; -60..first stop: alpha ramps up
-  var DEFAULT_ALPHA = 0.6;      // when --mc-duct-alpha is unset
-  // Opacity follows strength so ducts stand out: super-refraction (common)
-  // starts faint at SUPER_ALPHA of the field opacity and reaches full
-  // opacity at the ducting threshold DUCT_G.
-  var SUPER_ALPHA = 0.25;
-  var DUCT_G = -157;
-  var LUT_SIZE = 600;           // colour table, one entry per N/km from FADE_FROM
-  var PX_PER_CELL = 16;
+  var DEFAULT_ALPHA = 0.8;      // when --mc-duct-alpha is unset
+  // Colour table: entry n is the colour of g = -n, and of every g in
+  // (-n - 1, -n] (same band, the stops being whole numbers); the last entry
+  // covers everything stronger.
+  var LUT_SIZE = 1 - STOP_G[STOP_G.length - 1];
+  var PX_PER_CELL = 48;
   var MAX_SIDE = 2048;          // image long side, px
   var MAX_GRID = 1 << 22;       // lattice slots (0.25 deg worldwide is ~1M)
   var MAX_LAT = 85.0511287798;  // Web Mercator limit
@@ -85,11 +96,10 @@
   var EDGE_STYLE = { stroke: true, weight: 1, opacity: 0.7, dashArray: '1 5', interactive: false };
   var LORA_STYLE = { stroke: true, weight: 1.5, opacity: 0.95, dashArray: '4 3' };
 
-  // Legend: position (0..1 along the bar) of FADE_FROM and of each stop.
-  // Spread out instead of linear in g, so the labels have room.
-  // "Strong" sits right-aligned at the end: the -400..-600 stretch.
-  var BAR_FADE = 0.13;
-  var BAR_POS = [0.19, 0.29, 0.44, 0.58, 0.69, 0.78, 0.86, 1];
+  // Legend: where each band starts (0..1 along the bar; the last runs to the
+  // end, transparent before the first). Spread out instead of linear in g,
+  // so the labels have room. "Strong" sits right-aligned at the end.
+  var BAR_POS = [0.19, 0.29, 0.44, 0.58, 0.69, 0.78, 0.86, 0.93];
   var BAR_LABELS = [[0, 'Normal'], [0.19, 'Super-refraction'], [0.58, 'Ducting'], [1, 'Strong', true]];
 
   var NOTE = 'Indicator only: model levels are ~200 m apart, so thinner ducts are not visible.';
@@ -188,39 +198,24 @@
     return (isFinite(a) && a >= 0 && a <= 1) ? a : DEFAULT_ALPHA;
   }
 
-  // Colour of dN/dh value g: [r, g, b, a], a in 0..1 (before the field
-  // opacity). Transparent at FADE_FROM and above; alpha ramps to SUPER_ALPHA
-  // at the first stop, then to 1 at DUCT_G; colours interpolated between
-  // stops, the last stop beyond it.
-  function fieldAlphaAt(g, firstG) {
-    if (g >= firstG) return SUPER_ALPHA * Math.min(1, (FADE_FROM - g) / (FADE_FROM - firstG));
-    if (g <= DUCT_G || firstG <= DUCT_G) return 1;
-    return SUPER_ALPHA + (1 - SUPER_ALPHA) * (firstG - g) / (firstG - DUCT_G);
-  }
-
+  // Colour of dN/dh value g: [r, g, b, a], the flat colour of its band
+  // (stops[k].g >= g > stops[k + 1].g -> stops[k]; at or below the last stop
+  // -> the last), alpha 1; transparent above the first stop, for NaN or
+  // without stops. No blending between stops, no opacity ramp.
   function fieldColor(g, stops) {
-    if (!stops || !stops.length || !isFinite(g) || g >= FADE_FROM) return [0, 0, 0, 0];
-    var first = stops[0], last = stops[stops.length - 1];
-    var a = fieldAlphaAt(g, first.g);
-    if (g >= first.g) return [first.rgb[0], first.rgb[1], first.rgb[2], a];
-    if (g <= last.g) return [last.rgb[0], last.rgb[1], last.rgb[2], a];
-    for (var k = 0; k < stops.length - 1; k++) {
-      var s0 = stops[k], s1 = stops[k + 1];
-      if (g >= s1.g) {
-        var t = (s0.g - g) / (s0.g - s1.g);
-        return [0, 1, 2].map(function (c) { return Math.round(s0.rgb[c] + (s1.rgb[c] - s0.rgb[c]) * t); }).concat(a);
-      }
-    }
-    return [last.rgb[0], last.rgb[1], last.rgb[2], a];
+    if (!stops || !stops.length || !(g <= stops[0].g)) return [0, 0, 0, 0];
+    for (var k = stops.length - 1; k > 0; k--) if (g <= stops[k].g) break;
+    var c = stops[k].rgb;
+    return [c[0], c[1], c[2], 1];
   }
 
-  // RGBA table: entry k is g = FADE_FROM - k, alpha scaled by `alpha`.
+  // RGBA table: entry n is the colour of g = -n, alpha scaled by `alpha`.
   function fieldLut(stops, alpha) {
     var lut = new Uint8ClampedArray(LUT_SIZE * 4);
-    for (var k = 0; k < LUT_SIZE; k++) {
-      var c = fieldColor(FADE_FROM - k, stops);
-      lut[k * 4] = c[0]; lut[k * 4 + 1] = c[1]; lut[k * 4 + 2] = c[2];
-      lut[k * 4 + 3] = Math.round(c[3] * alpha * 255);
+    for (var n = 0; n < LUT_SIZE; n++) {
+      var c = fieldColor(-n, stops);
+      lut[n * 4] = c[0]; lut[n * 4 + 1] = c[1]; lut[n * 4 + 2] = c[2];
+      lut[n * 4 + 3] = Math.round(c[3] * alpha * 255);
     }
     return lut;
   }
@@ -281,8 +276,8 @@
   }
 
   // Per lattice slot: 0 outside the forecast area, 1 on its outer edge (some
-  // of the 8 neighbours is outside, or off the lattice), 2 inside. mix() uses
-  // it to widen the fade at the outer edge only.
+  // of the 8 neighbours is outside, or off the lattice), 2 inside. The
+  // coverage (rowSums/evalAt) uses it to widen the fade at the outer edge only.
   function areaSoft(present, rows, cols) {
     var out = new Uint8Array(rows * cols);
     for (var r = 0; r < rows; r++) {
@@ -360,63 +355,186 @@
     return vals;
   }
 
-  // Bilinear mix at lattice row v / column u (fractional, 0 = first centre)
-  // over the slots with data. Writes [value, coverage] into res. Coverage is
-  // 1 where all neighbours have data and falls to 0 by the edge of a cell
-  // whose neighbour has none. With `soft` (areaSoft) the coverage is also
-  // scaled down towards the outer edge of the forecast area, so the fade
-  // there spans a full cell (1 at the second cell in, 0 at the edge).
-  function mix(vals, rows, cols, v, u, res, soft) {
-    var i = Math.floor(v), j = Math.floor(u), fv = v - i, fu = u - j;
-    var p = 0, s = 0, q = 0;
+  // ── Interpolation ──
+  // At lattice row v / column u (fractional, 0 = first centre):
+  //   g: Catmull-Rom bicubic over the 4x4 slots around (v, u), indices
+  //      clamped to the lattice; bilinear over the slots with data when any
+  //      of the 16 has none (NaN propagates through the sums, which is how
+  //      that is detected).
+  //   a: coverage, from the bilinear weights of the slots with data: 1 where
+  //      all four have data, falling to 0 by the edge of a cell whose
+  //      neighbour has none; with `soft` (areaSoft) also scaled down towards
+  //      the outer edge of the forecast area, so the fade there spans a full
+  //      cell (1 at the second cell in, 0 at the edge).
+  // Separable: colTaps holds the horizontal taps of a set of columns,
+  // rowSums the vertical sums of one row per lattice column, rowEval combines
+  // them. The renderer and sample() share all three, so they agree exactly.
+
+  // Catmull-Rom weights of the 4 taps at t (0..1) into w[o..o+3]; t = 0 is
+  // exactly [0, 1, 0, 0], so the field equals the data at the cell centres.
+  function crWeights(t, w, o) {
+    var t2 = t * t, t3 = t2 * t;
+    w[o] = 0.5 * (2 * t2 - t3 - t);
+    w[o + 1] = 0.5 * (3 * t3 - 5 * t2 + 2);
+    w[o + 2] = 0.5 * (4 * t2 - 3 * t3 + t);
+    w[o + 3] = 0.5 * (t3 - t2);
+  }
+
+  // Horizontal taps for lattice columns us[x]: bj = the interval between
+  // lattice columns bj - 1 and bj (index into rowSums' padded arrays; -1 =
+  // off the lattice), fu = the fraction across it.
+  function colTaps(cols, us) {
+    var n = us.length;
+    var T = { bj: new Int32Array(n), fu: new Float64Array(n) };
+    for (var x = 0; x < n; x++) {
+      var u = us[x], j = Math.floor(u);
+      T.bj[x] = (j >= -1 && j < cols) ? j + 1 : -1;
+      T.fu[x] = u - j;
+    }
+    return T;
+  }
+
+  // Reusable per-row buffers for a lattice `cols` wide. P/S/Q are padded by
+  // one column on each side (zeros), so bilinear taps never need a check.
+  function rowBufs(cols) {
+    return { ok: false, P: new Float64Array(cols + 2), S: new Float64Array(cols + 2), Q: new Float64Array(cols + 2),
+      cub: new Float64Array(cols), C: new Float64Array((cols + 1) * 4), wv: new Float64Array(4) };
+  }
+
+  // Vertical sums of lattice row v into R, per lattice column c:
+  //   P/S/Q[c + 1] = bilinear weight, weighted value and weighted soft of the
+  //   two rows around v that have data; cub[c] = bicubic sum of the 4 rows
+  //   (NaN when any has no data). Then, per interval b between columns b - 1
+  //   and b, the horizontal Catmull-Rom polynomial through cub[b - 2..b + 1]
+  //   (clamped): C[4b..4b+3] = c0..c3, g(t) = ((c3 t + c2) t + c1) t + c0.
+  //   c0 is the column's own value, so g(0) is exact; c3 involves all four,
+  //   so a missing one makes g NaN everywhere in the interval.
+  //   R.ok = false when v is off the lattice.
+  function rowSums(vals, soft, rows, cols, v, R) {
+    var i = Math.floor(v), fv = v - i;
+    R.ok = i >= -1 && i < rows;
+    if (!R.ok) return R;
+    var P = R.P, S = R.S, Q = R.Q, cub = R.cub, wv = R.wv, c;
+    P.fill(0); S.fill(0); Q.fill(0);
     for (var di = 0; di < 2; di++) {
       var r = i + di;
       if (r < 0 || r >= rows) continue;
-      var wv = di ? fv : 1 - fv;
-      for (var dj = 0; dj < 2; dj++) {
-        var c = j + dj;
-        if (c < 0 || c >= cols) continue;
-        var x = vals[r * cols + c];
+      var w = di ? fv : 1 - fv, base = r * cols;
+      for (c = 0; c < cols; c++) {
+        var x = vals[base + c];
         if (x !== x) continue;               // NaN: no data
-        var w = wv * (dj ? fu : 1 - fu);
-        p += w; s += w * x;
-        if (soft) q += w * soft[r * cols + c];
+        P[c + 1] += w; S[c + 1] += w * x;
+        if (soft) Q[c + 1] += w * soft[base + c];
       }
     }
-    var a = 2 * p - 1;
-    a = a <= 0 ? 0 : a >= 1 ? 1 : a * a * (3 - 2 * a);
-    res[0] = p > 0 ? s / p : NaN;
-    res[1] = (soft && p > 0) ? a * q / (2 * p) : a;
-    return res;
+    crWeights(fv, wv, 0);
+    var last = rows - 1;
+    var b0 = Math.max(0, Math.min(last, i - 1)) * cols, b1 = Math.max(0, Math.min(last, i)) * cols;
+    var b2 = Math.max(0, Math.min(last, i + 1)) * cols, b3 = Math.max(0, Math.min(last, i + 2)) * cols;
+    var w0 = wv[0], w1 = wv[1], w2 = wv[2], w3 = wv[3];
+    for (c = 0; c < cols; c++) cub[c] = w0 * vals[b0 + c] + w1 * vals[b1 + c] + w2 * vals[b2 + c] + w3 * vals[b3 + c];
+    var C = R.C, lc = cols - 1;
+    for (var b = 0; b <= cols; b++) {
+      var j = b - 1;
+      var p0 = cub[Math.max(0, Math.min(lc, j - 1))], p1 = cub[Math.max(0, Math.min(lc, j))];
+      var p2 = cub[Math.max(0, Math.min(lc, j + 1))], p3 = cub[Math.max(0, Math.min(lc, j + 2))];
+      C[4 * b] = p1;
+      C[4 * b + 1] = 0.5 * (p2 - p0);
+      C[4 * b + 2] = 0.5 * (2 * p0 - 5 * p1 + 4 * p2 - p3);
+      C[4 * b + 3] = 0.5 * (3 * p1 - p0 - 3 * p2 + p3);
+    }
+    return R;
+  }
+
+  // Field along the row in R at every column of taps T: gs[x] = g (NaN = no
+  // data), as[x] = coverage (scaled by the soft sums in Q when hasSoft).
+  // The hot loop. It walks runs of columns in the same lattice interval, so
+  // the interval's coefficients stay in locals and a pixel costs only the
+  // polynomial; inside the forecast area (both columns full) the coverage
+  // needs no smoothstep or division.
+  function rowEval(R, T, hasSoft, gs, as) {
+    var n = gs.length, none = NaN;         // local: a global lookup per pixel is slow in some engines
+    if (!R.ok) { gs.fill(none); as.fill(0); return; }
+    var bj = T.bj, fu = T.fu, P = R.P, S = R.S, Q = R.Q, C = R.C;
+    var x = 0, end, f, e;
+    while (x < n) {
+      var b = bj[x];
+      for (end = x + 1; end < n && bj[end] === b; end++);
+      if (b < 0) { for (; x < end; x++) { gs[x] = none; as[x] = 0; } continue; }
+      var p0 = P[b], p1 = P[b + 1], s0 = S[b], s1 = S[b + 1], q0 = hasSoft ? Q[b] : 0, q1 = hasSoft ? Q[b + 1] : 0;
+      var o = 4 * b, c0 = C[o], c1 = C[o + 1], c2 = C[o + 2], c3 = C[o + 3];
+      var cubic = c3 === c3;               // NaN when one of the 16 has no data
+      if (p0 === 1 && p1 === 1) {          // full coverage on both sides
+        for (; x < end; x++) {
+          f = fu[x]; e = 1 - f;
+          as[x] = hasSoft ? (e * q0 + f * q1) / 2 : 1;
+          gs[x] = cubic ? ((c3 * f + c2) * f + c1) * f + c0 : e * s0 + f * s1;
+        }
+        continue;
+      }
+      for (; x < end; x++) {
+        f = fu[x]; e = 1 - f;
+        var p = e * p0 + f * p1;
+        if (!(p > 0)) { gs[x] = none; as[x] = 0; continue; }
+        var a = 2 * p - 1;
+        a = a <= 0 ? 0 : a >= 1 ? 1 : a * a * (3 - 2 * a);
+        as[x] = hasSoft ? a * (e * q0 + f * q1) / (2 * p) : a;
+        gs[x] = cubic ? ((c3 * f + c2) * f + c1) * f + c0 : (e * s0 + f * s1) / p;
+      }
+    }
   }
 
   function sample(grid, vals, lat, lon) {
-    var r = mix(vals, grid.rows, grid.cols, lat / grid.step - 0.5 - grid.i0, lon / grid.step - 0.5 - grid.j0, [0, 0], grid.soft);
-    return { g: r[0], a: r[1] };
+    var R = rowSums(vals, grid.soft, grid.rows, grid.cols, lat / grid.step - 0.5 - grid.i0, rowBufs(grid.cols));
+    var T = colTaps(grid.cols, [lon / grid.step - 0.5 - grid.j0]);
+    var gs = new Float64Array(1), as = new Float64Array(1);
+    rowEval(R, T, !!grid.soft, gs, as);
+    return { g: gs[0], a: as[0] };
   }
 
-  // Fills `out` (RGBA, grid.w x grid.h) with the field. O(pixels).
-  function renderField(grid, vals, lut, out) {
-    var W = grid.w, H = grid.h, rows = grid.rows, cols = grid.cols, step = grid.step, soft = grid.soft;
-    var us = new Float64Array(W);
-    for (var x = 0; x < W; x++) us[x] = (grid.west + (grid.east - grid.west) * (x + 0.5) / W) / step - 0.5 - grid.j0;
-    var res = [0, 0];
+  // The image columns' taps: computed once per grid (its width never changes).
+  function gridTaps(grid) {
+    if (grid._taps) return grid._taps;
+    var W = grid.w, us = new Float64Array(W);
+    for (var x = 0; x < W; x++) us[x] = (grid.west + (grid.east - grid.west) * (x + 0.5) / W) / grid.step - 0.5 - grid.j0;
+    return (grid._taps = colTaps(grid.cols, us));
+  }
+
+  // Runs fn(y, gs, as) for every image row y with that row's g and coverage
+  // (buffers reused from row to row).
+  function eachRow(grid, vals, fn) {
+    var W = grid.w, H = grid.h, T = gridTaps(grid), R = rowBufs(grid.cols), soft = !!grid.soft;
+    var gs = new Float64Array(W), as = new Float64Array(W);
     for (var y = 0; y < H; y++) {
-      var v = rowLat(y + 0.5, H, grid.north, grid.south) / step - 0.5 - grid.i0;
-      var o = y * W * 4;
-      for (x = 0; x < W; x++, o += 4) {
-        mix(vals, rows, cols, v, us[x], res, soft);
-        var cov = res[1];
+      rowSums(vals, grid.soft, grid.rows, grid.cols, rowLat(y + 0.5, H, grid.north, grid.south) / grid.step - 0.5 - grid.i0, R);
+      rowEval(R, T, soft, gs, as);
+      fn(y, gs, as);
+    }
+  }
+
+  // g and coverage per image pixel (row-major), as renderField sees them.
+  function fieldValues(grid, vals) {
+    var W = grid.w, out = { g: new Float32Array(W * grid.h), a: new Float32Array(W * grid.h) };
+    eachRow(grid, vals, function (y, gs, as) { out.g.set(gs, y * W); out.a.set(as, y * W); });
+    return out;
+  }
+
+  // Fills `out` (RGBA, grid.w x grid.h, all zero) with the field. O(pixels).
+  function renderField(grid, vals, lut, out) {
+    var W = grid.w, top = LUT_SIZE - 1;
+    eachRow(grid, vals, function (y, gs, as) {
+      for (var x = 0, o = y * W * 4; x < W; x++, o += 4) {
+        var cov = as[x];
         if (!(cov > 0)) continue;
-        var k = Math.round(FADE_FROM - res[0]);
-        if (!(k > 0)) continue;                // normal, or NaN
-        if (k >= LUT_SIZE) k = LUT_SIZE - 1;
-        var a = lut[k * 4 + 3];
+        var ng = -gs[x];
+        if (!(ng >= 0)) continue;              // no colour, or NaN
+        var n = ng > top ? top : ng | 0;       // floor
+        var a = lut[n * 4 + 3];
         if (!a) continue;
-        out[o] = lut[k * 4]; out[o + 1] = lut[k * 4 + 1]; out[o + 2] = lut[k * 4 + 2];
+        out[o] = lut[n * 4]; out[o + 1] = lut[n * 4 + 1]; out[o + 2] = lut[n * 4 + 2];
         out[o + 3] = a * cov;
       }
-    }
+    });
     return out;
   }
 
@@ -535,7 +653,7 @@
         if (this._group && m) { try { m.removeLayer(this._group); } catch (_) {} }
         if (this._field && m) { try { m.removeLayer(this._field); } catch (_) {} }
         if (this._renderer && m) { try { m.removeLayer(this._renderer); } catch (_) {} }
-        this._map = this._group = this._renderer = this._field = this._canvas = this._grid = null;
+        this._map = this._group = this._renderer = this._field = this._canvas = this._grid = this._img = null;
         this._legendCtl = this._timeCtl = this._legendEl = this._statusEl = this._metaEl = null;
         this._slider = this._timeLabel = this._onSlide = null;
         this._rects = [];
@@ -672,12 +790,16 @@
         box.appendChild(el('div', 'mc-duct-legend-note', NOTE));
       },
 
-      // Gradient bar from the same variables as the field, labels under it.
+      // Bar of the same colour bands as the field (hard stops: each colour
+      // starts where the previous ends), labels under it.
       _scale: function () {
         var wrap = el('div', 'mc-duct-scale');
         var bar = el('div', 'mc-duct-scale-bar');
-        var parts = ['transparent 0%', 'transparent ' + pct(BAR_FADE)];
-        for (var k = 0; k < STOP_G.length; k++) parts.push('var(--mc-duct-s' + (k + 1) + ') ' + pct(BAR_POS[k]));
+        var parts = ['transparent 0%', 'transparent ' + pct(BAR_POS[0])];
+        for (var k = 0; k < STOP_G.length; k++) {
+          var c = 'var(--mc-duct-s' + (k + 1) + ') ';
+          parts.push(c + pct(BAR_POS[k]), c + pct(k + 1 < BAR_POS.length ? BAR_POS[k + 1] : 1));
+        }
         bar.style.background = 'linear-gradient(to right, ' + parts.join(', ') + ')';
         bar.setAttribute('aria-hidden', 'true');
         wrap.appendChild(bar);
@@ -844,7 +966,10 @@
           if (canvas.width !== g.w) canvas.width = g.w;
           if (canvas.height !== g.h) canvas.height = g.h;
           var ctx = canvas.getContext('2d');
-          var img = ctx.createImageData(g.w, g.h);
+          // One pixel buffer per image size, cleared for each redraw.
+          var img = this._img;
+          if (!img || img.width !== g.w || img.height !== g.h) img = this._img = ctx.createImageData(g.w, g.h);
+          else img.data.fill(0);
           renderField(g, ductGridValues(g, d.cells, this._idx), fieldLut(fieldStops(), fieldAlpha()), img.data);
           ctx.putImageData(img, 0, 0);
         } catch (_) { this._dropField(); return; }
@@ -881,5 +1006,6 @@
   window.MC_ductEdges = ductEdges;
   window.MC_ductGridValues = ductGridValues;
   window.MC_ductSample = sample;
+  window.MC_ductFieldValues = fieldValues;
   window.MC_ductRowLat = rowLat;
 })();
