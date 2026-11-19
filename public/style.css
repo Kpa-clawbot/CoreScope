@@ -5691,7 +5691,7 @@ body { touch-action: pan-y; }
  * s1..s8 at dN/dh -79 (super-refraction starts), -100, -130, -157 (ducting
  * starts), -220, -300, -400 and -600 N/km and beyond; hex or rgb() only (read
  * by JS). alpha = field opacity. lora = dashed outline of cells where a duct
- * can carry 868/915 MHz. */
+ * can carry 868/915 MHz. edge = dotted line around the forecast area. */
 :root {
   --mc-duct-s1: #8e3fd0;
   --mc-duct-s2: #3d5ee6;
@@ -5703,6 +5703,7 @@ body { touch-action: pan-y; }
   --mc-duct-s8: #f03cc8;
   --mc-duct-alpha: 0.6;
   --mc-duct-lora: #111827;
+  --mc-duct-edge: rgba(71, 85, 105, 0.85);
 }
 [data-theme="dark"] {
   --mc-duct-s1: #a557f0;
@@ -5715,6 +5716,7 @@ body { touch-action: pan-y; }
   --mc-duct-s8: #ff5ad8;
   --mc-duct-alpha: 0.62;
   --mc-duct-lora: #f8fafc;
+  --mc-duct-edge: rgba(148, 163, 184, 0.9);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -5728,6 +5730,7 @@ body { touch-action: pan-y; }
     --mc-duct-s8: #ff5ad8;
     --mc-duct-alpha: 0.62;
     --mc-duct-lora: #f8fafc;
+    --mc-duct-edge: rgba(148, 163, 184, 0.9);
   }
 }
 .mc-duct-legend,
@@ -5766,6 +5769,7 @@ body { touch-action: pan-y; }
   border: 1px solid var(--mc-route-legend-border);
 }
 .mc-duct-swatch-lora { background: transparent; border: 2px dashed var(--mc-duct-lora); }
+.mc-duct-swatch-edge { background: transparent; border: 2px dotted var(--mc-duct-edge); }
 .mc-duct-scale { margin: 4px 0 8px; }
 .mc-duct-scale-bar {
   height: 12px;

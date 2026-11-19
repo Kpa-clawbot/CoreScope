@@ -35,13 +35,19 @@
  *   - The value is the cell's min dN/dh (g), bilinearly interpolated between
  *     cell centres over the cells that have data. Where a neighbour has no
  *     data the field fades to transparent by the cell's edge, so there are no
- *     hard square edges.
+ *     hard square edges. At the outer edge of the forecast area (the lattice
+ *     slots that have data at some hour) the fade is twice as wide: it starts
+ *     a full cell inside the edge (see areaSoft).
+ *   - The area's outer boundary is drawn as thin dotted lines (ductEdges),
+ *     one segment per run of cell edges, so users see where the forecast ends.
  *   - Built only when the data, the forecast hour or the theme changes,
  *     O(image pixels); pan and zoom only move/scale the image.
  *
  * Colours come from the --mc-duct-s1..s8 CSS variables (hex or rgb()), the
  * field opacity from --mc-duct-alpha and the LoRa outline from
- * --mc-duct-lora, all read at draw time.
+ * --mc-duct-lora and the dotted edge line from --mc-duct-edge, all read at
+ * draw time.
+ *   window.MC_ductEdges(grid)           -> [[[lat, lon], [lat, lon]], ...]
  */
 (function () {
   'use strict';
@@ -75,6 +81,8 @@
   var FIELD_Z = '245';          // above tiles (200), below the tile overlays (250) and vectors (400)
   var LORA_VAR = '--mc-duct-lora';
   var ALPHA_VAR = '--mc-duct-alpha';
+  var EDGE_VAR = '--mc-duct-edge';
+  var EDGE_STYLE = { stroke: true, weight: 1, opacity: 0.7, dashArray: '1 5', interactive: false };
   var LORA_STYLE = { stroke: true, weight: 1.5, opacity: 0.95, dashArray: '4 3' };
 
   // Legend: position (0..1 along the bar) of FADE_FROM and of each stop.
@@ -252,8 +260,13 @@
     if (!n) return null;
     var rows = i1 - i0 + 1, cols = j1 - j0 + 1;
     if (rows * cols > MAX_GRID) return null;
-    for (k = 0; k < cells.length; k++) if (slot[k] === 0) slot[k] = (ii[k] - i0) * cols + (jj[k] - j0);
-    var g = { step: step, i0: i0, j0: j0, rows: rows, cols: cols, slot: slot,
+    var present = new Uint8Array(rows * cols);
+    for (k = 0; k < cells.length; k++) {
+      if (slot[k] !== 0) continue;
+      slot[k] = (ii[k] - i0) * cols + (jj[k] - j0);
+      present[slot[k]] = 1;
+    }
+    var g = { step: step, i0: i0, j0: j0, rows: rows, cols: cols, slot: slot, soft: areaSoft(present, rows, cols),
       south: Math.max(-MAX_LAT, i0 * step), north: Math.min(MAX_LAT, (i1 + 1) * step),
       west: j0 * step, east: (j1 + 1) * step };
     if (!(g.north > g.south)) return null;
@@ -265,6 +278,74 @@
     g.w = Math.max(1, Math.round(w * scale));
     g.h = Math.max(1, Math.round(h * scale));
     return g;
+  }
+
+  // Per lattice slot: 0 outside the forecast area, 1 on its outer edge (some
+  // of the 8 neighbours is outside, or off the lattice), 2 inside. mix() uses
+  // it to widen the fade at the outer edge only.
+  function areaSoft(present, rows, cols) {
+    var out = new Uint8Array(rows * cols);
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        var s = r * cols + c;
+        if (!present[s]) continue;
+        var inner = r > 0 && r < rows - 1 && c > 0 && c < cols - 1;
+        if (inner) {
+          for (var d = -1; d <= 1 && inner; d++) {
+            var o = s + d * cols;
+            if (!present[o - 1] || !present[o] || !present[o + 1]) inner = false;
+          }
+        }
+        out[s] = inner ? 2 : 1;
+      }
+    }
+    return out;
+  }
+
+  // The outer boundary of the forecast area: the cell edges whose neighbour
+  // cell is outside the area, merged into runs along each lattice row and
+  // column: [[[lat, lon], [lat, lon]], ...]. A filled rectangle is 4 segments.
+  // Across the antimeridian a cell at lon 180 and one at -180 are neighbours,
+  // so there is no edge at the seam when both exist. O(lattice slots).
+  function ductEdges(grid) {
+    var out = [];
+    if (!grid || !grid.soft) return out;
+    var soft = grid.soft, rows = grid.rows, cols = grid.cols, step = grid.step;
+    var clampLat = function (lat) { return Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)); };
+    var r, c, start, lat, lon;
+    for (r = 0; r <= rows; r++) {
+      lat = clampLat((grid.i0 + r) * step);
+      start = -1;
+      for (c = 0; c <= cols; c++) {
+        var edge = c < cols && ((r > 0 && soft[(r - 1) * cols + c] > 0) !== (r < rows && soft[r * cols + c] > 0));
+        if (edge && start < 0) start = c;
+        if (!edge && start >= 0) {
+          out.push([[lat, (grid.j0 + start) * step], [lat, (grid.j0 + c) * step]]);
+          start = -1;
+        }
+      }
+    }
+    var seamCol = function (lon, east) {   // lattice column across the antimeridian, or -1
+      var j = Math.round(east ? -180 / step : 180 / step - 1) - grid.j0;
+      return (Math.abs(lon - (east ? 180 : -180)) < 1e-9 && j >= 0 && j < cols) ? j : -1;
+    };
+    for (c = 0; c <= cols; c++) {
+      lon = (grid.j0 + c) * step;
+      var mirror = c === cols ? seamCol(lon, true) : c === 0 ? seamCol(lon, false) : -1;
+      start = -1;
+      for (r = 0; r <= rows; r++) {
+        var has = function (col) { return r < rows && col >= 0 && col < cols && soft[r * cols + col] > 0; };
+        var left = c > 0 ? has(c - 1) : has(mirror);
+        var right = c < cols ? has(c) : has(mirror);
+        var vedge = r < rows && left !== right;
+        if (vedge && start < 0) start = r;
+        if (!vedge && start >= 0) {
+          out.push([[clampLat((grid.i0 + start) * step), lon], [clampLat((grid.i0 + r) * step), lon]]);
+          start = -1;
+        }
+      }
+    }
+    return out;
   }
 
   // g at time index i per lattice slot; NaN where there is no data (class 0).
@@ -282,10 +363,12 @@
   // Bilinear mix at lattice row v / column u (fractional, 0 = first centre)
   // over the slots with data. Writes [value, coverage] into res. Coverage is
   // 1 where all neighbours have data and falls to 0 by the edge of a cell
-  // whose neighbour has none.
-  function mix(vals, rows, cols, v, u, res) {
+  // whose neighbour has none. With `soft` (areaSoft) the coverage is also
+  // scaled down towards the outer edge of the forecast area, so the fade
+  // there spans a full cell (1 at the second cell in, 0 at the edge).
+  function mix(vals, rows, cols, v, u, res, soft) {
     var i = Math.floor(v), j = Math.floor(u), fv = v - i, fu = u - j;
-    var p = 0, s = 0;
+    var p = 0, s = 0, q = 0;
     for (var di = 0; di < 2; di++) {
       var r = i + di;
       if (r < 0 || r >= rows) continue;
@@ -297,23 +380,24 @@
         if (x !== x) continue;               // NaN: no data
         var w = wv * (dj ? fu : 1 - fu);
         p += w; s += w * x;
+        if (soft) q += w * soft[r * cols + c];
       }
     }
     var a = 2 * p - 1;
     a = a <= 0 ? 0 : a >= 1 ? 1 : a * a * (3 - 2 * a);
     res[0] = p > 0 ? s / p : NaN;
-    res[1] = a;
+    res[1] = (soft && p > 0) ? a * q / (2 * p) : a;
     return res;
   }
 
   function sample(grid, vals, lat, lon) {
-    var r = mix(vals, grid.rows, grid.cols, lat / grid.step - 0.5 - grid.i0, lon / grid.step - 0.5 - grid.j0, [0, 0]);
+    var r = mix(vals, grid.rows, grid.cols, lat / grid.step - 0.5 - grid.i0, lon / grid.step - 0.5 - grid.j0, [0, 0], grid.soft);
     return { g: r[0], a: r[1] };
   }
 
   // Fills `out` (RGBA, grid.w x grid.h) with the field. O(pixels).
   function renderField(grid, vals, lut, out) {
-    var W = grid.w, H = grid.h, rows = grid.rows, cols = grid.cols, step = grid.step;
+    var W = grid.w, H = grid.h, rows = grid.rows, cols = grid.cols, step = grid.step, soft = grid.soft;
     var us = new Float64Array(W);
     for (var x = 0; x < W; x++) us[x] = (grid.west + (grid.east - grid.west) * (x + 0.5) / W) / step - 0.5 - grid.j0;
     var res = [0, 0];
@@ -321,7 +405,7 @@
       var v = rowLat(y + 0.5, H, grid.north, grid.south) / step - 0.5 - grid.i0;
       var o = y * W * 4;
       for (x = 0; x < W; x++, o += 4) {
-        mix(vals, rows, cols, v, us[x], res);
+        mix(vals, rows, cols, v, us[x], res, soft);
         var cov = res[1];
         if (!(cov > 0)) continue;
         var k = Math.round(FADE_FROM - res[0]);
@@ -415,6 +499,8 @@
         this._map = map;
         var gen = ++this._gen;
         this._rects = [];
+        this._edge = null;
+        this._edgeColor = '';
         this._grid = null;
         try {
           this._renderer = newRenderer();
@@ -453,6 +539,7 @@
         this._legendCtl = this._timeCtl = this._legendEl = this._statusEl = this._metaEl = null;
         this._slider = this._timeLabel = this._onSlide = null;
         this._rects = [];
+        this._edge = null;
       },
 
       // ── controls ──
@@ -574,6 +661,10 @@
           lrow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-lora'));
           lrow.appendChild(el('span', null, 'Dashed outline: a duct here can carry LoRa 868/915 MHz'));
           box.appendChild(lrow);
+          var erow = el('div', 'mc-duct-legend-row');
+          erow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-edge'));
+          erow.appendChild(el('span', null, 'Dotted line: edge of the forecast area (no forecast beyond it)'));
+          box.appendChild(erow);
           var meta = d.attribution || d.modelLabel || d.model || '';
           if (meta) box.appendChild(el('div', 'mc-duct-legend-meta', meta));
           if (d.generatedAt) box.appendChild(el('div', 'mc-duct-legend-meta', 'Updated ' + fmtTime(d.generatedAt)));
@@ -673,6 +764,7 @@
         if (!group) return;
         try { group.clearLayers(); } catch (_) {}
         this._rects = [];
+        this._edge = null;
         this._grid = ductGrid(d.cells, Number(d.stepDeg) || 0.5);
         var h = (Number(d.stepDeg) || 0.5) / 2;
         for (var i = 0; i < d.cells.length; i++) {
@@ -689,6 +781,22 @@
           group.addLayer(rect);
           this._rects.push(rect);
         }
+        this._buildEdge(group);
+      },
+
+      // The forecast area's outline: one non-interactive multi-part polyline
+      // (a part per merged run of boundary cell edges), on the shared canvas.
+      _buildEdge: function (group) {
+        var segs = ductEdges(this._grid);
+        if (!segs.length || !L.polyline) return;
+        var color = cssVar(EDGE_VAR);
+        try {
+          var line = L.polyline(segs, L.extend({ renderer: this._renderer, color: color || undefined }, EDGE_STYLE, { stroke: !!color }));
+          line._mcEdge = true;
+          group.addLayer(line);
+          this._edge = line;
+          this._edgeColor = color;
+        } catch (_) { this._edge = null; }
       },
 
       _popupFn: function (cell) {
@@ -705,10 +813,15 @@
         this._restyle();
       },
 
-      // Redraws the field image and the LoRa outlines for the current hour
+      // Redraws the field image, the edge colour and the LoRa outlines for the current hour
       // and theme; the rectangles themselves are kept.
       _restyle: function () {
         this._drawField();
+        var edgeColor = cssVar(EDGE_VAR);
+        if (this._edge && edgeColor !== this._edgeColor) {   // theme change
+          this._edgeColor = edgeColor;
+          this._edge.setStyle(edgeColor ? { stroke: true, color: edgeColor } : { stroke: false });
+        }
         var i = this._idx, lora = cssVar(LORA_VAR);
         for (var r = 0; r < this._rects.length; r++) {
           var rect = this._rects[r];
@@ -765,6 +878,7 @@
   window.MC_ductFieldColor = fieldColor;
   window.MC_ductFieldStops = fieldStops;
   window.MC_ductGrid = ductGrid;
+  window.MC_ductEdges = ductEdges;
   window.MC_ductGridValues = ductGridValues;
   window.MC_ductSample = sample;
   window.MC_ductRowLat = rowLat;
