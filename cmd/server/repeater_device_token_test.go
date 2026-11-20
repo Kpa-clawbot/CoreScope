@@ -92,6 +92,10 @@ func TestBearerScopesForRoutes(t *testing.T) {
 		{"DELETE", repPath(rpkA, "claim"), []string{deviceScopeRepeaterClaim}},
 		{"PUT", repPath(rpkA, "info"), []string{deviceScopeRepeaterEdit}},
 		{"GET", repPath(rpkA, "info"), both},
+		{"GET", "/api/account/repeaters", both},
+		{"HEAD", "/api/account/repeaters", both},
+		{"POST", "/api/account/repeaters", nil},
+		{"DELETE", "/api/account/repeaters", nil},
 		{"GET", repPath(rpkA, "claim"), nil},
 		{"POST", repPath(rpkA, "info"), nil},
 		{"GET", "/api/repeaters/info", nil},
@@ -106,7 +110,7 @@ func TestBearerScopesForRoutes(t *testing.T) {
 	}
 	for path, want := range map[string]bool{
 		repPath(rpkA, "info"): true, repPath(rpkA, "claim"): true, "/api/auth/device-token": true,
-		"/api/account/companions": true, "/api/repeaters/info": false, "/api/account/sessions": false,
+		"/api/account/companions": true, "/api/account/repeaters": true, "/api/repeaters/info": false, "/api/account/sessions": false,
 	} {
 		if got := bearerCORSPath(path); got != want {
 			t.Errorf("bearerCORSPath(%s) = %v, want %v", path, got, want)

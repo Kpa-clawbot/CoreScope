@@ -50,11 +50,19 @@ func repeaterRoute(path string) string {
 // Any device token may read and end its own login; RX routes need rx;
 // repeater claims need repeater:claim and repeater edits repeater:edit. A
 // read of one repeater's details takes either repeater scope (it adds the
-// caller's canEdit and claimedByMe).
+// caller's canEdit and claimedByMe), and so does the list of the caller's
+// own claims (My repeaters), which an app cannot build from the public
+// catalog: claimers there are display names, and a claimed repeater may
+// have left the node list.
 func bearerScopesFor(method, path string) []string {
 	switch {
 	case path == "/api/auth/me", path == "/api/auth/logout":
 		return deviceScopes
+	case path == "/api/account/repeaters":
+		if method == http.MethodGet || method == http.MethodHead {
+			return []string{deviceScopeRepeaterClaim, deviceScopeRepeaterEdit}
+		}
+		return nil
 	case path == "/api/account/settings", path == "/api/account/companions",
 		strings.HasPrefix(path, "/api/account/companions/"):
 		return []string{deviceScopeRX}

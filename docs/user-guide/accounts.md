@@ -354,8 +354,9 @@ enabled.
   this when a claimer left or claimed a repeater that is not theirs.
 - **Mobile apps:** an app logs in at `POST /api/auth/device-token` like CoreDrive RX, but asks
   for the scopes it needs: `repeater:claim` to claim a repeater and remove its own claim,
-  `repeater:edit` to edit details (still only where the account may edit, as above). The token
-  shows under *My account, Devices*, and its claims and edits are recorded with `via: device`.
+  `repeater:edit` to edit details (still only where the account may edit, as above). Either
+  scope also lets the app read the account's own *My repeaters* list
+  (`GET /api/account/repeaters`). The token shows under *My account, Devices*, and its claims and edits are recorded with `via: device`.
   Admin claim removal stays in the browser. There is no separate switch. An admin's
   `repeater:edit` token can edit the details of every repeater, as an admin can in the browser,
   for as long as the token lives (90 days, renewed with use); log it out under *Devices* when the
