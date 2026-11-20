@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -142,7 +144,13 @@ func TestNodeAnalyticsCoverageEmptyStore(t *testing.T) {
 // detector reports as a failure of whichever test is running.
 func TestNodeAnalyticsWindowIgnoresLocalZone(t *testing.T) {
 	if os.Getenv("CS_TEST_LOCAL_ZONE_CHILD") != "1" {
-		cmd := exec.Command(os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.v")
+		if runtime.GOOS == "windows" {
+			t.Skip("Go takes the local zone from the OS on Windows and ignores TZ")
+		}
+		// A hung child fails here with its output, not at the parent's timeout.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.v")
 		cmd.Env = append(os.Environ(), "CS_TEST_LOCAL_ZONE_CHILD=1", "TZ=Etc/GMT-2")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
