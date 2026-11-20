@@ -132,10 +132,7 @@ func (s *Server) handleRepeaterInfoGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "pubkey must be 64 hex characters")
 		return
 	}
-	u, _, ok := s.optionalUser(w, r)
-	if !ok {
-		return
-	}
+	u, _ := s.optionalUser(w, r)
 	out, err := s.repeaterInfoFor(pk, u)
 	if err != nil {
 		log.Printf("[users] repeater info %s: %v", pk, err)

@@ -20,6 +20,9 @@ type meResponse struct {
 	DisplayName string     `json:"displayName"`
 	Role        users.Role `json:"role"`
 	CSRFToken   string     `json:"csrfToken"`
+	// Scopes: a device token's granted scopes, so an app can check what it
+	// holds after an update or a restore; absent for a browser session.
+	Scopes []string `json:"scopes,omitempty"`
 }
 
 type registerRequest struct {

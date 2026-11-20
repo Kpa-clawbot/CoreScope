@@ -206,26 +206,22 @@ func isSafeMethod(m string) bool { return m == http.MethodGet || m == http.Metho
 type authedHandler func(w http.ResponseWriter, r *http.Request, u *users.User, sess *users.Session)
 
 // optionalUser returns the caller of a route that also answers anonymously
-// (the read of one repeater's details). With no credential it returns nils
-// and ok. A bearer token that is unknown, expired or not a device token
-// answers 401 (ok false, the answer written), so a client learns its login
-// is gone; a valid device token without a scope for the route counts as
-// anonymous. Otherwise the cookie session decides, as for currentUser.
-func (s *Server) optionalUser(w http.ResponseWriter, r *http.Request) (*users.User, *users.Session, bool) {
+// (the read of one repeater's details), or nils for an anonymous one. A
+// bearer that does not resolve to an active device token with a scope for
+// the route counts as anonymous: an auth proxy may add its own
+// Authorization header (see bearerToken), and a visitor behind it must still
+// get the public view. A client learns its token is gone from /api/auth/me
+// or the 401 on its next write. Otherwise the cookie session decides, as
+// for currentUser.
+func (s *Server) optionalUser(w http.ResponseWriter, r *http.Request) (*users.User, *users.Session) {
 	tok, ok := bearerToken(r)
 	if !ok {
-		u, sess := s.auth.currentUser(w, r)
-		return u, sess, true
+		return s.auth.currentUser(w, r)
 	}
-	u, sess, code := s.auth.bearerUser(r, tok)
-	switch code {
-	case 0:
-		return u, sess, true
-	case http.StatusForbidden:
-		return nil, nil, true
+	if u, sess, code := s.auth.bearerUser(r, tok); code == 0 {
+		return u, sess
 	}
-	writeBearerFail(w, code)
-	return nil, nil, false
+	return nil, nil
 }
 
 // withUser requires a logged-in active user. A request with an

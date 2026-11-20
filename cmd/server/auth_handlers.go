@@ -325,11 +325,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMe answers the caller; a device token gets no CSRF token (it never
-// needs one).
+// needs one) and its scopes.
 func (s *Server) handleMe(w http.ResponseWriter, _ *http.Request, u *users.User, sess *users.Session) {
 	me := meFrom(u, sess)
 	if sess.Kind == users.SessionKindDevice {
 		me.CSRFToken = ""
+		me.Scopes = sess.Scopes
 	}
 	writeJSON(w, me)
 }

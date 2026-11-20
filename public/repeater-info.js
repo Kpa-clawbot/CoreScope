@@ -130,10 +130,14 @@
     var base = '/api/repeaters/' + encodeURIComponent(pk);
     var slot = el.id || '';
     var info = null;
+    // editRev is the revision the open form was loaded from, sent as
+    // baseRevision so a save made meanwhile (another tab, the app) answers
+    // 409 instead of being overwritten. undefined: unconditional save.
+    var editRev;
 
     function keep() {
       var form = el.querySelector('[data-ri-form]');
-      if (form) drafts[slot] = { pk: pk, values: rawForm(form) };
+      if (form) drafts[slot] = { pk: pk, values: rawForm(form), rev: editRev };
     }
     // shown is the mode on screen, or '' while nothing is (the view before
     // the GET answered).
@@ -145,7 +149,10 @@
       shown = mode;
       el.innerHTML = '<h4>Repeater info</h4>' +
         (mode === 'edit' ? formHtml(values || info) : mode === 'confirm' ? confirmHtml() : viewHtml(info, user));
-      if (mode === 'edit' && !values) keep();
+      if (mode === 'edit' && !values) {
+        editRev = info && typeof info.revision === 'number' ? info.revision : undefined;
+        keep();
+      }
     }
     var busy = false;
     function send(btn, method, path, body, done) {
@@ -155,6 +162,18 @@
       function settle() { busy = false; if (btn) btn.disabled = false; }
       return auth.request(method, path, body).then(function (r) {
         settle();
+        if (r.status === 409 && method === 'PUT' && r.data && typeof r.data === 'object') {
+          // Someone saved since the form opened: show what is stored now,
+          // from the 409's record, and let the user redo their change on it.
+          info = r.data;
+          if (info.canEdit) {
+            show('edit');
+            say(el, 'Someone else changed these details while you were editing. The form now shows the saved values; make your change again and save.');
+          } else {
+            show('view');
+          }
+          return;
+        }
         if (!r.ok) { say(el, auth.errText(r)); return; }
         info = r.data;
         done();
@@ -176,7 +195,9 @@
           var form = el.querySelector('[data-ri-form]');
           var err = formError(form);
           if (err) { say(el, err); return; }
-          send(t, 'PUT', base + '/info', readForm(form), back);
+          var body = readForm(form);
+          if (typeof editRev === 'number') body.baseRevision = editRev;
+          send(t, 'PUT', base + '/info', body, back);
         }
       });
       el.addEventListener('submit', function (ev) { ev.preventDefault(); });
@@ -190,7 +211,7 @@
       // An open draft comes back at once, in the same task as the re-render:
       // waiting for the GET would empty the section for a round trip.
       var d = drafts[slot];
-      if (d && d.pk === pk) { show('edit', d.values); el.hidden = false; }
+      if (d && d.pk === pk) { editRev = d.rev; show('edit', d.values); el.hidden = false; }
       return auth.request('GET', base + '/info').then(function (r) {
         // A section the node page already replaced must not touch the draft
         // its successor owns.

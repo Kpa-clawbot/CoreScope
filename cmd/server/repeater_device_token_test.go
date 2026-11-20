@@ -212,7 +212,12 @@ func TestRepeaterTokenEditFollowsCanEdit(t *testing.T) {
 		t.Fatalf("admin response = %+v", got)
 	}
 	// A disabled account's token stops working.
-	bobID := decode[meResponse](t, f.do("GET", "/api/auth/me", nil, bearer(bobBoth))).ID
+	bobMe := decode[meResponse](t, f.do("GET", "/api/auth/me", nil, bearer(bobBoth)))
+	bobID := bobMe.ID
+	// A token reads its own scopes back (review on #2429), with no CSRF token.
+	if !slices.Equal(bobMe.Scopes, []string{deviceScopeRepeaterClaim, deviceScopeRepeaterEdit}) || bobMe.CSRFToken != "" {
+		t.Fatalf("/api/auth/me for a device token = %+v", bobMe)
+	}
 	if err := f.st.SetStatus(bobID, users.StatusDisabled); err != nil {
 		t.Fatal(err)
 	}
@@ -254,13 +259,17 @@ func TestRepeaterInfoGetWithToken(t *testing.T) {
 	if strings.Contains(w.Body.String(), "canEdit") {
 		t.Fatalf("RX token got caller fields: %s", w.Body.String())
 	}
-	// A token that is gone answers 401 instead of passing as anonymous; a web
-	// session token is no bearer credential.
-	for _, tok := range []string{"nonsense", alice.cookie.Value} {
-		if w := f.do("GET", repPath(rpkA, "info"), nil, bearer(tok)); w.Code != http.StatusUnauthorized {
-			t.Errorf("bearer %.8s… = %d, want 401", tok, w.Code)
+	// A bearer that is no live device token reads the public view: a token
+	// that is gone, a web session token, and an auth proxy's own header
+	// (review on #2429: a 401 here hid the Repeater info section).
+	for _, tok := range []string{"nonsense", alice.cookie.Value, "eyJhbGciOiJSUzI1NiJ9.proxy.jwt"} {
+		w := f.do("GET", repPath(rpkA, "info"), nil, bearer(tok))
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "canEdit") {
+			t.Errorf("bearer %.8s… = %d %s, want 200 with the public view", tok, w.Code, w.Body.String())
 		}
 	}
+	// The same foreign header still gets 401 on a write, which needs a login.
+	expectStatus(t, f.do("PUT", repPath(rpkA, "info"), map[string]any{"notes": "x"}, bearer("eyJhbGciOiJSUzI1NiJ9.proxy.jwt")), http.StatusUnauthorized)
 	// The cookie still decides when both are sent, and anonymous reads stay public.
 	got = decode[repeaterInfoJSON](t, f.do("GET", repPath(rpkA, "info"), nil, as(alice), bearer("nonsense")))
 	if got.ClaimedByMe == nil || !*got.ClaimedByMe {
