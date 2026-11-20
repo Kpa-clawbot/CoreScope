@@ -47,7 +47,7 @@ func TestSpaHandlerPathTraversal(t *testing.T) {
 	}
 
 	fs := http.FileServer(http.Dir(root))
-	handler := spaHandler(root, fs)
+	handler := spaHandler(root, fs, "")
 
 	traversal := []string{
 		"/../secret.txt",
