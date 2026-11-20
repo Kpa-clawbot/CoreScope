@@ -6006,6 +6006,8 @@ body.embed #app.app-fixed {
   display: block; width: 100%; box-sizing: border-box; margin-top: 2px;
   background: var(--input-bg, var(--card-bg)); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;
 }
+.repeater-info-theirs { border-left: 3px solid var(--border); padding: 2px 0 2px 8px; margin: 0 0 8px; }
+.repeater-info-theirs p { margin: 0 0 4px; color: var(--text-muted); }
 .repeater-info-notice, .repeater-info-msg { color: var(--text-muted); font-size: 12px; }
 .repeater-info-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
 /* Global .btn-primary is white on --accent (2.75:1); same fix as .account-btn-primary. */

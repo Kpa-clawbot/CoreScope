@@ -177,9 +177,10 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Access-Control-Expose-Headers", corsExposedHeaders)
 		if s.auth != nil && bearerCORSPath(r.URL.Path) {
-			// Companion linking: CoreDrive RX on an allowlisted origin logs in
-			// and writes with a device token in Authorization. Still no
-			// credentials: nothing rides on cookies.
+			// Device-token clients on an allowlisted origin: CoreDrive RX
+			// (companion linking) and mobile apps (repeater claims and
+			// details) log in and write with a device token in Authorization.
+			// Still no credentials: nothing rides on cookies.
 			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		} else {

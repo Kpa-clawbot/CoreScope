@@ -356,11 +356,15 @@ enabled.
   for the scopes it needs: `repeater:claim` to claim a repeater and remove its own claim,
   `repeater:edit` to edit details (still only where the account may edit, as above). The token
   shows under *My account, Devices*, and its claims and edits are recorded with `via: device`.
-  Admin claim removal stays in the browser. There is no separate switch.
+  Admin claim removal stays in the browser. There is no separate switch. An admin's
+  `repeater:edit` token can edit the details of every repeater, as an admin can in the browser,
+  for as long as the token lives (90 days, renewed with use); log it out under *Devices* when the
+  device is lost or changes hands.
 - **Edits from two places:** each save of the details counts up a `revision`. The node page and
   an app both send the revision they started from, and if someone saved in between, CoreScope
   refuses the save and returns the current details instead of overwriting them. The node page
-  then shows the saved values with a note to make the change again.
+  keeps what you typed and shows the saved values under the form: *Save* again replaces them,
+  *Cancel* keeps them.
 
 ### Observer MQTT logins (optional)
 
