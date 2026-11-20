@@ -180,7 +180,7 @@ function context(ref = 'refs/tags/v9.8.7', event = 'workflow_dispatch', inputs =
 // That is what keeps a gate red rather than skipped, which branch protection
 // would count as passing.
 function route(ctx, failedJob, ingestor = 'true') {
-  for (const name of ['changes', 'go-test', 'race-test', 'server-race-shard', 'server-race', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+  for (const name of ['changes', 'go-test', 'race-test', 'musl-test', 'server-race-shard', 'server-race', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
     const job = block(deploy, name, 2);
     assert.ok(job, `missing ${name} job`);
     const needs = value(job, 'needs', 4).replace(/[\[\]\s]/g, '').split(',').filter(Boolean);

@@ -593,6 +593,18 @@ func LoadConfig(path string) (*Config, error) {
 	if v := os.Getenv("DB_PATH"); v != "" {
 		cfg.DBPath = v
 	}
+	if v := os.Getenv("DB_DRIVER"); v != "" {
+		if cfg.DB == nil {
+			cfg.DB = &DBConfig{}
+		}
+		cfg.DB.Driver = v
+	}
+	if v := os.Getenv("DB_DSN"); v != "" {
+		if cfg.DB == nil {
+			cfg.DB = &DBConfig{}
+		}
+		cfg.DB.DSN = v
+	}
 	if v := os.Getenv("MQTT_BROKER"); v != "" {
 		// Single broker from env â€” create a source
 		topic := os.Getenv("MQTT_TOPIC")

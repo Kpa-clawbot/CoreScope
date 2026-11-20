@@ -515,3 +515,47 @@ func TestApplyListLimitsDefaults(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadConfigEnvDBDriverDSN(t *testing.T) {
+	write := func(body string) string {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	// Env fills unset values and allocates the db block.
+	t.Setenv("DB_DRIVER", "pg")
+	t.Setenv("DB_DSN", "postgres://u:p@h/db")
+	cfg, err := LoadConfig(write(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DB == nil || cfg.DB.Driver != "pg" || cfg.DB.DSN != "postgres://u:p@h/db" {
+		t.Fatalf("env not applied: %+v", cfg.DB)
+	}
+
+	// Config wins over env (same precedence as ResolveDBPath).
+	cfg, err = LoadConfig(write(`{"db":{"driver":"sqlite","dsn":"cfg-dsn"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DB.Driver != "sqlite" || cfg.DB.DSN != "cfg-dsn" {
+		t.Fatalf("config should win over env: %+v", cfg.DB)
+	}
+
+	// Env fills only the missing key.
+	cfg, _ = LoadConfig(write(`{"db":{"driver":"postgres"}}`))
+	if cfg.DB.Driver != "postgres" || cfg.DB.DSN != "postgres://u:p@h/db" {
+		t.Fatalf("partial fill wrong: %+v", cfg.DB)
+	}
+
+	// No env, no db block: stays nil.
+	t.Setenv("DB_DRIVER", "")
+	t.Setenv("DB_DSN", "")
+	cfg, _ = LoadConfig(write(`{}`))
+	if cfg.DB != nil {
+		t.Fatalf("DB should stay nil, got %+v", cfg.DB)
+	}
+}

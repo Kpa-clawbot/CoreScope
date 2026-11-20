@@ -153,10 +153,12 @@ func rotateUsersBackups(dir string, keep int, justWritten string) (int, error) {
 // maybeBackup sweeps orphaned temporary files, takes a snapshot when one
 // is due and then rotates. The
 // janitor calls it every hour, the first time at startup. A failure is
-// logged and leaves the existing snapshots; the next run tries again.
+// logged and leaves the existing snapshots; the next run tries again. A
+// PostgreSQL store has no file to snapshot: it is backed up with pg_dump
+// (logged once at startup, logStartup), so nothing runs here.
 func (a *authService) maybeBackup(now time.Time) {
 	b := a.set.backup
-	if !b.enabled {
+	if !b.enabled || a.st.IsPostgres() {
 		return
 	}
 	if n, err := sweepUsersBackupTemps(b.dir, now); err != nil {
@@ -184,11 +186,20 @@ func (a *authService) maybeBackup(now time.Time) {
 	log.Printf("[users] backup written: %s (%d bytes, kept %d)", absForLog(path), size, kept)
 }
 
+// msgUsersBackupPostgres is the 501 body of the users backup download when
+// the accounts are in PostgreSQL.
+const msgUsersBackupPostgres = "accounts are stored in PostgreSQL; back them up with pg_dump"
+
 // handleAdminUsersBackup streams a fresh users.db snapshot from a temp
 // directory, removed afterwards. The file holds password hashes and
-// addresses: admin only, audited as user.backup.
+// addresses: admin only, audited as user.backup. With the accounts in
+// PostgreSQL there is no users.db: 501.
 func (s *Server) handleAdminUsersBackup(w http.ResponseWriter, _ *http.Request, admin *users.User, _ *users.Session) {
 	a := s.auth
+	if a.st.IsPostgres() {
+		writeError(w, http.StatusNotImplemented, msgUsersBackupPostgres)
+		return
+	}
 	tmpDir, err := os.MkdirTemp("", "corescope-users-")
 	if err != nil {
 		log.Printf("[users] backup download: temp dir: %v", err)

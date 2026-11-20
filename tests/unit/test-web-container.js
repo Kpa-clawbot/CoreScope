@@ -57,7 +57,7 @@ test('Caddy sends the no-cache rule for exactly the paths in deploy/static/_head
 });
 
 test('compose points BACKEND at the server service, on the port the image runs it on', () => {
-  const port = read('docker/supervisord-go-no-caddy.conf').match(/corescope-server .*-port (\d+)/)[1];
+  const port = read('docker/supervisord-go-no-caddy.conf').match(/\[program:corescope-server\][^[]*?\ncommand=.*-port (\d+)/)[1];
   assert.ok(/^ {2}corescope:\s*$/m.test(compose), 'no corescope service');
   assert.ok(compose.includes(`BACKEND=corescope:${port}`), `BACKEND=corescope:${port}`);
   assert.ok(dockerfile.includes(`BACKEND=corescope:${port}`), 'Dockerfile.web default BACKEND');

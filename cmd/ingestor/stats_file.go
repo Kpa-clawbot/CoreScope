@@ -145,8 +145,11 @@ func writeStatsAtomic(path string, b []byte) error {
 	tmp := path + ".tmp"
 	// O_NOFOLLOW: if tmp is a pre-existing symlink, openat fails with ELOOP
 	// instead of clobbering the symlink target. O_TRUNC zeroes existing
-	// regular-file content. 0o600 — no need for world-readable.
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|oNoFollow, 0o600)
+	// regular-file content. 0o640: never world-readable, but group-readable so
+	// a server in another container (PostgreSQL Docker layout) that shares
+	// the directory's group can read it — the file holds performance
+	// counters only, no secrets.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|oNoFollow, 0o640)
 	if err != nil {
 		return err
 	}
@@ -164,6 +167,33 @@ func writeStatsAtomic(path string, b []byte) error {
 		return err
 	}
 	return nil
+}
+
+// upsertIngestorStatsSQL replaces the single ingestor_stats row.
+const upsertIngestorStatsSQL = `INSERT INTO ingestor_stats (id, updated_at, payload) VALUES (1, ?, ?)
+	ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at, payload = excluded.payload`
+
+// statsPublisher returns where the stats writer sends each encoded snapshot
+// (stamp is its RFC3339 UTC sampledAt), and a description of it for log
+// lines.
+//
+// SQLite: the stats file at statsFilePath(), shared with the server through
+// the filesystem, exactly as before.
+//
+// Postgres: the ingestor_stats row (id 1), so the server, possibly on another
+// host, needs no shared volume; no file is written at all. One upsert per
+// tick, through WriterExec, so it queues behind the other writers on the
+// store's single connection like any other write and shows up in the
+// writer_perf timings.
+func (s *Store) statsPublisher() (publish func(stamp string, b []byte) error, where string) {
+	if !s.pg {
+		path := statsFilePath()
+		return func(_ string, b []byte) error { return writeStatsAtomic(path, b) }, path
+	}
+	return func(stamp string, b []byte) error {
+		_, err := s.WriterExec("stats_writer", upsertIngestorStatsSQL, stamp, string(b))
+		return err
+	}, "table ingestor_stats"
 }
 
 // procIOSnapshot is the raw counter snapshot used to compute per-second rates
@@ -237,13 +267,14 @@ func procIORate(prev, cur procIOSnapshot, stamp string) *PerfIOSample {
 	}
 }
 
-// StartStatsFileWriter writes the current stats snapshot to disk every
-// `interval` so the server can serve them at /api/perf/write-sources.
+// StartStatsFileWriter publishes the current stats snapshot every `interval`
+// so the server can serve them at /api/perf/write-sources: to the stats file
+// on SQLite, to the ingestor_stats row on Postgres (statsPublisher).
 // Failures are logged once-per-interval and never fatal.
 //
-// The stats file path is resolved via statsFilePath() once at writer-loop
-// start; the env var (CORESCOPE_INGESTOR_STATS) is only re-read on process
-// restart, not per tick.
+// The destination is resolved once at writer-loop start; the env var
+// (CORESCOPE_INGESTOR_STATS) is only re-read on process restart, not per
+// tick.
 // The returned stop function ends the writer goroutine and returns once it has
 // exited. Production ignores it and runs for the process lifetime; tests must
 // call it, because this goroutine reads package-level hooks (readProcSelfIOFn)
@@ -260,7 +291,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
 		defer close(stopped)
 		t := time.NewTicker(interval)
 		defer t.Stop()
-		path := statsFilePath()
+		publish, where := s.statsPublisher()
 		// Track previous procIO sample so we can compute per-second deltas
 		// across ticks (#1120 follow-up: ingestor /proc/self/io exposure).
 		prevIO := readProcSelfIOFn()
@@ -319,8 +350,8 @@ func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
 			if n := len(b); n > 0 && b[n-1] == '\n' {
 				b = b[:n-1]
 			}
-			if err := writeStatsAtomic(path, b); err != nil {
-				log.Printf("[stats-file] write %s: %v", path, err)
+			if err := publish(stamp, b); err != nil {
+				log.Printf("[stats-file] write %s: %v", where, err)
 			}
 		}
 	}()

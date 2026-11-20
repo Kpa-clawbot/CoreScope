@@ -50,7 +50,7 @@ func createTestDBReverseTime(tb testing.TB, dbPath string, numTx int) {
 			direction TEXT, snr REAL, rssi REAL, score INTEGER,
 			path_json TEXT, timestamp TEXT, raw_hex TEXT
 		)`,
-		`CREATE TABLE IF NOT EXISTS observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT, inactive INTEGER)`,
+		`CREATE TABLE IF NOT EXISTS observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT, inactive INTEGER)`,
 		`CREATE TABLE IF NOT EXISTS nodes (
 			public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
 			last_seen TEXT, first_seen TEXT, frequency REAL

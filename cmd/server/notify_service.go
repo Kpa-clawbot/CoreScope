@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/url"
@@ -31,11 +33,38 @@ type notifier struct {
 	externalErr string
 	// adaptive caches the learned offline thresholds (offlineWindows).
 	adaptive map[string]adaptiveEntry
+	// job is the evaluation's cluster-wide lock (single-instance jobs).
+	job exclusiveJob
 }
 
 func newNotifier(a *authService, src notifySource, now func() time.Time) *notifier {
-	return &notifier{a: a, src: src, now: now}
+	return &notifier{a: a, src: src, now: now, job: exclusiveJob{name: notifyJobName}}
 }
+
+// notifyJobName is the evaluation's single-instance lock (users.TryExclusive).
+const notifyJobName = "notify-evaluate"
+
+// Notification claims, PostgreSQL only. The evaluation runs on one replica
+// at a time (notifyJobName), but the lock goes with its connection, so two
+// replicas' evaluations can rarely overlap: both read the same states and
+// would mail the same changes. Before mailing, each change is claimed with a
+// count-to-one in the store's rate_limits table (users.RateLimitHit with max
+// 1, an atomic upsert): the key is the transition as read, user, event,
+// subject, the new state and the stored state and its changed_at it replaces
+// (notifyClaimKey), which two overlapping evaluations compute alike and a
+// later transition of the same subject never repeats (changed_at moves on).
+// Only claimed changes are mailed, so a duplicate pass mails nothing twice.
+//
+// RateLimitHit counts per fixed window, so a claim hits two of them, the
+// windows containing now and now+notifyClaimOverlap (one when they are the
+// same), stopping at the first that is already taken. Two claims of one key
+// less than notifyClaimOverlap apart always share one of those windows, and
+// only the first hit there wins it, so at most one of them succeeds. A claim
+// row is pruned once its window has ended (the janitor, longestSharedWindow).
+const (
+	notifyClaimWindow  = 2 * time.Hour
+	notifyClaimOverlap = time.Hour // < notifyClaimWindow, see above
+)
 
 // notifySendTimeout bounds one mail send inside a tick.
 const notifySendTimeout = 30 * time.Second
@@ -110,6 +139,9 @@ func (n *notifier) safeTick(ctx context.Context) {
 // state write ends the tick without mail; the next tick starts over. A
 // tick that evaluates logs one line with its counts, its duration and how
 // long LastHeardMap held the packet store's read lock.
+//
+// The ingest check runs on every replica, so each knows when ingest last
+// resumed; the evaluation itself only on the replica holding notifyJobName.
 func (n *notifier) tick(ctx context.Context) {
 	if !n.src.ready() {
 		return
@@ -117,6 +149,13 @@ func (n *notifier) tick(ctx context.Context) {
 	started := time.Now()
 	now := n.now()
 	stale := n.checkIngest(now)
+	lockCtx, cancel := context.WithTimeout(ctx, exclusiveLockTimeout)
+	release, ok := n.job.acquire(lockCtx, n.a.tryExclusive)
+	cancel()
+	if !ok {
+		return
+	}
+	defer release()
 	st := n.a.st
 	prefs, err := st.AllNotifyPrefs()
 	if err != nil {
@@ -233,7 +272,17 @@ func (n *notifier) tick(ctx context.Context) {
 			return
 		}
 	}
-	mails := n.deliver(ctx, now, res.Changes, accounts, byUser)
+	var claim func(uid int64, changes []notifyChange) []notifyChange
+	if st.IsPostgres() {
+		prev := make(map[users.NotifyKey]users.NotifyState, len(states))
+		for _, s := range states {
+			prev[s.NotifyKey] = s
+		}
+		claim = func(uid int64, changes []notifyChange) []notifyChange {
+			return n.claimChanges(ctx, now, uid, changes, prev)
+		}
+	}
+	mails := n.deliver(ctx, now, res.Changes, accounts, byUser, claim)
 	changes := 0
 	for _, list := range res.Changes {
 		changes += len(list)
@@ -294,10 +343,12 @@ func notifySkipReason(u users.User, p users.NotifyPrefs, userMails, totalMails i
 // with changes but no preferences row was evaluated with the defaults; the
 // row (and so the unsubscribe token) is created before the first mail.
 // Once ctx is cancelled (shutdown) the remaining users are not mailed;
-// their changes are already stored, like any other skipped change. It
+// their changes are already stored, like any other skipped change. claim,
+// when not nil (PostgreSQL), returns the changes of a user this evaluation
+// may mail (claimChanges); a user with none left gets no mail. It
 // returns the number of mails sent.
 func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64][]notifyChange,
-	accounts map[int64]users.User, prefs map[int64]users.NotifyPrefs) int {
+	accounts map[int64]users.User, prefs map[int64]users.NotifyPrefs, claim func(uid int64, changes []notifyChange) []notifyChange) int {
 	if len(changes) == 0 {
 		return 0
 	}
@@ -332,8 +383,14 @@ func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64
 				continue
 			}
 		}
+		list := changes[uid]
+		if claim != nil {
+			if list = claim(uid, list); len(list) == 0 {
+				continue
+			}
+		}
 		sendCtx, cancel := context.WithTimeout(ctx, notifySendTimeout)
-		err := n.a.sendMail(sendCtx, &u, users.NotifyMailPurpose, n.a.notifyMail(u, p, changes[uid]))
+		err := n.a.sendMail(sendCtx, &u, users.NotifyMailPurpose, n.a.notifyMail(u, p, list))
 		cancel()
 		if err != nil {
 			continue // logged by sendMail; the changes stay recorded
@@ -343,6 +400,58 @@ func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64
 		sent++
 	}
 	return sent
+}
+
+// notifyClaimKey names one transition as this evaluation read it: user,
+// event, subject, the new state, and the stored state with its changed_at
+// (empty and 0 when the subject had no row). Hashed to keep the key short.
+func notifyClaimKey(uid int64, c notifyChange, prev map[users.NotifyKey]users.NotifyState) string {
+	old, had := prev[users.NotifyKey{UserID: uid, Event: c.Event, Subject: c.Subject}]
+	var changed int64
+	if had {
+		changed = old.ChangedAt.Unix()
+	}
+	h := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%d", uid, c.Event, c.Subject, c.To, old.State, changed)))
+	return "notify-claim:" + hex.EncodeToString(h[:16])
+}
+
+// claimChanges returns the changes of uid this evaluation claimed (see
+// notifyClaimWindow), in order. A change whose claim fails is not mailed
+// (logged): a lost mail is the lesser harm than a duplicate.
+func (n *notifier) claimChanges(ctx context.Context, now time.Time, uid int64, changes []notifyChange, prev map[users.NotifyKey]users.NotifyState) []notifyChange {
+	out := changes[:0:0]
+	taken := 0
+	for _, c := range changes {
+		ok, err := claimNotification(ctx, n.a.st, notifyClaimKey(uid, c, prev), now)
+		switch {
+		case err != nil:
+			log.Printf("[notify] user #%d: claim a change, not mailed: %v", uid, err)
+		case ok:
+			out = append(out, c)
+		default:
+			taken++
+		}
+	}
+	if taken > 0 {
+		log.Printf("[notify] user #%d: %d change(s) already claimed by an overlapping evaluation, not mailed again", uid, taken)
+	}
+	return out
+}
+
+// claimNotification takes key in the windows containing now and
+// now+notifyClaimOverlap, stopping at the first one already taken.
+func claimNotification(ctx context.Context, st sharedRateLimits, key string, now time.Time) (bool, error) {
+	at := []time.Time{now}
+	if later := now.Add(notifyClaimOverlap); later.Unix()/int64(notifyClaimWindow/time.Second) != now.Unix()/int64(notifyClaimWindow/time.Second) {
+		at = append(at, later)
+	}
+	for _, t := range at {
+		ok, err := st.RateLimitHit(ctx, key, notifyClaimWindow, 1, t)
+		if err != nil || !ok {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // notifyMail is the one mail for all of a user's changes in one evaluation.

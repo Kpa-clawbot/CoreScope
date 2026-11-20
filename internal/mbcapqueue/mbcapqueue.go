@@ -16,11 +16,15 @@
 // Layout (under <dir(dbPath)>/mbcap-snapshot/):
 //
 //	snapshot.json       — atomic-replaced by the server each analytics cycle
-//	snapshot.json.tmp   — transient (rename target)
+//	snapshot.json.*.tmp — transient random-named temp (rename source)
 //
 // The file is rewritten in full each cycle (idempotent overwrite). The
 // ingestor reads the file at most once per persist tick; if absent, the
 // tick is a no-op.
+//
+// Store abstracts the handoff: NewFS is this file layout (SQLite, shared data
+// directory); NewPG keeps each snapshot as a row of <schema>.mbcap_snapshots,
+// so a PostgreSQL deployment needs no shared filesystem.
 package mbcapqueue
 
 import (
@@ -66,7 +70,11 @@ func QueueDir(dbPath string) string {
 
 // EnsureDir creates the snapshot directory if missing.
 func EnsureDir(dbPath string) error {
-	return os.MkdirAll(QueueDir(dbPath), 0o755)
+	root, err := openQueueRoot(QueueDir(dbPath), true)
+	if err != nil {
+		return err
+	}
+	return root.Close()
 }
 
 // SnapshotPath returns the absolute path of snapshot.json under dbPath.
@@ -77,26 +85,35 @@ func SnapshotPath(dbPath string) string {
 // WriteSnapshot atomically replaces snapshot.json with the given payload.
 // Uses tmp-then-rename so a reader never sees a torn file.
 func WriteSnapshot(dbPath string, snap Snapshot) error {
-	if err := EnsureDir(dbPath); err != nil {
+	b, err := marshalSnapshot(snap)
+	if err != nil {
+		return err
+	}
+	if err := checkSize(len(b)); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	root, err := openQueueRoot(QueueDir(dbPath), true)
+	if err != nil {
 		return fmt.Errorf("ensure dir: %w", err)
 	}
+	defer root.Close()
+	if err := writeFileAtomic(root, SnapshotFileName, b); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	return nil
+}
+
+// marshalSnapshot stamps a zero WrittenAt with the current time and encodes
+// the snapshot as both stores keep it.
+func marshalSnapshot(snap Snapshot) ([]byte, error) {
 	if snap.WrittenAt.IsZero() {
 		snap.WrittenAt = time.Now().UTC()
 	}
 	b, err := json.Marshal(snap)
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return nil, fmt.Errorf("marshal: %w", err)
 	}
-	final := SnapshotPath(dbPath)
-	tmp := final + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return fmt.Errorf("write tmp: %w", err)
-	}
-	if err := os.Rename(tmp, final); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
-	}
-	return nil
+	return b, nil
 }
 
 // ReadSnapshot loads the current snapshot.json. Returns os.ErrNotExist
@@ -104,7 +121,15 @@ func WriteSnapshot(dbPath string, snap Snapshot) error {
 // "nothing to persist" rather than an error.
 func ReadSnapshot(dbPath string) (Snapshot, error) {
 	var snap Snapshot
-	b, err := os.ReadFile(SnapshotPath(dbPath))
+	root, err := openQueueRoot(QueueDir(dbPath), false)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return snap, os.ErrNotExist
+		}
+		return snap, fmt.Errorf("read: %w", err)
+	}
+	defer root.Close()
+	b, err := readRegularFile(root, SnapshotFileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return snap, os.ErrNotExist

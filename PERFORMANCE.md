@@ -28,11 +28,11 @@ All times are averages over 3 runs. "Cached" = warm TTL cache hit.
 ### Two-Layer Performance Stack
 
 1. **In-Memory Packet Store** (`packet-store.js`)
-   - All packets loaded from SQLite into RAM on startup (~28K packets = ~12MB)
+   - All packets loaded from the database (SQLite or PostgreSQL) into RAM on startup (~28K packets = ~12MB)
    - Indexed by `id`, `hash`, `observer`, and `node` (Map-based O(1) lookup)
    - Ring buffer with configurable max memory (default 1GB, ~2.3M packets)
-   - SQLite becomes **write-only** for packets — reads never touch disk
-   - New packets from MQTT written to both RAM + SQLite
+   - The database becomes **write-only** for packets — reads never touch disk
+   - New packets from MQTT written to both RAM + the database
 
 2. **TTL Cache** (`server.js`)
    - Computed API responses cached with configurable TTLs (via `config.json`)

@@ -413,7 +413,11 @@ func (b *keyBackfiller) resumeOrStart(ctx context.Context, kind, runFP string) (
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0) FROM transmissions`).Scan(&upper); err != nil {
 		return 0, 0, 0, fmt.Errorf("backfill upper bound: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT OR REPLACE INTO key_backfill_state(kind, run_fp, cursor, upper, rewritten) VALUES(?,?,0,?,0)`,
+	// started_at is omitted, so excluded.started_at is its default: the reset
+	// a REPLACE (delete, then insert) used to give it.
+	if _, err := db.ExecContext(ctx, `INSERT INTO key_backfill_state(kind, run_fp, cursor, upper, rewritten) VALUES(?,?,0,?,0)
+		ON CONFLICT (kind) DO UPDATE SET run_fp = excluded.run_fp, cursor = excluded.cursor, upper = excluded.upper,
+			rewritten = excluded.rewritten, started_at = excluded.started_at`,
 		kind, runFP, upper); err != nil {
 		return 0, 0, 0, fmt.Errorf("start backfill run: %w", err)
 	}
@@ -429,7 +433,7 @@ func finishRun(ctx context.Context, db *sql.DB, kind, runFP string, all []string
 	}
 	defer tx.Rollback()
 	for _, fp := range all {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO key_backfill_done(kind, key_fp) VALUES(?,?)`, kind, fp); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO key_backfill_done(kind, key_fp) VALUES(?,?) ON CONFLICT DO NOTHING`, kind, fp); err != nil {
 			return fmt.Errorf("record done key: %w", err)
 		}
 	}

@@ -564,3 +564,45 @@ func TestClientRegionsDaysOrZero(t *testing.T) {
 		t.Errorf("retention=0 = %d, want 0", got)
 	}
 }
+
+func TestLoadConfigEnvVarDBDriverDSN(t *testing.T) {
+	t.Setenv("DB_PATH", "")
+	t.Setenv("MQTT_BROKER", "")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+
+	// No db block: env allocates it.
+	os.WriteFile(cfgPath, []byte(`{}`), 0o644)
+	t.Setenv("DB_DRIVER", "postgres")
+	t.Setenv("DB_DSN", "postgres://u:p@h/db")
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DB == nil || cfg.DB.Driver != "postgres" || cfg.DB.DSN != "postgres://u:p@h/db" {
+		t.Fatalf("env not applied: %+v", cfg.DB)
+	}
+
+	// Env overrides config values (same precedence as DB_PATH).
+	os.WriteFile(cfgPath, []byte(`{"db":{"driver":"sqlite","dsn":"cfg-dsn","vacuumOnStartup":true}}`), 0o644)
+	cfg, err = LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DB.Driver != "postgres" || cfg.DB.DSN != "postgres://u:p@h/db" || !cfg.DB.VacuumOnStartup {
+		t.Fatalf("env should override config: %+v", cfg.DB)
+	}
+
+	// Unset env leaves config alone and no db block stays nil.
+	t.Setenv("DB_DRIVER", "")
+	t.Setenv("DB_DSN", "")
+	cfg, _ = LoadConfig(cfgPath)
+	if cfg.DB.Driver != "sqlite" || cfg.DB.DSN != "cfg-dsn" {
+		t.Fatalf("config values lost: %+v", cfg.DB)
+	}
+	os.WriteFile(cfgPath, []byte(`{}`), 0o644)
+	cfg, _ = LoadConfig(cfgPath)
+	if cfg.DB != nil {
+		t.Fatalf("DB should stay nil, got %+v", cfg.DB)
+	}
+}

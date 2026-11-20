@@ -20,6 +20,7 @@ package main
 // #1975 come from a 1179-repeater instance.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -104,14 +105,13 @@ func splitRegionsCSV(csv string) []string {
 // supervisord starts both processes together, so a server that probed first
 // would ignore every mobile-client region answer until its next restart.
 // Once seen the answer latches, so the steady state costs nothing; until
-// then it is one sqlite_master lookup per caller, and both callers sit
+// then it is one catalogue lookup per caller, and both callers sit
 // behind 30s caches.
 func (db *DB) declaredRegionsTablePresent() bool {
 	if db.hasDeclaredRegionsTable || db.declaredRegionsTableLate.Load() {
 		return true
 	}
-	var n int
-	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'node_declared_regions'`).Scan(&n); err != nil || n == 0 {
+	if !db.tablePresent("node_declared_regions") {
 		return false
 	}
 	db.declaredRegionsTableLate.Store(true)
@@ -380,18 +380,37 @@ func scopeAuditPrefixIndex(targets []string) map[int]map[string][]string {
 // (ScopeAuditForwarding), against the small in-memory prefix index built by
 // scopeAuditPrefixIndex, so the SQL cost stays O(rows in window) regardless
 // of len(targets).
-var scopeAuditForwarderScanQuery = `
+//
+// The Postgres form is the same single pass. IS JSON ARRAY is the
+// json_valid + json_array_length > 0 guard in one: an invalid, scalar or
+// object path_json unnests to no rows, as an empty array does, and the CASE
+// guarantees the jsonb cast only ever sees valid JSON. jsonb_array_elements_text
+// yields a string element unquoted and unescaped, as je.value does, and a JSON
+// null as SQL NULL, which the LENGTH floor drops on both backends.
+func (db *DB) scopeAuditForwarderScanQuery() string {
+	return db.sqlFor(`
 	SELECT t.id, je.value
 	FROM transmissions t
 	JOIN observations o ON o.transmission_id = t.id
 	JOIN json_each(o.path_json) je
 	WHERE t.first_seen >= ?
-	  AND ` + scopeConformanceForwarderRouteTypesSQL + `
+	  AND `+scopeConformanceForwarderRouteTypesSQL+`
 	  AND o.path_json IS NOT NULL
 	  AND json_valid(o.path_json)
 	  AND json_array_length(o.path_json) > 0
-	  AND LENGTH(je.value) >= ` + fmt.Sprint(minForwarderHopHexLen) + `
-`
+	  AND LENGTH(je.value) >= `+fmt.Sprint(minForwarderHopHexLen)+`
+`, `
+	SELECT t.id, je.value
+	FROM transmissions t
+	JOIN observations o ON o.transmission_id = t.id
+	CROSS JOIN LATERAL jsonb_array_elements_text(
+		CASE WHEN o.path_json IS JSON ARRAY THEN o.path_json::jsonb ELSE '[]'::jsonb END) AS je(value)
+	WHERE t.first_seen >= ?
+	  AND `+scopeConformanceForwarderRouteTypesSQL+`
+	  AND o.path_json IS NOT NULL
+	  AND LENGTH(je.value) >= `+fmt.Sprint(minForwarderHopHexLen)+`
+`)
+}
 
 // observerRegionClause returns the condition that limits a query over
 // observations aliased o to those heard by observers in codes, with its
@@ -405,7 +424,7 @@ func (db *DB) observerRegionClause(q interface {
 	}
 	col, obsCol := "o.observer_id", "id"
 	if db.isV3 {
-		col, obsCol = "o.observer_idx", "rowid"
+		col, obsCol = "o.observer_idx", "idx"
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(codes)), ",")
 	args := make([]interface{}, len(codes))
@@ -429,7 +448,7 @@ func (db *DB) observerRegionClause(q interface {
 		return "", nil, err
 	}
 	if len(ids) == 0 {
-		return " AND 0", nil, nil
+		return " AND 1 = 0", nil, nil
 	}
 	// The unary + keeps SQLite off the observer index. Driven from it, the
 	// scan reads every observation the region's observers ever made and checks
@@ -629,7 +648,14 @@ func (s *PacketStore) ScopeAuditForwardingHeardIn(sinceISO string, targets []str
 	// transmission arriving between them would otherwise appear in the hop scan
 	// with no metadata to attribute it by — rare, but the fix is a shared
 	// snapshot rather than a rule about what to do with the leftovers.
-	tx, err := s.db.conn.Begin()
+	// SQLite's read transaction holds one snapshot from its first read; a
+	// Postgres transaction does that only at REPEATABLE READ (READ COMMITTED,
+	// its default, takes a new snapshot per statement).
+	var opts *sql.TxOptions
+	if s.db.isPostgres() {
+		opts = &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}
+	}
+	tx, err := s.db.conn.BeginTx(context.Background(), opts)
 	if err != nil {
 		return nil, fmt.Errorf("scope audit forwarder scan begin: %w", err)
 	}
@@ -644,7 +670,7 @@ func (s *PacketStore) ScopeAuditForwardingHeardIn(sinceISO string, targets []str
 	if err != nil {
 		return nil, fmt.Errorf("scope audit region observers: %w", err)
 	}
-	rows, err := tx.Query(scopeAuditForwarderScanQuery+observerClause, append([]interface{}{sinceISO}, observerArgs...)...)
+	rows, err := tx.Query(s.db.scopeAuditForwarderScanQuery()+observerClause, append([]interface{}{sinceISO}, observerArgs...)...)
 	if err != nil {
 		return nil, fmt.Errorf("scope audit forwarder scan: %w", err)
 	}

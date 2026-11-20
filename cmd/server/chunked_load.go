@@ -418,11 +418,11 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 			chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 					t.payload_type, t.payload_version, t.decoded_json,
 					o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-					o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
+					o.snr, o.rssi, o.score, o.path_json, ` + s.db.obsTimestampISOSQL() + obsRawHexCol + rpCol + scopeNameCol + `
 				FROM (SELECT * FROM transmissions t2 ` + whereClause + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
 				LEFT JOIN observations o ON o.transmission_id = t.id
-				LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-				ORDER BY t.id ASC, o.timestamp DESC`
+				LEFT JOIN observers obs ON obs.idx = o.observer_idx
+				` + loadOrderByTxID
 		} else {
 			chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 					t.payload_type, t.payload_version, t.decoded_json,
@@ -557,7 +557,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 	var obsID sql.NullInt64
 	var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 	var snr, rssi sql.NullFloat64
-	var score sql.NullInt64
+	var score sql.NullFloat64
 	var obsRawHex sql.NullString
 	var resolvedPathStr sql.NullString
 	var scopeName sql.NullString
@@ -636,7 +636,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				Direction:      internStr(nullStrVal(direction)),
 				SNR:            nullFloatPtr(snr),
 				RSSI:           nullFloatPtr(rssi),
-				Score:          nullIntPtr(score),
+				Score:          nullFloatPtr(score),
 				PathJSON:       obsPJ,
 				// Keep only this frame's relay eligibility, not its raw bytes.
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),

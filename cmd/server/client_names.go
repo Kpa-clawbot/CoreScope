@@ -20,8 +20,7 @@ func (db *DB) clientNodeNamesPresent() bool {
 	if db.clientNodeNamesTable.Load() {
 		return true
 	}
-	var n int
-	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'client_node_names'`).Scan(&n); err != nil || n == 0 {
+	if !db.tablePresent("client_node_names") {
 		return false
 	}
 	db.clientNodeNamesTable.Store(true)
@@ -92,7 +91,15 @@ type prefixHit struct {
 // client_node_names: the bare `name` beside MAX(observed_at) is SQLite's
 // documented bare-column rule, so it is the name of the newest observation
 // for that target. Ordering by observed_at, not ingested_at, keeps a drive
-// buffered offline from overwriting a fresher answer.
+// buffered offline from overwriting a fresher answer. Postgres has no
+// bare-column rule; DISTINCT ON picks the same row. On an observed_at tie
+// SQLite keeps the first row it reads through idx_cnn_target, the lowest id,
+// hence the id tie-break.
+//
+// The prefix is a bound parameter in the select list, which Postgres cannot
+// type on its own, hence the CAST. Keys are hex: the nodes LIKE pattern is
+// lowercased because Postgres's LIKE is case-sensitive and nodes.public_key
+// is stored lowercase; SQLite's LIKE ignores ASCII case either way.
 func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 	res := make(map[string]prefixHit, len(keys))
 	withClient := s.db.clientNamesUsable()
@@ -115,15 +122,17 @@ func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 			// Parameterized: the prefix flows in as bound args, never
 			// interpolated. The per-prefix LIMIT 2 lives in a subquery because a
 			// bare LIMIT on a UNION ALL term is a SQLite syntax error.
-			parts = append(parts, "SELECT * FROM (SELECT ? AS pfx, public_key AS pk, COALESCE(name,'') AS nm, 0 AS src FROM nodes WHERE public_key LIKE ? LIMIT 2)")
-			args = append(args, k, k+"%")
+			lk := strings.ToLower(k)
+			parts = append(parts, "SELECT * FROM (SELECT CAST(? AS TEXT) AS pfx, public_key AS pk, COALESCE(name,'') AS nm, 0 AS src FROM nodes WHERE public_key LIKE ? LIMIT 2)")
+			args = append(args, k, lk+"%")
 			if withClient {
 				// A range, not LIKE: LIKE on a case-sensitive column cannot use
 				// idx_cnn_target and scans it per key. target is lowercase hex
 				// (the ingestor lowercases it), and "g" sorts after "f", so
 				// [k, k+"g") is exactly the keys starting with k.
-				lk := strings.ToLower(k)
-				parts = append(parts, "SELECT pfx, pk, nm, src FROM (SELECT ? AS pfx, target AS pk, name AS nm, 1 AS src, MAX(observed_at) FROM client_node_names c WHERE target >= ? AND target < ? AND "+heard+" GROUP BY target LIMIT 2)")
+				parts = append(parts, s.db.sqlFor(
+					"SELECT pfx, pk, nm, src FROM (SELECT CAST(? AS TEXT) AS pfx, target AS pk, name AS nm, 1 AS src, MAX(observed_at) FROM client_node_names c WHERE target >= ? AND target < ? AND "+heard+" GROUP BY target LIMIT 2)",
+					"SELECT * FROM (SELECT DISTINCT ON (target) CAST(? AS TEXT) AS pfx, target AS pk, name AS nm, 1 AS src FROM client_node_names c WHERE target >= ? AND target < ? AND "+heard+" ORDER BY target, observed_at DESC, id ASC LIMIT 2)"))
 				args = append(args, k, lk, lk+"g")
 			}
 		}

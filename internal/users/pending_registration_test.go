@@ -8,64 +8,68 @@ import (
 )
 
 func TestUpdatePendingRegistrationUpdatesBothFields(t *testing.T) {
-	st, _ := newTestStore(t)
-	u := mustCreate(t, st, "pending@example.org", "Original")
-	if err := st.UpdatePendingRegistration(u.ID, "replacement-hash", "Replacement"); err != nil {
-		t.Fatal(err)
-	}
-	got, err := st.GetByID(u.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.PasswordHash != "replacement-hash" || got.DisplayName != "Replacement" || got.Status != StatusPending {
-		t.Fatal("pending registration was not updated together")
-	}
+	forEachBackend(t, func(t *testing.T, newTestStore storeFactory) {
+		st, _ := newTestStore(t)
+		u := mustCreate(t, st, "pending@example.org", "Original")
+		if err := st.UpdatePendingRegistration(u.ID, "replacement-hash", "Replacement"); err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.GetByID(u.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.PasswordHash != "replacement-hash" || got.DisplayName != "Replacement" || got.Status != StatusPending {
+			t.Fatal("pending registration was not updated together")
+		}
+	})
 }
 
 // The caller holds a stale pending snapshot after activation/disable/deletion.
 func TestUpdatePendingRegistrationRejectsChangedAccount(t *testing.T) {
-	for _, state := range []string{"active", "disabled", "deleted"} {
-		t.Run(state, func(t *testing.T) {
-			st, _ := newTestStore(t)
-			u := mustCreate(t, st, "changed@example.org", "Original")
-			if err := st.Activate(u.ID, RoleUser, nil); err != nil {
-				t.Fatal(err)
-			}
-			if state == "disabled" {
-				if err := st.SetStatus(u.ID, StatusDisabled); err != nil {
+	forEachBackend(t, func(t *testing.T, newTestStore storeFactory) {
+		for _, state := range []string{"active", "disabled", "deleted"} {
+			t.Run(state, func(t *testing.T) {
+				st, _ := newTestStore(t)
+				u := mustCreate(t, st, "changed@example.org", "Original")
+				if err := st.Activate(u.ID, RoleUser, nil); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if state == "deleted" {
-				if err := st.Delete(u.ID); err != nil {
+				if state == "disabled" {
+					if err := st.SetStatus(u.ID, StatusDisabled); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if state == "deleted" {
+					if err := st.Delete(u.ID); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := st.UpdatePendingRegistration(u.ID, "replacement-hash", "Replacement"); !errors.Is(err, ErrAccountChanged) {
+					t.Fatalf("stale registration error = %v, want ErrAccountChanged", err)
+				}
+				got, err := st.GetByID(u.ID)
+				if state == "deleted" {
+					if !errors.Is(err, ErrNotFound) {
+						t.Fatalf("deleted account lookup = %v", err)
+					}
+					return
+				}
+				if err != nil {
 					t.Fatal(err)
 				}
-			}
-			if err := st.UpdatePendingRegistration(u.ID, "replacement-hash", "Replacement"); !errors.Is(err, ErrAccountChanged) {
-				t.Fatalf("stale registration error = %v, want ErrAccountChanged", err)
-			}
-			got, err := st.GetByID(u.ID)
-			if state == "deleted" {
-				if !errors.Is(err, ErrNotFound) {
-					t.Fatalf("deleted account lookup = %v", err)
+				if got.PasswordHash != u.PasswordHash || got.DisplayName != u.DisplayName || string(got.Status) != state {
+					t.Fatal("stale registration changed an account that is no longer pending")
 				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.PasswordHash != u.PasswordHash || got.DisplayName != u.DisplayName || string(got.Status) != state {
-				t.Fatal("stale registration changed an account that is no longer pending")
-			}
-		})
-	}
+			})
+		}
+	})
 }
 
 // SQLite's writer lock holds activation uncommitted while registration starts.
 // Observe the store's only connection in use, then commit the winning activation.
 // The UPDATE must test the newly committed status rather than the stale snapshot.
 func TestUpdatePendingRegistrationCannotOverwriteConcurrentActivation(t *testing.T) {
-	st, _ := newTestStore(t)
+	st, _ := newSQLiteTestStore(t)
 	u := mustCreate(t, st, "activation@example.org", "Original")
 	var file string
 	if err := st.db.QueryRow(`PRAGMA database_list`).Scan(new(int), new(string), &file); err != nil {
@@ -133,28 +137,30 @@ func TestUpdatePendingRegistrationCannotOverwriteConcurrentActivation(t *testing
 }
 
 func TestUpdatePendingRegistrationCompetingRequestsKeepFieldsTogether(t *testing.T) {
-	st, _ := newTestStore(t)
-	u := mustCreate(t, st, "competing@example.org", "Original")
-	start := make(chan struct{})
-	result := make(chan error, 2)
-	for _, name := range []string{"First", "Second"} {
-		go func(name string) {
-			<-start
-			result <- st.UpdatePendingRegistration(u.ID, name+"-hash", name)
-		}(name)
-	}
-	close(start)
-	for i := 0; i < 2; i++ {
-		if err := <-result; err != nil {
+	forEachBackend(t, func(t *testing.T, newTestStore storeFactory) {
+		st, _ := newTestStore(t)
+		u := mustCreate(t, st, "competing@example.org", "Original")
+		start := make(chan struct{})
+		result := make(chan error, 2)
+		for _, name := range []string{"First", "Second"} {
+			go func(name string) {
+				<-start
+				result <- st.UpdatePendingRegistration(u.ID, name+"-hash", name)
+			}(name)
+		}
+		close(start)
+		for i := 0; i < 2; i++ {
+			if err := <-result; err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := st.GetByID(u.ID)
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	got, err := st.GetByID(u.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if (got.DisplayName != "First" && got.DisplayName != "Second") ||
-		got.PasswordHash != got.DisplayName+"-hash" || got.Status != StatusPending {
-		t.Fatal("competing registrations mixed fields from different requests")
-	}
+		if (got.DisplayName != "First" && got.DisplayName != "Second") ||
+			got.PasswordHash != got.DisplayName+"-hash" || got.Status != StatusPending {
+			t.Fatal("competing registrations mixed fields from different requests")
+		}
+	})
 }

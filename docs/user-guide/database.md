@@ -1,7 +1,22 @@
 # Database
 
-CoreScope uses SQLite in WAL (Write-Ahead Log) mode for both the server
-(read-only) and ingestor (read-write).
+CoreScope stores its measurement data (packets, nodes, observers) in either **SQLite**
+(the default) or **PostgreSQL**. This page covers both.
+
+- **SQLite** is a single file, needs no extra service and no configuration. The server opens it
+  read-only and the ingestor read-write, in WAL (Write-Ahead Log) mode. Everything below from
+  [WAL mode](#wal-mode) on is **SQLite-only**.
+- **PostgreSQL** is an explicit choice for large or long-retention installs. Setup, moving data
+  between the two, backups and troubleshooting are in the [PostgreSQL guide](../postgresql.md).
+  On PostgreSQL, maintenance (vacuum, statistics) is handled by PostgreSQL's autovacuum, and
+  the WAL, auto-vacuum and `VACUUM` settings below do not apply.
+
+Backend selection is `db.driver` and `db.dsn` (or `DB_DRIVER` and `DB_DSN`); see
+[Configuration](configuration.md#database).
+
+User accounts, when enabled, use a separate SQLite file (`users.db`) on both backends, or schema `corescope_users` in PostgreSQL when `userManagement.dsn` is set; see [User accounts in PostgreSQL](../postgresql.md#user-accounts-in-postgresql).
+
+> The rest of this page applies to SQLite databases only.
 
 ## WAL mode
 

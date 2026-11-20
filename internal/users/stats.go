@@ -61,17 +61,17 @@ func (s *Store) Stats(now time.Time) (Stats, error) {
 	t := unix(now)
 	var st Stats
 	if err := s.db.QueryRow(`SELECT COUNT(*),
-			COALESCE(SUM(status = 'active'), 0),
-			COALESCE(SUM(status = 'pending'), 0),
-			COALESCE(SUM(status = 'disabled'), 0),
-			COALESCE(SUM(role = 'admin' AND status = 'active'), 0),
-			COALESCE(SUM(status = 'pending' AND created_at < ?), 0),
-			COALESCE(SUM(email_bouncing != 0), 0)
+			COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'disabled' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN role = 'admin' AND status = 'active' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'pending' AND created_at < ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN email_bouncing != 0 THEN 1 ELSE 0 END), 0)
 		FROM users`, t-secs(StuckPendingAfter)).
 		Scan(&st.Total, &st.Active, &st.Pending, &st.Disabled, &st.Admins, &st.StuckPending, &st.Bouncing); err != nil {
 		return Stats{}, err
 	}
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(at >= ?), 0), COUNT(*) FROM audit_log
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(CASE WHEN at >= ? THEN 1 ELSE 0 END), 0), COUNT(*) FROM audit_log
 		WHERE action = 'user.register' AND at >= ? AND at <= ?`, t-secs(7*day), t-secs(30*day), t).
 		Scan(&st.New7d, &st.New30d); err != nil {
 		return Stats{}, err
@@ -81,15 +81,16 @@ func (s *Store) Stats(now time.Time) (Stats, error) {
 		return Stats{}, err
 	}
 	st.NewPerDay = perDay
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(last >= ?), 0), COUNT(*) FROM (
-			SELECT MAX(COALESCE(u.last_login_at, 0),
-				COALESCE((SELECT MAX(last_seen_at) FROM sessions s WHERE s.user_id = u.id), 0)) AS last
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(CASE WHEN last_active >= ? THEN 1 ELSE 0 END), 0), COUNT(*) FROM (
+			SELECT `+sqlMax2(`COALESCE(u.last_login_at, 0)`,
+		`COALESCE((SELECT MAX(last_seen_at) FROM sessions s WHERE s.user_id = u.id), 0)`)+` AS last_active
 			FROM users u
-		) WHERE last >= ?`, t-secs(7*day), t-secs(30*day)).
+		) AS a WHERE last_active >= ?`, t-secs(7*day), t-secs(30*day)).
 		Scan(&st.Active7d, &st.Active30d); err != nil {
 		return Stats{}, err
 	}
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(action = 'user.login'), 0), COALESCE(SUM(action = 'user.login.failed'), 0)
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(CASE WHEN action = 'user.login' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN action = 'user.login.failed' THEN 1 ELSE 0 END), 0)
 		FROM audit_log WHERE action IN ('user.login', 'user.login.failed') AND at >= ?`, t-secs(day)).
 		Scan(&st.Logins24h, &st.FailedLogins24h); err != nil {
 		return Stats{}, err
@@ -167,7 +168,7 @@ func (s *Store) guessedAccounts(since int64) ([]GuessedAccount, error) {
 	rows, err := s.db.Query(`SELECT a.target_user_id, COALESCE(u.display_name, ''), COUNT(*) AS n
 		FROM audit_log a LEFT JOIN users u ON u.id = a.target_user_id
 		WHERE a.action = 'user.login.failed' AND a.at >= ? AND a.target_user_id IS NOT NULL
-		GROUP BY a.target_user_id HAVING n >= ? ORDER BY n DESC, a.target_user_id LIMIT ?`,
+		GROUP BY a.target_user_id, u.display_name HAVING COUNT(*) >= ? ORDER BY n DESC, a.target_user_id LIMIT ?`,
 		since, GuessingThreshold, statsGuessingLimit)
 	if err != nil {
 		return nil, err

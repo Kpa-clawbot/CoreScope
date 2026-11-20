@@ -61,6 +61,8 @@ Backups are saved to `./backups/meshcore-<timestamp>/`.
 
 ### Manual backup
 
+> Status note: these steps apply to a SQLite database. With the optional PostgreSQL backend, back up with `pg_dump` instead (see [postgresql.md](postgresql.md)).
+
 ```bash
 mkdir -p backups/pre-go-migration
 cp ~/meshcore-data/meshcore.db backups/pre-go-migration/

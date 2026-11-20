@@ -1,0 +1,160 @@
+# PostgreSQL for the measurement database. An override for docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#
+# Four services:
+#   postgres       PostgreSQL 17, data in a named volume, not published.
+#   postgres-init  one-shot: scripts/postgres-roles.sh provisions the writer
+#                  and reader roles and the database (idempotent, every `up`).
+#   prod           caddy + mosquitto + the server. DISABLE_INGESTOR=true, and
+#                  only the READER DSN: the writer credential is never in this
+#                  container's environment or files.
+#   ingestor       the same image running /app/corescope-ingestor directly as a
+#                  non-root uid, with the WRITER DSN. No supervisord, caddy or
+#                  mosquitto. It shares prod's network namespace, so the
+#                  broker is still mqtt://localhost:1883 in config.json, and
+#                  prod's data directory, for config.json, users.db and the
+#                  file queues in <data dir>/shared.
+# The separate container is the security boundary for the writer credential;
+# the in-container separation docker/entrypoint-go.sh still applies to the
+# server (its own uid, a whitelisted environment) is defence in depth.
+#
+# Because the ingestor joins prod's network namespace, recreating or
+# restarting prod needs the ingestor restarted too: use `docker compose up -d`
+# (it does both), not `docker restart` on prod alone.
+#
+# In the data directory:
+#   - config.json must not set db.driver or db.dsn: the database is chosen from
+#     the environment only, and the entrypoint refuses a dsn there. On start
+#     it becomes group 61001 (CORESCOPE_SHARE_GID), mode 0660, so the server
+#     can save geo-filter edits and the ingestor can read it.
+#   - .env, if any, must not be readable by the server's uid (chmod 600).
+# gid 61001 is above the range given to ordinary users (GID_MAX 60000), so on
+# the host those files are not opened to a real user's group. The ingestor's
+# uid (INGESTOR_UID, 1000) and the server's (SERVER_RUN_AS_UID, 1001) must
+# differ from each other and from 0.
+#
+# Required in .env next to this file (generate each with e.g.
+# `openssl rand -hex 24`; the DSNs below carry them unencoded, so keep them to
+# URL-safe characters):
+#   POSTGRES_PASSWORD           the postgres superuser, used only by postgres-init
+#   CORESCOPE_WRITER_PASSWORD   the ingestor's role
+#   CORESCOPE_READER_PASSWORD   the server's role
+# Optional: CORESCOPE_DB (corescope), CORESCOPE_WRITER (corescope_writer),
+# CORESCOPE_READER (corescope_reader), SERVER_RUN_AS_UID (1001),
+# CORESCOPE_ACCOUNTS (corescope_accounts), CORESCOPE_ACCOUNTS_PASSWORD (unset),
+# INGESTOR_UID / INGESTOR_GID (1000), CORESCOPE_SHARE_GID (61001).
+#
+# User accounts in PostgreSQL (userManagement.enabled): set
+# CORESCOPE_ACCOUNTS_PASSWORD too. postgres-init then sets up the accounts role
+# and its schema corescope_users, and prod gets DB_DSN_ACCOUNTS,
+#   postgres://corescope_accounts@postgres:5432/corescope?sslmode=disable
+# with that password; the ingestor never gets it (it reads the two tables it
+# needs as the writer, through the group role corescope_users_reader). Unset,
+# prod gets an empty DB_DSN_ACCOUNTS, which the entrypoint drops.
+#
+# Postgres is reachable only on the compose network. To reach it from the host
+# (psql, backups), add to the postgres service:  ports: ["127.0.0.1:5432:5432"]
+#
+# Existing SQLite data is not moved by this file. Copy it once, before the
+# first start, giving the password through the environment (or ~/.pgpass),
+# never in the URL, where `ps` would show it:
+#   PGPASSWORD=<writer password> corescope-migrate copy \
+#     -from sqlite:<path to meshcore.db> -to postgres://corescope_writer@<host>:5432/corescope
+# The ingestor refuses to start on an empty PostgreSQL while <data dir>/meshcore.db
+# still holds data (CORESCOPE_SQLITE_GUARD_PATH below).
+
+x-corescope-db: &corescope-db
+  CORESCOPE_DB: ${CORESCOPE_DB:-corescope}
+  CORESCOPE_WRITER: ${CORESCOPE_WRITER:-corescope_writer}
+  CORESCOPE_READER: ${CORESCOPE_READER:-corescope_reader}
+  CORESCOPE_ACCOUNTS: ${CORESCOPE_ACCOUNTS:-corescope_accounts}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: corescope-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # Over TCP: the image's first-start initialisation runs a temporary
+    # server on the Unix socket only, which a socket check would call ready.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # Runs once per `up`, then exits; idempotent, so every start re-applies the
+  # roles' passwords and grants. Prints the two connection URLs without
+  # passwords.
+  postgres-init:
+    image: postgres:17-alpine
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./scripts/postgres-roles.sh:/usr/local/bin/postgres-roles.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/postgres-roles.sh"]
+    environment:
+      <<: *corescope-db
+      # conninfo rather than a URL, so the superuser password needs no encoding.
+      PG_ADMIN_URL: host=postgres port=5432 user=postgres dbname=postgres sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      CORESCOPE_WRITER_PASSWORD: ${CORESCOPE_WRITER_PASSWORD:?set CORESCOPE_WRITER_PASSWORD in .env}
+      CORESCOPE_READER_PASSWORD: ${CORESCOPE_READER_PASSWORD:?set CORESCOPE_READER_PASSWORD in .env}
+      # Optional: empty skips the accounts role and schema.
+      CORESCOPE_ACCOUNTS_PASSWORD: ${CORESCOPE_ACCOUNTS_PASSWORD:-}
+
+  prod:
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    environment:
+      - DB_DRIVER=postgres
+      - DISABLE_INGESTOR=true
+      - SERVER_RUN_AS_UID=${SERVER_RUN_AS_UID:-1001}
+      - CORESCOPE_SHARE_GID=${CORESCOPE_SHARE_GID:-61001}
+      - DB_DSN_SERVER=postgres://${CORESCOPE_READER:-corescope_reader}:${CORESCOPE_READER_PASSWORD:?set CORESCOPE_READER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
+      # The accounts store's DSN, only with CORESCOPE_ACCOUNTS_PASSWORD (else
+      # empty); used only when userManagement.enabled. Never the ingestor's.
+      - DB_DSN_ACCOUNTS=${CORESCOPE_ACCOUNTS_PASSWORD:+postgres://${CORESCOPE_ACCOUNTS:-corescope_accounts}:${CORESCOPE_ACCOUNTS_PASSWORD}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable}
+
+  ingestor:
+    image: corescope:latest
+    container_name: corescope-ingestor
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+      prod:
+        condition: service_started
+    network_mode: "service:prod"
+    user: "${INGESTOR_UID:-1000}:${INGESTOR_GID:-1000}"
+    group_add:
+      - "${CORESCOPE_SHARE_GID:-61001}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    working_dir: /app
+    entrypoint: ["/app/corescope-ingestor", "-config", "/app/data/config.json"]
+    volumes:
+      - ${PROD_DATA_DIR:-~/meshcore-data}:/app/data
+    environment:
+      - DB_DRIVER=postgres
+      - DB_DSN=postgres://${CORESCOPE_WRITER:-corescope_writer}:${CORESCOPE_WRITER_PASSWORD:?set CORESCOPE_WRITER_PASSWORD in .env}@postgres:5432/${CORESCOPE_DB:-corescope}?sslmode=disable
+      # On PostgreSQL DB_PATH only anchors the file queues it shares with the
+      # server, in the directory prod's entrypoint prepares.
+      - DB_PATH=/app/data/shared/meshcore.db
+      - CORESCOPE_SQLITE_GUARD_PATH=/app/data/meshcore.db
+
+volumes:
+  postgres-data:

@@ -77,9 +77,12 @@ var (
 	radioRefreshMu sync.Mutex // one refresh at a time (poller, full reload)
 )
 
+// tableExists reports whether a table exists, on SQLite or Postgres. A probe
+// that fails reads as absent, the same as before the Postgres port: every
+// caller treats an optional table it cannot see as not created yet.
 func tableExists(conn *sql.DB, name string) bool {
-	var n int
-	return conn.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n) == nil
+	ok, err := dbschema.TableExists(conn, name)
+	return err == nil && ok
 }
 
 // loadRadioStints reads observer_radios whole. A table the ingestor has not

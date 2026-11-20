@@ -164,7 +164,7 @@ func seedTestDBRows(t *testing.T, dbPath string, numTx, obsPerTx int, rowTimes f
 		path_json TEXT, timestamp TEXT, raw_hex TEXT
 	)`)
 	// PREFLIGHT: async=true reason="unit-test fixture seeder"
-	execOrFail(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT, inactive INTEGER)`)
+	execOrFail(`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT, inactive INTEGER)`)
 	// PREFLIGHT: async=true reason="unit-test fixture seeder"
 	execOrFail(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, frequency REAL)`)
 	// PREFLIGHT: async=true reason="unit-test fixture seeder"
