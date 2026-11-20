@@ -18,6 +18,13 @@
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
 
   let map, wsHandler, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer, clickablePathsLayer;
+  let _liveAutoTiles = null; // MC_attachAutoTiles handle for the basemap
+  // Bumped by init() and destroy(). Every await in init() (and loadNodes())
+  // re-checks it: navigating away mid-await used to resume on a destroyed page
+  // and call map.on() on the nulled map, or build a map in the next page's DOM.
+  let pageGen = 0;
+  // AreaFilter subscription, removed in destroy() so visits don't accumulate listeners.
+  let _areaChangeHandler = null;
   // New animation canvas
   let animCanvas, animCtx;
   let _dprMedia = null;
@@ -1241,6 +1248,7 @@
   }
 
   async function init(app) {
+    const gen = ++pageGen;
     app.innerHTML = `
       <div class="live-page">
         <div id="liveMap" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:1"></div>
@@ -1400,6 +1408,7 @@
       if (Array.isArray(mapCfg.center) && mapCfg.center.length === 2) mapCenter = mapCfg.center;
       if (typeof mapCfg.zoom === 'number') mapZoom = mapCfg.zoom;
     } catch { }
+    if (gen !== pageGen) return;
 
     // #1709: URL hash lat/lon/zoom is the highest-precedence viewport source.
     // Applied here so the very first setView() lands at the requested viewport
@@ -1545,53 +1554,12 @@
     }
     _rebindDPRListener();
 
-    const isDark = window.MC_isDarkTheme();
-    // #1420 — multi-provider dark-tile picker. Light mode unchanged (live page).
-    let _liveDarkRefLayer = null;
-    // Single shared registry resolver (map-tile-providers.js loads before this
-    // file; there is deliberately no second fallback body here — AGENTS.md DRY).
-    function _liveResolveTile(dark) {
-      const r = window.MC_resolveTile(!!dark);
-      return { url: r.url, attribution: r.attribution, refUrl: r.refUrl, maxZoom: r.maxZoom };
-    }
-    const liveAutoLayerGroup = L.layerGroup().addTo(map);
-
-    function _liveSyncDarkTiles(dark) {
-      const r = _liveResolveTile(dark);
-      tileLayer.setUrl(r.url);
-      if (tileLayer.options) tileLayer.options.attribution = r.attribution;
-      if (dark && r.refUrl) {
-        if (!_liveDarkRefLayer) {
-          _liveDarkRefLayer = L.tileLayer(r.refUrl, { maxZoom: 19, attribution: r.attribution }).addTo(liveAutoLayerGroup);
-        } else {
-          _liveDarkRefLayer.setUrl(r.refUrl);
-          if (!liveAutoLayerGroup.hasLayer(_liveDarkRefLayer)) _liveDarkRefLayer.addTo(liveAutoLayerGroup);
-        }
-      } else if (_liveDarkRefLayer) {
-        liveAutoLayerGroup.removeLayer(_liveDarkRefLayer);
-        _liveDarkRefLayer = null;
-      }
-      if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
-      // #1420 parity with map.js — refresh visible attribution credit after provider swap.
-      // Make sure the map is loaded before trying to update the ui
-      if (map && map.attributionControl) {
-        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) {}
-      }
-    }
-    const _liveInitTile = _liveResolveTile(isDark);
-    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: _liveInitTile.maxZoom || 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
-    if (isDark && _liveInitTile.refUrl) {
-      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: _liveInitTile.maxZoom || 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
-    }
-    if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
-  
     // Add Zoom Control
     L.control.zoom({ position: 'topright' }).addTo(map);
 
-    // Add Layer Control, passing 'topright' to put it on the right
-    if (typeof window.MC_createLayerControl === 'function') {
-      window.MC_createLayerControl(map, liveAutoLayerGroup, 'topright');
-    }
+    // Shared theme-synced basemap; the provider picker goes on the right,
+    // after the zoom control.
+    _liveAutoTiles = window.MC_attachAutoTiles(map, { controlPosition: 'topright' });
 
     // Add custom Leaflet Control for Fullscreen
     const LiveFullscreenControl = L.Control.extend({
@@ -1635,18 +1603,6 @@
 
 
 
-    // Swap tiles when theme changes
-    const _themeObs = new MutationObserver(function () {
-      _liveSyncDarkTiles(window.MC_isDarkTheme());
-    });
-    _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    // #1420 — re-render on customizer change.
-    window.addEventListener('mc-tile-provider-changed', function (e) {
-      const dark = window.MC_isDarkTheme();
-      if (e && e.detail && e.detail.type && e.detail.type !== (dark ? 'dark' : 'light')) return;
-      _liveSyncDarkTiles(dark);
-    });
-
     // #1485 — animations + trails need their own pane above markerPane.
     // PR #1334 moved node markers from L.circleMarker (overlayPane @ 400)
     // to L.marker+divIcon (markerPane @ 600); animations stayed in the
@@ -1666,8 +1622,10 @@
 
     injectSVGFilters();
     AreaFilter.init(document.getElementById('liveAreaFilter'));
-    AreaFilter.onChange(function () { loadNodes(); });
+    if (_areaChangeHandler) AreaFilter.offChange(_areaChangeHandler);
+    _areaChangeHandler = AreaFilter.onChange(function () { loadNodes(); });
     await loadNodes();
+    if (gen !== pageGen) return;
     // Build the heat layer only when the user wants it. It used to be built
     // unconditionally and torn down ~270 lines later, which was invisible
     // (no await in between, so no frame composited) but meant that any throw
@@ -1904,6 +1862,7 @@
     (async function () {
       try {
         const gf = await api('/config/geo-filter', { ttl: 3600 });
+        if (gen !== pageGen) return;
         if (!gf || !gf.polygon || gf.polygon.length < 3) return;
         const geoColor = cssVar('--geo-filter-color') || '#3b82f6';
         const latlngs = gf.polygon.map(function (p) { return [p[0], p[1]]; });
@@ -2724,6 +2683,8 @@
   }
 
   async function loadNodes(beforeTs) {
+    const gen = pageGen;
+    if (!map) return;
     try {
       const aqs = AreaFilter.areaQueryString();
       // #1108 — honor region selector for visible map nodes unless
@@ -2747,6 +2708,7 @@
       const { nodes: list } = await fetchAllNodes(`${beforeQs}${aqs}${rqs}`, {
         safetyCap: window.LIVE_MAP_MAX_NODES || 10000,
       });
+      if (gen !== pageGen) return;
       var now = Date.now();
       // Time-scoped reload (VCR scrub/replay): reconcile against the existing
       // markers instead of tearing the layer down. addNodeMarker() already
@@ -4590,6 +4552,9 @@
   }
 
   function destroy() {
+    pageGen++;
+    if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; }
+    if (AreaFilter.destroy) AreaFilter.destroy();
     // #1514 S3 — drain onComplete callbacks BEFORE clearing the array. Audio
     // `onHop` hooks rely on these firing exactly once per queued animation;
     // previously destroy() dropped them silently when navigating away with
@@ -4635,7 +4600,9 @@
       RegionFilter.offChange(regionFilterChangeHandler);
       regionFilterChangeHandler = null;
     }
-    if (map) { map.remove(); map = null; }
+    if (window.RegionFilter && typeof RegionFilter.destroy === 'function') RegionFilter.destroy();
+    if (_liveAutoTiles) { _liveAutoTiles.destroy(); _liveAutoTiles = null; }
+    if (map) { window.MC_safeRemoveMap(map); map = null; }
     if (_onResize) {
       window.removeEventListener('resize', _onResize);
       window.removeEventListener('orientationchange', _onResize);

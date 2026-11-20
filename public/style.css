@@ -2786,6 +2786,14 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 }
 .mc-route-trust-message-detail { color: var(--text-muted); }
 
+/* An expanded layer picker stacks above the other map corners: Leaflet gives
+ * every corner the same z-index, so a later corner (e.g. the ducting legend
+ * bottom-left) would otherwise cover a long picker list. */
+.leaflet-top:has(.leaflet-control-layers-expanded),
+.leaflet-bottom:has(.leaflet-control-layers-expanded) {
+  z-index: 1001;
+}
+
 /* For Leaflet layer control */
 .leaflet-control-layers,
 .leaflet-control-layers-expanded {
@@ -2795,6 +2803,20 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 }
 .leaflet-control-layers-separator {
   border-top-color: var(--border) !important;
+}
+/* Tile picker category groups (map-tile-providers.js _decorateControl) */
+.leaflet-control-layers .mc-tile-group {
+  border: 0;
+  margin: 8px 0 0;
+  padding: 0;
+  min-width: 0;
+}
+.leaflet-control-layers .mc-tile-group-heading {
+  padding: 0;
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
 }
 [data-theme="dark"] .leaflet-control-layers-toggle {
   filter: invert(1);
@@ -5665,6 +5687,125 @@ body { touch-action: pan-y; }
   --mc-route-legend-border: #94a3b8;
 }
 
+/* Tropospheric ducting overlay (map-ducting.js). The field colour bands:
+ * s1..s8 each colour the mean refractivity gradient over the lowest
+ * 1.5 km, from -44 N/km (s1), -48, -54, -58, -62, -70, -80 and -90 N/km (s8)
+ * down to the next stop (s8: -90 and beyond); weaker is transparent. Flat, no
+ * blending; hex or rgb() only (read by JS). alpha = field opacity, the same for every band. lora = dashed outline of cells where a duct
+ * may carry LoRa 868/915 MHz (lowest trapped frequency <= 868 MHz). edge =
+ * dotted line around the forecast area. */
+:root {
+  --mc-duct-s1: #8e3fd0;
+  --mc-duct-s2: #3d5ee6;
+  --mc-duct-s3: #10a8d8;
+  --mc-duct-s4: #19b24a;
+  --mc-duct-s5: #e6d21a;
+  --mc-duct-s6: #f5900f;
+  --mc-duct-s7: #e3242b;
+  --mc-duct-s8: #f03cc8;
+  --mc-duct-alpha: 0.8;
+  --mc-duct-lora: #111827;
+  --mc-duct-edge: rgba(71, 85, 105, 0.85);
+}
+[data-theme="dark"] {
+  --mc-duct-s1: #a557f0;
+  --mc-duct-s2: #5577ff;
+  --mc-duct-s3: #22c3f0;
+  --mc-duct-s4: #2fd35e;
+  --mc-duct-s5: #f5e33a;
+  --mc-duct-s6: #ff9d2a;
+  --mc-duct-s7: #ff3d3d;
+  --mc-duct-s8: #ff5ad8;
+  --mc-duct-alpha: 0.8;
+  --mc-duct-lora: #f8fafc;
+  --mc-duct-edge: rgba(148, 163, 184, 0.9);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --mc-duct-s1: #a557f0;
+    --mc-duct-s2: #5577ff;
+    --mc-duct-s3: #22c3f0;
+    --mc-duct-s4: #2fd35e;
+    --mc-duct-s5: #f5e33a;
+    --mc-duct-s6: #ff9d2a;
+    --mc-duct-s7: #ff3d3d;
+    --mc-duct-s8: #ff5ad8;
+    --mc-duct-alpha: 0.8;
+    --mc-duct-lora: #f8fafc;
+    --mc-duct-edge: rgba(148, 163, 184, 0.9);
+  }
+}
+.mc-duct-legend,
+.mc-duct-time {
+  background: var(--mc-route-legend-bg);
+  color: var(--mc-route-legend-fg);
+  border: 1px solid var(--mc-route-legend-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 260px;
+}
+.mc-duct-legend-title {
+  display: block;
+  width: 100%;
+  margin: 0 0 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.mc-duct-legend-title::after { content: " \25BE"; }
+.mc-duct-legend-title[aria-expanded="false"] { margin-bottom: 0; }
+.mc-duct-legend-title[aria-expanded="false"]::after { content: " \25B8"; }
+.mc-duct-legend-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.mc-duct-swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--mc-route-legend-border);
+}
+.mc-duct-swatch-lora { background: transparent; border: 2px dashed var(--mc-duct-lora); }
+.mc-duct-swatch-edge { background: transparent; border: 2px dotted var(--mc-duct-edge); }
+.mc-duct-scale { margin: 4px 0 8px; }
+.mc-duct-scale-bar {
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--mc-route-legend-border);
+}
+/* Two lines: a label wraps within its band span (max-width set by JS). */
+.mc-duct-scale-labels { position: relative; height: 30px; font-size: 11px; }
+.mc-duct-scale-label {
+  position: absolute;
+  top: 0;
+  box-sizing: border-box;
+  padding: 2px 0 0 3px;
+  border-left: 1px solid var(--mc-route-legend-fg);
+  white-space: normal;
+  line-height: 1.2;
+}
+.mc-duct-scale-label-end {
+  white-space: nowrap;
+  padding: 2px 3px 0 0;
+  border-left: 0;
+  border-right: 1px solid var(--mc-route-legend-fg);
+  transform: translateX(-100%);
+}
+.mc-duct-legend-caption { margin-top: 2px; color: var(--mc-route-legend-fg); opacity: 0.8; }
+.mc-duct-legend-status { margin: 4px 0; font-weight: 600; }
+.mc-duct-legend-note,
+.mc-duct-legend-meta { margin-top: 4px; color: var(--mc-route-legend-fg); opacity: 0.8; }
+.mc-duct-time-label { display: block; font-weight: 600; margin-bottom: 4px; }
+.mc-duct-time input[type="range"] { width: 100%; min-width: 180px; }
+.leaflet-bottom.leaflet-left .mc-duct-legend,
+.leaflet-bottom.leaflet-left .mc-duct-time { max-width: min(260px, calc(100vw - 80px)); }
+.mc-duct-popup-title { font-weight: 600; margin-bottom: 2px; }
+
 .mc-route-marker-icon { background: transparent !important; border: none !important; }
 .mc-route-marker {
   position: relative;
@@ -6011,3 +6152,12 @@ body.embed #app.app-fixed {
 /* Global .btn-primary is white on --accent (2.75:1); same fix as .account-btn-primary. */
 .repeater-info-actions .btn-primary { background: var(--accent-strong); color: var(--text-on-accent); }
 .repeater-info-actions .btn-primary:hover { background: var(--palette-blue-700); }
+
+/* Ducting controls on the Live page: clear the VCR bar (the map runs under
+ * it) and, on desktop, the live feed panel pinned to the bottom-left. */
+.live-page .leaflet-bottom.leaflet-left {
+  bottom: calc(var(--vcr-bar-height, 58px) + 10px);
+}
+@media (min-width: 641px) {
+  .live-page .leaflet-bottom.leaflet-left { left: 384px; }
+}

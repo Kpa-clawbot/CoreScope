@@ -362,7 +362,273 @@ See `config.example.json` in the repository for all available options including:
 
 ### Map Tile Providers
 
-Map tile providers are enabled and configured via the `config.json` file. You can provide your custom API credentials (e.g. `osm_url`, `stamen_api_key`, `mapbox_api_key`) to activate external tile services. Once configured on the server, users can select their preferred tile provider from the Customizer UI on the client, and their choice will be persisted automatically.
+Map tiles are configured under `map.tiles` in `config.json`. Several providers are built in; you switch whole provider groups on or off, set the key for Carto, and can add your own tile servers. Everything under `map.tiles` is sent to every visitor (see [Public config and privacy](#public-config-and-privacy)).
+
+#### How the picker works for visitors
+
+The Map, Live and Repeater Planner pages show the layer picker. Every other map (node detail, node reach, RX coverage, the Analytics route map and the home mini-map) has no picker but follows the same choice; because those maps never load MapLibre, a vector choice shows the theme's default raster map there. **Auto** is the default: it picks the light or dark map to match the current theme, using `lightDefault` / `darkDefault`. A visitor can instead pin a specific map. Pinned maps are listed in **Street**, **Topographic** and **Satellite** groups (gray styles follow the plain ones inside each group), and a separate **Overlays** group has checkboxes for layers drawn on top of the map (place labels, hillshade). A pin is saved per browser in `localStorage` (`mc-tile-pinned`) and survives a reload: every picker opens on it until the visitor picks **Auto** again, and the maps without a picker show it whenever it suits the current theme (satellite always does), otherwise the theme's map. Ticked overlays are saved the same way. Nothing is stored on the server.
+
+#### Built-in providers
+
+The group is the key under `map.tiles.providers`. "Default" is the state when the group is absent from your config.
+
+| Group | Maps (ids) | Category | Theme | Key | Default | Terms |
+|---|---|---|---|---|---|---|
+| `carto` | `carto-light`, `carto-dark`, `carto-voyager`, `carto-voyager-dark`, `positron-dark` | street | light / dark | Yes, free (see [below](#carto-now-requires-an-api-key)) | On | Free key, 5M tiles/month |
+| `osm` | `osm-standard`, `osm-dark` | street | light / dark | Optional (`provider` + `token`: `thunderforest`, `maptiler` or `mapbox`) | Off | Without a token this is the OSM community server: fair use only |
+| `opentopomap` | `opentopomap` | topographic | light | No | Off | Fair use, zoom up to 17 |
+| `stamen` | `stamen-toner-lite`, `stamen-toner-dark` | street | light / dark | Yes (`token`, Stadia Maps); not offered without one | Off | Stadia Maps terms |
+| `usgs` | `usgs-topo`, `usgs-imagery` | topographic, satellite | light | No | Off | US coverage, zoom up to 16 |
+| `esri` | `esri-darkgray-labels` | street | dark | No | Always on | Esri terms |
+| `eox` | `eox-s2-2025`, `eox-s2-2016` (Sentinel-2 satellite), `eox-terrain-light`; overlays `eox-labels`, `eox-labels-dark` | satellite, topographic | any (satellite), light (terrain) | No | Off | 2016 imagery CC BY 4.0; 2025 imagery CC BY-NC-SA 4.0 (non-commercial) |
+| `osmfr` | `osmfr-hot` (Humanitarian), `osmfr-cyclosm` (CyclOSM), `osmfr-gray` (OSM Gray), `osmfr-gray-dark` (OSM Gray Dark) | street, topographic | light / dark | No | Off | OSM France community servers, donation-funded fair use |
+| `openfreemap` | `openfreemap-liberty`, `-bright`, `-positron` (light); `openfreemap-dark`, `-fiord` (dark) | street (vector) | light / dark | No | Off | Free, no limits |
+| `versatiles` | `versatiles-colorful`, `-muted`, `-gray` (light); `versatiles-colorful-dark`, `-gray-dark` (dark) | street (vector) | light / dark | No | Off | Free |
+| `hillshade` | overlay `hillshade` | overlay | any | No | Off | Elevation tiles from AWS Open Data by default |
+
+**EOX licensing.** The 2016 Sentinel-2 imagery is CC BY 4.0. The later years (including 2025) are CC BY-NC-SA 4.0, which excludes commercial use. The group is off by default; a commercial deployment should leave it off or license the imagery from EOX. The EOX group also carries Terrain Light and the place-label overlays, so leaving it off leaves those out too.
+
+**Be a good neighbour.** OSM France, OpenTopoMap and the OSM community server are volunteer-run. Keep your instance's traffic modest, or self-host (see [Self-hosting](#self-hosting-tiles)).
+
+#### Turning groups on and off
+
+Set `enabled` on a group:
+
+```json
+"map": {
+  "tiles": {
+    "providers": {
+      "osm":         { "enabled": true },
+      "openfreemap": { "enabled": true },
+      "hillshade":   { "enabled": true }
+    }
+  }
+}
+```
+
+- `eox`, `osmfr`, `openfreemap`, `versatiles`, `hillshade`, `osm`, `opentopomap`, `stamen` and `usgs` are off until you set `"enabled": true` (the boolean; a string does not count). `stamen` additionally needs a `token`. Upgrading therefore changes nothing in the picker until you turn a group on: check the group's terms in the table above first.
+- `carto` is on unless `"enabled": false`; `esri` is always available.
+- Disabling a group removes its maps from the picker. If a visitor had saved one, or `darkDefault` / `lightDefault` names one, it falls back to the default.
+
+`darkDefault` and `lightDefault` pick which map **Auto** uses in the dark and light theme. They take any registered map id from the table above or a custom entry as `custom-<id>`. Defaults are `carto-dark` and `carto-light`; an unknown or disabled id is ignored.
+
+#### Your own tile servers: `map.tiles.custom`
+
+`map.tiles.custom` is a list of up to 20 entries. Each appears in the picker as `custom-<id>`. Custom entries are always enabled when valid.
+
+| Field | Required | Values | Default |
+|---|---|---|---|
+| `id` | Yes | 1-32 characters of `a-z`, `0-9`, `-`, starting with a letter or digit. Unique across all custom entries | |
+| `url` | Yes | See URL rules below. Raster: an XYZ template containing `{z}`, `{x}` and `{y}` (or `{-y}`). Vector: a MapLibre style JSON URL | |
+| `label` | No | Text, at most 64 characters | the `id` |
+| `type` | No | `light`, `dark` or `any`. `any` is listed under both themes and is never color-inverted (use for satellite) | `light` |
+| `category` | No | `street`, `topo` or `satellite` | `street` |
+| `format` | No | `raster` or `vector` | `raster` |
+| `attribution` | No | Plain text, at most 200 characters (HTML is escaped, not rendered) | empty |
+| `maxZoom` | No | Number, clamped to 0-24 | 19 |
+| `maxNativeZoom` | No | Number, clamped to 0-24. Highest zoom the server really has; the browser stretches tiles above it up to `maxZoom` | unset |
+| `subdomains` | No | 1-8 characters of `a-z`, `0-9`, used for `{s}` | `abc` |
+| `overlay` | No | `true` adds a raster layer drawn over the base map (checkbox under **Overlays**) instead of a base map. Must be `format: "raster"` | `false` |
+
+**URL rules.** `url` is at most 2048 characters and must be one of:
+
+- `https://host/...` or `http://host/...` (an `http://` tile URL is blocked by browsers on an `https` page, and vector maps refuse it outright);
+- a same-site path starting with a single `/`, for example `/tiles/{z}/{x}/{y}.png`.
+
+Rejected: any other scheme (`javascript:`, `data:`, `file:`, `ftp:`), protocol-relative `//host/...`, `/\host`, credentials in the URL (`user:pass@host`), backslashes, whitespace or control characters, and any `{...}` other than `{z}` `{x}` `{y}` `{s}` `{r}` `{-y}`.
+
+**What happens to a bad entry.** An invalid entry is skipped; the rest still load. For each skipped entry the browser console shows one warning such as `[tiles] custom tile "ours" skipped: url must be an https://, http:// or '/' URL ...` that names the entry's `id` and the reason (it never prints the URL, which may carry a key). If the `id` itself is invalid the warning names the list position instead, for example `map.tiles.custom[2] skipped: id must be ...`. Entries beyond the 20th are ignored with a warning, a duplicate `id` is skipped, and a vector entry with `overlay: true` is skipped. Open the browser console on the map page to check your config.
+
+**Example 1: self-hosted raster XYZ server**
+
+```json
+"custom": [
+  {
+    "id": "ours",
+    "label": "Our tile server",
+    "type": "light",
+    "category": "street",
+    "format": "raster",
+    "url": "https://tiles.example.org/{z}/{x}/{y}.png",
+    "attribution": "(c) OpenStreetMap contributors",
+    "maxZoom": 19
+  }
+]
+```
+
+**Example 2: self-hosted vector style**
+
+The `url` is a MapLibre style JSON. It can come from a self-hosted OpenFreeMap, or from tileserver-gl, Martin or Protomaps serving a `style.json`. The tile and glyph URLs inside the style must also be `https://` (or `http://` only if the page itself is `http://`).
+
+```json
+"custom": [
+  {
+    "id": "ours-vector",
+    "label": "Our vector map",
+    "type": "light",
+    "category": "street",
+    "format": "vector",
+    "url": "https://maps.example.org/styles/liberty",
+    "attribution": "OpenMapTiles, OpenStreetMap contributors"
+  },
+  {
+    "id": "ours-vector-dark",
+    "label": "Our vector map (dark)",
+    "type": "dark",
+    "format": "vector",
+    "url": "https://maps.example.org/styles/dark",
+    "attribution": "OpenMapTiles, OpenStreetMap contributors"
+  }
+]
+```
+
+**Example 3: a raster overlay (contour lines)**
+
+Use transparent PNG tiles. The overlay is off until a visitor ticks it under **Overlays**.
+
+```json
+"custom": [
+  {
+    "id": "contours",
+    "label": "Contour lines",
+    "overlay": true,
+    "format": "raster",
+    "url": "https://tiles.example.org/contours/{z}/{x}/{y}.png",
+    "attribution": "Contours (c) Example Org",
+    "maxZoom": 19,
+    "maxNativeZoom": 16
+  }
+]
+```
+
+To make a custom map the default, name it in `darkDefault` / `lightDefault`, for example `"lightDefault": "custom-ours"`.
+
+#### Vector maps
+
+OpenFreeMap, VersaTiles and custom `vector` entries are drawn with MapLibre GL, which is vendored in `public/vendor/` (no third-party script host). It is about 380 KB gzipped and is downloaded only the first time a vector map is shown; visitors who stay on raster maps never fetch it. The scripts are loaded with Subresource Integrity, so a proxy or CDN that rewrites JavaScript (minifying, injecting) makes them fail the check: vector maps then fall back to the raster map with only a console warning. Serve `public/vendor/` unmodified. If WebGL is unavailable, the library fails to load within 15 seconds, or the GL context is lost, the map falls back to the shipped default raster map for the current theme (Carto Positron or Carto Dark).
+
+#### Hillshade overlay
+
+The `hillshade` overlay shades terrain in the visitor's browser from Terrarium-encoded elevation tiles (`elevation m = R*256 + G + B/256 - 32768`, 256x256 or 512x512 PNG). By default it reads AWS Open Data, the same bucket the repeater planner uses for `terrain.tileUrl`. To read from your own mirror, set a template URL (same URL rules as `custom`, and it must contain `{z}`, `{x}`, `{y}`; otherwise the default is used and a console warning is logged):
+
+```json
+"hillshade": { "enabled": true, "url": "https://tiles.example.org/terrarium/{z}/{x}/{y}.png" }
+```
+
+The tile host must allow cross-origin image reads (`Access-Control-Allow-Origin`); without it the browser cannot read pixels and the overlay stays blank. It is off for visitors until they tick it.
+
+#### Tropospheric ducting overlay
+
+Under some weather conditions a layer of the lower atmosphere traps radio waves and carries them far beyond the horizon. The ducting overlay forecasts where that can happen and whether the duct is able to carry LoRa. It shows up as an **Overlays** entry named "Tropospheric ducting" on the Map, Live and Repeater Planner pages, but only when you enable it. It is off by default.
+
+The LoRa verdict (the dashed outline and the popup's LoRa lines) is judged against `los.frequencyMhz`, the frequency the line-of-sight tools use (default 910.525 MHz), when line of sight is enabled: set it to your mesh's frequency (for example 869.525 in Europe). With line of sight off, the overlay judges 868 and 915 MHz separately.
+
+**It makes outbound requests.** The server downloads a pressure-level weather forecast from [Open-Meteo](https://open-meteo.com) (`api.open-meteo.com`). Visitors' browsers never contact Open-Meteo; they only read the result from `GET /api/ducting` on your server. Nothing is written to the database. The forecast is held in memory and rebuilt after a restart.
+
+Open-Meteo's free API is for **non-commercial use only** (data licence CC BY 4.0), and has limits of 600 calls per minute, 5,000 per hour and 10,000 per day. The limits count per IP address: several CoreScope instances on one host or behind one NAT address (for example a live and a staging instance) share them, and each instance's own call budget (below) does not know about the others. Give only one of them the ducting overlay, or point the others at a self-hosted Open-Meteo. The same applies to several server replicas of one installation behind a load balancer: each replica fetches the forecast on its own, so N replicas use N times the calls, and until every replica has refreshed they can answer with different forecasts. With more than one replica, point `baseUrl` at a self-hosted Open-Meteo. For a commercial deployment, self-host Open-Meteo (open source, AGPL) and point `baseUrl` at it, see below. There is no API-key setting.
+
+Enable it in `config.json`:
+
+```json
+"ducting": { "enabled": true }
+```
+
+The map colours the mean refractivity gradient over the lowest 1.5 km above ground (N/km), the ITU-R P.453 style gradient, which tracks where radio signals bend most. On high terrain the models' top level (700 hPa, usually about 2,900 to 3,200 m above sea level) can be less than 1.5 km above the ground; there the mean is taken over the depth that is available, as long as it is at least 1 km. In practice a cell whose model ground is up to roughly 1,500 m gets the full 1.5 km mean, one up to roughly 2,000 m (Denver, about 1,600 m, for example) the shallower mean, and one higher than that gets no colour: Mexico City (about 2,240 m, 700 hPa only about 860 m above the ground), Bogotá or the high Andes and Tibet have no field value. Their duct class is still computed from the levels there are. `GET /api/ducting` carries the mean per cell and hour as `n` (N/km, rounded) next to the duct class and the other fields. `n` = 0 means no data (no forecast, or less than 1 km of profile above the ground), not a zero gradient.
+
+The defaults suit most sites. All keys are optional:
+
+| Key | Default | Allowed | Meaning |
+|-----|---------|---------|---------|
+| `enabled` | `false` | `true` / `false` | Turns the feature on. When off, `GET /api/ducting` returns 404 and the overlay is not offered. |
+| `model` | `"gfs"` | `gfs`, `icon`, `rrfs-conus` | Weather model, see the table below. |
+| `area` | none | `[south, west, north, east]` in degrees | Forecast this box instead of the bounding box of your nodes. `-90 <= south < north <= 90`, `-180 <= west < east <= 180`. An invalid value is ignored with a warning. |
+| `marginDeg` | `5` | `0` to `10` | Degrees added on every side of the bounding box of your nodes, so the overlay reaches past the outermost nodes. `0` forecasts just the bounding box itself. Ignored when `area` is set. |
+| `gridStepDeg` | `0.5` | `0.25` to `2` | Grid cell size in degrees. |
+| `maxPoints` | `450` | `1` to `1000` | Most grid cells (forecast points) to fetch. With the other defaults the grid keeps 0.5 degree cells only while the nodes' box plus the 5 degree margin fits in 450 cells, which means nodes spread over at most about half a degree each way (21 x 21 = 441 cells); a wider mesh gets 1 degree cells (nodes spread up to about 11 degrees each way), see *Call budget*. The server may lower this further to stay inside the daily call budget. |
+| `refreshMinutes` | `360` | `60` to `1440` | How often to fetch a new forecast. GFS itself only runs every 6 hours. |
+| `forecastHours` | `48` | `1` to `120` | How many hours ahead the time slider can go. At least the refresh interval in hours (rounded up) plus 2, so a forecast never runs out before the next one lands; a smaller value is raised with a warning. |
+| `baseUrl` | `"https://api.open-meteo.com"` | absolute `http(s)` URL, no credentials | Open-Meteo server to use. |
+
+A value outside its allowed range is replaced by the default and a warning naming the key is logged at startup (`[ducting] ...`). Warnings never print `baseUrl`.
+
+By default the forecast covers the bounding box of your nodes plus `marginDeg` (5 degrees) on every side, filled edge to edge, so the map's normal view is covered with a continuous field with no gaps between nodes. The box takes the shortest way round the globe: nodes at 179 and -179 degrees longitude give a narrow box across the antimeridian, not one 358 degrees wide. Cell centres are always longitudes from -180 up to (not including) 180. Set `area` to forecast a fixed region instead (the box and `marginDeg` are then ignored).
+
+Which nodes place the box:
+
+- Only nodes with a position whose `last_seen` is within the last 14 days. A node not heard for longer, or with no readable `last_seen`, is left out.
+- Nodes that are hidden or blacklisted are left out, so they cannot stretch the box.
+- With 5 or more such nodes, nodes far from the rest are left out: the server takes the median latitude and the median longitude of the nodes (longitude measured along the shortest way round, so a mesh across the antimeridian is handled correctly), and drops every node farther from that point than 500 km or 4 times the median distance of all nodes from it, whichever is larger. A few nodes far away (in a mesh of 20 or more, even several advertising the same wrong position) then cannot stretch the grid across an ocean, while a mesh genuinely spread over a region (say from Texas to Florida) is kept whole. At most 10% of the nodes (or one node, in a small mesh) are left out this way: if more would be, the mesh genuinely spans several areas and every node is kept (set `area` if you want a tighter grid). With fewer than 5 nodes nothing is left out. The regions-around-nodes fallback (see *Call budget*) still covers every node.
+
+Each refresh logs the grid it used, without naming any node: `[ducting] grid: box S..N, W..E (k nodes, t trimmed), step X deg, C cells` (`k` nodes inside the box, `t` left out as outliers; W is greater than E when the box crosses the antimeridian). With `area` set the line reads `[ducting] grid: area S..N, W..E, step X deg, C cells`.
+
+**On a public instance, set `area`.** Without it the grid follows whatever positions nodes advertise, so anyone who can get a node onto your map can move part of the forecast, within the limits above. With `area` set the grid stays where you put it, whatever the nodes advertise.
+
+**Models**
+
+| `model` | Coverage | Pressure levels (1000 hPa up to) | Notes |
+|---------|----------|-----------------------------------|-------|
+| `gfs` (default) | Worldwide, NOAA GFS | 700 hPa, every 25 hPa (13 levels) | Best vertical detail of the global models. |
+| `icon` | Worldwide, DWD ICON | 700 hPa, 8 levels (1000, 975, 950, 925, 900, 850, 800, 700) | Fewer low levels, so thin ducts are more likely to be missed. Cheaper per point. |
+| `rrfs-conus` | Contiguous United States only | 700 hPa, every 25 hPa (13 levels) | Explicit opt-in, never the default. If `area` is unset, or reaches outside the contiguous US, a warning is logged and cells outside have no data. |
+
+**Call budget**
+
+This section applies to the public Open-Meteo API only; see *Self-hosting Open-Meteo* below.
+
+Open-Meteo counts a request with more than 10 variables as several calls. CoreScope asks for temperature, humidity and height at every level plus three surface values. For GFS that is 42 variables per point, so **4.2 calls per point per refresh** (ICON: 27 variables, 2.7 calls).
+
+The server limits the number of points so a day stays under 8,000 calls, leaving headroom below the 10,000 free limit: points <= 8,000 / (calls per point x refreshes per day). The effective limit is `min(maxPoints, that value)`, and is logged at startup. With the defaults, 450 points every 6 hours (4 refreshes a day) is 450 x 4.2 x 4 = about 7,600 calls a day (the GFS cap at that refresh is 476 points). A worked example: nodes spread over a region 20 x 15 degrees, with `gridStepDeg` 1, is 300 points, and 300 x 4.2 x 4 = about 5,000 calls a day. Refreshing hourly with GFS would cap you at about 79 points.
+
+If the box has more cells than allowed, the step is doubled (0.5, 1, 2, 4, up to 8 degrees) until it fits, so the map gets coarser rather than the budget being exceeded. If the box needs more than `maxPoints` cells even at 8 degrees (nodes spread over most of the world), the server falls back to the regions around the nodes: the cells that contain a node plus `marginDeg` around each, doubling the step as needed and, at 8 degrees, keeping the cells with the most nodes first, then those closest to a node. It then logs `[ducting] node area too large for maxPoints even at 8 deg; covering the regions around nodes instead` once per refresh.
+
+**How refreshing behaves**
+
+- Against the public API the first fetch starts a random 1 to 5 minutes after the server starts, so a run of restarts, or several instances started together, do not all fetch at once. The call budget is kept in memory only, so every restart begins with a fresh one; the delay spreads those fetches out but does not make them free. With a self-hosted `baseUrl` the first fetch starts at once. After that a fetch runs every `refreshMinutes`, in the background. Until the first one finishes the overlay says the forecast is being prepared. The browser asks again every minute while it has no forecast, then every 30 minutes; those requests read the server's copy and never reach Open-Meteo.
+- Points are requested in batches of 50; against the public API they are paced to at most 400 calls per minute. Every batch of a fetch asks for the same hours (`start_hour` to `end_hour`, from the hour the fetch started), so a fetch that runs past the top of an hour still lines up.
+- If one batch fails (an HTTP error, a timeout, a bad answer), the others are kept: its cells are blank in that forecast and the server logs `[ducting] batch i of n failed, its k cells have no data: ...`. If more than half of the batches fail, the server stops asking and the whole refresh counts as failed.
+- If a refresh fails, the last good forecast stays on the map. The server retries with a growing delay, and waits at least an hour after Open-Meteo answers that a rate limit was hit. A rate-limit answer (HTTP 429) ends the fetch at once, whatever batch it comes in.
+- If there is nothing to forecast yet (no `area` and no node position from the last 14 days, or none inside a regional model's coverage), `GET /api/ducting` says `pending`, Open-Meteo is not contacted, and the server looks again every 5 minutes. It logs `[ducting] no grid cells yet ...` once, not on every retry. A forecast already on the map stays there.
+- A forecast counts as expired an hour after its last forecast hour; the API then answers `error` with `forecast expired`.
+- `GET /api/ducting` answers with `Cache-Control: public, max-age=300` when it has a forecast (`ok`), so a CDN or browser may keep it for 5 minutes, and with `no-store` while `pending` or on `error`. An `ok` answer also carries `ETag: "<generatedAt>-<model>"`; a request whose `If-None-Match` names it gets `304 Not Modified` with no body, so a client that already has this forecast does not download it again.
+
+**Self-hosting Open-Meteo**
+
+Follow the upstream documentation at <https://github.com/open-meteo/open-meteo> to run your own instance with the model you chose, then point CoreScope at it. When `baseUrl` is anything other than the public `api.open-meteo.com`, the free-tier call budget does not apply: the 8,000 calls a day limit is not used to lower `maxPoints`, the hourly and daily hard caps are not enforced, and the startup log says `(self-hosted: no call budget)` instead of `(budget cap N)`. Requests are not paced either (the 400 calls per minute pace is for the public API's per-minute limit); a 429 answer is still backed off from.
+
+The check is on the host name in `baseUrl` only. If you put a proxy or cache in front of the **public** API, its `baseUrl` must keep the host name `api.open-meteo.com` (for example by resolving that name to the proxy); under any other name it counts as self-hosted, the call budget is switched off, and the instance can run past Open-Meteo's free limits.
+
+```json
+"ducting": { "enabled": true, "baseUrl": "https://weather.example.org" }
+```
+
+**What is public.** `/api/config/client` tells browsers only the model, its label, the grid step and the attribution text. `baseUrl` is never sent. The forecast cells themselves are public through `GET /api/ducting`.
+
+**How it is calculated.** For each cell and hour, humidity is turned into water-vapour pressure, then into radio refractivity `N = 77.6 / T x (P + 4810 e / T)` (ITU-R P.453) and modified refractivity `M = N + 0.157 h` (h in metres above ground). Where M decreases with height in the lowest 3 km, the layer traps radio waves. Its thickness `d` (metres) and strength `ΔM` (M units) give the lowest frequency it can trap, `fmin ≈ 120000 / (d x √ΔM)` MHz. The same constant is used for surface-based and elevated ducts: ITU-R P.834 shows that an elevated duct's cutoff depends on the profile below it and can be higher or lower than a surface duct's, so there is no single correction factor, and the model's coarse levels would not support one. A 868 MHz LoRa signal needs `d x √ΔM` of at least about 138, for example a 44 m thick duct with ΔM of 10. The map's colour is the mean gradient of N from the 2 m surface point to 1.5 km above ground; where the profile stops lower (high terrain), from 2 m to its top, if that is at least 1 km up. Each cell is classed as normal, super-refraction (the refractivity gradient reaches -79 N/km or steeper, which stretches range without trapping), elevated duct (the layer starts above the ground) or surface-based duct.
+
+**Limitations.** Say these to your users:
+
+- The model levels are roughly 200 to 250 m apart near the ground, so thinner ducts are invisible. That includes most evaporation ducts over the sea.
+- The grid is tens of kilometres across; a cell says nothing about local terrain or a single link.
+- It is a forecast indicator, not a guarantee that a path will open or stay closed.
+- An elevated duct mostly matters for nodes that sit inside it, such as high sites. A node on the ground below it usually does not benefit.
+
+**Attribution.** Open-Meteo data is CC BY 4.0. The legend shows the required text ("Weather data by Open-Meteo.com (CC BY 4.0)" plus the model name); do not hide it. Weather models: NOAA (GFS, RRFS) and DWD (ICON).
+
+#### Self-hosting tiles
+
+Self-hosting removes the third-party dependency and keeps visitors' requests on your infrastructure. Follow the upstream documentation rather than any steps here:
+
+- **OpenFreeMap**: run your own copy of the planet tiles and styles; see <https://github.com/hyperknot/openfreemap> (self-hosting guide). Point a `vector` custom entry at your `styles/<name>` URL.
+- **Protomaps (PMTiles)**: a single-file tile archive served from static storage or a small server; see <https://docs.protomaps.com>. Use its style JSON as a `vector` custom entry.
+- **Any XYZ raster server** (tileserver-gl, Martin, a static tile tree on object storage): use a `raster` custom entry.
+- **Elevation for hillshade**: mirror the Terrarium tiles (`s3://elevation-tiles-prod/terrarium`, public, no credentials needed) and set `hillshade.url`. The bucket is large; mirror only your region's zoom levels (hillshade uses up to zoom 15).
+- **Elevation for the planner**: mirror the SRTM `skadi` tree (`s3://elevation-tiles-prod/skadi`) and set `terrain.tileUrl` to its `https` base URL (no query string). That setting is server-side and separate from `map.tiles`; see [docs/api-spec.md](api-spec.md).
+
+#### Public config and privacy
+
+- **Everything under `map.tiles` is public.** The server sends it to every visitor, including anonymous ones. Never put credentials in a URL, and restrict any provider key by domain in that provider's dashboard. This applies to the Carto key, the `osm` and `stamen` tokens, and custom URLs alike.
+- **Visitors' browsers fetch tiles directly** from the chosen host, not through CoreScope. That host sees the visitor's IP address and the map area being viewed. Browsers send only your site's origin as the Referer, not the full page path. If this matters for your users, pick a provider you trust or self-host.
+- **A `/path` URL resolves against the page's origin.** On a static/CDN UI deployment (see [Static host or CDN](#static-host-or-cdn)) that is the UI host, not the API server.
 
 #### CARTO now requires an API key
 

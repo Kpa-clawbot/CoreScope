@@ -638,6 +638,49 @@ jobs:
             sleep 1
           done
 
+      - name: Start ducting E2E server (fake Open-Meteo)
+        # test-map-ducting-e2e.js: a second server on :13596 whose ducting
+        # source is the fake Open-Meteo on :13597 (scenario mixed). The fake
+        # must listen before the server starts: the server's first refresh
+        # runs at startup and a failed one is retried only after 5 minutes. A
+        # loopback baseUrl counts as self-hosted, so that first fetch starts at
+        # once and is not paced: it takes well under a second.
+        if: matrix.shard == 1
+        run: |
+          fuser -k 13596/tcp 13597/tcp 2>/dev/null || true
+          rm -rf /tmp/cs-ducting
+          mkdir -p /tmp/cs-ducting
+          # Own copy of the (already migrated and seeded) fixture.
+          cp test-fixtures/e2e-fixture.db /tmp/cs-ducting/e2e-fixture.db
+          cat > /tmp/cs-ducting/config.json <<'JSON'
+          {
+            "port": 13596,
+            "planner": { "enabled": true, "defaultRangeKm": 30, "newAntennaM": 10,
+                         "existingAntennaM": 20, "maxAreaKm": 100, "nodeMarginKm": 20, "maxLegKm": 100 },
+            "ducting": { "enabled": true, "baseUrl": "http://127.0.0.1:13597",
+                         "gridStepDeg": 0.5, "forecastHours": 48 }
+          }
+          JSON
+          node tests/e2e/lib/fake-open-meteo.js --port 13597 --scenario mixed &
+          echo $! > .fake-ducting.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:13597/__state > /dev/null 2>&1; then echo "fake Open-Meteo ready after ${i}s"; break; fi
+            if [ "$i" -eq 30 ]; then echo "fake Open-Meteo failed to start within 30s"; exit 1; fi
+            sleep 1
+          done
+          ./corescope-server -config-dir /tmp/cs-ducting -port 13596 -db /tmp/cs-ducting/e2e-fixture.db -public public-instrumented &
+          echo $! > .server-ducting.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:13596/api/healthz > /dev/null 2>&1; then echo "ducting server ready after ${i}s"; break; fi
+            if [ "$i" -eq 30 ]; then echo "ducting server failed to start within 30s"; exit 1; fi
+            sleep 1
+          done
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:13596/api/ducting | grep -q '"status":"ok"'; then echo "ducting forecast ok after $((i*5))s"; break; fi
+            if [ "$i" -eq 60 ]; then echo "no ducting forecast within 300s"; curl -s http://localhost:13596/api/ducting | head -c 500; exit 1; fi
+            sleep 5
+          done
+
       - name: Run Playwright E2E tests (fail-fast)
         env:
           # On master pushes every suite records the frontend coverage of the
@@ -809,12 +852,20 @@ jobs:
           # The lint rule that keeps network calls on CSApi (needs eslint).
           suite 1 test-lint-network-calls.js
           suite 3 test-table-sort.js
+          # jsdom suites for the map teardown races and vector zoom limits (#2428).
+          suite 2 test-map-teardown-races.js
+          suite 2 test-map-vector-leaflet-zoom.js
+          # The #2428 tile providers and the harness that serves their tiles: every
+          # tile host is stubbed in the browser, so the fixture server is enough.
+          suite 3 test-map-providers-e2e.js BASE_URL=$B
+          suite 3 test-map-providers-harness-e2e.js BASE_URL=$B
           suite 1 test-touch-targets.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-live-dedup.js BASE_URL=$B
           suite 1 test-nodes-export-e2e.js BASE_URL=$B
           suite 1 test-node-quick-actions-e2e.js BASE_URL=$B
           suite 2 test-show-neighbors.js BASE_URL=$B
           suite 3 test-user-management-e2e.js BASE_URL=http://localhost:13582 BASE_URL_OFF=$B
+          suite 1 test-map-ducting-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13596
 
       # #1616: slide-over focus-restore flake-gate. Runs the slide-over
       # E2E 3 more times against the SAME backend instance (it already
@@ -873,7 +924,7 @@ jobs:
             kill $(cat .server-um.pid) 2>/dev/null || true
             rm -f .server-um.pid
           fi
-          for f in .server-split.pid .static-split.pid; do
+          for f in .server-split.pid .static-split.pid .server-ducting.pid .fake-ducting.pid; do
             if [ -f "$f" ]; then kill $(cat "$f") 2>/dev/null || true; rm -f "$f"; fi
           done
 

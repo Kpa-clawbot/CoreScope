@@ -53,7 +53,16 @@
     return 'Area: ' + (area ? area.label : _selected) + ' ▾';
   }
 
+  // Drops the outside-click listener a render() put on document. It closes
+  // over the container, so a page that leaves it behind pins that page's
+  // whole detached DOM for the life of the tab.
+  function release(container) {
+    if (container && container._areaCleanup) { container._areaCleanup(); container._areaCleanup = null; }
+  }
+
   function render(container) {
+    if (_container && _container !== container) release(_container);
+    _container = container;
     if (_areas.length === 0) {
       container.innerHTML = '';
       container.style.display = 'none';
@@ -61,7 +70,7 @@
     }
     container.style.display = '';
 
-    if (container._areaCleanup) { container._areaCleanup(); container._areaCleanup = null; }
+    release(container);
 
     var html = '<div class="region-dropdown-wrap" role="group" aria-label="Area filter">';
     html += '<button class="region-dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">' +
@@ -112,14 +121,26 @@
   function offChange(fn) { _listeners = _listeners.filter(function (f) { return f !== fn; }); }
 
   async function initFilter(container) {
+    if (_container && _container !== container) release(_container);
     _container = container;
     await fetchAreas();
+    // The page may have been torn down (destroy) while areas were loading.
+    if (_container !== container) return;
     render(container);
+  }
+
+  /** Release the document listener and references held for `container`
+   *  (default: the current one). Call from a page's destroy(). */
+  function destroy(container) {
+    var c = container || _container;
+    release(c);
+    if (!container || container === _container) _container = null;
   }
 
   window.AreaFilter = {
     init: initFilter,
     render: render,
+    destroy: destroy,
     getSelected: getSelected,
     getAreaParam: getAreaParam,
     areaQueryString: areaQueryString,

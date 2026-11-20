@@ -21,6 +21,7 @@
     if (abs < 86400) return (v / 3600).toFixed(1) + 'h';
     return (v / 86400).toFixed(1) + 'd';
   }
+  var _subpathMap = null; // subpath detail minimap; removed on re-render and page destroy (WebGL/Leaflet leak)
   // #1085 — auto-refresh timer for the Roles tab. Started when the Roles
   // tab is rendered, cleared on tab switch and destroy.
   var _rolesRefreshTimer = null;
@@ -2465,13 +2466,21 @@
 
     // Render minimap
     if (hasMap && typeof L !== 'undefined') {
+      if (_subpathMap) { try { _subpathMap.remove(); } catch (_e) {} _subpathMap = null; }
       const map = L.map('subpathMap', { zoomControl: false, attributionControl: false });
+      _subpathMap = map;
       // Shared resolver for attribution/maxZoom parity with the other maps
       // (OpenTopoMap caps at 17, USGS at 16 — a hardcoded 18 404s above those).
       const _tileR = (typeof window.MC_resolveTile === 'function')
         ? window.MC_resolveTile(typeof window.MC_isDarkTheme === 'function' ? window.MC_isDarkTheme() : false)
         : null;
-      L.tileLayer((_tileR && _tileR.url) || getTileUrl(), { maxZoom: (_tileR && _tileR.maxZoom) || 18 }).addTo(map);
+      (_tileR && typeof window.MC_buildTileLayer === 'function'
+        ? window.MC_buildTileLayer(_tileR, { raster: true })
+        : L.tileLayer((_tileR && _tileR.url) || getTileUrl(), { maxZoom: (_tileR && _tileR.maxZoom) || 18 })).addTo(map);
+      try { // dark-inverted providers need their CSS filter on this map too
+        const _pane = _tileR && _tileR.invertFilter && map.getPane('tilePane');
+        if (_pane) _pane.style.filter = _tileR.invertFilter;
+      } catch (_e) {}
 
       const latlngs = [];
       nodesWithLoc.forEach((n, i) => {
@@ -3217,7 +3226,7 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _loadError = null; if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; } if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; } _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _subpathMap = null; } _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _loadError = null; if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; } if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; } _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {

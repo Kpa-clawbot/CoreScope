@@ -133,7 +133,11 @@
       "tests/e2e/test-theme-url-param-2236-e2e.js",
       "tests/e2e/test-touch-gestures-coverage-e2e.js",
       "tests/e2e/test-touch-targets.js",
-      "tests/e2e/test-user-management-e2e.js"
+      "tests/e2e/test-user-management-e2e.js",
+      "tests/e2e/test-map-providers-harness-e2e.js",
+      "tests/e2e/test-map-providers-e2e.js",
+      "tests/e2e/test-map-race-stress-e2e.js",
+      "tests/e2e/test-map-ducting-e2e.js"
     ]
   },
   "domIntegration": {
@@ -143,7 +147,9 @@
       "tests/e2e/test-lint-network-calls.js",
       "tests/e2e/test-radio-setting-1869-e2e.js",
       "tests/e2e/test-observer-neighbors-2270-e2e.js",
-      "tests/e2e/test-table-sort.js"
+      "tests/e2e/test-table-sort.js",
+      "tests/e2e/test-map-teardown-races.js",
+      "tests/e2e/test-map-vector-leaflet-zoom.js"
     ]
   },
   "playwrightRunner": {
