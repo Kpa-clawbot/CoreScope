@@ -22,7 +22,7 @@ function assert(cond, msg) {
 
 const read = f => fs.readFileSync(path.join(REPO_ROOT, 'public', f), 'utf8');
 const warnings = [];
-const ctx = { window: {}, console: { log() {}, warn: m => warnings.push(m), error() {} } };
+const ctx = { window: {}, URLSearchParams, console: { log() {}, warn: m => warnings.push(m), error() {} } };
 vm.createContext(ctx);
 vm.runInContext(read('route-view-utils.js'), ctx);
 const U = ctx.window.MC_ROUTE_UTILS;
@@ -98,7 +98,14 @@ console.log('\n=== precedence ===');
   const r = pick({ obsId: '11', observer: 'b1b2c3d4' });
   assert(r.chosen.id === 11 && r.pathView === null, 'obs wins over observer');
   assert(pick({ obsId: '11', paths: 'all' }).pathView.mode === 'all', 'obs combines with paths=all');
-  assert(pick({ observer: 'b1b2c3d4', paths: 'all' }).pathView.mode === 'path', 'observer wins over paths=all');
+  {
+    // The All button writes paths=all next to an existing observer=, so a
+    // reload of that URL must open the All view, with the observer's
+    // observation still the one chosen.
+    const both = pick({ observer: 'b1b2c3d4', paths: 'all' });
+    assert(both.pathView.mode === 'all', 'paths=all wins the view over observer');
+    assert(both.chosen.id === 10 && both.observationId === '10', 'observer still chooses the observation with paths=all');
+  }
   {
     const fell = pick({ obsId: '999', observer: 'b1b2c3d4' });
     assert(fell.chosen.id === 10 && fell.pathView.mode === 'path', 'an unmatched obs falls through to observer');
@@ -111,6 +118,22 @@ console.log('\n=== precedence ===');
   assert(pick({}).chosen.id === 10 && pick({}).pathView === null, 'no params: first observation, default view');
   assert(pick({ paths: 'ALL' }).pathView === null, 'paths only accepts "all"');
   assert(U.resolveDeepLinkObservation([], { observer: 'a1b2c3d4' }).chosen === null, 'no observations: nothing chosen');
+}
+
+console.log('\n=== withPathsAllParam: the All button writes the deep link ===');
+{
+  const W = U.withPathsAllParam;
+  assert(W('#/map?packet=ABC', true) === '#/map?packet=ABC&paths=all', 'adds paths=all');
+  assert(W('#/map?packet=ABC&observer=a1b2c3d4', true) === '#/map?packet=ABC&observer=a1b2c3d4&paths=all',
+    'keeps observer and the other params');
+  assert(W('#/map?packet=ABC&paths=all', true) === '#/map?packet=ABC&paths=all', 'already there: unchanged');
+  assert(W('#/map?packet=ABC&paths=all&observer=a1b2c3d4', false) === '#/map?packet=ABC&observer=a1b2c3d4',
+    'removes paths=all, keeps the rest');
+  assert(W('#/map?packet=ABC', false) === '#/map?packet=ABC', 'nothing to remove: unchanged');
+  assert(W('#/map?route=1', true) === '#/map?route=1', 'no packet= (sessionStorage route): untouched, paths=all would not reload');
+  assert(W('#/map', true) === '#/map', 'plain map: untouched');
+  assert(W('', true) === '', 'empty hash: untouched');
+  assert(W('#/map?packet=A%2FB&obs=7', true) === '#/map?packet=A%2FB&obs=7&paths=all', 'encoded values survive');
 }
 
 console.log('\n=== pathGroupKey matches the path picker grouping ===');
@@ -136,6 +159,12 @@ console.log('\n=== wiring ===');
   assert(/pathRows\[ri\]\.dataset\.pathKey === key\) \{ pathRows\[ri\]\.click\(\);/.test(rvSrc),
     'observer view goes through the path row click handler');
   assert(/sidebar\._applyPathView\(opts\.initialPathView\)/.test(rvSrc), 'renderer applies the initial path view');
+  const syncCalls = rvSrc.match(/syncPathsAllParam\((true|false)\)/g) || [];
+  assert(syncCalls.filter(c => c === 'syncPathsAllParam(true)').length === 2,
+    'the All button and the map badge both write paths=all (' + syncCalls.join(', ') + ')');
+  assert(syncCalls.includes('syncPathsAllParam(false)'), 'isolating one path removes paths=all');
+  assert(/history\.replaceState\(null, '', next\)/.test(rvSrc),
+    'the hash is rewritten with replaceState, so the router does not re-run the deep link');
 }
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

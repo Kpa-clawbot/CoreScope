@@ -10,6 +10,7 @@
  *   buildSnrSparkline(snrTrend)
  *   pathGroupKey(rawHops, filterHops)
  *   resolveDeepLinkObservation(observations, params)
+ *   withPathsAllParam(hash, on)
  *
  * `spiderFanFor` is NOT extracted — it consumes Leaflet LatLng / map types
  * (mapRef.latLngToLayerPoint, mk.getLatLng, mk.setLatLng, L.point) and is
@@ -171,7 +172,8 @@
   //   observer — ?observer=<pubkey or hex prefix of 8+ chars>; that
   //              observer's shortest-path observation, its path isolated in the
   //              picker
-  //   paths    — ?paths=all; open the picker's union ("All") view
+  //   paths    — ?paths=all; open the picker's union ("All") view, even
+  //              with observer (which then only picks the observation)
   // Returns { chosen, observationId, pathView }. observationId is the id of
   // the observation obs or observer actually selected (null on fallback to
   // the first), never an unmatched obs. pathView is { mode: 'all' },
@@ -215,13 +217,15 @@
     }
     var observationId = chosen ? String(chosen.id) : null;
     if (!chosen) chosen = observations[0] || null;
+    // paths=all wins the view: the All button writes it next to an existing
+    // observer=, which still picks the observation (the route's spine).
     var pathView = null;
-    if (byObserver) {
+    if (params.paths === 'all') {
+      pathView = { mode: 'all' };
+    } else if (byObserver) {
       var path = [];
       try { path = JSON.parse(chosen.path_json || '[]'); } catch (_) {}
       pathView = { mode: 'path', path: path };
-    } else if (params.paths === 'all') {
-      pathView = { mode: 'all' };
     }
     return {
       chosen: chosen,
@@ -230,11 +234,26 @@
     };
   }
 
+  // The hash with ?paths=all added (on) or removed (!on), the other params
+  // untouched. Only a #/map?packet=<hash> deep link reloads into the All
+  // view, so any other hash comes back as it was.
+  function withPathsAllParam(hash, on) {
+    hash = String(hash || '');
+    var q = hash.indexOf('?');
+    if (q < 0) return hash;
+    var params = new URLSearchParams(hash.slice(q + 1));
+    if (!params.get('packet') || (params.get('paths') === 'all') === !!on) return hash;
+    if (on) params.set('paths', 'all'); else params.delete('paths');
+    var qs = params.toString();
+    return hash.slice(0, q) + (qs ? '?' + qs : '');
+  }
+
   window.MC_ROUTE_UTILS = {
     escapeHtml: escapeHtml,
     buildPacketContextBlock: buildPacketContextBlock,
     buildSnrSparkline: buildSnrSparkline,
     pathGroupKey: pathGroupKey,
-    resolveDeepLinkObservation: resolveDeepLinkObservation
+    resolveDeepLinkObservation: resolveDeepLinkObservation,
+    withPathsAllParam: withPathsAllParam
   };
 })();
