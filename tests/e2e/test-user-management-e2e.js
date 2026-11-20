@@ -720,10 +720,19 @@ async function until(fn, label) {
     await userA.goto(BASE + '/#/account?section=repeaters');
     const btn = '#myRepList [data-unclaim="' + rpk + '"]';
     await userA.waitForSelector(btn);
+    // Record claim DELETEs instead of waiting a fixed time: the dismissed
+    // confirm must send none, and the claim must still be listed.
+    const deletes = [];
+    const onReq = (req) => { if (req.method() === 'DELETE' && req.url().indexOf('/api/repeaters/' + rpk + '/claim') !== -1) deletes.push(req.url()); };
+    userA.on('request', onReq);
     userA.once('dialog', (d) => d.dismiss());
     await userA.click(btn);
-    await userA.waitForTimeout(300);
-    assert((await userA.locator(btn).count()) === 1, 'dismissing the confirm still unclaimed');
+    const listed = await userA.evaluate(() => window.CSAuth.request('GET', '/api/account/repeaters')
+      .then((r) => (r.data && r.data.repeaters || []).map((x) => x.pubkey)));
+    userA.off('request', onReq);
+    assert(deletes.length === 0, 'dismissing the confirm sent ' + deletes.join(', '));
+    assert(listed.indexOf(rpk) !== -1, 'dismissing the confirm still unclaimed');
+    assert((await userA.locator(btn).count()) === 1, 'Unclaim button gone after dismissing');
     userA.once('dialog', (d) => d.accept());
     await userA.click(btn);
     await userA.waitForSelector('#myRepEmpty');

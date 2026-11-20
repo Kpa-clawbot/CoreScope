@@ -466,8 +466,15 @@ test('my repeaters: silent ones first, escaped, with status, co-maintainers and 
   assert.deepStrictEqual(order, ['cc', 'bb', 'dd', 'ff', 'ee', 'aa'], 'gone, then silent (input order), then uncertain, then heard: ' + order);
   assert(h.indexOf('data-pubkey="' + pkUnc + '" data-health="uncertain"') !== -1 &&
     /<span class="um-chip um-status-pending">last heard AGO, its prefix still relays<\/span>/.test(h), 'uncertain row: ' + h);
-  assert(h.indexOf('data-pubkey="' + pkInact + '" data-health="stale"') !== -1 && h.indexOf('>Old Tower</a>') !== -1,
-    'inactive row lists by name as silent: ' + h);
+  assert(h.indexOf('data-pubkey="' + pkInact + '" data-health="stale"') !== -1 &&
+    h.indexOf('<span class="account-rep-name">Old Tower</span>') !== -1 &&
+    h.indexOf('silent, last heard AGO · no longer in the node list') !== -1, 'inactive row: plain name, marked as dropped: ' + h);
+  // The node page reads only nodes: inactive and unknown rows are not links.
+  for (const pk of [pkInact, pkGone]) {
+    assert(h.indexOf('href="#/nodes/' + pk + '"') === -1, 'row links to a missing node page: ' + pk);
+  }
+  assert(h.indexOf('href="#/nodes/' + pkOld + '"') !== -1, 'known row lost its link');
+  assert.strictEqual((h.match(/no longer in the node list/g) || []).length, 1, 'only the inactive row carries the note');
   assert(h.indexOf('data-health="gone"') !== -1 && h.indexOf('no longer in the database') !== -1, 'departed row: ' + h);
   assert(h.indexOf('data-pubkey="' + pkOld + '" data-health="stale"') !== -1 && h.indexOf('silent, last heard') !== -1, 'stale row: ' + h);
   assert(h.indexOf('never heard') !== -1, 'never-heard row: ' + h);

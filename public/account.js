@@ -177,7 +177,9 @@
     var when = fns.timeAgo(r.lastHeard);
     if (state === 'active') return { state: state, rank: 3, text: 'heard ' + when };
     if (state === 'uncertain') return { state: state, rank: 2, text: 'last heard ' + when + ', its prefix still relays' };
-    return { state: 'stale', rank: 1, text: 'silent, last heard ' + when };
+    // inactive: retention dropped it from the node list, which is also why
+    // its row has no node page to link to.
+    return { state: 'stale', rank: 1, text: 'silent, last heard ' + when + (r.inactive ? ' · no longer in the node list' : '') };
   }
 
   var HEALTH_CHIP = { active: 'um-status-active', uncertain: 'um-status-pending', stale: 'um-status-disabled', gone: 'um-chip-unsubscribed' };
@@ -185,7 +187,9 @@
   // The repeaters this account claimed, silent ones first, each with its
   // saved status, the other maintainers and an Unclaim button. A repeater
   // retention moved to inactive_nodes (inactive) is listed as silent from
-  // its last advert there.
+  // its last advert there. Inactive and unknown rows show the name as plain
+  // text: /api/nodes/{pubkey} reads only nodes, so the node page would say
+  // Node not found.
   function myRepeatersHtml(list, fns) {
     fns = fns || { getNodeStatus: window.getNodeStatus, timeAgo: window.timeAgo };
     if (!list || !list.length) {
@@ -199,8 +203,10 @@
       var r = x.r, h = x.h;
       var name = r.name || shortKey(r.pubkey);
       var others = r.comaintainers || [];
+      var linked = r.known && !r.inactive;
       html += '<li data-pubkey="' + escapeHtml(r.pubkey) + '" data-health="' + escapeHtml(h.state) + '"><span>' +
-        '<a href="#/nodes/' + encodeURIComponent(r.pubkey) + '">' + escapeHtml(name) + '</a> ' +
+        (linked ? '<a href="#/nodes/' + encodeURIComponent(r.pubkey) + '">' + escapeHtml(name) + '</a> '
+          : '<span class="account-rep-name">' + escapeHtml(name) + '</span> ') +
         '<small><code>' + escapeHtml(shortKey(r.pubkey)) + '</code></small> ' +
         '<span class="um-chip ' + HEALTH_CHIP[h.state] + '">' + escapeHtml(h.text) + '</span>' +
         '<br><small>' + escapeHtml(r.status ? 'status ' + r.status : 'no details yet') +
