@@ -19,9 +19,11 @@
 package dbschema
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -208,8 +210,16 @@ func AssertReady(ro *sql.DB) error {
 	// unset (unknown state).
 	mustCol("observers", "can_relay_seen")
 	// observations.observer_idx references observers.idx, an explicit
-	// INTEGER PRIMARY KEY (== rowid) that survives dump-and-reload.
-	mustCol("observers", "idx")
+	// INTEGER PRIMARY KEY (== rowid) that survives dump-and-reload. A plain
+	// column named idx is not that: require the key itself, by the same test
+	// the ingestor's rebuild uses to decide it is done.
+	if cols, idxIsPK, err := observersColumnsInfo(context.Background(), ro); err != nil {
+		missing = append(missing, fmt.Sprintf("observers.idx (probe error: %v)", err))
+	} else if !idxIsPK && slices.Contains(cols, "idx") {
+		missing = append(missing, "observers.idx (not the primary key)")
+	} else if !idxIsPK {
+		missing = append(missing, "observers.idx")
+	}
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",
