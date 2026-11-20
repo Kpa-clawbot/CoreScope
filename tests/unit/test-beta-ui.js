@@ -41,7 +41,8 @@ function fakeDoc() {
   };
 }
 
-function load(deployment, hash) {
+const BUILD_INFO = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'build-info.js'), 'utf8');
+function load(deployment, hash, healthBody) {
   const listeners = {};
   const doc = fakeDoc();
   const ctx = {
@@ -49,10 +50,18 @@ function load(deployment, hash) {
     location: { protocol: 'https:', host: 'beta.example', hash: hash || '#/packets' },
     navigator: { userAgent: 'TestBrowser/1.0' },
     addEventListener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); },
-    fetch() { throw new Error('beta-ui must not fetch'); },
+    // beta-ui fetches nothing itself. With build-info.js loaded (healthBody
+    // given), the server build comes from BuildInfo's one /api/health.
+    requests: [],
+    fetch(url) {
+      if (!healthBody) throw new Error('beta-ui must not fetch');
+      ctx.requests.push(url);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(healthBody) });
+    },
   };
   ctx.window = ctx;
   loadApiBase(ctx, deployment);
+  if (healthBody) vm.runInContext(BUILD_INFO, ctx);
   vm.runInContext(SRC, ctx);
   return { ctx, doc, listeners };
 }
@@ -152,5 +161,22 @@ test('classicOnlyHtml escapes the link too, and drops it without a classic URL',
   assert.strictEqual(bare.ctx.CSBeta.classicOnlyHtml('Admin'), '<p class="cs-classic-only">Admin is available on the classic site.</p>');
 });
 
-console.log(`\nbeta-ui: ${passed} passed, ${failed} failed`);
-if (failed) process.exit(1);
+// The issue report names the server build once BuildInfo has it: the badge
+// asks for it once, and refreshes its link when it arrives.
+const serverBuild = (async () => {
+  const name = 'the issue report names the server build, from the one /api/health';
+  try {
+    const { ctx, doc } = load({ channel: 'beta', apiBase: 'https://api.example', auth: false, commit: 'abc1234' },
+      '#/packets', { version: 'edge', commit: 'dac8d9f' });
+    for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0));
+    const body = new URL(doc.getElementById('csChannelBadge').href).searchParams.get('body');
+    assert.ok(body.endsWith('Channel: beta · Commit: abc1234 · Server: edge (dac8d9f) · Browser: TestBrowser/1.0\n'), body);
+    assert.deepStrictEqual(Array.from(ctx.requests), ['https://api.example/api/health']);
+    passed++; console.log('  ✅ ' + name);
+  } catch (e) { failed++; console.log('  ❌ ' + name + ': ' + e.message); }
+})();
+
+serverBuild.then(() => {
+  console.log(`\nbeta-ui: ${passed} passed, ${failed} failed`);
+  if (failed) process.exit(1);
+});

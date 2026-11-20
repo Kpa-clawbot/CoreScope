@@ -91,16 +91,37 @@ async function resetPerfStats(win, fetchFn, alertFn) {
   return true;
 }
 
-function renderVersionCard(health) {
+function renderVersionCard(health, label) {
   if (!health || (!health.version && !health.commit)) return '';
   var ver = health.version && health.version !== 'unknown' ? health.version : null;
   var sha = health.commit && health.commit !== 'unknown' ? health.commit : null;
   if (!ver && !sha) return '';
-  var vTag = ver ? (ver.charAt(0) === 'v' ? ver : 'v' + ver) : null;
+  // A release ("3.8.2" or "v3.8.2") links to its tag; anything else the server
+  // reports (edge, a git describe string) is text.
+  var vTag = ver && /^v?\d+\.\d+\.\d+$/.test(ver) ? (ver.charAt(0) === 'v' ? ver : 'v' + ver) : null;
   var parts = [];
   if (vTag) parts.push('<a href="' + GH + '/releases/tag/' + vTag + '" target="_blank" rel="noopener">' + vTag + '</a>');
+  else if (ver && UI_BUILD_ID.test(ver)) parts.push(ver);
   if (sha) parts.push('<a href="' + GH + '/commit/' + sha + '" target="_blank" rel="noopener">' + sha.slice(0, 7) + '</a>');
-  return '<div class="perf-card"><div class="perf-num perf-num--small">' + parts.join(' · ') + '</div><div class="perf-label">Version</div></div>';
+  return '<div class="perf-card"><div class="perf-num perf-num--small">' + parts.join(' · ') + '</div><div class="perf-label">' + (label || 'Version') + '</div></div>';
+}
+
+// The UI's own build, next to the server's, when the UI is served apart from
+// the server (build-info.js describe()). Release tags and commits link to
+// GitHub; other versions (a git describe string) and build ids are text.
+// Values outside build.sh's shapes for VERSION and COMMIT are not shown.
+var UI_BUILD_ID = /^[A-Za-z0-9._+-]{1,64}$/;
+function renderUiVersionCard(info) {
+  if (!info || !info.separate || !info.ui) return '';
+  var B = window.BuildInfo;
+  var ver = UI_BUILD_ID.test(info.ui.version || '') ? info.ui.version : null;
+  var commit = UI_BUILD_ID.test(info.ui.commit || '') ? info.ui.commit : null;
+  if (!ver && !commit) return '';
+  var parts = [];
+  if (ver) parts.push(B.isRelease(ver) ? '<a href="' + GH + '/releases/tag/' + ver + '" target="_blank" rel="noopener">' + ver + '</a>' : ver);
+  if (commit) parts.push(B.isCommit(commit) ? '<a href="' + GH + '/commit/' + commit + '" target="_blank" rel="noopener">' + commit.slice(0, 7) + '</a>' : commit);
+  return '<div class="perf-card' + (info.mismatch ? ' perf-card--mismatch' : '') + '"><div class="perf-num perf-num--small">' + parts.join(' · ') +
+    '</div><div class="perf-label">' + (info.mismatch ? 'UI version (differs from the server)' : 'UI version') + '</div></div>';
 }
 
 (function () {
@@ -127,6 +148,8 @@ function renderVersionCard(health) {
       ]);
 
       let html = '';
+      // A UI served apart from the server shows its own build too.
+      const build = window.BuildInfo ? window.BuildInfo.describe(health) : null;
 
       // Server overview
       html += `<div style="display:flex;gap:16px;flex-wrap:wrap;margin:16px 0;">
@@ -134,7 +157,8 @@ function renderVersionCard(health) {
         <div class="perf-card"><div class="perf-num">${server.avgMs}ms</div><div class="perf-label">Avg Response</div></div>
         <div class="perf-card"><div class="perf-num">${health ? health.uptimeHuman : Math.round(server.uptime / 60) + 'm'}</div><div class="perf-label">Uptime</div></div>
         <div class="perf-card"><div class="perf-num">${server.slowQueries.length}</div><div class="perf-label">Slow (&gt;100ms)</div></div>
-        ${renderVersionCard(health)}
+        ${renderVersionCard(health, build && build.separate ? 'Server version' : 'Version')}
+        ${renderUiVersionCard(build)}
       </div>`;
 
       // System health (memory, event loop / go runtime, WS)

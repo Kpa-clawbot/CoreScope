@@ -18,9 +18,10 @@
   }
 
   // issueUrl opens a new issue pre-filled with what a report needs and nobody
-  // remembers to type: page, channel, commit, browser. GitHub's title and body
-  // parameters do this without an issue template in the repository.
-  function issueUrl(channel, commit, page, browser) {
+  // remembers to type: page, channel, commit, the server build when known,
+  // browser. GitHub's title and body parameters do this without an issue
+  // template in the repository.
+  function issueUrl(channel, commit, page, browser, server) {
     // Account queries can contain mail-link tokens. Redact before creating
     // the badge: account.js removes tokens with replaceState, which does not
     // emit hashchange to refresh an already-created issue link.
@@ -30,7 +31,8 @@
       '**What I expected (what the classic site does):**\n\n\n' +
       '**What happened on the ' + (channel || 'beta') + ' frontend:**\n\n\n' +
       '---\n' +
-      'Channel: ' + (channel || '') + ' · Commit: ' + (commit || 'unknown') + ' · Browser: ' + (browser || '') + '\n';
+      'Channel: ' + (channel || '') + ' · Commit: ' + (commit || 'unknown') +
+      (server ? ' · Server: ' + server : '') + ' · Browser: ' + (browser || '') + '\n';
     return REPO + '/issues/new?title=' + encodeURIComponent('[' + (channel || 'beta') + '] ') +
       '&body=' + encodeURIComponent(body);
   }
@@ -43,10 +45,19 @@
       (href ? ' <a class="cs-classic-link" href="' + esc(href) + '">Open in classic</a>' : '') + '</p>';
   }
 
+  // serverBuild is the server build for reports, "edge (dac8d9f)", once
+  // BuildInfo (build-info.js) has /api/health; null until then.
+  var serverBuild = null;
+  function describeServer(h) {
+    var B = window.BuildInfo, s = B.describe(h).server;
+    var commit = s.commit ? B.label({ version: null, commit: s.commit }) : null;
+    return s.version && commit ? s.version + ' (' + commit + ')' : (s.version || commit);
+  }
+
   function refreshLinks(doc) {
     var api = window.CSApi;
     var badge = doc.getElementById('csChannelBadge');
-    if (badge) badge.href = issueUrl(api.channel, api.commit, location.hash || '#/', navigator.userAgent);
+    if (badge) badge.href = issueUrl(api.channel, api.commit, location.hash || '#/', navigator.userAgent, serverBuild);
     var classic = doc.getElementById('csClassicLink');
     if (classic) classic.href = api.classicHref() || '#';
   }
@@ -80,6 +91,12 @@
     brand.parentNode.insertBefore(wrap, brand.nextSibling);
     refreshLinks(doc);
     window.addEventListener('hashchange', function () { refreshLinks(doc); });
+    if (window.BuildInfo) {
+      window.BuildInfo.health().then(function (h) {
+        serverBuild = describeServer(h);
+        refreshLinks(doc);
+      });
+    }
     return true;
   }
 

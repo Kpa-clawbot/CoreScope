@@ -107,18 +107,13 @@
   }
 
   // ── Version footer (frontend version display) ───────────────────────────
-  // GET /api/health reports {version, commit, buildTime}. Fetch once and cache
-  // the promise for the page lifetime so re-opening the drawer doesn't refetch.
-  var versionPromise = null;
-  function fetchVersion() {
-    if (versionPromise) return versionPromise;
-    versionPromise = CSApi.fetch('/api/health', { headers: { Accept: 'application/json' } })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .catch(function () { return null; });
-    return versionPromise;
-  }
+  // GET /api/health reports {version, commit, buildTime}; BuildInfo asks once
+  // per page, so re-opening the drawer doesn't refetch. A UI served apart from
+  // the server names both builds and flags two different ones.
   function fillVersion(el) {
-    fetchVersion().then(function (h) {
+    BuildInfo.health().then(function (h) {
+      var info = BuildInfo.describe(h);
+      if (info.separate) return fillSeparate(el, info, h);
       if (!h || !h.version) return; // leave the neutral "CoreScope" label as-is
       el.textContent = 'CoreScope ' + h.version;
       var bits = [];
@@ -126,6 +121,16 @@
       if (h.buildTime) bits.push('built ' + h.buildTime);
       if (bits.length) el.title = bits.join(' \u00B7 ');
     });
+  }
+  function fillSeparate(el, info, h) {
+    var ui = BuildInfo.label(info.ui), server = BuildInfo.label(info.server);
+    el.textContent = 'CoreScope UI ' + (ui || '?') + (server ? ' \u00B7 server ' + server : '');
+    var bits = [];
+    if (info.ui.commit) bits.push('UI commit ' + info.ui.commit);
+    if (info.server.commit) bits.push('server commit ' + info.server.commit);
+    if (h && h.buildTime && h.buildTime !== 'unknown') bits.push('server built ' + h.buildTime);
+    el.title = (info.mismatch ? 'The UI and the server are different builds. ' : '') + bits.join(' \u00B7 ');
+    if (info.mismatch) el.classList.add('nav-drawer-version--mismatch');
   }
 
   var EDGE_PX = 44;          // pointerdown must start within left N px (drawer trigger zone)
@@ -250,8 +255,8 @@
   function open() {
     buildDom();
     if (!isWide()) return; // Option A
-    // First open only: fetchVersion caches its promise for the page lifetime,
-    // so re-opening costs nothing.
+    // BuildInfo caches /api/health for the page lifetime, so re-opening costs
+    // nothing.
     if (versionEl) fillVersion(versionEl);
     if (!drawerWidth) drawerWidth = drawerEl.getBoundingClientRect().width || 320;
     // Capture the previously-focused element BEFORE we move focus, so close()

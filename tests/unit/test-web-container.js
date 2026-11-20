@@ -92,6 +92,20 @@ test('compose publishes 443 over UDP too, for the HTTP/3 Caddy advertises', () =
   assert.ok(compose.includes('- "${HTTPS_PORT:-443}:443/udp"'), 'udp 443');
 });
 
+test('the web image names its build: APP_VERSION becomes VERSION, and compose passes both build args', () => {
+  const run = dockerfile.split('\n').find((l) => /^RUN\b.*scripts\/static\/build\.sh/.test(l));
+  assert.ok(/\bARG APP_VERSION\b/.test(dockerfile), 'ARG APP_VERSION');
+  assert.ok(/\bVERSION="\$APP_VERSION"/.test(run), run);
+  assert.ok(compose.includes('APP_VERSION: ${APP_VERSION:-}'), 'compose APP_VERSION build arg');
+  assert.ok(compose.includes('GIT_COMMIT: ${GIT_COMMIT:-}'), 'compose GIT_COMMIT build arg');
+});
+
+test('without GIT_COMMIT the image uses an id that cannot pass for a commit', () => {
+  // A bare timestamp is all digits, which a commit check would take for a
+  // short sha and compare with the server's commit.
+  assert.ok(dockerfile.includes('build-$(date +%s)'), 'fallback build-<epoch>');
+});
+
 test('compose fixes the web container address, so the server can trust that address alone', () => {
   // trustedProxies believes X-Forwarded-For from the listed addresses. The
   // compose subnet also holds its gateway, where a client reaching a published
@@ -111,6 +125,14 @@ test('CI builds and smokes the web image and validates the split compose file', 
   assert.ok(/docker buildx build \. -f Dockerfile\.web --load/.test(ci), 'image-check builds Dockerfile.web');
   assert.ok(/curl[^\n]*\/api\/healthz/.test(ci), 'the smoke checks that /api reaches BACKEND');
   assert.ok(/docker compose -f docker-compose\.split\.yml config --quiet/.test(ci), 'split compose validated');
+});
+
+test('the CI smoke names the build as a release does: APP_VERSION in, version in deployment.js', () => {
+  const ci = read('.github/workflows/deploy.yml');
+  const step = ci.slice(ci.indexOf('name: Build and smoke the web image'));
+  assert.ok(/APP_VERSION: \$\{\{ steps\.meta\.outputs\.app_version \}\}/.test(step), 'APP_VERSION from the build metadata');
+  assert.ok(/--build-arg APP_VERSION="\$APP_VERSION"/.test(step), 'APP_VERSION build arg');
+  assert.ok(step.includes("version: '$APP_VERSION'"), 'deployment.js must carry the version');
 });
 
 console.log(`\nweb container: ${passed} passed, ${failed} failed`);
