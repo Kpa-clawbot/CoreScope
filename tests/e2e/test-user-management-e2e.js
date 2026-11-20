@@ -695,6 +695,17 @@ async function until(fn, label) {
     assert((await userA.textContent(riSel + ' [data-ri-unclaim]')).trim() === 'Unclaim', 'button text');
   });
 
+  await step('repeater info: My account, My repeaters lists the claim with its status; axe on the section', async () => {
+    await userA.goto(BASE + '/#/account?section=repeaters');
+    const row = '#myRepList li[data-pubkey="' + rpk + '"]';
+    await userA.waitForSelector(row);
+    const t = (await userA.innerText(row)).replace(/\s+/g, ' ');
+    assert(t.indexOf('status maintenance') !== -1, 'status missing: ' + t);
+    assert((await userA.getAttribute(row + ' a', 'href')) === '#/nodes/' + rpk, 'no node link');
+    assert((await userA.locator(row + ' [data-unclaim]').count()) === 1, 'no Unclaim button');
+    await axeClean(userA, '#myRepList');
+  });
+
   await step('repeater info: user B sees Claim but no Edit, and a direct PUT is 403', async () => {
     await registerAndActivate(userB, 'ri-b@e2e.test', 'Repeater B');
     await openRepeater(userB);
@@ -703,6 +714,32 @@ async function until(fn, label) {
     const status = await userB.evaluate((pk) => window.CSAuth.request('PUT', '/api/repeaters/' + pk + '/info',
       { heightM: 1, gainDbi: 0, status: 'active', power: '', notes: 'b' }).then((r) => r.status), rpk);
     assert(status === 403, 'PUT by non-maintainer returned ' + status);
+  });
+
+  await step('repeater info: Unclaim on My repeaters asks first, then empties the list', async () => {
+    await userA.goto(BASE + '/#/account?section=repeaters');
+    const btn = '#myRepList [data-unclaim="' + rpk + '"]';
+    await userA.waitForSelector(btn);
+    // Record claim DELETEs instead of waiting a fixed time: the dismissed
+    // confirm must send none, and the claim must still be listed.
+    const deletes = [];
+    const onReq = (req) => { if (req.method() === 'DELETE' && req.url().indexOf('/api/repeaters/' + rpk + '/claim') !== -1) deletes.push(req.url()); };
+    userA.on('request', onReq);
+    userA.once('dialog', (d) => d.dismiss());
+    await userA.click(btn);
+    const listed = await userA.evaluate(() => window.CSAuth.request('GET', '/api/account/repeaters')
+      .then((r) => (r.data && r.data.repeaters || []).map((x) => x.pubkey)));
+    userA.off('request', onReq);
+    assert(deletes.length === 0, 'dismissing the confirm sent ' + deletes.join(', '));
+    assert(listed.indexOf(rpk) !== -1, 'dismissing the confirm still unclaimed');
+    assert((await userA.locator(btn).count()) === 1, 'Unclaim button gone after dismissing');
+    userA.once('dialog', (d) => d.accept());
+    await userA.click(btn);
+    await userA.waitForSelector('#myRepEmpty');
+    assert((await userA.textContent('#myRepMsg')).indexOf('Repeater unclaimed.') !== -1, 'no confirmation message');
+    // Claim again for the steps below.
+    const status = await userA.evaluate((pk) => window.CSAuth.request('POST', '/api/repeaters/' + pk + '/claim').then((r) => r.status), rpk);
+    assert(status === 200, 're-claim returned ' + status);
   });
 
   await step('repeater info: the section deep link scrolls the section into view', async () => {
