@@ -93,8 +93,9 @@ type Store struct {
 	hopMaintMu                 sync.Mutex         // serializes the hop index backfill and trim
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
-	stmtUpsertObserver         *sql.Stmt
-	stmtGetObserverRowid       *sql.Stmt
+	stmtUpdateObserver         *sql.Stmt // UpsertObserverAt fast path; see upsertObserver
+	stmtUpsertObserver         *sql.Stmt // its INSERT fallback for a new observer
+	stmtGetObserverIdx         *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
 	stmtTouchNodeLastSeen      *sql.Stmt
@@ -289,7 +290,8 @@ func applySchema(db *sql.DB) error {
 		);
 
 		CREATE TABLE IF NOT EXISTS observers (
-			id TEXT PRIMARY KEY,
+			idx INTEGER PRIMARY KEY AUTOINCREMENT,
+			id TEXT NOT NULL UNIQUE,
 			name TEXT,
 			iata TEXT,
 			last_seen TEXT,
@@ -548,23 +550,14 @@ func applySchema(db *sql.DB) error {
 		}
 	}
 
-	// Create/rebuild packets_v view (v3 schema: observer_idx → observers.rowid)
-	// The Go server reads this view; without it fresh installs get "no such table: packets_v".
-	db.Exec(`DROP VIEW IF EXISTS packets_v`)
-	_, vErr := db.Exec(`
-		CREATE VIEW packets_v AS
-			SELECT o.id, COALESCE(o.raw_hex, t.raw_hex) AS raw_hex,
-				   datetime(o.timestamp, 'unixepoch') AS timestamp,
-				   obs.id AS observer_id, obs.name AS observer_name,
-				   o.direction, o.snr, o.rssi, o.score, t.hash, t.route_type,
-				   t.payload_type, t.payload_version, o.path_json, t.decoded_json,
-				   t.created_at
-			FROM observations o
-			JOIN transmissions t ON t.id = o.transmission_id
-			LEFT JOIN observers obs ON obs.rowid = o.observer_idx AND (obs.inactive IS NULL OR obs.inactive = 0)
-	`)
-	if vErr != nil {
-		return fmt.Errorf("packets_v view: %w", vErr)
+	// Create/rebuild packets_v view (v3 schema: observer_idx → observers.idx).
+	// cmd/server does not read it; external SQLite readers do, and without it
+	// fresh installs get "no such table: packets_v". On a legacy observers table
+	// (implicit rowid only) it joins on the rowid until dbschema.Apply's
+	// observers rebuild recreates it on idx, so it stays readable if the
+	// rebuild refuses.
+	if err := dbschema.EnsurePacketsView(db); err != nil {
+		return fmt.Errorf("packets_v view: %w", err)
 	}
 
 	// One-time migration: recalculate advert_count to count unique transmissions only
@@ -830,6 +823,10 @@ func applySchema(db *sql.DB) error {
 		// Backfill: set last_packet_at = last_seen only for observers that actually have
 		// observation rows (packet_count alone is unreliable — UpsertObserver sets it to 1
 		// on INSERT even for status-only observers).
+		// Deliberately rowid, not idx: this runs in applySchema, before
+		// dbschema.Apply rebuilds a legacy observers table with an explicit idx.
+		// Within one DB the two are the same value (idx is the INTEGER PRIMARY
+		// KEY, i.e. the rowid alias), and only rowid exists on a legacy table.
 		res, err := db.Exec(`UPDATE observers SET last_packet_at = last_seen
 			WHERE last_packet_at IS NULL
 			AND rowid IN (SELECT DISTINCT observer_idx FROM observations WHERE observer_idx IS NOT NULL)`)
@@ -1059,6 +1056,29 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
+	// Same SET as stmtUpsertObserver's DO UPDATE, args in the same order,
+	// with the id last for the WHERE.
+	s.stmtUpdateObserver, err = s.db.Prepare(`
+		UPDATE observers SET
+			name = COALESCE(?, name),
+			iata = COALESCE(?, iata),
+			last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
+			packet_count = packet_count + 1,
+			model = COALESCE(?, model),
+			firmware = COALESCE(?, firmware),
+			client_version = COALESCE(?, client_version),
+			radio = COALESCE(?, radio),
+			battery_mv = COALESCE(?, battery_mv),
+			uptime_secs = COALESCE(?, uptime_secs),
+			noise_floor = COALESCE(?, noise_floor),
+			can_relay = COALESCE(?, can_relay),
+			can_relay_seen = CASE WHEN ? IS NULL THEN can_relay_seen ELSE 1 END
+		WHERE id = ?
+	`)
+	if err != nil {
+		return err
+	}
+
 	s.stmtUpsertObserver, err = s.db.Prepare(`
 		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, can_relay, can_relay_seen)
 		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), CASE WHEN ? IS NULL THEN 0 ELSE 1 END)
@@ -1081,19 +1101,19 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtGetObserverRowid, err = s.db.Prepare("SELECT rowid FROM observers WHERE id = ?")
+	s.stmtGetObserverIdx, err = s.db.Prepare("SELECT idx FROM observers WHERE id = ?")
 	if err != nil {
 		return err
 	}
 
-	// Args: ingestNow, rxTime, ingestNow, rxTime, rowid
+	// Args: ingestNow, rxTime, ingestNow, rxTime, idx
 	// MIN(existing, ingestNow) clamps any future value already in the DB before
 	// taking MAX with rxTime, so the guard never locks in a past bug's stale future.
 	s.stmtUpdateObserverLastSeen, err = s.db.Prepare(`
 		UPDATE observers SET
 			last_seen      = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
 			last_packet_at = MAX(MIN(COALESCE(last_packet_at, ''), ?), ?)
-		WHERE rowid = ?`)
+		WHERE idx = ?`)
 	if err != nil {
 		return err
 	}
@@ -1201,15 +1221,15 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	// Resolve observer_idx and update last_seen
 	var observerIdx *int64
 	if data.ObserverID != "" {
-		var rowid int64
-		err := s.stmtGetObserverRowid.QueryRow(data.ObserverID).Scan(&rowid)
+		var idx int64
+		err := s.stmtGetObserverIdx.QueryRow(data.ObserverID).Scan(&idx)
 		if err == nil {
-			observerIdx = &rowid
+			observerIdx = &idx
 			// observer.last_seen and last_packet_at answer "when did the analyzer
 			// last hear from this observer" — both are ingest-time questions.
 			// Per-packet rxTime is stored separately on observations/transmissions
 			// using envelope time (see InsertTransmission above). See #1465.
-			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, ingestNow, ingestNow, ingestNow, rowid)
+			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, ingestNow, ingestNow, ingestNow, idx)
 		}
 	}
 
@@ -1381,13 +1401,10 @@ func (s *Store) UpsertObserverAt(id, name, iata string, meta *ObserverMeta, last
 	}
 	normalizedIATA := strings.TrimSpace(strings.ToUpper(iata))
 
-	model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay := observerMetaColumns(meta)
+	u := observerUpsert{id: id, name: name, iata: normalizedIATA, lastSeen: lastSeen, ingestNow: ingestNow}
+	u.model, u.firmware, u.clientVersion, u.radio, u.batteryMv, u.uptimeSecs, u.noiseFloor, u.canRelay = observerMetaColumns(meta)
 
-	_, err := s.stmtUpsertObserver.Exec(
-		id, name, normalizedIATA, lastSeen, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay, canRelay,
-		name, normalizedIATA, ingestNow, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay, canRelay,
-	)
-	if err != nil {
+	if err := s.upsertObserver(u); err != nil {
 		s.Stats.WriteErrors.Add(1)
 		return err
 	}
@@ -1396,6 +1413,51 @@ func (s *Store) UpsertObserverAt(id, name, iata string, meta *ObserverMeta, last
 	// Reactivate if this observer was previously marked inactive
 	s.db.Exec(`UPDATE observers SET inactive = 0 WHERE id = ? AND inactive = 1`, id)
 	return nil
+}
+
+// observerUpsert is one UpsertObserverAt write, shared by its UPDATE fast path
+// and its INSERT fallback.
+type observerUpsert struct {
+	id, name, iata, lastSeen, ingestNow string
+
+	model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay interface{}
+}
+
+// upsertObserver writes u with an UPDATE, and INSERTs only when no row has
+// that id. observers.idx is AUTOINCREMENT, and SQLite advances
+// sqlite_sequence for every INSERT it attempts, even one ON CONFLICT turns
+// into an update: as a plain upsert this would write the sequence page again
+// for every ingested packet. The fallback keeps its ON CONFLICT, so a row
+// created between the two statements is updated, not an error.
+func (s *Store) upsertObserver(u observerUpsert) error {
+	updated, err := s.updateObserver(u)
+	if err != nil || updated {
+		return err
+	}
+	return s.insertObserver(u)
+}
+
+// updateObserver applies u to an existing row and reports whether there was
+// one.
+func (s *Store) updateObserver(u observerUpsert) (bool, error) {
+	res, err := s.stmtUpdateObserver.Exec(
+		u.name, u.iata, u.ingestNow, u.lastSeen, u.model, u.firmware, u.clientVersion, u.radio, u.batteryMv, u.uptimeSecs, u.noiseFloor, u.canRelay, u.canRelay,
+		u.id,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// insertObserver is the INSERT ... ON CONFLICT DO UPDATE fallback.
+func (s *Store) insertObserver(u observerUpsert) error {
+	_, err := s.stmtUpsertObserver.Exec(
+		u.id, u.name, u.iata, u.lastSeen, u.lastSeen, u.model, u.firmware, u.clientVersion, u.radio, u.batteryMv, u.uptimeSecs, u.noiseFloor, u.canRelay, u.canRelay,
+		u.name, u.iata, u.ingestNow, u.lastSeen, u.model, u.firmware, u.clientVersion, u.radio, u.batteryMv, u.uptimeSecs, u.noiseFloor, u.canRelay, u.canRelay,
+	)
+	return err
 }
 
 // UpsertObserverRetained applies the metadata from a RETAINED status message
@@ -2249,7 +2311,7 @@ func (s *Store) RemoveStaleObservers(observerDays int) (int64, error) {
 // the second stage of observer retention: the soft-delete hides the observer,
 // this reclaims the row after its packets have aged out via packetDays.
 //
-// observations.observer_idx is a bare rowid with no foreign key, so deleting a
+// observations.observer_idx is a bare observers.idx with no foreign key, so deleting a
 // still-referenced observer silently orphans history — packets_v stops resolving
 // the observer and the packets are mis-attributed. The three NOT EXISTS guards
 // are what make the delete safe; they are correctness, not defensive padding.
@@ -2267,7 +2329,7 @@ func (s *Store) PurgeStaleObservers(purgeDays int) (int64, error) {
 		DELETE FROM observers
 		WHERE inactive = 1
 		  AND last_seen < ?
-		  AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.observer_idx = observers.rowid)
+		  AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.observer_idx = observers.idx)
 		  AND NOT EXISTS (SELECT 1 FROM observer_metrics m WHERE m.observer_id = observers.id)
 		  AND NOT EXISTS (SELECT 1 FROM dropped_packets d WHERE d.observer_id = observers.id)`, cutoff)
 	if err != nil {
@@ -2540,9 +2602,40 @@ func (s *Store) RecordNaiveSkew(observerID string, deltaSec int64, now time.Time
 	}
 	nowStr := now.UTC().Format(time.RFC3339)
 	cutoff := now.Add(-24 * time.Hour).UTC().Format(time.RFC3339)
-	// One INSERT-or-UPDATE round trip. ON CONFLICT path resets the rolling
-	// counter when the previous event is older than the 24h window, otherwise
-	// increments it.
+	// UPDATE first, INSERT only for an unknown observer, for the same reason
+	// as upsertObserver: an attempted INSERT advances sqlite_sequence.
+	updated, err := s.updateNaiveSkew(observerID, deltaSec, nowStr, cutoff)
+	if err != nil || updated {
+		return err
+	}
+	return s.insertNaiveSkew(observerID, deltaSec, nowStr, cutoff)
+}
+
+// updateNaiveSkew records a naive-clock event on an existing observer and
+// reports whether there was one. The rolling counter resets to 1 when the
+// previous event is older than the 24h window (cutoff), otherwise increments.
+func (s *Store) updateNaiveSkew(observerID string, deltaSec int64, nowStr, cutoff string) (bool, error) {
+	res, err := s.db.Exec(`
+		UPDATE observers SET
+			clock_skew_seconds = ?,
+			clock_last_naive_at = ?,
+			clock_skew_count_24h = CASE
+				WHEN clock_last_naive_at IS NULL OR clock_last_naive_at < ?
+					THEN 1
+				ELSE COALESCE(clock_skew_count_24h, 0) + 1
+			END
+		WHERE id = ?
+	`, deltaSec, nowStr, cutoff, observerID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// insertNaiveSkew is RecordNaiveSkew's INSERT ... ON CONFLICT DO UPDATE
+// fallback for an observer that has no row yet.
+func (s *Store) insertNaiveSkew(observerID string, deltaSec int64, nowStr, cutoff string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO observers (id, clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at)
 		VALUES (?, ?, 1, ?)

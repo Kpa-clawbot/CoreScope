@@ -2111,7 +2111,7 @@ func TestPerObservationRawHex(t *testing.T) {
 	rows, err := store.db.Query(`
 		SELECT o.raw_hex, obs.id
 		FROM observations o
-		LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+		LEFT JOIN observers obs ON obs.idx = o.observer_idx
 		ORDER BY o.id ASC
 	`)
 	if err != nil {
