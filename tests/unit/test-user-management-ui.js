@@ -510,6 +510,59 @@ test('my repeaters: Unclaim is disabled while its DELETE runs, so a double click
   assert.strictEqual(btn.disabled, false, 'button stays disabled after the DELETE');
 });
 
+// Unclaim and Unlink keep their button disabled until the list GET after the
+// DELETE has answered: the old button is still on screen until then.
+for (const c of [
+  { name: 'Unclaim', list: 'myRepList', msg: 'myRepMsg', attr: 'data-unclaim', get: '/api/account/repeaters',
+    empty: { repeaters: [] }, done: 'Repeater unclaimed.' },
+  { name: 'Unlink', list: 'compList', msg: 'compMsg', attr: 'data-unlink', get: '/api/account/companions',
+    empty: [], done: 'Companion unlinked.' }]) {
+  test(c.name + ' stays disabled until the reloaded list is in', async () => {
+    const pk = 'ab'.repeat(32);
+    let releaseList = null;
+    let deleted = false;
+    const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: c.empty }), { confirm: () => true });
+    env.setRequest((method, p) => {
+      if (method === 'DELETE') { deleted = true; return Promise.resolve({ ok: true, status: 200, data: {} }); }
+      if (p === c.get && deleted) return new Promise((r) => { releaseList = () => r({ ok: true, status: 200, data: c.empty }); });
+      if (p === c.get) return Promise.resolve({ ok: true, status: 200, data: c.empty });
+      return Promise.resolve({ ok: true, status: 200, data: [] });
+    });
+    env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+    env.t.views.profile({ set innerHTML(v) {} });
+    await new Promise((r) => setTimeout(r, 5));
+    const btn = { getAttribute: (a) => (a === c.attr ? pk : null) };
+    const first = env.els[c.list].handlers.click({ target: btn });
+    await new Promise((r) => setTimeout(r, 5));
+    assert(releaseList, 'list not reloaded after the DELETE');
+    assert.strictEqual(env.els[c.msg].textContent, c.done);
+    assert.strictEqual(btn.disabled, true, 'button enabled again while the list GET runs');
+    env.els[c.list].handlers.click({ target: btn });
+    assert.strictEqual(env.calls.filter((x) => x.method === 'DELETE').length, 1, 'a click before the reload sent another DELETE');
+    releaseList();
+    await first;
+    assert.strictEqual(btn.disabled, false, 'button stays disabled after the reload');
+  });
+}
+
+test('an inactive repeater carries the dropped note in every health state', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const fns = { getNodeStatus: realGetNodeStatus(), timeAgo: () => 'AGO' };
+  const recent = new Date(Date.now() - 3600 * 1000).toISOString();
+  const old = new Date(Date.now() - 10 * 86400 * 1000).toISOString();
+  const base = { known: true, inactive: true, role: 'repeater', name: 'X', claimedAt: '2026-11-01T00:00:00Z', status: null, comaintainers: [] };
+  const h = env.t.myRepeatersHtml([
+    Object.assign({ pubkey: '11'.repeat(32), lastHeard: recent }, base),
+    Object.assign({ pubkey: '22'.repeat(32), lastHeard: old, lastRelayed: recent }, base),
+    Object.assign({ pubkey: '33'.repeat(32), lastHeard: old }, base),
+    Object.assign({ pubkey: '44'.repeat(32), lastHeard: null }, base)], fns);
+  for (const [pk, state] of [['11', 'active'], ['22', 'uncertain'], ['33', 'stale'], ['44', 'stale']]) {
+    assert(h.indexOf('data-pubkey="' + pk.repeat(32) + '" data-health="' + state + '"') !== -1, pk + ' not ' + state + ': ' + h);
+  }
+  assert.strictEqual((h.match(/no longer in the node list/g) || []).length, 4, 'note missing on a state: ' + h);
+  assert.strictEqual((h.match(/href="#\/nodes\//g) || []).length, 0, 'inactive row links to a node page');
+});
+
 test('my repeaters empty state explains how to claim', () => {
   const env = loadAccount('#/account', () => ({}));
   for (const list of [[], null, undefined]) {
