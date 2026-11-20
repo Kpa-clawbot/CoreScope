@@ -9,9 +9,9 @@ import (
 )
 
 // observers.rowid must not be used: observations.observer_idx holds
-// observers.idx, the explicit key column. A bare rowid would silently break
-// if the table were ever rebuilt (VACUUM renumbers rowids of tables without
-// an INTEGER PRIMARY KEY).
+// observers.idx, the explicit key column. A bare rowid is not part of the
+// schema: a dump-and-reload renumbers it, and VACUUM may (SQLite documents
+// that it can change the rowid of tables without an INTEGER PRIMARY KEY).
 func TestNoObserversRowidInServerSources(t *testing.T) {
 	re := regexp.MustCompile(`\.rowid\b|rowid FROM observers`)
 	files, err := filepath.Glob("*.go")

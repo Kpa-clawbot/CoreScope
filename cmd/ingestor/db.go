@@ -550,9 +550,11 @@ func applySchema(db *sql.DB) error {
 	}
 
 	// Create/rebuild packets_v view (v3 schema: observer_idx → observers.idx).
-	// The Go server reads this view; without it fresh installs get "no such table: packets_v".
-	// On a legacy observers table (implicit rowid only) the view is rebuilt again
-	// by dbschema.Apply's observers rebuild once idx exists.
+	// cmd/server does not read it; external SQLite readers do, and without it
+	// fresh installs get "no such table: packets_v". On a legacy observers table
+	// (implicit rowid only) it joins on the rowid until dbschema.Apply's
+	// observers rebuild recreates it on idx, so it stays readable if the
+	// rebuild refuses.
 	if err := dbschema.EnsurePacketsView(db); err != nil {
 		return fmt.Errorf("packets_v view: %w", err)
 	}

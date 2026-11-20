@@ -293,10 +293,39 @@ func legacyFullDB(t *testing.T) *sql.DB {
 		`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT, transmission_id INTEGER NOT NULL REFERENCES transmissions(id), observer_idx INTEGER, direction TEXT, snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp INTEGER NOT NULL, raw_hex TEXT)`,
 		legacyObserversDDL,
 		`CREATE INDEX idx_observers_last_seen ON observers(last_seen)`,
-		packetsViewSQL,
 		`INSERT INTO observers (id, name) VALUES ('a', 'A'), ('b', 'B')`,
 	)
+	// As the ingestor leaves it before dbschema.Apply: the legacy-shape view.
+	if err := EnsurePacketsView(db); err != nil {
+		t.Fatal(err)
+	}
 	return db
+}
+
+// packetsViewJoin returns the observers column packets_v joins on, read
+// from its stored definition.
+func packetsViewJoin(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	var def string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'packets_v'`).Scan(&def); err != nil {
+		t.Fatalf("read packets_v: %v", err)
+	}
+	for _, key := range []string{observersKey, legacyObserversKey} {
+		if strings.Contains(def, "obs."+key+" = o.observer_idx") {
+			return key
+		}
+	}
+	t.Fatalf("packets_v joins on neither key: %s", def)
+	return ""
+}
+
+// assertPacketsViewReadable fails unless packets_v answers a full read.
+func assertPacketsViewReadable(t *testing.T, db *sql.DB) {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM packets_v`).Scan(&n); err != nil {
+		t.Errorf("packets_v not readable: %v", err)
+	}
 }
 
 func assertRefusedUntouched(t *testing.T, db *sql.DB, wantErr string) {
@@ -307,6 +336,12 @@ func assertRefusedUntouched(t *testing.T, db *sql.DB, wantErr string) {
 	err := ensureObserversIdx(db, nil)
 	if err == nil || !strings.Contains(err.Error(), wantErr) {
 		t.Fatalf("ensureObserversIdx err = %v, want mention of %q", err, wantErr)
+	}
+	// Review of #2407: a refused rebuild must leave packets_v readable, on
+	// the rowid join the legacy table still supports.
+	assertPacketsViewReadable(t, db)
+	if key := packetsViewJoin(t, db); key != legacyObserversKey {
+		t.Errorf("packets_v joins on %s after a refused rebuild, want %s", key, legacyObserversKey)
 	}
 	if got := dumpRows(t, db, `SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name`); !reflect.DeepEqual(schema, got) {
 		t.Errorf("schema changed by refused rebuild:\nbefore=%v\nafter=%v", schema, got)
@@ -326,6 +361,11 @@ func TestObserversIdxRefusesUnknownColumn(t *testing.T) {
 	mustExec(t, db, `ALTER TABLE observers ADD COLUMN operator_note TEXT`,
 		`UPDATE observers SET operator_note = 'keep me'`)
 	assertRefusedUntouched(t, db, "operator_note")
+	// The refusal names the way out, since it stops the ingestor on every start.
+	if err := ensureObserversIdx(db, nil); err == nil || !strings.Contains(err.Error(), "DROP COLUMN") ||
+		!strings.Contains(err.Error(), "previous CoreScope version") {
+		t.Errorf("refusal does not say how to continue: %v", err)
+	}
 }
 
 // (e) A NULL id (legal under the legacy TEXT PRIMARY KEY) can't satisfy the
@@ -334,6 +374,57 @@ func TestObserversIdxRefusesNullID(t *testing.T) {
 	db := legacyFullDB(t)
 	mustExec(t, db, `INSERT INTO observers (id, name) VALUES (NULL, 'ghost')`)
 	assertRefusedUntouched(t, db, "NULL id")
+	if err := ensureObserversIdx(db, nil); err == nil || !strings.Contains(err.Error(), "WHERE id IS NULL") ||
+		!strings.Contains(err.Error(), "previous CoreScope version") {
+		t.Errorf("refusal does not say how to continue: %v", err)
+	}
+}
+
+// A failure after the old table is dropped and observers_new renamed (the
+// deepest point of the rebuild) rolls everything back: the legacy table and
+// its rows, no observers_new left behind, the readable packets_v and the
+// caller's foreign_keys setting. A table squatting on the name of an index
+// the rebuild creates makes CREATE INDEX IF NOT EXISTS fail there.
+func TestObserversIdxRollsBackMidRebuild(t *testing.T) {
+	db := legacyFullDB(t)
+	mustExec(t, db, `CREATE TABLE idx_observers_iata_norm (x INTEGER)`)
+	assertRefusedUntouched(t, db, "already a table named idx_observers_iata_norm")
+	var stale int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'observers_new'`).Scan(&stale); err != nil || stale != 0 {
+		t.Errorf("observers_new left behind after the rollback: %d (%v)", stale, err)
+	}
+	// Once the blocker is gone, the next start completes the rebuild.
+	mustExec(t, db, `DROP TABLE idx_observers_iata_norm`)
+	if err := ensureObserversIdx(db, nil); err != nil {
+		t.Fatalf("rebuild after the blocker was removed: %v", err)
+	}
+	if !observersIdxIsPK(t, db) {
+		t.Fatal("observers.idx is not the primary key after the retry")
+	}
+}
+
+// packets_v follows the table: the rowid join on a legacy table (a read that
+// works), the idx join once the rebuild ran, and EnsurePacketsView after the
+// rebuild keeps the idx join.
+func TestPacketsViewFollowsObserversShape(t *testing.T) {
+	db := legacyFullDB(t)
+	if key := packetsViewJoin(t, db); key != legacyObserversKey {
+		t.Fatalf("legacy table: packets_v joins on %s, want %s", key, legacyObserversKey)
+	}
+	assertPacketsViewReadable(t, db)
+	if err := ensureObserversIdx(db, nil); err != nil {
+		t.Fatalf("ensureObserversIdx: %v", err)
+	}
+	if key := packetsViewJoin(t, db); key != observersKey {
+		t.Fatalf("after the rebuild: packets_v joins on %s, want %s", key, observersKey)
+	}
+	if err := EnsurePacketsView(db); err != nil {
+		t.Fatal(err)
+	}
+	if key := packetsViewJoin(t, db); key != observersKey {
+		t.Fatalf("EnsurePacketsView after the rebuild: joins on %s, want %s", key, observersKey)
+	}
+	assertPacketsViewReadable(t, db)
 }
 
 // The full canonical legacy table migrates and keeps foreign_keys on.
