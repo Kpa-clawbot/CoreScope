@@ -205,7 +205,7 @@
 
   // Keyless vector built-ins (optIn). Attribution is plain text (S1).
   var _VECTOR_ATTRIBUTION = {
-    openfreemap: '© OpenMapTiles Data from OpenStreetMap',
+    openfreemap: 'OpenFreeMap © OpenMapTiles Data from OpenStreetMap',
     versatiles: '© OpenStreetMap contributors, VersaTiles'
   };
   function _vector(group, label, type, style, url) {

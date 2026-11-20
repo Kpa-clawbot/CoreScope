@@ -247,7 +247,7 @@ const VECTOR = {
   'versatiles-colorful-dark': ['versatiles', 'VersaTiles Colorful Dark', 'dark', undefined, 'https://tiles.versatiles.org/assets/styles/colorful-dark/style.json'],
   'versatiles-gray-dark': ['versatiles', 'VersaTiles Gray Dark', 'dark', 'gray', 'https://tiles.versatiles.org/assets/styles/gray-dark/style.json'],
 };
-const VECTOR_ATTR = { openfreemap: '© OpenMapTiles Data from OpenStreetMap', versatiles: '© OpenStreetMap contributors, VersaTiles' };
+const VECTOR_ATTR = { openfreemap: 'OpenFreeMap © OpenMapTiles Data from OpenStreetMap', versatiles: '© OpenStreetMap contributors, VersaTiles' };
 
 function custom(entries, extra) {
   return { tiles: Object.assign({ providers: ALL_ON(), custom: entries }, extra || {}) };
