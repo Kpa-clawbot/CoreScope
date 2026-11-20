@@ -281,5 +281,36 @@ test('applyTileFilter: the pane filter follows a fitting pin and ignores a non-f
   assert.strictEqual(s.filter(), '', 'Auto: carto-light has no filter');
 });
 
+test('resolveTile { ignorePin }: the theme map even with a fitting pin (the Auto layer of a picker map)', () => {
+  const s = makeSandbox();
+  s.w.MC_setPinnedTileProvider('eox-s2-2025');
+  assert.strictEqual(s.w.MC_resolveTile(false).id, 'eox-s2-2025', 'pin used by default');
+  assert.strictEqual(s.w.MC_resolveTile(false, { ignorePin: true }).id, 'carto-light', 'ignored on request');
+  assert.strictEqual(s.w.MC_resolveTile(true, { ignorePin: true }).id, 'carto-dark');
+});
+
+test('applyTileFilter: a picker map pane (data-mc-picker) ignores the pin', () => {
+  const s = makeSandbox();
+  s.state.theme = 'dark';
+  const plain = s.filter();
+  s.w.MC_setPinnedTileProvider('osmfr-gray-dark');
+  const pickerPane = { style: { filter: 'x' }, getAttribute: (k) => (k === 'data-mc-picker' ? 'true' : null) };
+  s.w.MC_applyTileFilter(pickerPane);
+  assert.strictEqual(pickerPane.style.filter, plain, 'picker pane keeps the theme filter: ' + pickerPane.style.filter);
+  assert.ok(/grayscale\(/.test(s.filter()), 'a pane without a picker follows the pin');
+});
+
+test('a failed write (quota full) never brings back the older stored pin', () => {
+  const s = makeSandbox();
+  s.storage.store['mc-tile-pinned'] = 'osmfr-hot'; // an older pin, still stored
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'osmfr-hot');
+  s.storage.setItem = () => { throw new Error('QuotaExceededError'); };
+  s.storage.removeItem = () => { throw new Error('QuotaExceededError'); };
+  assert.strictEqual(s.w.MC_setPinnedTileProvider('eox-s2-2025'), true);
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'eox-s2-2025', 'the new pick, not the stored older one');
+  s.w.MC_setPinnedTileProvider(null);
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), null, 'Auto, not the stored older one');
+});
+
 console.log('map tile pin: ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);

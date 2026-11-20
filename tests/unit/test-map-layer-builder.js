@@ -563,6 +563,35 @@ test('attach: destroy removes listener, observer, group and the layer control', 
   h.destroy(); // idempotent
 });
 
+// A pick is saved (mc-tile-pinned). On a map WITH a picker the pin is the
+// explicit layer only: the hidden Auto group stays on the theme's map, so a
+// later click on Auto never first loads the pinned map, and a pin set in
+// another tab never shows under a radio that says Auto. A map WITHOUT a
+// picker follows the pin (it fits the theme here).
+test('picker: the hidden Auto group never loads the pinned map; a map without a picker shows it', () => {
+  const s = makeSandbox({ theme: 'light' });
+  s.w.MC_MAP_CFG = { tiles: { providers: { osmfr: { enabled: true } } } };
+  s.w.MC_initTileRegistry(true);
+  const map = makeMap();
+  const h = s.w.MC_attachAutoTiles(map, { controlPosition: 'topleft' });
+  const plain = makeMap();
+  const hp = s.w.MC_attachAutoTiles(plain, {});
+  const c = s.stats.controls[s.stats.controls.length - 1];
+  map.addLayer(c.baseMaps['osmfr-hot']);
+  c.baseMaps['osmfr-hot']._events.add();
+  map._handlers.baselayerchange({ name: 'osmfr-hot', layer: c.baseMaps['osmfr-hot'] });
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'osmfr-hot', 'pinned');
+  const autoUrls = h.group._layers.map(l => tilesOf(l)[0]._url).join(' ');
+  assert.ok(/light_all/.test(autoUrls) && !/openstreetmap\.fr/.test(autoUrls), 'Auto group still Carto light: ' + autoUrls);
+  const plainUrls = hp.group._layers.map(l => tilesOf(l)[0]._url).join(' ');
+  assert.ok(/openstreetmap\.fr/.test(plainUrls), 'map without a picker follows the pin: ' + plainUrls);
+  // Another tab's pin (no storage event) and a theme flip: Auto stays the theme map.
+  s.ctx.localStorage.setItem('mc-tile-pinned', 'osmfr-hot');
+  h.sync();
+  assert.ok(/light_all/.test(h.group._layers.map(l => tilesOf(l)[0]._url).join(' ')), 'Auto group ignores the pin on sync');
+  h.destroy(); hp.destroy();
+});
+
 // The picker rebuilds when /api/config/client arrives (fromConfig). An
 // explicit pick of a LIGHT entry while the app is dark must survive it: the
 // radio and the tiles stay on the picked entry.

@@ -2343,20 +2343,14 @@
     // #1420 Dark-tile provider dropdown — persists + fires mc-tile-provider-changed
     container.querySelectorAll('[data-cv2-dark-tile-provider]').forEach(function (sel) {
       sel.addEventListener('change', function () {
-        var id = sel.value;
-        if (typeof window.MC_setDarkTileProvider === 'function') {
-          window.MC_setDarkTileProvider(id);
-        }
+        _setThemeTile('dark', sel.value);
       });
     });
 
     // Light-tile provider dropdown — persists + fires mc-tile-provider-changed
     container.querySelectorAll('[data-cv2-light-tile-provider]').forEach(function (sel) {
       sel.addEventListener('change', function () {
-        var id = sel.value;
-        if (typeof window.MC_setLightTileProvider === 'function') {
-          window.MC_setLightTileProvider(id);
-        }
+        _setThemeTile('light', sel.value);
       });
     });
 
@@ -2862,6 +2856,14 @@
   // in try/catch because we run before/after page lifecycle in tests
   // and operators' browsers where any one surface (localStorage,
   // document, body) could be missing.
+  // The customizer's light/dark map choice. A map picked in a layer picker
+  // (mc-tile-pinned) would hide it, so the newer choice (this one) clears it.
+  function _setThemeTile(theme, id) {
+    if (typeof window.MC_setPinnedTileProvider === 'function') window.MC_setPinnedTileProvider(null);
+    var set = theme === 'light' ? window.MC_setLightTileProvider : window.MC_setDarkTileProvider;
+    return typeof set === 'function' ? set(id) : false;
+  }
+
   function _resetAll() {
     // 1. localStorage — customizer-owned keys ONLY. Theme / favorites /
     //    gesture hints / channel selection state are explicitly preserved
@@ -2875,6 +2877,11 @@
     ];
     for (var i = 0; i < CUSTOMIZER_LS_KEYS.length; i++) {
       try { localStorage.removeItem(CUSTOMIZER_LS_KEYS[i]); } catch (_e) { /* ignore */ }
+    }
+    // The map picked in a layer picker (mc-tile-pinned): through its setter,
+    // so every open map follows at once.
+    if (typeof window.MC_setPinnedTileProvider === 'function') {
+      try { window.MC_setPinnedTileProvider(null); } catch (_e) { /* ignore */ }
     }
 
     // 2. CB preset — body[data-cb-preset] + CSS var teardown lives in
@@ -3002,6 +3009,7 @@
     _gfReapply: _gfReapply,
     // #1496 — full reset (not just STORAGE_KEY). See _resetAll() above.
     resetAll: _resetAll,
+    setThemeTile: _setThemeTile,
     // Exposed for tests — see test-issue-1509-detect-preset.js.
     detectActivePreset: _detectActivePreset,
     // #1380 — exposed for unit tests; see test-issue-1380-*.

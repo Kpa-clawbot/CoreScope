@@ -174,6 +174,7 @@
   // honoured only while it names a registered entry.
   var PIN_KEY      = 'mc-tile-pinned';
   var _pinMemo     = null;   // last value written, for when localStorage throws
+  var _pinUnsaved  = false;  // the last write failed: localStorage holds an older pin
   
   var _serverDefault = null;
   var _serverDefaultLight = null;
@@ -644,7 +645,9 @@
   // The pinned map: the stored id while it is registered, else null (Auto).
   function getPinnedId() {
     var v = _pinMemo;
-    try { if (window.localStorage) v = window.localStorage.getItem(PIN_KEY); } catch (_) {}
+    if (!_pinUnsaved) {
+      try { if (window.localStorage) v = window.localStorage.getItem(PIN_KEY); } catch (_) {}
+    }
     return _hasId(v) ? v : null;
   }
 
@@ -653,12 +656,13 @@
   function setPinned(id) {
     if (id !== null && !_hasId(id)) return false;
     _pinMemo = id;
+    _pinUnsaved = false;
     try {
       if (window.localStorage) {
         if (id === null) window.localStorage.removeItem(PIN_KEY);
         else window.localStorage.setItem(PIN_KEY, id);
       }
-    } catch (_) { }
+    } catch (_) { _pinUnsaved = true; } // e.g. quota full: never fall back to the stored, older pin
     var detail = { pinned: id };
     try {
       var ev = (typeof CustomEvent === 'function')
@@ -671,9 +675,10 @@
 
   // The entry a map without an explicit layer shows for a theme: the pin
   // when it suits the theme (an 'any' entry, e.g. satellite, always does),
-  // else that theme's choice.
-  function _themeId(isDark) {
-    var pin = getPinnedId();
+  // else that theme's choice. A map with a picker ignores the pin: there
+  // the pin is the explicit layer, and Auto always means the theme's map.
+  function _themeId(isDark, ignorePin) {
+    var pin = ignorePin ? null : getPinnedId();
     if (pin && _fitsTheme(REGISTRY[pin], isDark ? 'dark' : 'light')) return pin;
     return isDark ? getActiveId() : getActiveLightId();
   }
@@ -703,7 +708,8 @@
     }
 
     var isDark = _isDarkEffective();
-    pane.style.filter = _paneFilter(REGISTRY[_themeId(isDark)], isDark);
+    var picker = typeof pane.getAttribute === 'function' && pane.getAttribute('data-mc-picker') === 'true';
+    pane.style.filter = _paneFilter(REGISTRY[_themeId(isDark, picker)], isDark);
   }
 
   // The tile-pane CSS filter for an entry: its `filter` in both themes, else
@@ -797,8 +803,11 @@
    *   3. The TILE_DARK/TILE_LIGHT constants (pre-config load or a registry
    *      the config has emptied out).
    */
-  window.MC_resolveTile = function (isDark) {
+  // opts.ignorePin: resolve the theme's map even when a map is pinned (the
+  // Auto layer of a map with a picker).
+  window.MC_resolveTile = function (isDark, opts) {
     isDark = !!isDark;
+    var ignorePin = !!(opts && opts.ignorePin);
     var desc = {
       type: isDark ? 'dark' : 'light',
       id: null,
@@ -832,7 +841,7 @@
     var reg0 = null;
     try { reg0 = window.MC_TILE_PROVIDERS || REGISTRY; } catch (_e) { reg0 = REGISTRY; }
     // 2a. A map pinned in a picker, when it suits this theme.
-    try {
+    if (!ignorePin) try {
       var pin = (typeof window.MC_getPinnedTileProvider === 'function') ? window.MC_getPinnedTileProvider() : null;
       if (pin && Object.prototype.hasOwnProperty.call(reg0, pin) && _fitsTheme(reg0[pin], desc.type)) id = pin;
     } catch (_e) { id = null; }
@@ -1619,6 +1628,11 @@
     // Overlays come with the picker: surfaces without one (node maps,
     // analytics, home, customizer) show none.
     var overlays = opts.controlPosition ? _overlaySet(map) : null;
+    // Marks this map's tile pane as having a picker: its Auto filter (like
+    // its Auto layer) ignores the pin.
+    if (opts.controlPosition) {
+      try { var tp = map.getPane && map.getPane('tilePane'); if (tp && tp.setAttribute) tp.setAttribute('data-mc-picker', 'true'); } catch (_) {}
+    }
 
     function themeIsDark() {
       return typeof window.MC_isDarkTheme === 'function' ? !!window.MC_isDarkTheme() : _isDark();
@@ -1631,7 +1645,9 @@
     function sync() {
       if (destroyed) return;
       var r;
-      try { r = window.MC_resolveTile(themeIsDark()); } catch (_) { return; }
+      // On a map with a picker the Auto group is always the theme's map: the
+      // pin is shown as the explicit layer, never loaded into the hidden group.
+      try { r = window.MC_resolveTile(themeIsDark(), opts.controlPosition ? { ignorePin: true } : undefined); } catch (_) { return; }
       if (!r || !r.url) return;
       // A vector entry is built as a raster fallback, so its url can't be
       // swapped in place. A vector layer stuck on a transient fallback is
