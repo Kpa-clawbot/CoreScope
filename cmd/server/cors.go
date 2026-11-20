@@ -121,10 +121,12 @@ const corsExposedHeaders = "Retry-After, X-CoreScope-Load-Status"
 // /api/packets/observations, /api/paths/inspect; see simple_post_test.go).
 // Same-origin writes (admin UI, API-key holders on the canonical origin) are
 // unaffected — they never go through the preflight path.
-// The exception is the bearer routes of companion linking (bearerCORSPath,
-// only with user management on), which also allow POST, PUT, DELETE and the
-// Authorization header, for every listed origin: each deployment under a
-// wildcard entry included.
+// The exception is the bearer routes (bearerCORSPath, only with user
+// management on): companion linking and the repeater claim and details
+// routes. They also allow POST, PUT, DELETE and the Authorization header,
+// for every listed origin: each deployment under a wildcard entry included,
+// so with "*" in corsAllowedOrigins any origin may send token-bearing writes
+// to them. No cookies go with those requests, so a write needs the token.
 // Credentialed CORS is intentionally NOT enabled.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -175,9 +177,10 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Access-Control-Expose-Headers", corsExposedHeaders)
 		if s.auth != nil && bearerCORSPath(r.URL.Path) {
-			// Companion linking: CoreDrive RX on an allowlisted origin logs in
-			// and writes with a device token in Authorization. Still no
-			// credentials: nothing rides on cookies.
+			// Device-token clients on an allowlisted origin: CoreDrive RX
+			// (companion linking) and mobile apps (repeater claims and
+			// details) log in and write with a device token in Authorization.
+			// Still no credentials: nothing rides on cookies.
 			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		} else {

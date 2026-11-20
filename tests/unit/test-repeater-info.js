@@ -177,6 +177,80 @@ test('save PUTs the form body', async () => {
   assert.strictEqual(c.p, '/api/repeaters/' + PK + '/info');
   assert.deepStrictEqual(JSON.parse(JSON.stringify(c.body)), { heightM: 12.5, gainDbi: 3, status: 'active', power: 'solar', notes: 'hi' });
 });
+// Review on #2429: the browser sends the revision its form was loaded
+// from, so it cannot silently overwrite a save made meanwhile (by the app).
+test('save sends the loaded revision as baseRevision', async () => {
+  const form = { heightM: '12', gainDbi: '3', status: '', power: '', notes: '' };
+  const f = mountFlow({ info: INFO({ canEdit: true, revision: 4 }), form });
+  await f.l.R.mount(f.el, { public_key: PK, role: 'repeater' });
+  f.click('data-ri-edit');
+  f.click('data-ri-save');
+  await tick();
+  assert.strictEqual(f.l.calls[1].body.baseRevision, 4);
+});
+test('a 409 keeps the typed values, shows the stored ones under them, and the next save uses their revision', async () => {
+  const form = { heightM: '12', gainDbi: '3', status: '', power: '', notes: 'mine' };
+  const f = mountFlow({ info: INFO({ canEdit: true, revision: 4 }), form });
+  await f.l.R.mount(f.el, { public_key: PK, role: 'repeater' });
+  f.click('data-ri-edit');
+  const stored = INFO({ canEdit: true, revision: 5, heightM: 30, notes: 'from the app <b>', updatedBy: 'Bob <i>', updatedAt: '2026-11-20T00:00:00Z' });
+  const realRequest = f.l.auth.request;
+  f.l.auth.request = (m, p, b) => { f.l.calls.push({ method: m, p, body: b }); return Promise.resolve({ ok: false, status: 409, data: stored }); };
+  f.click('data-ri-save');
+  await tick();
+  assert(f.el.innerHTML.includes('data-ri-form'), 'form not kept open: ' + f.el.innerHTML);
+  const h = f.el.innerHTML;
+  assert(h.includes('value="12"') && h.includes('>mine</textarea>'), 'typed values lost: ' + h);
+  const theirs = h.slice(h.indexOf('data-ri-theirs'));
+  assert(h.indexOf('data-ri-theirs') !== -1 && theirs.includes('Saved meanwhile by Bob &lt;i&gt;:') &&
+    theirs.includes('30 m') && theirs.includes('from the app &lt;b&gt;'), 'stored values not shown under the form: ' + h);
+  assert(!h.includes('<b>') && !h.includes('<i>'), 'raw tag: ' + h);
+  assert(/Your changes are still in the form/.test(f.el.msg.textContent), f.el.msg.textContent);
+  f.l.auth.request = realRequest;
+  f.click('data-ri-save');
+  await tick();
+  assert.strictEqual(f.l.calls[f.l.calls.length - 1].body.baseRevision, 5, 'retry not based on the stored revision');
+});
+test('a 409 without edit rights any more shows the view', async () => {
+  const f = mountFlow({ info: INFO({ canEdit: true, revision: 1 }), form: { heightM: '', gainDbi: '', status: '', power: '', notes: '' } });
+  await f.l.R.mount(f.el, { public_key: PK, role: 'repeater' });
+  f.click('data-ri-edit');
+  f.l.auth.request = () => Promise.resolve({ ok: false, status: 409, data: INFO({ canEdit: false, revision: 2, heightM: 7 }) });
+  f.click('data-ri-save');
+  await tick();
+  assert(!f.el.innerHTML.includes('data-ri-form') && f.el.innerHTML.includes('7 m'), f.el.innerHTML);
+  assert(/can no longer edit this repeater/.test(f.el.msg.textContent), 'no explanation: ' + f.el.msg.textContent);
+});
+test('a re-mount after a 409 keeps the typed values and the stored revision', async () => {
+  const opts = { info: INFO({ canEdit: true, revision: 4 }), form: { heightM: '12', gainDbi: '3', status: '', power: '', notes: 'mine' } };
+  const a = mountFlow(opts);
+  await a.l.R.mount(a.el, { public_key: PK, role: 'repeater' });
+  a.click('data-ri-edit');
+  a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: false, status: 409, data: INFO({ canEdit: true, revision: 6 }) }); };
+  a.click('data-ri-save');
+  await tick();
+  a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: true, revision: 6 }) }); };
+  const b = mountFlow(opts, a.l);
+  await b.l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+  assert(b.el.innerHTML.includes('>mine</textarea>'), 'draft lost the typed notes: ' + b.el.innerHTML);
+  b.click('data-ri-save');
+  await tick();
+  assert.strictEqual(a.l.calls[a.l.calls.length - 1].body.baseRevision, 6, 'draft did not keep the stored revision');
+});
+test('a re-mounted draft keeps the revision it was opened at', async () => {
+  const opts = { info: INFO({ canEdit: true, revision: 3 }), form: { heightM: '25', gainDbi: '3', status: '', power: '', notes: '' } };
+  const a = mountFlow(opts);
+  await a.l.R.mount(a.el, { public_key: PK, role: 'repeater' });
+  a.click('data-ri-edit');
+  a.el.handlers.input({});
+  // The page re-renders; its GET now sees a newer revision from elsewhere.
+  a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: true, revision: 9 }) }); };
+  const b = mountFlow(opts, a.l);
+  await b.l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+  b.click('data-ri-save');
+  await tick();
+  assert.strictEqual(a.l.calls[a.l.calls.length - 1].body.baseRevision, 3, 'the draft must not adopt the newer revision');
+});
 test('error response shows its text via textContent; clicks are ignored while busy', async () => {
   const f = mountFlow({ info: INFO({ canEdit: true, claimedByMe: true }) });
   await f.l.R.mount(f.el, { public_key: PK, role: 'repeater' });

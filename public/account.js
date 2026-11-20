@@ -127,16 +127,34 @@
       submitBtn('Delete my account', true) + msgBox('delMsg') + '</form>');
   }
 
-  // A CoreDrive RX device token (kind "device") shows its label and a marker;
-  // a browser session its user agent. Both are revoked with the same button.
+  // What a device token's repeater scopes allow, as shown under its name.
+  var DEVICE_SCOPE_TEXT = { 'repeater:claim': 'claim repeaters', 'repeater:edit': 'edit repeater details' };
+
+  // A device token without scopes or with rx is CoreDrive RX; any other app
+  // shows its label (the device name it sent).
+  function deviceName(s) {
+    var scopes = s.scopes || [];
+    if (!scopes.length || scopes.indexOf('rx') !== -1) return 'CoreDrive RX' + (s.label ? ' – ' + s.label : '');
+    return s.label || 'App';
+  }
+
+  function deviceScopesText(s) {
+    var parts = (s.scopes || []).map(function (sc) { return DEVICE_SCOPE_TEXT[sc]; }).filter(Boolean);
+    return parts.length ? 'can ' + parts.join(' and ') + ' · ' : '';
+  }
+
+  // A device token (kind "device") shows its name, a marker and what it may
+  // do; a browser session its user agent. Both are revoked with the same
+  // button.
   function sessionsHtml(list) {
     var html = '';
     (list || []).forEach(function (s) {
       var device = s.kind === 'device';
-      var name = device ? 'CoreDrive RX' + (s.label ? ' – ' + s.label : '') : (s.userAgent || 'Unknown device');
+      var name = device ? deviceName(s) : (s.userAgent || 'Unknown device');
       html += '<li' + (device ? ' data-kind="device"' : '') + '><span>' + escapeHtml(name) +
         (device ? ' <span class="um-chip um-chip-device">app</span>' : '') +
-        '<br><small>last seen ' + escapeHtml(fmtDate(s.lastSeenAt)) + '</small></span>' +
+        '<br><small>' + (device ? escapeHtml(deviceScopesText(s)) : '') +
+        'last seen ' + escapeHtml(fmtDate(s.lastSeenAt)) + '</small></span>' +
         (s.current ? '<span class="um-chip">this device</span>'
                    : '<button type="button" class="account-btn account-btn-secondary" data-sess="' + escapeHtml(String(s.id)) + '">Log out</button>') + '</li>';
     });
