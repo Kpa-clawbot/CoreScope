@@ -1516,7 +1516,7 @@
   // selected observation as canonical, and dispatches the same payload that
   // the packets-page 'View on map' button would have set in sessionStorage.
   // Without an obs param, the first observation is used. Optional:
-  //   &observer=<pubkey or 8+ char prefix> — that observer's earliest
+  //   &observer=<pubkey or 8+ char prefix> — that observer's shortest-path
   //     observation, its path isolated in the path picker
   //   &paths=all — open the path picker's "All" (union) view
   async function loadRouteFromDeepLink() {
@@ -1543,7 +1543,7 @@
       const observations = data.observations || pkt.observations || [];
       if (!observations.length) return;
       // Pick the observation: ?obs=<id>, else ?observer=<pubkey|prefix>'s
-      // earliest, else the first. ?observer / ?paths=all also set which
+      // shortest path, else the first. ?observer / ?paths=all also set which
       // path-picker view the route opens in.
       const pick = window.MC_ROUTE_UTILS.resolveDeepLinkObservation(observations, {
         obsId: obsId, observer: params.get('observer'), paths: params.get('paths')

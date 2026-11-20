@@ -10,6 +10,7 @@
  *   buildSnrSparkline(snrTrend)
  *   pathGroupKey(rawHops, filterHops)
  *   resolveDeepLinkObservation(observations, params)
+ *   withPathsAllParam(hash, on)
  *
  * `spiderFanFor` is NOT extracted — it consumes Leaflet LatLng / map types
  * (mapRef.latLngToLayerPoint, mk.getLatLng, mk.setLatLng, L.point) and is
@@ -169,14 +170,21 @@
   // Deep-link observation choice for #/map?packet=<hash>. params:
   //   obsId    — ?obs=<observation id>; wins when it names an observation
   //   observer — ?observer=<pubkey or hex prefix of 8+ chars>; that
-  //              observer's earliest observation, its path isolated in the
+  //              observer's shortest-path observation, its path isolated in the
   //              picker
-  //   paths    — ?paths=all; open the picker's union ("All") view
+  //   paths    — ?paths=all; open the picker's union ("All") view, even
+  //              with observer (which then only picks the observation)
   // Returns { chosen, observationId, pathView }. observationId is the id of
   // the observation obs or observer actually selected (null on fallback to
   // the first), never an unmatched obs. pathView is { mode: 'all' },
   // { mode: 'path', path: <raw hops> } or null.
   var OBSERVER_KEY_RE = /^[0-9a-f]{8,}$/;
+  // Hops in an observation's path_json; Infinity when there are none to draw.
+  function observedHopCount(o) {
+    var hops;
+    try { hops = JSON.parse(o.path_json || '[]'); } catch (_) { hops = null; }
+    return Array.isArray(hops) && hops.length ? hops.length : Infinity;
+  }
   function resolveDeepLinkObservation(observations, params) {
     observations = observations || [];
     params = params || {};
@@ -187,13 +195,19 @@
     var key = String(params.observer || '').trim().toLowerCase();
     if (!chosen && key) {
       if (OBSERVER_KEY_RE.test(key)) {
-        var best = null, bestTs = Infinity;
+        // One observer can hear a packet several times (direct, then via
+        // more repeaters). The shortest observed path is the most direct
+        // route; ties go to the earliest, then the lower id. An empty or
+        // unparseable path has nothing to draw, so it ranks last.
+        var best = null, bestLen = Infinity, bestTs = Infinity;
         observations.forEach(function (o) {
           if (String(o.observer_id || '').toLowerCase().indexOf(key) !== 0) return;
+          var len = observedHopCount(o);
           var ts = Date.parse(o.timestamp);
           if (isNaN(ts)) ts = Infinity;
-          if (!best || ts < bestTs || (ts === bestTs && Number(o.id) < Number(best.id))) {
-            best = o; bestTs = ts;
+          if (!best || len < bestLen ||
+              (len === bestLen && (ts < bestTs || (ts === bestTs && Number(o.id) < Number(best.id))))) {
+            best = o; bestLen = len; bestTs = ts;
           }
         });
         chosen = best;
@@ -203,13 +217,15 @@
     }
     var observationId = chosen ? String(chosen.id) : null;
     if (!chosen) chosen = observations[0] || null;
+    // paths=all wins the view: the All button writes it next to an existing
+    // observer=, which still picks the observation (the route's spine).
     var pathView = null;
-    if (byObserver) {
+    if (params.paths === 'all') {
+      pathView = { mode: 'all' };
+    } else if (byObserver) {
       var path = [];
       try { path = JSON.parse(chosen.path_json || '[]'); } catch (_) {}
       pathView = { mode: 'path', path: path };
-    } else if (params.paths === 'all') {
-      pathView = { mode: 'all' };
     }
     return {
       chosen: chosen,
@@ -218,11 +234,26 @@
     };
   }
 
+  // The hash with ?paths=all added (on) or removed (!on), the other params
+  // untouched. Only a #/map?packet=<hash> deep link reloads into the All
+  // view, so any other hash comes back as it was.
+  function withPathsAllParam(hash, on) {
+    hash = String(hash || '');
+    var q = hash.indexOf('?');
+    if (q < 0) return hash;
+    var params = new URLSearchParams(hash.slice(q + 1));
+    if (!params.get('packet') || (params.get('paths') === 'all') === !!on) return hash;
+    if (on) params.set('paths', 'all'); else params.delete('paths');
+    var qs = params.toString();
+    return hash.slice(0, q) + (qs ? '?' + qs : '');
+  }
+
   window.MC_ROUTE_UTILS = {
     escapeHtml: escapeHtml,
     buildPacketContextBlock: buildPacketContextBlock,
     buildSnrSparkline: buildSnrSparkline,
     pathGroupKey: pathGroupKey,
-    resolveDeepLinkObservation: resolveDeepLinkObservation
+    resolveDeepLinkObservation: resolveDeepLinkObservation,
+    withPathsAllParam: withPathsAllParam
   };
 })();

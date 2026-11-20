@@ -81,6 +81,16 @@
   var buildPacketContextBlock = _MC_RT_U.buildPacketContextBlock;
   var buildSnrSparkline = _MC_RT_U.buildSnrSparkline;
   var pathGroupKey = _MC_RT_U.pathGroupKey;
+  var withPathsAllParam = _MC_RT_U.withPathsAllParam;
+
+  // Mirror the path picker's All view in the deep link (?paths=all), so the
+  // address bar shows a link that reopens it. replaceState, not location.hash:
+  // a hashchange would make the router re-run the deep link and redraw.
+  function syncPathsAllParam(on) {
+    var next = withPathsAllParam(location.hash, on);
+    if (next === location.hash) return;
+    try { history.replaceState(null, '', next); } catch (e) { console.warn('[route-view]', e); }
+  }
 
   // Polish review (carmack #1423): bound _detailCache (was unbounded plain
   // object; every distinct pubkey ever clicked was retained for the tab's
@@ -1018,6 +1028,7 @@
         pathRows.forEach(function (r) { r.classList.remove('mc-rt-path-active'); });
         row.classList.add('mc-rt-path-active');
         isolatePath(row.dataset.pathKey);
+        syncPathsAllParam(false);
       });
       row.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); }
@@ -1030,6 +1041,7 @@
         e.preventDefault();
         pathRows.forEach(function (r) { r.classList.remove('mc-rt-path-active'); });
         restoreAllPaths();
+        syncPathsAllParam(true);
       });
     }
     // On-map "N hops shown" badge: the sidebar chip says the same, but someone
@@ -1058,6 +1070,7 @@
         mapBadge.addEventListener('click', function () {
           pathRows.forEach(function (r) { r.classList.remove('mc-rt-path-active'); });
           restoreAllPaths();
+          syncPathsAllParam(true);
           mapBadge.remove();
         });
         mapContainerEl.appendChild(mapBadge);

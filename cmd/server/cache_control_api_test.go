@@ -66,7 +66,7 @@ func TestStaticAssetsDoNotEmitBareNoStore(t *testing.T) {
 	_, router := setupTestServer(t)
 	// Wire the SPA handler exactly the way main.go does for non-/api paths.
 	fs := http.FileServer(http.Dir(dir))
-	router.PathPrefix("/").Handler(spaHandler(dir, fs))
+	router.PathPrefix("/").Handler(spaHandler(dir, fs, ""))
 
 	cases := []struct {
 		path        string
