@@ -362,7 +362,176 @@ See `config.example.json` in the repository for all available options including:
 
 ### Map Tile Providers
 
-Map tile providers are enabled and configured via the `config.json` file. You can provide your custom API credentials (e.g. `osm_url`, `stamen_api_key`, `mapbox_api_key`) to activate external tile services. Once configured on the server, users can select their preferred tile provider from the Customizer UI on the client, and their choice will be persisted automatically.
+Map tiles are configured under `map.tiles` in `config.json`. Several providers are built in; you switch whole provider groups on or off, set the key for Carto, and can add your own tile servers. Everything under `map.tiles` is sent to every visitor (see [Public config and privacy](#public-config-and-privacy)).
+
+#### How the picker works for visitors
+
+The Map, Live and Repeater Planner pages show the layer picker. Every other map (node detail, node reach, RX coverage, the Analytics route map and the home mini-map) has no picker but follows the same choice; because those maps never load MapLibre, a vector choice shows the theme's default raster map there. **Auto** is the default: it picks the light or dark map to match the current theme, using `lightDefault` / `darkDefault`. A visitor can instead pin a specific map. Pinned maps are listed in **Street**, **Topographic** and **Satellite** groups (gray styles follow the plain ones inside each group), and a separate **Overlays** group has checkboxes for layers drawn on top of the map (place labels, hillshade). A pin is saved per browser in `localStorage` (`mc-tile-pinned`) and survives a reload: every picker opens on it until the visitor picks **Auto** again, and the maps without a picker show it whenever it suits the current theme (satellite always does), otherwise the theme's map. Ticked overlays are saved the same way. Nothing is stored on the server.
+
+#### Built-in providers
+
+The group is the key under `map.tiles.providers`. "Default" is the state when the group is absent from your config.
+
+| Group | Maps (ids) | Category | Theme | Key | Default | Terms |
+|---|---|---|---|---|---|---|
+| `carto` | `carto-light`, `carto-dark`, `carto-voyager`, `carto-voyager-dark`, `positron-dark` | street | light / dark | Yes, free (see [below](#carto-now-requires-an-api-key)) | On | Free key, 5M tiles/month |
+| `osm` | `osm-standard`, `osm-dark` | street | light / dark | Optional (`provider` + `token`: `thunderforest`, `maptiler` or `mapbox`) | Off | Without a token this is the OSM community server: fair use only |
+| `opentopomap` | `opentopomap` | topographic | light | No | Off | Fair use, zoom up to 17 |
+| `stamen` | `stamen-toner-lite`, `stamen-toner-dark` | street | light / dark | Yes (`token`, Stadia Maps); not offered without one | Off | Stadia Maps terms |
+| `usgs` | `usgs-topo`, `usgs-imagery` | topographic, satellite | light | No | Off | US coverage, zoom up to 16 |
+| `esri` | `esri-darkgray-labels` | street | dark | No | Always on | Esri terms |
+| `eox` | `eox-s2-2025`, `eox-s2-2016` (Sentinel-2 satellite), `eox-terrain-light`; overlays `eox-labels`, `eox-labels-dark` | satellite, topographic | any (satellite), light (terrain) | No | Off | 2016 imagery CC BY 4.0; 2025 imagery CC BY-NC-SA 4.0 (non-commercial) |
+| `osmfr` | `osmfr-hot` (Humanitarian), `osmfr-cyclosm` (CyclOSM), `osmfr-gray` (OSM Gray), `osmfr-gray-dark` (OSM Gray Dark) | street, topographic | light / dark | No | Off | OSM France community servers, donation-funded fair use |
+| `openfreemap` | `openfreemap-liberty`, `-bright`, `-positron` (light); `openfreemap-dark`, `-fiord` (dark) | street (vector) | light / dark | No | Off | Free, no limits |
+| `versatiles` | `versatiles-colorful`, `-muted`, `-gray` (light); `versatiles-colorful-dark`, `-gray-dark` (dark) | street (vector) | light / dark | No | Off | Free |
+| `hillshade` | overlay `hillshade` | overlay | any | No | Off | Elevation tiles from AWS Open Data by default |
+
+**EOX licensing.** The 2016 Sentinel-2 imagery is CC BY 4.0. The later years (including 2025) are CC BY-NC-SA 4.0, which excludes commercial use. The group is off by default; a commercial deployment should leave it off or license the imagery from EOX. The EOX group also carries Terrain Light and the place-label overlays, so leaving it off leaves those out too.
+
+**Be a good neighbour.** OSM France, OpenTopoMap and the OSM community server are volunteer-run. Keep your instance's traffic modest, or self-host (see [Self-hosting](#self-hosting-tiles)).
+
+#### Turning groups on and off
+
+Set `enabled` on a group:
+
+```json
+"map": {
+  "tiles": {
+    "providers": {
+      "osm":         { "enabled": true },
+      "openfreemap": { "enabled": true },
+      "hillshade":   { "enabled": true }
+    }
+  }
+}
+```
+
+- `eox`, `osmfr`, `openfreemap`, `versatiles`, `hillshade`, `osm`, `opentopomap`, `stamen` and `usgs` are off until you set `"enabled": true` (the boolean; a string does not count). `stamen` additionally needs a `token`. Upgrading therefore changes nothing in the picker until you turn a group on: check the group's terms in the table above first.
+- `carto` is on unless `"enabled": false`; `esri` is always available.
+- Disabling a group removes its maps from the picker. If a visitor had saved one, or `darkDefault` / `lightDefault` names one, it falls back to the default.
+
+`darkDefault` and `lightDefault` pick which map **Auto** uses in the dark and light theme. They take any registered map id from the table above or a custom entry as `custom-<id>`. Defaults are `carto-dark` and `carto-light`; an unknown or disabled id is ignored.
+
+#### Your own tile servers: `map.tiles.custom`
+
+`map.tiles.custom` is a list of up to 20 entries. Each appears in the picker as `custom-<id>`. Custom entries are always enabled when valid.
+
+| Field | Required | Values | Default |
+|---|---|---|---|
+| `id` | Yes | 1-32 characters of `a-z`, `0-9`, `-`, starting with a letter or digit. Unique across all custom entries | |
+| `url` | Yes | See URL rules below. Raster: an XYZ template containing `{z}`, `{x}` and `{y}` (or `{-y}`). Vector: a MapLibre style JSON URL | |
+| `label` | No | Text, at most 64 characters | the `id` |
+| `type` | No | `light`, `dark` or `any`. `any` is listed under both themes and is never color-inverted (use for satellite) | `light` |
+| `category` | No | `street`, `topo` or `satellite` | `street` |
+| `format` | No | `raster` or `vector` | `raster` |
+| `attribution` | No | Plain text, at most 200 characters (HTML is escaped, not rendered) | empty |
+| `maxZoom` | No | Number, clamped to 0-24 | 19 |
+| `maxNativeZoom` | No | Number, clamped to 0-24. Highest zoom the server really has; the browser stretches tiles above it up to `maxZoom` | unset |
+| `subdomains` | No | 1-8 characters of `a-z`, `0-9`, used for `{s}` | `abc` |
+| `overlay` | No | `true` adds a raster layer drawn over the base map (checkbox under **Overlays**) instead of a base map. Must be `format: "raster"` | `false` |
+
+**URL rules.** `url` is at most 2048 characters and must be one of:
+
+- `https://host/...` or `http://host/...` (an `http://` tile URL is blocked by browsers on an `https` page, and vector maps refuse it outright);
+- a same-site path starting with a single `/`, for example `/tiles/{z}/{x}/{y}.png`.
+
+Rejected: any other scheme (`javascript:`, `data:`, `file:`, `ftp:`), protocol-relative `//host/...`, `/\host`, credentials in the URL (`user:pass@host`), backslashes, whitespace or control characters, and any `{...}` other than `{z}` `{x}` `{y}` `{s}` `{r}` `{-y}`.
+
+**What happens to a bad entry.** An invalid entry is skipped; the rest still load. For each skipped entry the browser console shows one warning such as `[tiles] custom tile "ours" skipped: url must be an https://, http:// or '/' URL ...` that names the entry's `id` and the reason (it never prints the URL, which may carry a key). If the `id` itself is invalid the warning names the list position instead, for example `map.tiles.custom[2] skipped: id must be ...`. Entries beyond the 20th are ignored with a warning, a duplicate `id` is skipped, and a vector entry with `overlay: true` is skipped. Open the browser console on the map page to check your config.
+
+**Example 1: self-hosted raster XYZ server**
+
+```json
+"custom": [
+  {
+    "id": "ours",
+    "label": "Our tile server",
+    "type": "light",
+    "category": "street",
+    "format": "raster",
+    "url": "https://tiles.example.org/{z}/{x}/{y}.png",
+    "attribution": "(c) OpenStreetMap contributors",
+    "maxZoom": 19
+  }
+]
+```
+
+**Example 2: self-hosted vector style**
+
+The `url` is a MapLibre style JSON. It can come from a self-hosted OpenFreeMap, or from tileserver-gl, Martin or Protomaps serving a `style.json`. The tile and glyph URLs inside the style must also be `https://` (or `http://` only if the page itself is `http://`).
+
+```json
+"custom": [
+  {
+    "id": "ours-vector",
+    "label": "Our vector map",
+    "type": "light",
+    "category": "street",
+    "format": "vector",
+    "url": "https://maps.example.org/styles/liberty",
+    "attribution": "OpenMapTiles, OpenStreetMap contributors"
+  },
+  {
+    "id": "ours-vector-dark",
+    "label": "Our vector map (dark)",
+    "type": "dark",
+    "format": "vector",
+    "url": "https://maps.example.org/styles/dark",
+    "attribution": "OpenMapTiles, OpenStreetMap contributors"
+  }
+]
+```
+
+**Example 3: a raster overlay (contour lines)**
+
+Use transparent PNG tiles. The overlay is off until a visitor ticks it under **Overlays**.
+
+```json
+"custom": [
+  {
+    "id": "contours",
+    "label": "Contour lines",
+    "overlay": true,
+    "format": "raster",
+    "url": "https://tiles.example.org/contours/{z}/{x}/{y}.png",
+    "attribution": "Contours (c) Example Org",
+    "maxZoom": 19,
+    "maxNativeZoom": 16
+  }
+]
+```
+
+To make a custom map the default, name it in `darkDefault` / `lightDefault`, for example `"lightDefault": "custom-ours"`.
+
+#### Vector maps
+
+OpenFreeMap, VersaTiles and custom `vector` entries are drawn with MapLibre GL, which is vendored in `public/vendor/` (no third-party script host). It is about 380 KB gzipped and is downloaded only the first time a vector map is shown; visitors who stay on raster maps never fetch it. The scripts are loaded with Subresource Integrity, so a proxy or CDN that rewrites JavaScript (minifying, injecting) makes them fail the check: vector maps then fall back to the raster map with only a console warning. Serve `public/vendor/` unmodified. If WebGL is unavailable, the library fails to load within 15 seconds, or the GL context is lost, the map falls back to the shipped default raster map for the current theme (Carto Positron or Carto Dark).
+
+#### Hillshade overlay
+
+The `hillshade` overlay shades terrain in the visitor's browser from Terrarium-encoded elevation tiles (`elevation m = R*256 + G + B/256 - 32768`, 256x256 or 512x512 PNG). By default it reads AWS Open Data, the same bucket the repeater planner uses for `terrain.tileUrl`. To read from your own mirror, set a template URL (same URL rules as `custom`, and it must contain `{z}`, `{x}`, `{y}`; otherwise the default is used and a console warning is logged):
+
+```json
+"hillshade": { "enabled": true, "url": "https://tiles.example.org/terrarium/{z}/{x}/{y}.png" }
+```
+
+The tile host must allow cross-origin image reads (`Access-Control-Allow-Origin`); without it the browser cannot read pixels and the overlay stays blank. It is off for visitors until they tick it.
+
+#### Self-hosting tiles
+
+Self-hosting removes the third-party dependency and keeps visitors' requests on your infrastructure. Follow the upstream documentation rather than any steps here:
+
+- **OpenFreeMap**: run your own copy of the planet tiles and styles; see <https://github.com/hyperknot/openfreemap> (self-hosting guide). Point a `vector` custom entry at your `styles/<name>` URL.
+- **Protomaps (PMTiles)**: a single-file tile archive served from static storage or a small server; see <https://docs.protomaps.com>. Use its style JSON as a `vector` custom entry.
+- **Any XYZ raster server** (tileserver-gl, Martin, a static tile tree on object storage): use a `raster` custom entry.
+- **Elevation for hillshade**: mirror the Terrarium tiles (`s3://elevation-tiles-prod/terrarium`, public, no credentials needed) and set `hillshade.url`. The bucket is large; mirror only your region's zoom levels (hillshade uses up to zoom 15).
+- **Elevation for the planner**: mirror the SRTM `skadi` tree (`s3://elevation-tiles-prod/skadi`) and set `terrain.tileUrl` to its `https` base URL (no query string). That setting is server-side and separate from `map.tiles`; see [docs/api-spec.md](api-spec.md).
+
+#### Public config and privacy
+
+- **Everything under `map.tiles` is public.** The server sends it to every visitor, including anonymous ones. Never put credentials in a URL, and restrict any provider key by domain in that provider's dashboard. This applies to the Carto key, the `osm` and `stamen` tokens, and custom URLs alike.
+- **Visitors' browsers fetch tiles directly** from the chosen host, not through CoreScope. That host sees the visitor's IP address and the map area being viewed. Browsers send only your site's origin as the Referer, not the full page path. If this matters for your users, pick a provider you trust or self-host.
+- **A `/path` URL resolves against the page's origin.** On a static/CDN UI deployment (see [Static host or CDN](#static-host-or-cdn)) that is the UI host, not the API server.
 
 #### CARTO now requires an API key
 
