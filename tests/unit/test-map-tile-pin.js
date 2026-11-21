@@ -12,6 +12,9 @@
  *   - MC_resolveTile (maps without a picker) follows a pin that suits the
  *     theme ('any' suits both) and ignores one that does not or whose group
  *     is off; MC_applyTileFilter uses the same rule
+ *   - a pick saved in another tab ('storage' event on mc-tile-pinned, or
+ *     storage cleared): one crossTab re-sync event, the same validation,
+ *     no write-back, and a newer pick there replaces an unsaved one here
  *
  * Runs via: node tests/unit/test-map-tile-pin.js
  */
@@ -310,6 +313,112 @@ test('a failed write (quota full) never brings back the older stored pin', () =>
   assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'eox-s2-2025', 'the new pick, not the stored older one');
   s.w.MC_setPinnedTileProvider(null);
   assert.strictEqual(s.w.MC_getPinnedTileProvider(), null, 'Auto, not the stored older one');
+});
+
+console.log('── #2444 a pick saved in another tab (storage event) ──');
+
+// What the browser does in this tab when another tab writes mc-tile-pinned:
+// storage already holds the new value, then a 'storage' event arrives.
+function otherTab(s, key, value) {
+  if (key === null) { for (const k of Object.keys(s.storage.store)) delete s.storage.store[k]; }
+  else if (value === null) delete s.storage.store[key];
+  else s.storage.store[key] = value;
+  const before = s.events.length;
+  s.w.dispatchEvent({ type: 'storage', key, newValue: key === null ? null : value, oldValue: null });
+  return s.events.slice(before).filter(e => e.type === 'mc-tile-provider-changed');
+}
+// Counts localStorage writes made while fn runs.
+function writesDuring(s, fn) {
+  let n = 0;
+  const set = s.storage.setItem, rm = s.storage.removeItem;
+  s.storage.setItem = (k, v) => { n++; return set(k, v); };
+  s.storage.removeItem = (k) => { n++; return rm(k); };
+  try { fn(); } finally { s.storage.setItem = set; s.storage.removeItem = rm; }
+  return n;
+}
+
+test('cross-tab pin: a pick re-syncs the maps here (one event, crossTab) and is followed', () => {
+  const s = makeSandbox();
+  const ev = otherTab(s, 'mc-tile-pinned', 'osmfr-hot');
+  assert.strictEqual(ev.length, 1, 'one mc-tile-provider-changed');
+  assert.strictEqual(ev[0].detail.crossTab, true);
+  assert.strictEqual(ev[0].detail.pinned, 'osmfr-hot');
+  assert.strictEqual(s.w.MC_resolveTile(false).id, 'osmfr-hot');
+});
+
+test('cross-tab pin: Auto there (key removed, or empty) clears it here', () => {
+  const s = makeSandbox();
+  s.w.MC_setPinnedTileProvider('osmfr-hot');
+  for (const v of [null, '']) {
+    s.storage.store['mc-tile-pinned'] = 'osmfr-hot';
+    const ev = otherTab(s, 'mc-tile-pinned', v);
+    assert.strictEqual(ev.length, 1, JSON.stringify(v));
+    assert.strictEqual(ev[0].detail.pinned, null);
+    assert.strictEqual(s.w.MC_getPinnedTileProvider(), null);
+    assert.strictEqual(s.w.MC_resolveTile(false).id, 'carto-light');
+  }
+});
+
+test('cross-tab pin: an unregistered or disabled id reads as no pin, as getPinnedId has it', () => {
+  const s = makeSandbox();
+  s.w.MC_setPinnedTileProvider('osmfr-hot');
+  for (const v of ['nope', '__proto__', '<img src=x onerror=1>']) {
+    const ev = otherTab(s, 'mc-tile-pinned', v);
+    assert.strictEqual(ev.length, 1, v);
+    assert.strictEqual(ev[0].detail.pinned, null, v);
+    assert.strictEqual(s.w.MC_resolveTile(false).id, 'carto-light', v);
+  }
+  s.load({ tiles: { providers: {} } }); // osmfr off here
+  otherTab(s, 'mc-tile-pinned', 'osmfr-hot');
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), null, 'group off');
+  s.load({ tiles: { providers: ALL_ON() } });
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'osmfr-hot', 'and back with the group');
+});
+
+test('cross-tab pin: storage cleared there (key null) is Auto here', () => {
+  const s = makeSandbox();
+  s.w.MC_setPinnedTileProvider('eox-s2-2025');
+  const ev = otherTab(s, null, null);
+  assert.strictEqual(ev.length, 1);
+  assert.strictEqual(ev[0].detail.pinned, null);
+  assert.strictEqual(s.w.MC_resolveTile(true).id, 'carto-dark');
+});
+
+test('cross-tab pin: other keys are ignored', () => {
+  const s = makeSandbox();
+  for (const k of ['mc-tile-overlays', 'meshcore-theme', 'mc-tile-pinned-x']) {
+    assert.strictEqual(otherTab(s, k, 'osmfr-hot').length, 0, k);
+  }
+});
+
+test('cross-tab pin: handling it never writes to localStorage (no echo between tabs)', () => {
+  const s = makeSandbox();
+  const n = writesDuring(s, () => {
+    otherTab(s, 'mc-tile-pinned', 'osmfr-hot');
+    otherTab(s, 'mc-tile-pinned', null);
+    otherTab(s, 'mc-tile-pinned', 'nope');
+    otherTab(s, null, null);
+  });
+  assert.strictEqual(n, 0, n + ' writes');
+});
+
+test('cross-tab pin: a newer pick from another tab replaces a pick this tab failed to save', () => {
+  const s = makeSandbox();
+  s.storage.store['mc-tile-pinned'] = 'osmfr-hot';
+  const set = s.storage.setItem, rm = s.storage.removeItem;
+  s.storage.setItem = () => { throw new Error('QuotaExceededError'); };
+  s.storage.removeItem = () => { throw new Error('QuotaExceededError'); };
+  s.w.MC_setPinnedTileProvider('eox-s2-2025');
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'eox-s2-2025', 'unsaved pick kept');
+  s.storage.setItem = set; s.storage.removeItem = rm;
+  otherTab(s, 'mc-tile-pinned', 'osmfr-cyclosm');
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'osmfr-cyclosm', 'the other tab is newer');
+  otherTab(s, 'mc-tile-pinned', null);
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), null, 'and its Auto');
+  // Reads blocked here: the event's value is the only copy.
+  const b = makeSandbox(undefined, { throwGet: true, throwSet: true });
+  b.w.dispatchEvent({ type: 'storage', key: 'mc-tile-pinned', newValue: 'osmfr-hot', oldValue: null });
+  assert.strictEqual(b.w.MC_getPinnedTileProvider(), 'osmfr-hot', 'followed with reads blocked');
 });
 
 console.log('map tile pin: ' + passed + ' passed, ' + failed + ' failed');

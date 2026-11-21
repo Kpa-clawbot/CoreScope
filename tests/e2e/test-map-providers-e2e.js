@@ -41,18 +41,26 @@ const OPT_IN_IDS = ['eox-s2-2025', 'eox-s2-2016', 'eox-terrain-light', 'osmfr-ho
   'openfreemap-liberty', 'openfreemap-bright', 'openfreemap-positron', 'openfreemap-dark', 'openfreemap-fiord',
   'versatiles-colorful', 'versatiles-muted', 'versatiles-gray', 'versatiles-colorful-dark', 'versatiles-gray-dark'];
 
-async function newPage(browser, { theme, provider, overlays, custom, planner, providers } = {}) {
+async function newPage(browser, opts = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+  return newTab(context, opts, true);
+}
+
+// Another page (tab) in `context`, set up like the first one. The tile stub
+// is per context: only the first page installs it.
+async function newTab(context, { theme, provider, overlays, custom, planner, providers } = {}, first) {
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
   const errors = [], warnings = [];
   page.on('pageerror', e => errors.push(String(e && e.message || e)));
   page.on('console', m => { if (m.type() === 'warning') warnings.push(m.text()); });
   await MH.installCollectors(page);
-  await MH.installTileStub(page, {
-    mode: 'stub', baseUrl: BASE,
-    extraHosts: [{ key: 'e2e-custom', kind: 'raster', test: new RegExp(CUSTOM_HOST.replace(/\./g, '\\.')) }],
-  });
+  if (first) {
+    await MH.installTileStub(page, {
+      mode: 'stub', baseUrl: BASE,
+      extraHosts: [{ key: 'e2e-custom', kind: 'raster', test: new RegExp(CUSTOM_HOST.replace(/\./g, '\\.')) }],
+    });
+  }
   await MH.presetStorage(page, { theme: theme || 'light', provider: provider || 'auto', overlays });
   // Rewrite map.tiles.custom / planner in the client config.
   await page.route('**/api/config/client', async (route) => {
@@ -458,6 +466,69 @@ async function run() {
           assert(c.errors.length === 0, 'page errors: ' + c.errors);
         });
       } finally { await c.context.close(); }
+    }
+
+    // ── 7e. A pick made in another tab reaches open maps ────────────────
+    // Three pages in one context (real 'storage' events): A picks on the map
+    // page; B shows a node detail map (no picker) and follows without a
+    // reload; C is another map page with a picker, which keeps its own
+    // layer and radio. Nothing is written back.
+    {
+      const a = await newPage(browser, { theme: 'light' });
+      try {
+        const b = await newTab(a.context, { theme: 'light' });
+        const c = await newTab(a.context, { theme: 'light' });
+        await gotoMap(a.page);
+        await gotoMap(c.page);
+        const pk = await a.page.evaluate(async () => {
+          const r = await fetch('/api/nodes?limit=200'); const j = await r.json();
+          const n = (j.nodes || []).find(x => x.lat && x.lon);
+          return n ? n.public_key : null;
+        });
+        assert(pk, 'the fixture has no node with a location');
+        await b.page.goto(`${BASE}/#/nodes/${pk}`, { waitUntil: 'domcontentloaded' });
+        await b.page.waitForSelector('#nodeFullMap .leaflet-tile-loaded', { timeout: 15000 });
+        // The client config, and the node page once its data lands, re-apply
+        // the tiles (and so pick up a stored pin by themselves): let every
+        // tab settle first.
+        for (const t of [a, b, c]) await t.page.waitForFunction(() => window.MC_MAP_CFG, null, { timeout: 15000 });
+        await b.page.waitForLoadState('networkidle');
+        const countWrites = (p) => p.evaluate(() => {
+          window.__pinWrites = 0;
+          const set = Storage.prototype.setItem, rm = Storage.prototype.removeItem;
+          Storage.prototype.setItem = function (k, v) { if (k === 'mc-tile-pinned') window.__pinWrites++; return set.call(this, k, v); };
+          Storage.prototype.removeItem = function (k) { if (k === 'mc-tile-pinned') window.__pinWrites++; return rm.call(this, k); };
+        });
+        await countWrites(b.page);
+        await countWrites(c.page);
+        const noOsmfr = (p, scope) => p.locator(`${scope || ''} .leaflet-tile-pane img[src*="openstreetmap.fr"]`).count();
+        await test('7e a pick in tab A redraws a picker-less map in tab B without a reload', async () => {
+          await pick(a.page, 'osmfr-hot');
+          await drawn(a.page, 'openstreetmap\\.fr/hot');
+          await drawn(b.page, 'openstreetmap\\.fr/hot', '#nodeFullMap');
+        });
+        await test('7e Auto in tab A returns tab B to the theme map', async () => {
+          await pick(a.page, '__auto__');
+          await drawn(a.page, 'cartocdn');
+          await b.page.waitForFunction(() => {
+            const imgs = Array.from(document.querySelectorAll('#nodeFullMap .leaflet-tile-pane img.leaflet-tile'));
+            return imgs.length > 0 && imgs.every(i => !/openstreetmap\.fr/.test(i.src)) && imgs.some(i => i.classList.contains('leaflet-tile-loaded') && /cartocdn/.test(i.src));
+          }, null, { timeout: 15000 });
+        });
+        await test('7e a map page with a picker in tab C keeps its layer and radio; no tab writes the pick back', async () => {
+          await pick(a.page, 'osmfr-hot');
+          await drawn(b.page, 'openstreetmap\\.fr/hot', '#nodeFullMap'); // the event has been handled
+          await c.page.evaluate(() => new Promise(r => setTimeout(r, 0)));
+          assert(await radioOn(c.page, '__auto__'), 'tab C: Auto no longer selected');
+          assert(!(await radioOn(c.page, 'osmfr-hot')), 'tab C: osmfr-hot selected');
+          assert(await noOsmfr(c.page) === 0, 'tab C draws the other tab\'s pick');
+          assert((await tileKeys(c.page)).some(u => /cartocdn/.test(u)), 'tab C lost its Auto tiles');
+          const w = [await b.page.evaluate(() => window.__pinWrites), await c.page.evaluate(() => window.__pinWrites)];
+          assert(w[0] === 0 && w[1] === 0, 'pin writes in tabs B, C: ' + w);
+          assert(await pinned(c.page) === 'osmfr-hot', 'stored pin: ' + await pinned(c.page));
+          for (const t of [a, b, c]) assert(t.errors.length === 0, 'page errors: ' + t.errors);
+        });
+      } finally { await a.context.close(); }
     }
 
     // ── 7c. Untouched config: the opt-in groups are not offered ─────────

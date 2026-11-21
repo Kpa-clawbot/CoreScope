@@ -1726,9 +1726,24 @@
   // ── Cross-tab sync ──────────────────────────────────────────────────────
   // If another tab in the same browser changes the provider, mirror the
   // dispatch + filter-apply here so live map.js / live.js swap tiles too.
+  // A pick saved there (mc-tile-pinned), or storage cleared there (key
+  // null), re-syncs the maps here the same way: a map without a picker
+  // follows the pin (when it fits the theme); a map with a picker keeps its
+  // layer and radio, its Auto ignoring the pin, until its next load (#2444).
+  // Nothing is written back, so tabs never echo each other's picks.
   try {
     window.addEventListener('storage', function (e) {
-      if (!e || (e.key !== STORAGE_KEY && e.key !== STORAGE_KEY_LIGHT)) return;
+      if (!e) return;
+      if (e.key === PIN_KEY || e.key === null) {
+        // Storage now holds the newest pick, which supersedes this tab's
+        // copy of a write that failed. getPinnedId validates it as usual.
+        _pinMemo = (e.key === PIN_KEY && e.newValue) ? e.newValue : null;
+        _pinUnsaved = false;
+        _dispatch(EVENT_NAME, { pinned: getPinnedId(), crossTab: true });
+        applyTileFilter();
+        return;
+      }
+      if (e.key !== STORAGE_KEY && e.key !== STORAGE_KEY_LIGHT) return;
       if (!_hasId(e.newValue)) return;
       var detail = { id: e.newValue, provider: REGISTRY[e.newValue], crossTab: true };
       try {

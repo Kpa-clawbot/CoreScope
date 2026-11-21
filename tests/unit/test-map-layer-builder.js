@@ -7,7 +7,9 @@
  *   - MC_buildTileLayer: raster options, refUrl grouping, vector fallback
  *   - layer-control labels are plain text (S2)
  *   - MC_attachAutoTiles: build, in-place update, rebuild, theme flip, no-op,
- *     destroy, several maps on one page
+ *     destroy, several maps on one page; no Auto tiles on a picker map that
+ *     loads with a saved pick; another tab's pick (maps with / without a
+ *     picker)
  *
  * Runs via: node tests/unit/test-map-layer-builder.js
  */
@@ -732,6 +734,61 @@ test('loads without a pin, and maps without a picker, build and show Auto at onc
   assert.strictEqual(count(plain.requested, OSMFR), 1, 'no picker: follows the pin');
   assert.strictEqual(count(plain.requested, CARTO), 0);
   hp.destroy(); hn.destroy();
+});
+
+// Another tab saves a pick: storage already holds it, then 'storage' arrives.
+function pinFromOtherTab(s, value) {
+  if (value === null) s.ctx.localStorage.removeItem('mc-tile-pinned');
+  else s.ctx.localStorage.setItem('mc-tile-pinned', value);
+  s.w.dispatchEvent({ type: 'storage', key: 'mc-tile-pinned', newValue: value, oldValue: null });
+}
+const urlsOf = (g) => g._layers.map(l => tilesOf(l)[0]._url).join(' ');
+
+test('cross-tab pin: a map without a picker follows it and returns to the theme map on Auto', () => {
+  const s = makeSandbox({ theme: 'light', mapCfg: { tiles: { providers: { osmfr: { enabled: true } } } } });
+  const plain = makeMap();
+  const h = s.w.MC_attachAutoTiles(plain, {});
+  assert.ok(CARTO.test(urlsOf(h.group)));
+  pinFromOtherTab(s, 'osmfr-hot');
+  assert.ok(OSMFR.test(urlsOf(h.group)), 'follows the pin: ' + urlsOf(h.group));
+  pinFromOtherTab(s, null);
+  assert.ok(/light_all/.test(urlsOf(h.group)), 'Auto: the theme map again: ' + urlsOf(h.group));
+  pinFromOtherTab(s, 'carto-dark'); // a dark pin in light: not followed
+  assert.ok(/light_all/.test(urlsOf(h.group)), 'non-fitting pin ignored');
+  h.destroy();
+});
+
+test('cross-tab pin: a picker map keeps its layer, radio and hidden Auto group; nothing is written', () => {
+  const s = makeSandbox({ theme: 'light', mapCfg: { tiles: { providers: { osmfr: { enabled: true } } } } });
+  const auto = makeMap();
+  const ha = s.w.MC_attachAutoTiles(auto, { controlPosition: 'topleft' });
+  const explicit = makeMap();
+  const he = s.w.MC_attachAutoTiles(explicit, { controlPosition: 'topleft' });
+  const ce = s.stats.controls[s.stats.controls.length - 1];
+  explicit.addLayer(ce.baseMaps['carto-voyager']);
+  ce.baseMaps['carto-voyager']._events.add();
+  explicit._handlers.baselayerchange({ name: 'carto-voyager', layer: ce.baseMaps['carto-voyager'] });
+  explicit.removeLayer(he.group);
+  const controls = s.stats.controls.length;
+  const before = [auto._layers.slice(), explicit._layers.slice(), ha.group._layers[0], he.group._layers[0]];
+  let writes = 0;
+  const ls = s.ctx.localStorage, set = ls.setItem, rm = ls.removeItem;
+  for (const v of ['osmfr-hot', 'eox-s2-2025', null, 'osmfr-cyclosm']) {
+    if (v === null) rm.call(ls, 'mc-tile-pinned'); else set.call(ls, 'mc-tile-pinned', v);
+    ls.setItem = (k, x) => { writes++; return set.call(ls, k, x); };
+    ls.removeItem = (k) => { writes++; return rm.call(ls, k); };
+    s.w.dispatchEvent({ type: 'storage', key: 'mc-tile-pinned', newValue: v, oldValue: null });
+    ls.setItem = set; ls.removeItem = rm;
+  }
+  assert.strictEqual(writes, 0, 'no write-back');
+  assert.strictEqual(s.stats.controls.length, controls, 'no picker rebuilt');
+  assert.deepStrictEqual(auto._layers, before[0], 'Auto map: same layers');
+  assert.deepStrictEqual(explicit._layers, before[1], 'explicit map: same layers');
+  assert.ok(explicit.hasLayer(ce.baseMaps['carto-voyager']) && !explicit._layers.includes(he.group), 'explicit pick stays');
+  assert.strictEqual(ha.group._layers[0], before[2]);
+  assert.ok(/light_all/.test(urlsOf(ha.group)) && /light_all/.test(urlsOf(he.group)), 'Auto groups stay the theme map');
+  assert.strictEqual(explicit.tilePane.getAttribute('data-explicit-layer'), 'true');
+  ha.destroy(); he.destroy();
 });
 
 // Static/secondary maps pass { raster: true }: a vector desc builds its

@@ -17,7 +17,7 @@ The layers button on the map (top-left) chooses what the map underneath the node
   - **Hillshade**: shaded relief, so hills and valleys stand out. Useful with any map when you are judging radio line of sight.
   - **Place labels**: town and road names, mainly for satellite imagery, which has none.
 
-Your choice is saved in your browser: the picker opens on it after a reload and on the Live and Repeater Planner pages too. The small maps on node pages, Analytics and Home show it whenever it suits the current theme (a satellite map always does; a light map is not used in dark mode), and otherwise the theme's map. It is not shared with other visitors and not stored on the server. Pick **Auto** to go back to following the theme.
+Your choice is saved in your browser: the picker opens on it after a reload and on the Live and Repeater Planner pages too. The small maps on node pages, Analytics and Home show it whenever it suits the current theme (a satellite map always does; a light map is not used in dark mode), and otherwise the theme's map. A choice made in another tab reaches those small maps at once; a page with a picker keeps what you picked there until you reload it. It is not shared with other visitors and not stored on the server. Pick **Auto** to go back to following the theme.
 
 Which maps the picker lists is up to the site's operator: the newer providers are offered only once the operator turns them on.
 
