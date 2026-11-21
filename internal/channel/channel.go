@@ -27,14 +27,17 @@ func ChannelHash(key []byte) byte {
 }
 
 // Decrypt verifies the 2-byte HMAC-SHA256 MAC and performs AES-128-ECB decryption.
-// mac must be exactly 2 bytes. ciphertext must be a multiple of 16 bytes.
+// key is a 16-byte key or a 32-byte channel secret. mac must be exactly 2
+// bytes. ciphertext must be a multiple of 16 bytes.
 // Returns the plaintext and true if MAC verification succeeded, or nil and false otherwise.
 func Decrypt(key []byte, mac []byte, ciphertext []byte) ([]byte, bool) {
-	if len(key) != 16 || len(mac) != 2 || len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
+	if (len(key) != 16 && len(key) != 32) || len(mac) != 2 || len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
 		return nil, false
 	}
 
-	// 32-byte channel secret: 16-byte key + 16 zero bytes
+	// The MAC is keyed with the 32-byte channel secret (a 16-byte key
+	// zero-padded); AES-128 uses its first 16 bytes (firmware
+	// Utils::MACThenDecrypt).
 	channelSecret := make([]byte, 32)
 	copy(channelSecret, key)
 
@@ -47,7 +50,7 @@ func Decrypt(key []byte, mac []byte, ciphertext []byte) ([]byte, bool) {
 	}
 
 	// AES-128-ECB decrypt
-	block, err := aes.NewCipher(key)
+	block, err := aes.NewCipher(key[:16])
 	if err != nil {
 		return nil, false
 	}

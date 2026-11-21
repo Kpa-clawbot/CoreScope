@@ -159,3 +159,30 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatalf("got ts=%d sender=%q msg=%q", ts, sender, msg)
 	}
 }
+
+// A 256-bit channel secret: the MAC is keyed with all 32 bytes, AES-128 uses
+// the first 16 (firmware Utils::MACThenDecrypt).
+func TestDecrypt256BitSecret(t *testing.T) {
+	secret := make([]byte, 32)
+	for i := range secret {
+		secret[i] = byte(i*7 + 1)
+	}
+	plain := make([]byte, 16)
+	copy(plain[5:], "A: hi")
+	block, _ := aes.NewCipher(secret[:16])
+	ct := make([]byte, 16)
+	block.Encrypt(ct, plain)
+	m := hmac.New(sha256.New, secret)
+	m.Write(ct)
+	mac := m.Sum(nil)[:2]
+	got, ok := Decrypt(secret, mac, ct)
+	if !ok || string(got[5:10]) != "A: hi" {
+		t.Fatalf("256-bit secret: ok=%v plaintext=%q", ok, got)
+	}
+	if _, ok := Decrypt(secret[:16], mac, ct); ok {
+		t.Fatal("the 16-byte prefix alone must not verify a MAC keyed with all 32 bytes")
+	}
+	if _, ok := Decrypt(secret[:24], mac, ct); ok {
+		t.Fatal("a 24-byte key is neither size the firmware accepts")
+	}
+}

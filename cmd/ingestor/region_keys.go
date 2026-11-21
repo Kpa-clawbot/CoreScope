@@ -6,6 +6,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -214,13 +215,18 @@ func splitDeclaredRegionsCSV(csv string) []string {
 // packet. `all` is the single map matching iterates - merging at build time
 // rather than per packet keeps the hot path free of allocation. `explicit`
 // carries membership only, and exists so the ambiguity tie-break can tell an
-// operator-configured region from one derived off the air.
+// operator-configured region from one derived off the air. `catalog` marks the
+// lowest tier, names promoted from a public catalogue (#2107): they never win
+// a tie-break against an explicit or a derived key.
 type regionKeySnapshot struct {
 	all      map[string][]byte
 	explicit map[string]bool
+	catalog  map[string]bool
 }
 
 func (s *regionKeySnapshot) isExplicit(name string) bool { return s.explicit[name] }
+
+func (s *regionKeySnapshot) isCatalog(name string) bool { return s.catalog[name] }
 
 // regionKeySet holds the live snapshot. Readers take one atomic load; a
 // refresh builds the replacement off to the side and swaps the pointer, so the
@@ -229,6 +235,12 @@ type regionKeySet struct {
 	cur     atomic.Pointer[regionKeySnapshot]
 	enabled bool
 	max     int
+
+	// mu serialises the two writers, refreshDerived (autoRegionKeys ticker)
+	// and setCatalog (catalogue worker), so neither drops the other's tier
+	// in a read-modify-swap race. Readers never take it.
+	mu         sync.Mutex
+	catalogSrc map[string][]byte // the promoted catalogue tier, kept across derived rebuilds
 }
 
 // newRegionKeySet builds the explicit tier from hashRegions. The derived tier
@@ -246,7 +258,7 @@ func newRegionKeySet(cfg *Config) *regionKeySet {
 		enabled: cfg.AutoRegionKeysEnabled(),
 		max:     cfg.AutoRegionKeysMaxDerived(),
 	}
-	s.cur.Store(&regionKeySnapshot{all: all, explicit: explicitNames})
+	s.cur.Store(&regionKeySnapshot{all: all, explicit: explicitNames, catalog: map[string]bool{}})
 	return s
 }
 
@@ -261,13 +273,13 @@ func regionKeySetFromKeys(keys map[string][]byte) *regionKeySet {
 		all[name] = key
 	}
 	s := &regionKeySet{}
-	s.cur.Store(&regionKeySnapshot{all: all, explicit: names})
+	s.cur.Store(&regionKeySnapshot{all: all, explicit: names, catalog: map[string]bool{}})
 	return s
 }
 
 // emptyRegionKeySnapshot backs the nil case below. Shared and never mutated:
 // refreshDerived always builds a fresh map rather than writing into one.
-var emptyRegionKeySnapshot = &regionKeySnapshot{all: map[string][]byte{}, explicit: map[string]bool{}}
+var emptyRegionKeySnapshot = &regionKeySnapshot{all: map[string][]byte{}, explicit: map[string]bool{}, catalog: map[string]bool{}}
 
 // snapshot is nil-safe on purpose. A nil *regionKeySet means "no region keys",
 // which is exactly what a nil map[string][]byte meant before M2 — the shape
@@ -296,6 +308,8 @@ func (s *regionKeySet) refreshDerived(names []string) []string {
 	if !s.enabled {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	old := s.cur.Load()
 	all := make(map[string][]byte, len(old.explicit)+len(names))
 	for name := range old.explicit {
@@ -318,8 +332,55 @@ func (s *regionKeySet) refreshDerived(names []string) []string {
 		all[name] = h[:16]
 		added = append(added, name)
 	}
-	s.cur.Store(&regionKeySnapshot{all: all, explicit: old.explicit})
+	s.cur.Store(&regionKeySnapshot{all: all, explicit: old.explicit, catalog: mergeCatalogRegions(all, s.catalogSrc)})
 	return added
+}
+
+// setCatalog replaces the catalogue tier with keys (name -> key) and swaps in
+// a new snapshot. A catalogue name that is already explicit or derived is
+// skipped: the higher tier keeps it. Returns the names newly in force.
+func (s *regionKeySet) setCatalog(keys map[string][]byte) []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.cur.Load()
+	all := make(map[string][]byte, len(old.all)+len(keys))
+	for name, key := range old.all {
+		if !old.catalog[name] {
+			all[name] = key
+		}
+	}
+	src := make(map[string][]byte, len(keys))
+	for name, key := range keys {
+		src[name] = key
+	}
+	s.catalogSrc = src
+	catalog := mergeCatalogRegions(all, src)
+	var added []string
+	for name := range catalog {
+		if !old.catalog[name] {
+			added = append(added, name)
+		}
+	}
+	sort.Strings(added)
+	s.cur.Store(&regionKeySnapshot{all: all, explicit: old.explicit, catalog: catalog})
+	return added
+}
+
+// mergeCatalogRegions adds each catalogue key to all unless the name is
+// already there, and returns the names it added.
+func mergeCatalogRegions(all map[string][]byte, src map[string][]byte) map[string]bool {
+	catalog := make(map[string]bool, len(src))
+	for name, key := range src {
+		if _, exists := all[name]; exists {
+			continue
+		}
+		all[name] = key
+		catalog[name] = true
+	}
+	return catalog
 }
 
 // scopeReason records how a scope match was decided, so the outcome is
@@ -331,6 +392,7 @@ const (
 	scopeReasonNone                scopeReason = "none"                  // no key matched
 	scopeReasonUnique              scopeReason = "unique"                // exactly one key matched
 	scopeReasonExplicitOverDerived scopeReason = "explicit-over-derived" // several matched, one was operator config
+	scopeReasonOverCatalog         scopeReason = "over-catalog"          // several matched, all but one from the catalogue tier
 	scopeReasonAmbiguous           scopeReason = "ambiguous"             // several matched, no principled winner
 )
 
@@ -355,6 +417,10 @@ type scopeMatch struct {
 //  2. Several matched but exactly one came from hashRegions - name that one.
 //     The operator's own configuration outranks a name picked up off the air,
 //     and this covers the bulk of the ambiguity auto-derivation introduces.
+//     2b. Several matched, none from hashRegions, and all but one came from the
+//     catalogue tier (#2107) - name the one that did not. A catalogue name
+//     never wins a tie-break against a key this instance configured or saw
+//     declared.
 //  3. Otherwise abstain, returning an empty name. Two equally-sourced
 //     candidates offer no principled winner, and naming a packet wrongly is
 //     worse than leaving it unnamed - the rule #1609 established, unchanged.
@@ -381,6 +447,17 @@ func (s *regionKeySnapshot) match(payloadType byte, payloadRaw []byte, code1 str
 	if len(explicitMatches) == 1 {
 		return scopeMatch{Name: explicitMatches[0], Reason: scopeReasonExplicitOverDerived, Candidates: matched}
 	}
+	if len(explicitMatches) == 0 && len(s.catalog) > 0 {
+		var other []string
+		for _, name := range matched {
+			if !s.catalog[name] {
+				other = append(other, name)
+			}
+		}
+		if len(other) == 1 {
+			return scopeMatch{Name: other[0], Reason: scopeReasonOverCatalog, Candidates: matched}
+		}
+	}
 	return scopeMatch{Reason: scopeReasonAmbiguous, Candidates: matched}
 }
 
@@ -401,8 +478,11 @@ func (s *regionKeySet) matchScopeName(payloadType byte, payloadRaw []byte, code1
 var scopeMatchCounters struct {
 	unique              atomic.Int64
 	explicitOverDerived atomic.Int64
-	ambiguous           atomic.Int64
-	none                atomic.Int64
+	// overCatalog is not persisted with the others (scope_match_tally.go):
+	// it only exists while the catalogue tier is on, and is logged with them.
+	overCatalog atomic.Int64
+	ambiguous   atomic.Int64
+	none        atomic.Int64
 	// sinceUnix is when this tally started counting, carried across
 	// restarts with the counters themselves (scope_match_tally.go). A
 	// ratio without its window is not a measurement.
@@ -421,6 +501,9 @@ func recordScopeMatch(m scopeMatch) {
 	case scopeReasonExplicitOverDerived:
 		scopeMatchCounters.explicitOverDerived.Add(1)
 		log.Printf("[regions] collision resolved to explicit %s over derived candidates %v", m.Name, m.Candidates)
+	case scopeReasonOverCatalog:
+		scopeMatchCounters.overCatalog.Add(1)
+		log.Printf("[regions] collision resolved to %s over catalogue candidates %v", m.Name, m.Candidates)
 	case scopeReasonAmbiguous:
 		scopeMatchCounters.ambiguous.Add(1)
 		log.Printf("[regions] ambiguous collision between %v; storing unmatched", m.Candidates)
@@ -431,9 +514,10 @@ func recordScopeMatch(m scopeMatch) {
 // ticker so the numbers arrive on the same cadence as the key-set changes that
 // move them.
 func logScopeMatchCounters() {
-	log.Printf("[regions] scope matches since %s: unique=%d explicit-over-derived=%d ambiguous=%d none=%d",
+	log.Printf("[regions] scope matches since %s: unique=%d explicit-over-derived=%d over-catalog=%d ambiguous=%d none=%d",
 		time.Unix(scopeMatchCounters.sinceUnix.Load(), 0).UTC().Format(time.RFC3339),
 		scopeMatchCounters.unique.Load(), scopeMatchCounters.explicitOverDerived.Load(),
+		scopeMatchCounters.overCatalog.Load(),
 		scopeMatchCounters.ambiguous.Load(), scopeMatchCounters.none.Load())
 }
 
