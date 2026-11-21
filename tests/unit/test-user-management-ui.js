@@ -571,6 +571,22 @@ test('my repeaters empty state explains how to claim', () => {
   }
 });
 
+test('app tokens with repeater scopes show their own name and what they may do', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const h = env.t.sessionsHtml([
+    { id: 4, kind: 'device', label: 'NodeScope – iPhone', scopes: ['repeater:claim', 'repeater:edit'], lastSeenAt: '2026-01-01T00:00:00Z', current: false },
+    { id: 5, kind: 'device', label: '', scopes: ['repeater:edit'], lastSeenAt: '2026-01-01T00:00:00Z', current: false },
+    { id: 6, kind: 'device', label: '<b>x</b>', scopes: ['rx'], lastSeenAt: '2026-01-01T00:00:00Z', current: false },
+    { id: 7, kind: 'device', label: 'Pixel', scopes: ['rx', 'repeater:claim'], lastSeenAt: '2026-01-01T00:00:00Z', current: false }]);
+  assert(h.indexOf('<span>NodeScope – iPhone <span class="um-chip um-chip-device">') !== -1, 'no app name: ' + h);
+  assert(h.indexOf('can claim repeaters and edit repeater details · last seen') !== -1, 'no scope line: ' + h);
+  assert(h.indexOf('<span>App <span class="um-chip um-chip-device">') !== -1 && h.indexOf('can edit repeater details · last seen') !== -1,
+    'unlabelled app row: ' + h);
+  assert(h.indexOf('CoreDrive RX – &lt;b&gt;x&lt;/b&gt;') !== -1 && h.indexOf('<b>x</b>') === -1, 'rx row: ' + h);
+  assert(h.indexOf('CoreDrive RX – Pixel') !== -1 && h.indexOf('can claim repeaters · last seen') !== -1, 'rx token with a repeater scope: ' + h);
+  assert.strictEqual((h.match(/data-sess=/g) || []).length, 4, 'every app row keeps its logout button');
+});
+
 test('companions list escapes fields, shortens the pubkey and says never without a reception', () => {
   const env = loadAccount('#/account', () => ({}));
   const pk = 'ab'.repeat(32);

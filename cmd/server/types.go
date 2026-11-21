@@ -1145,12 +1145,16 @@ type ClientConfigResponse struct {
 // channel proposals and node notifications are on. CompanionLinking says the
 // device-token and companion routes exist: CoreDrive RX shows its login only
 // then, because an older CoreScope answers those paths with the SPA page.
+// RepeaterTokens says device tokens may ask for the repeater scopes and that
+// repeater edits take a baseRevision; a client offers native claims and
+// edits only then.
 type ClientUserManagement struct {
 	Enabled          bool `json:"enabled"`
 	ChannelProposals bool `json:"channelProposals,omitempty"`
 	Notifications    bool `json:"notifications,omitempty"`
 	CompanionLinking bool `json:"companionLinking,omitempty"`
 	ObserverLogins   bool `json:"observerLogins,omitempty"`
+	RepeaterTokens   bool `json:"repeaterTokens,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that

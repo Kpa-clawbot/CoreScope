@@ -97,12 +97,30 @@ func TestMyRepeatersList(t *testing.T) {
 	}
 }
 
-func TestMyRepeatersNeedsBrowserSession(t *testing.T) {
+// A browser session or a device token with a repeater scope lists the
+// caller's claims; an rx-only token and no login do not.
+func TestMyRepeatersAccess(t *testing.T) {
 	f := repeaterFixture(t)
-	f.registerAndActivate(t, "alice@example.org", "Alice", pw)
+	alice := f.registerAndActivate(t, "alice@example.org", "Alice", pw)
+	f.registerAndActivate(t, "bob@example.org", "Bob", pw)
+	if _, err := f.st.ClaimRepeater(alice.me.ID, rpkA); err != nil {
+		t.Fatal(err)
+	}
 	expectStatus(t, f.do("GET", "/api/account/repeaters", nil), http.StatusUnauthorized)
-	tok := f.deviceToken(t, "alice@example.org", pw, "Pixel").Token
-	expectStatus(t, f.do("GET", "/api/account/repeaters", nil, bearer(tok)), http.StatusForbidden)
+	rx := f.deviceToken(t, "alice@example.org", pw, "Pixel").Token
+	expectStatus(t, f.do("GET", "/api/account/repeaters", nil, bearer(rx)), http.StatusForbidden)
+	for _, scope := range []string{deviceScopeRepeaterClaim, deviceScopeRepeaterEdit} {
+		tok := f.scopedToken(t, "alice@example.org", scope, scope)
+		got := decode[myRepeatersJSON](t, f.do("GET", "/api/account/repeaters", nil, bearer(tok))).Repeaters
+		if len(got) != 1 || got[0].Pubkey != rpkA {
+			t.Errorf("%s token: got %+v, want alice's one claim", scope, got)
+		}
+	}
+	// Bob's repeater token lists Bob's claims, not Alice's.
+	bobTok := f.scopedToken(t, "bob@example.org", "bob", deviceScopeRepeaterClaim)
+	if got := decode[myRepeatersJSON](t, f.do("GET", "/api/account/repeaters", nil, bearer(bobTok))).Repeaters; len(got) != 0 {
+		t.Errorf("bob's token listed %+v", got)
+	}
 }
 
 // Without the analyzer database (auth-only fixture) the claims still list,

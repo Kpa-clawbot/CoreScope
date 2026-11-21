@@ -20,6 +20,9 @@ type meResponse struct {
 	DisplayName string     `json:"displayName"`
 	Role        users.Role `json:"role"`
 	CSRFToken   string     `json:"csrfToken"`
+	// Scopes: a device token's granted scopes, so an app can check what it
+	// holds after an update or a restore; absent for a browser session.
+	Scopes []string `json:"scopes,omitempty"`
 }
 
 type registerRequest struct {
@@ -37,6 +40,8 @@ type deviceTokenRequest struct {
 	Email      string `json:"email"`
 	Password   string `json:"password"`
 	DeviceName string `json:"deviceName"`
+	// Scopes the token asks for; omitted means ["rx"] (CoreDrive RX).
+	Scopes []string `json:"scopes"`
 }
 
 type deviceTokenUser struct {
@@ -48,6 +53,7 @@ type deviceTokenResponse struct {
 	Token     string          `json:"token"`
 	ExpiresAt string          `json:"expiresAt"`
 	User      deviceTokenUser `json:"user"`
+	Scopes    []string        `json:"scopes"`
 }
 
 type companionChallengeRequest struct {
@@ -131,6 +137,9 @@ type sessionJSON struct {
 	ExpiresAt  string `json:"expiresAt"`
 	UserAgent  string `json:"userAgent"`
 	Current    bool   `json:"current"`
+	// Scopes of a device token (rx, repeater:claim, repeater:edit); absent
+	// for a web session, which has full access.
+	Scopes []string `json:"scopes,omitempty"`
 }
 
 type mailEventJSON struct {
@@ -201,7 +210,7 @@ func meFrom(u *users.User, sess *users.Session) meResponse {
 
 func sessionToJSON(s users.Session, currentID int64) sessionJSON {
 	return sessionJSON{ID: s.ID, Kind: s.Kind, Label: s.Label, CreatedAt: rfc3339(s.CreatedAt), LastSeenAt: rfc3339(s.LastSeenAt),
-		ExpiresAt: rfc3339(s.ExpiresAt), UserAgent: s.UserAgent, Current: s.ID == currentID}
+		ExpiresAt: rfc3339(s.ExpiresAt), UserAgent: s.UserAgent, Current: s.ID == currentID, Scopes: s.Scopes}
 }
 
 func mailToJSON(m users.MailRecord) mailJSON {
