@@ -144,7 +144,7 @@ func OpenStore(dbPath string) (*Store, error) {
 }
 
 // OpenStoreWithInterval opens or creates a SQLite DB with a configurable sample interval.
-func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error) {
+func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (_ *Store, err error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data dir: %w", err)
@@ -154,6 +154,13 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 	if err != nil {
 		return nil, fmt.Errorf("opening db: %w", err)
 	}
+	// Every failure from here on must release the database: a leaked handle
+	// keeps the file open (on Windows it cannot even be deleted).
+	defer func() {
+		if err != nil {
+			db.Close()
+		}
+	}()
 
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("pinging db: %w", err)
