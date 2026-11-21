@@ -169,7 +169,14 @@
   // use (getNodeStatus from roles.js: silent past the repeater threshold is
   // stale; a silent one whose prefix still relays is uncertain). fns carries
   // getNodeStatus and timeAgo so tests can pass the real ones in.
+  // An inactive repeater (retention dropped it from the node list, which is
+  // also why its row has no node page to link to) says so in every state.
   function repeaterHealth(r, fns) {
+    var h = repeaterHealthBase(r, fns);
+    if (r.inactive && r.known) h.text += ' · no longer in the node list';
+    return h;
+  }
+  function repeaterHealthBase(r, fns) {
     if (!r.known) return { state: 'gone', rank: 0, text: 'no longer in the database' };
     if (!r.lastHeard) return { state: 'stale', rank: 1, text: 'never heard' };
     var node = { role: r.role || 'repeater', last_heard: r.lastHeard, last_relayed: r.lastRelayed || null };
@@ -177,9 +184,7 @@
     var when = fns.timeAgo(r.lastHeard);
     if (state === 'active') return { state: state, rank: 3, text: 'heard ' + when };
     if (state === 'uncertain') return { state: state, rank: 2, text: 'last heard ' + when + ', its prefix still relays' };
-    // inactive: retention dropped it from the node list, which is also why
-    // its row has no node page to link to.
-    return { state: 'stale', rank: 1, text: 'silent, last heard ' + when + (r.inactive ? ' · no longer in the node list' : '') };
+    return { state: 'stale', rank: 1, text: 'silent, last heard ' + when };
   }
 
   var HEALTH_CHIP = { active: 'um-status-active', uncertain: 'um-status-pending', stale: 'um-status-disabled', gone: 'um-chip-unsubscribed' };
@@ -508,7 +513,7 @@
         btn.disabled = true; // a second click while the DELETE runs would 404 over the success message
         return CSAuth.request('DELETE', '/api/account/companions/' + encodeURIComponent(pk)).then(function (r) {
           CSAuth.say('compMsg', r.ok ? 'Companion unlinked.' : CSAuth.errText(r), r.ok);
-          loadCompanions();
+          return loadCompanions(); // the button stays disabled until the list is redrawn
         }).catch(function () { CSAuth.say('compMsg', 'Network error, try again.', false); })
           .then(function () { btn.disabled = false; });
       });
@@ -530,7 +535,7 @@
         btn.disabled = true; // a second click while the DELETE runs would 404 over the success message
         return CSAuth.request('DELETE', '/api/repeaters/' + encodeURIComponent(pk) + '/claim').then(function (r) {
           CSAuth.say('myRepMsg', r.ok ? 'Repeater unclaimed.' : CSAuth.errText(r), r.ok);
-          loadMyRepeaters();
+          return loadMyRepeaters(); // the button stays disabled until the list is redrawn
         }).catch(function () { CSAuth.say('myRepMsg', 'Network error, try again.', false); })
           .then(function () { btn.disabled = false; });
       });
