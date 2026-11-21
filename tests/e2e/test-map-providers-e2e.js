@@ -273,15 +273,27 @@ async function run() {
             const box = document.querySelector(`label[data-tile-overlay-id="${o}"] input`);
             return { writes: window.__ovWrites, stored: JSON.parse(localStorage.getItem('mc-tile-overlays') || '[]'), box: !!(box && box.checked) };
           }, other);
+          // Waits for the state the asserts below expect after click n (n
+          // writes, hillshade stored iff `hill`, the other overlay stored and
+          // its box ticked), then one more frame and tick, so a late extra
+          // write or a box unticked by the deferred sync is still seen. A
+          // state that never arrives is reported by the asserts.
+          const settled = async (n, hill) => {
+            await c.page.waitForFunction(([o, want, h]) => {
+              const box = document.querySelector(`label[data-tile-overlay-id="${o}"] input`);
+              const stored = JSON.parse(localStorage.getItem('mc-tile-overlays') || '[]');
+              return window.__ovWrites >= want && stored.indexOf(o) >= 0 && (stored.indexOf('hillshade') >= 0) === h && !!(box && box.checked);
+            }, [other, n, hill], { timeout: 5000 }).catch(() => {});
+            await c.page.evaluate(() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))));
+            return state();
+          };
           await pickOverlay(c.page, 'hillshade');
-          await c.page.waitForTimeout(300);
-          let st = await state();
+          let st = await settled(1, true);
           assert(st.writes === 1, `first click wrote ${st.writes}x: ${JSON.stringify(st.stored)}`);
           assert(st.stored.indexOf(other) >= 0 && st.stored.indexOf('hillshade') >= 0, 'after first click stored ' + JSON.stringify(st.stored));
           assert(st.box, `${other} box not ticked after the first click`);
           await pickOverlay(c.page, 'hillshade');
-          await c.page.waitForTimeout(300);
-          st = await state();
+          st = await settled(2, false);
           assert(st.writes === 2, `second click: ${st.writes} writes in total, want 2: ${JSON.stringify(st.stored)}`);
           assert(st.stored.indexOf(other) >= 0 && st.stored.indexOf('hillshade') < 0, 'after second click stored ' + JSON.stringify(st.stored));
           assert(st.box, `${other} box not ticked after the second click`);
