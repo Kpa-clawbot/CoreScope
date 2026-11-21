@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -177,20 +178,20 @@ func TestResolveNotifications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if set.notify != (notifySettings{}) {
+	if !reflect.DeepEqual(set.notify, notifySettings{}) {
 		t.Fatalf("absent block = %+v; want off", set.notify)
 	}
 	defaults := notifySettings{enabled: true, interval: 5 * time.Minute, perUserPerDay: 20, maxMailsPerDay: 100, maxWatchesPerUser: 50}
 	u.Notifications = &NotificationsConfig{Enabled: true}
-	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != defaults {
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); !reflect.DeepEqual(set.notify, defaults) {
 		t.Fatalf("defaults = %+v", set.notify)
 	}
 	u.Notifications = &NotificationsConfig{Enabled: true, IntervalMinutes: 1, PerUserPerDay: 3, MaxMailsPerDay: 9, MaxWatchesPerUser: 2}
-	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != (notifySettings{enabled: true, interval: time.Minute, perUserPerDay: 3, maxMailsPerDay: 9, maxWatchesPerUser: 2}) {
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); !reflect.DeepEqual(set.notify, notifySettings{enabled: true, interval: time.Minute, perUserPerDay: 3, maxMailsPerDay: 9, maxWatchesPerUser: 2}) {
 		t.Fatalf("explicit = %+v", set.notify)
 	}
 	u.Notifications = &NotificationsConfig{Enabled: true, IntervalMinutes: -5, PerUserPerDay: -1, MaxWatchesPerUser: -2}
-	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != defaults {
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); !reflect.DeepEqual(set.notify, defaults) {
 		t.Fatalf("zero and negative values = %+v; want defaults", set.notify)
 	}
 	u.Notifications = &NotificationsConfig{Enabled: false, PerUserPerDay: 3}

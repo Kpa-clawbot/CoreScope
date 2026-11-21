@@ -86,11 +86,12 @@ func resolveProposals(c *ChannelProposalsConfig) proposalSettings {
 // NotificationsConfig is userManagement.notifications
 // (docs/specs/2026-10-07-node-notifications-design.md). Off by default.
 type NotificationsConfig struct {
-	Enabled           bool `json:"enabled"`
-	IntervalMinutes   int  `json:"intervalMinutes,omitempty"`
-	PerUserPerDay     int  `json:"perUserPerDay,omitempty"`
-	MaxMailsPerDay    int  `json:"maxMailsPerDay,omitempty"`
-	MaxWatchesPerUser int  `json:"maxWatchesPerUser,omitempty"`
+	NodeScopePush     *NotifyRelayConfig `json:"nodeScopePush,omitempty"`
+	Enabled           bool               `json:"enabled"`
+	IntervalMinutes   int                `json:"intervalMinutes,omitempty"`
+	PerUserPerDay     int                `json:"perUserPerDay,omitempty"`
+	MaxMailsPerDay    int                `json:"maxMailsPerDay,omitempty"`
+	MaxWatchesPerUser int                `json:"maxWatchesPerUser,omitempty"`
 	// ExternalAlerts feeds the node.external event (#2177). Absent: the
 	// event is not offered.
 	ExternalAlerts *ExternalAlertsConfig `json:"externalAlerts,omitempty"`
@@ -117,6 +118,11 @@ type ExternalAlertsConfig struct {
 
 // notifySettings is the resolved form; the zero value means off.
 type notifySettings struct {
+	relay             *notifyRelayClient
+	relayOrigin       string
+	relayAnalyzerID   string
+	relayCredential   string
+	relayPlatforms    []string
 	enabled           bool
 	interval          time.Duration // between evaluations, at least a minute
 	perUserPerDay     int           // notification mails per user per 24 hours
@@ -339,23 +345,24 @@ func (c *Config) UserManagementEnabled() bool {
 
 // userMgmtSettings is the validated, resolved form the auth service runs on.
 type userMgmtSettings struct {
-	dbPath         string
-	adminEmails    map[string]bool
-	baseURL        *url.URL // no trailing slash, no query or fragment
-	secureCookie   bool
-	sessionTTL     time.Duration
-	trustedProxies []*net.IPNet
-	provider       string // "brevo", "postal" or (e2etest builds only) "fake"
-	brevoAPIKey    string
-	postalBaseURL  string // no trailing slash
-	postalAPIKey   string
-	fromEmail      string
-	fromName       string
-	webhookSecret  string
-	proposals      proposalSettings
-	notify         notifySettings
-	backup         backupSettings
-	observerLogins observerLoginSettings
+	dbPath                    string
+	adminEmails               map[string]bool
+	baseURL                   *url.URL // no trailing slash, no query or fragment
+	secureCookie              bool
+	sessionTTL                time.Duration
+	trustedProxies            []*net.IPNet
+	provider                  string // "brevo", "postal" or (e2etest builds only) "fake"
+	brevoAPIKey               string
+	postalBaseURL             string // no trailing slash
+	postalAPIKey              string
+	fromEmail                 string
+	fromName                  string
+	webhookSecret             string
+	proposals                 proposalSettings
+	notify                    notifySettings
+	nodeScopeSelfEnrollOrigin string
+	backup                    backupSettings
+	observerLogins            observerLoginSettings
 }
 
 const defaultSessionDays = 30
@@ -451,6 +458,12 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 	set.proposals = resolveProposals(u.ChannelProposals)
 	set.notify = resolveNotifications(u.Notifications)
 	if set.notify.enabled {
+		if u.Notifications.NodeScopePush == nil {
+			set.nodeScopeSelfEnrollOrigin = getenv(nodeScopeSelfEnrollOriginEnv)
+		}
+		if err = set.notify.configureRelay(u.Notifications.NodeScopePush, getenv); err != nil {
+			return nil, err
+		}
 		if set.notify.external, err = resolveExternalAlerts(u.Notifications.ExternalAlerts); err != nil {
 			return nil, err
 		}

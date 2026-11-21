@@ -36,7 +36,10 @@ type authService struct {
 
 	// notify evaluates node notifications; nil unless
 	// userManagement.notifications.enabled.
-	notify *notifier
+	notify              *notifier
+	nodeScopeRelay      atomic.Pointer[notifySettings]
+	nodeScopeDelivery   nodeScopeDeliveryState
+	nodeScopeEnrollment nodeScopeEnrollmentFlow
 
 	// obsIdx answers the broker hooks; nil unless observerLogins.enabled
 	// (or when its load failed, see newAuthService).
@@ -113,6 +116,8 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 		m = mailer.NewBrevo(set.brevoAPIKey, set.fromEmail, set.fromName)
 	}
 	s.auth = newAuthService(set, st, m)
+	s.auth.restoreAndPrunePushState(s.cfg.UserManagement.Notifications)
+	s.auth.restoreNodeScopeLifecycle()
 	s.auth.logStartup()
 	s.auth.wg.Add(1)
 	go func() {
@@ -125,6 +130,11 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 		go func() {
 			defer s.auth.wg.Done()
 			s.auth.notify.loop(s.auth.stop, set.notify.interval)
+		}()
+		s.auth.wg.Add(1)
+		go func() {
+			defer s.auth.wg.Done()
+			s.auth.notify.pushLoop(s.auth.stop)
 		}()
 		log.Printf("[notify] node notifications enabled: every %s, at most %d mails per user and %d in total per 24 hours",
 			set.notify.interval, set.notify.perUserPerDay, set.notify.maxMailsPerDay)

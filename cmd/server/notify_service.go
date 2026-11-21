@@ -106,7 +106,7 @@ func (n *notifier) safeTick(ctx context.Context) {
 // dropped states and writes the new ones, and then mails each user's
 // changes. Users without a preferences row and users with notifications
 // off are evaluated too (the evaluator gives the first the defaults and
-// keeps the second's states current without changes). A failed read or
+// keeps the second's states current). A failed read or
 // state write ends the tick without mail; the next tick starts over. A
 // tick that evaluates logs one line with its counts, its duration and how
 // long LastHeardMap held the packet store's read lock.
@@ -114,6 +114,7 @@ func (n *notifier) tick(ctx context.Context) {
 	if !n.src.ready() {
 		return
 	}
+	pushEpoch := n.a.nodeScopeDelivery.epoch.Load()
 	started := time.Now()
 	now := n.now()
 	stale := n.checkIngest(now)
@@ -223,15 +224,9 @@ func (n *notifier) tick(ctx context.Context) {
 	res := evaluateNotifications(notifyInput{Now: now, Health: n.src.health(), LowMv: n.src.lowBatteryMv(),
 		Accounts: accounts, Prefs: prefs, Watches: watches, States: states, Nodes: nodes,
 		Heard: heard, SharedSeen: n.src.sharedPrefixSeen(infra), OfflineAfter: n.offlineWindows(pubkeys, now), NewestPacket: n.src.newestPacket(), Observers: observers, ObserverOwners: owners, IngestStale: stale, IngestResumedAt: n.ingestResumedAt, External: external})
-	if err := st.DeleteNotifyStates(res.Drop); err != nil {
-		log.Printf("[notify] delete dropped states, nothing mailed this time: %v", err)
+	if err := n.saveNotificationChanges(res, accounts, nodes, pushEpoch); err != nil {
+		log.Printf("[notify] save notification changes, nothing mailed this time: %v", err)
 		return
-	}
-	if len(res.States) > 0 {
-		if err := st.WriteNotifyStates(res.States); err != nil {
-			log.Printf("[notify] write states, nothing mailed this time: %v", err)
-			return
-		}
 	}
 	mails := n.deliver(ctx, now, res.Changes, accounts, byUser)
 	changes := 0
@@ -240,6 +235,29 @@ func (n *notifier) tick(ctx context.Context) {
 	}
 	log.Printf("[notify] tick: users=%d changes=%d mails=%d took=%.2fms lock=%.2fms",
 		len(accounts), changes, mails, msFloat(time.Since(started)), msFloat(lock))
+}
+
+func (n *notifier) saveNotificationChanges(res notifyResult, accounts map[int64]users.User, nodes map[string]notifyNode, pushEpoch uint64) error {
+	state := &n.a.nodeScopeDelivery
+	state.mu.RLock()
+	settings := n.a.nodeScopeRelaySettings()
+	if settings.relay != nil {
+		defer state.mu.RUnlock()
+		var events []users.PushEvent
+		if !n.a.nodeScopeDeliveryPaused() && pushEpoch == state.epoch.Load() {
+			events = notifyPushEvents(res.Changes, accounts, nodes)
+		}
+		return n.a.st.ApplyNotifyChanges(res.Drop, res.States, settings.relayAnalyzerID, events)
+	}
+	state.mu.RUnlock()
+
+	if err := n.a.st.DeleteNotifyStates(res.Drop); err != nil {
+		return err
+	}
+	if len(res.States) > 0 {
+		return n.a.st.WriteNotifyStates(res.States)
+	}
+	return nil
 }
 
 // readExternal fetches and validates the externalAlerts feed. It returns

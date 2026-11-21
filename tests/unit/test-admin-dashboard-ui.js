@@ -1,6 +1,5 @@
 /* Unit tests for the admin area (docs/specs/2026-10-07-admin-dashboard-design.md):
- * public/admin-audit.js, public/admin-overview.js and public/admin.js, each
- * loaded from disk into a vm sandbox (same pattern as
+ * Admin tab modules loaded from disk into a vm sandbox (same pattern as
  * test-user-management-ui.js). */
 'use strict';
 const vm = require('vm');
@@ -49,7 +48,7 @@ function makeDom() {
 }
 
 // loadTab runs the given public files with window === the sandbox global,
-// a fake CSAuth whose request() answers from routes(path), a recording
+// a fake CSAuth whose request() answers from routes(path, body, method), a recording
 // history.replaceState and recordable intervals.
 function loadTab(files, hash, routes, extra) {
   const dom = makeDom();
@@ -59,7 +58,7 @@ function loadTab(files, hash, routes, extra) {
   const bodies = [];
   const timers = [];
   const CSAuth = {
-    request(method, p, body) { calls.push(p); bodies.push(body); return Promise.resolve().then(() => routes(p, body)); },
+    request(method, p, body) { calls.push(p); bodies.push(body); return Promise.resolve().then(() => routes(p, body, method)); },
     say(id, text, ok) { const el = dom.document.getElementById(id); el.textContent = text; el.ok = !!ok; },
     errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); },
   };
@@ -272,6 +271,142 @@ test('unmount drops a response that arrives later', async () => {
   assert.strictEqual(env.els.auditBody.innerHTML, '');
 });
 
+console.log('admin-notifications.js');
+
+test('enrollment uses the admin API and only permits one in-flight Enable request', async () => {
+  const endpoint = '/api/admin/notifications/nodescope';
+  const methods = [];
+  let finish;
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    assert.strictEqual(p, endpoint);
+    assert.strictEqual(body, undefined, 'credentials and analyzer inputs are server-side');
+    methods.push(method);
+    return method === 'GET' ? OK({ state: 'available', publicOrigin: XSS })
+      : new Promise((resolve) => { finish = resolve; });
+  });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  assert(!container.innerHTML.includes('<img'), container.innerHTML);
+  assert(container.innerHTML.includes('>&lt;img '), container.innerHTML);
+  const click = container.querySelector('#adminEnableNodeScope').handlers.click;
+  click();
+  click();
+  await tick();
+  assert.deepStrictEqual(methods, ['GET', 'POST']);
+  assert(container.innerHTML.includes('id="adminEnableNodeScope" disabled'), container.innerHTML);
+  finish(OK({ state: 'connected', analyzerId: 'an_test' }));
+  await tick();
+  assert(container.innerHTML.includes('is-connected">Connected</span>'), container.innerHTML);
+  assert(container.innerHTML.includes('an_test'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminEnableNodeScope'), container.innerHTML);
+});
+
+test('an enrollment failure leaves Enable available and escapes the API error', async () => {
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) =>
+    method === 'GET' ? OK({ state: 'available' }) : { ok: false, status: 422, data: { error: XSS } });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  container.querySelector('#adminEnableNodeScope').handlers.click();
+  await tick();
+  assert(container.innerHTML.includes('role="alert">&lt;img '), container.innerHTML);
+  assert(!container.innerHTML.includes('<img'), container.innerHTML);
+  assert(container.innerHTML.includes('id="adminEnableNodeScope">Enable'), container.innerHTML);
+});
+
+test('a disabled notifier offers no Enable button', async () => {
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', () => OK({ state: 'notifications_disabled' }));
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  assert(container.innerHTML.includes('Node notifications are disabled'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminEnableNodeScope'), container.innerHTML);
+});
+
+test('connected and manually configured destinations can pause and resume delivery', async () => {
+  for (const state of ['connected', 'manual']) {
+    const updates = [];
+    const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+      assert.strictEqual(p, '/api/admin/notifications/nodescope');
+      if (method === 'GET') return OK({ state, analyzerId: 'an_test' });
+      assert.strictEqual(method, 'PUT');
+      assert.deepStrictEqual(Object.keys(body), ['paused']);
+      updates.push(body.paused);
+      return OK({ state, paused: body.paused, analyzerId: 'an_test' });
+    });
+    const container = env.dom.mk('c');
+    env.ctx.CSAdminNotifications.mount(container);
+    await tick();
+    assert(container.innerHTML.includes('>Pause delivery</button>'), container.innerHTML);
+    assert.strictEqual(container.innerHTML.includes('>Disconnect relay</button>'), state === 'connected');
+    if (state === 'manual') assert(container.innerHTML.includes('remove its server configuration'));
+    container.querySelector('#adminPauseNodeScope').handlers.click();
+    await tick();
+    assert(container.innerHTML.includes('is-paused">Paused</span>'), container.innerHTML);
+    assert(container.innerHTML.includes('an_test'), container.innerHTML);
+    assert(container.innerHTML.includes('>Resume delivery</button>'), container.innerHTML);
+    container.querySelector('#adminPauseNodeScope').handlers.click();
+    await tick();
+    assert.deepStrictEqual(updates, [true, false]);
+    assert(container.innerHTML.includes('is-connected">Connected</span>'), container.innerHTML);
+  }
+});
+
+test('disconnect requires confirmation and returns a disconnected card', async () => {
+  const methods = [];
+  let accept = false;
+  let confirmation;
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    assert.strictEqual(p, '/api/admin/notifications/nodescope');
+    assert.strictEqual(body, undefined);
+    methods.push(method);
+    return method === 'GET' ? OK({ state: 'connected', analyzerId: 'an_test' }) : OK({ state: 'available' });
+  }, { confirm(text) { confirmation = text; return accept; } });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  const disconnect = container.querySelector('#adminDisconnectNodeScope').handlers.click;
+  disconnect();
+  await tick();
+  assert(confirmation.includes('enable alerts again'), confirmation);
+  assert.deepStrictEqual(methods, ['GET']);
+  accept = true;
+  disconnect();
+  disconnect();
+  await tick();
+  assert.deepStrictEqual(methods, ['GET', 'DELETE']);
+  assert(!container.innerHTML.includes('an_test'), container.innerHTML);
+  assert(container.innerHTML.includes('>Enable</button>'), container.innerHTML);
+});
+
+test('failed disconnect reloads the pending state and offers retry without Resume', async () => {
+  const methods = [];
+  let pending = false;
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    methods.push(method);
+    if (method === 'GET') return OK({ state: 'connected', paused: pending, disconnectPending: pending });
+    assert.strictEqual(method, 'DELETE');
+    if (pending) return OK({ state: 'available' });
+    pending = true;
+    return { ok: false, status: 502, data: { error: XSS } };
+  }, { confirm() { return true; } });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  container.querySelector('#adminDisconnectNodeScope').handlers.click();
+  await tick();
+  assert.deepStrictEqual(methods, ['GET', 'DELETE', 'GET']);
+  assert(container.innerHTML.includes('is-paused">Disconnect pending</span>'), container.innerHTML);
+  assert(container.innerHTML.includes('>Retry disconnect</button>'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminPauseNodeScope'), container.innerHTML);
+  assert(container.innerHTML.includes('role="alert">&lt;img '), container.innerHTML);
+  container.querySelector('#adminDisconnectNodeScope').handlers.click();
+  await tick();
+  assert.deepStrictEqual(methods, ['GET', 'DELETE', 'GET', 'DELETE']);
+  assert(container.innerHTML.includes('>Enable</button>'), container.innerHTML);
+});
+
 console.log('admin-overview.js');
 
 const STATS = { total: 3, active: 2, pending: 1, disabled: 0, admins: 1, stuckPending: 1, bouncing: 2, new7d: 3, new30d: 3,
@@ -428,7 +563,7 @@ function loadShell(hash, opts) {
   const listeners = {};
   const me = { current: opts.me === undefined ? { id: 1, role: 'admin' } : opts.me };
   const mods = {};
-  ['CSAdminOverview', 'CSAdminUsers', 'CSAdminAudit', 'CSAdminProposals', 'CSAdminObserverLogins'].forEach((n) => {
+  ['CSAdminOverview', 'CSAdminUsers', 'CSAdminNotifications', 'CSAdminAudit', 'CSAdminProposals', 'CSAdminObserverLogins'].forEach((n) => {
     mods[n] = { mounted: 0, unmounted: 0, el: null, mount(el) { this.mounted++; this.el = el; }, unmount() { this.unmounted++; } };
   });
   const CSAuth = { ready: () => Promise.resolve(), isEnabled: () => opts.enabled !== false,
@@ -468,6 +603,16 @@ test('#/admin mounts the overview tab into #adminTab', async () => {
   assert.strictEqual(env.mods.CSAdminOverview.mounted, 1);
   assert.strictEqual(env.mods.CSAdminOverview.el, env.els.adminTab);
   assert(env.app.innerHTML.indexOf('<h2>Admin</h2>') !== -1);
+});
+
+test('the Notifications deep link mounts the tab loaded by index.html', async () => {
+  const env = loadShell('#/admin?tab=notifications');
+  await env.page.init(env.app, null);
+  assert.strictEqual(env.mods.CSAdminNotifications.el, env.els.adminTab);
+  assert(env.app.innerHTML.includes('href="#/admin?tab=notifications" aria-current="page"'));
+  const index = src('public/index.html');
+  const tabScript = index.indexOf('src="admin-notifications.js?v=__BUST__"');
+  assert(tabScript !== -1 && tabScript < index.indexOf('src="admin.js?v=__BUST__"'));
 });
 
 test('the old #/admin/users link is rewritten with replaceState and opens the Users tab with its detail id', async () => {
