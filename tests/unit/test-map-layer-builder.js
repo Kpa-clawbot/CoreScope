@@ -638,6 +638,102 @@ test('picker: an explicit pick survives the fromConfig rebuild (light entry in d
   assert.ok(!map.hasLayer(c5.baseMaps['carto-light']));
 });
 
+// A map that, like Leaflet, starts a tile layer's tiles when it joins the map
+// (directly, or inside a group that is on the map) and fires the layer's
+// 'add' event. `requested` lists the tile URLs started, in order.
+function makeTrackingMap() {
+  const m = makeMap();
+  m.requested = [];
+  function start(l) {
+    if (!l) return;
+    if (l.kind === 'tile') { m.requested.push(l._url); return; }
+    if (l.kind !== 'group') return;
+    l._layers.forEach(start);
+    if (l._mcTracked) return;
+    l._mcTracked = true;
+    const groupAdd = l.addLayer;
+    l.addLayer = (x) => { const on = m._layers.includes(l) && !l._layers.includes(x); groupAdd(x); if (on) start(x); return l; };
+  }
+  const mapAdd = m.addLayer;
+  m.addLayer = (l) => {
+    if (m._layers.includes(l)) return m;
+    mapAdd(l);
+    start(l);
+    if (l._events && typeof l._events.add === 'function') l._events.add();
+    return m;
+  };
+  return m;
+}
+const CARTO = /basemaps\.cartocdn\.com/;
+const OSMFR = /openstreetmap\.fr\/hot/;
+const count = (list, re) => list.filter(u => re.test(u)).length;
+
+// A picker map loading with a saved pick shows the pick: the Auto group's
+// theme map is never started only to be replaced (#2444).
+test('pinned picker load: no Auto tiles started; picking Auto then shows the theme map', () => {
+  const s = makeSandbox({ theme: 'light', mapCfg: { tiles: { providers: { osmfr: { enabled: true } } } } });
+  s.w.localStorage.setItem('mc-tile-pinned', 'osmfr-hot');
+  const map = makeTrackingMap();
+  const h = s.w.MC_attachAutoTiles(map, { controlPosition: 'topleft' });
+  const c = s.stats.controls[s.stats.controls.length - 1];
+  assert.ok(map.hasLayer(c.baseMaps['osmfr-hot']), 'the pick is shown');
+  assert.ok(!map._layers.includes(h.group), 'Auto group not on the map');
+  assert.strictEqual(count(map.requested, CARTO), 0, 'Auto tiles started: ' + map.requested.join(' '));
+  assert.ok(count(map.requested, OSMFR) > 0, 'pinned tiles started');
+  // A theme flip while the pick is shown starts nothing for Auto either.
+  s.setTheme('dark');
+  s.setTheme('light');
+  assert.strictEqual(count(map.requested, CARTO), 0, 'theme flip started Auto tiles');
+  // The user picks Auto: Leaflet swaps the layers, then fires baselayerchange.
+  map.removeLayer(c.baseMaps['osmfr-hot']);
+  map.addLayer(h.group);
+  map._handlers.baselayerchange({ name: '__auto__', layer: h.group });
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), null, 'Auto clears the pin');
+  assert.strictEqual(h.group._layers.length, 1, 'one Auto layer');
+  assert.ok(/light_all/.test(tilesOf(h.group._layers[0])[0]._url), 'Auto shows the theme map');
+  assert.strictEqual(count(map.requested, CARTO), 1, 'the theme map is started once');
+  // From here Auto follows the theme as before.
+  s.setTheme('dark');
+  assert.ok(/dark_all/.test(tilesOf(h.group._layers[0])[0]._url), 'dark after a flip');
+  h.destroy();
+  assert.ok(!map._layers.includes(h.group), 'destroy removes the group');
+});
+
+test('pinned picker load: a config that turns the pin off shows Auto; turning it back on restores the pick', () => {
+  const s = makeSandbox({ theme: 'light', mapCfg: { tiles: { providers: { osmfr: { enabled: true } } } } });
+  s.w.localStorage.setItem('mc-tile-pinned', 'osmfr-hot');
+  const map = makeTrackingMap();
+  const h = s.w.MC_attachAutoTiles(map, { controlPosition: 'topleft' });
+  assert.strictEqual(count(map.requested, CARTO), 0);
+  s.w.MC_MAP_CFG = { tiles: { providers: {} } };
+  s.w.MC_initTileRegistry(true);
+  assert.ok(map._layers.includes(h.group), 'pin off: Auto shown');
+  assert.strictEqual(h.group._layers.length, 1);
+  assert.ok(/light_all/.test(tilesOf(h.group._layers[0])[0]._url), 'the theme map');
+  assert.strictEqual(count(map.requested, CARTO), 1, 'started once');
+  s.w.MC_MAP_CFG = { tiles: { providers: { osmfr: { enabled: true } } } };
+  s.w.MC_initTileRegistry(true);
+  const c = s.stats.controls[s.stats.controls.length - 1];
+  assert.ok(map.hasLayer(c.baseMaps['osmfr-hot']), 'the pick is back');
+  assert.ok(!map._layers.includes(h.group), 'Auto off again');
+  h.destroy();
+});
+
+test('loads without a pin, and maps without a picker, build and show Auto at once as before', () => {
+  const s = makeSandbox({ theme: 'light', mapCfg: { tiles: { providers: { osmfr: { enabled: true } } } } });
+  const picker = makeTrackingMap();
+  const hp = s.w.MC_attachAutoTiles(picker, { controlPosition: 'topleft' });
+  assert.ok(picker._layers.includes(hp.group) && hp.group._layers.length === 1, 'no pin: Auto on the map');
+  assert.strictEqual(count(picker.requested, CARTO), 1, 'no pin: the theme map is started');
+  s.w.localStorage.setItem('mc-tile-pinned', 'osmfr-hot');
+  const plain = makeTrackingMap();
+  const hn = s.w.MC_attachAutoTiles(plain, {});
+  assert.ok(plain._layers.includes(hn.group), 'no picker: group on the map');
+  assert.strictEqual(count(plain.requested, OSMFR), 1, 'no picker: follows the pin');
+  assert.strictEqual(count(plain.requested, CARTO), 0);
+  hp.destroy(); hn.destroy();
+});
+
 // Static/secondary maps pass { raster: true }: a vector desc builds its
 // raster fallback directly and MapLibre is never touched.
 test('MC_buildTileLayer({ raster: true }): vector -> raster fallback without MapLibre; raster unchanged', () => {

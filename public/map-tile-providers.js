@@ -1611,6 +1611,8 @@
    * 'mc-tile-provider-changed' and on documentElement data-theme changes.
    * Every call keeps its own state, so several maps on one page are
    * independent; the config arriving async re-syncs through the same event.
+   * On a picker map that loads with a saved pick the group stays off the map
+   * and empty until Auto is shown (#2444).
    *
    * @param {L.Map} map
    * @param {{controlPosition?: string}} [opts] - controlPosition adds the
@@ -1619,7 +1621,13 @@
    */
   window.MC_attachAutoTiles = function (map, opts) {
     opts = opts || {};
-    var group = L.layerGroup().addTo(map);
+    var group = L.layerGroup();
+    // A picker map loading with a saved pick shows that pick, not Auto: the
+    // control adds the group only when Auto is shown, and the Auto layer is
+    // built when the group first joins the map, so the theme's tiles are not
+    // started only to be cancelled (#2444).
+    var lazy = !!opts.controlPosition && !!getPinnedId();
+    if (!lazy) group.addTo(map);
     var cur = null;       // descriptor the current layer was built from
     var layer = null;     // the layer inside group
     var destroyed = false;
@@ -1644,6 +1652,7 @@
 
     function sync() {
       if (destroyed) return;
+      if (!layer && lazy && !map.hasLayer(group)) return; // built on the group's first add
       var r;
       // On a map with a picker the Auto group is always the theme's map: the
       // pin is shown as the explicit layer, never loaded into the hidden group.
@@ -1686,6 +1695,7 @@
     }
 
     sync();
+    if (lazy) group.on('add', function () { if (!layer) sync(); });
     try { window.addEventListener(EVENT_NAME, onProviderChanged); } catch (_) {}
     if (typeof MutationObserver === 'function') {
       try {
@@ -1695,6 +1705,7 @@
     }
     if (overlays) overlays.sync(); // restore the ticked overlays
     if (opts.controlPosition) lc = _createLayerControl(map, group, opts.controlPosition, overlays);
+    if (lazy && !lc) group.addTo(map); // no control to show the pick: Auto
 
     function destroy() {
       if (destroyed) return;

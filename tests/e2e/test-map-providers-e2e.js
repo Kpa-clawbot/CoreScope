@@ -420,6 +420,46 @@ async function run() {
       } finally { await c.context.close(); }
     }
 
+    // ── 7d. A load with a saved pick never starts the Auto tiles ────────
+    // The picker shows the pick; the theme's map (the Auto layer) must not
+    // be started first only to be replaced and cancelled. Chromium drops a
+    // tile image aborted in the same task before it reaches the network, so
+    // the check counts the tile images Leaflet starts (every http(s) src set
+    // on an <img>) as well as the network requests.
+    {
+      const c = await newPage(browser, { theme: 'light' });
+      try {
+        await gotoMap(c.page);
+        await test('7d a reload with a saved pick starts the pinned tiles only, none of the Auto (theme) map', async () => {
+          await pick(c.page, 'osmfr-hot');
+          await drawn(c.page, 'openstreetmap\\.fr/hot');
+          await c.page.addInitScript(() => {
+            window.__tileSrcs = [];
+            const d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+            Object.defineProperty(HTMLImageElement.prototype, 'src', {
+              configurable: true, get: d.get,
+              set(v) { if (/^https?:/.test(v)) window.__tileSrcs.push(String(v)); return d.set.call(this, v); },
+            });
+          });
+          c.requests.length = 0;
+          await reloadMap(c.page);
+          await drawn(c.page, 'openstreetmap\\.fr/hot');
+          await MH.waitForTiles(c.page, { timeout: 15000 });
+          const srcs = await c.page.evaluate(() => window.__tileSrcs);
+          const count = (list, re) => list.filter(u => re.test(u)).length;
+          const AUTO = /cartocdn\.com\//, PIN = /openstreetmap\.fr\/hot\//;
+          const n = { autoStarted: count(srcs, AUTO), pinStarted: count(srcs, PIN), autoRequested: count(c.requests, AUTO), pinRequested: count(c.requests, PIN) };
+          console.log('     pinned reload: ' + JSON.stringify(n));
+          assert(n.pinStarted > 0 && n.pinRequested > 0, 'no pinned tile requested: ' + JSON.stringify(n));
+          assert(n.autoStarted === 0 && n.autoRequested === 0, 'Auto (carto) tiles started on a load with a saved pick: ' + JSON.stringify(n));
+          await pick(c.page, '__auto__');
+          await drawn(c.page, 'cartocdn');
+          assert(await pinned(c.page) === null, 'Auto did not clear the pin');
+          assert(c.errors.length === 0, 'page errors: ' + c.errors);
+        });
+      } finally { await c.context.close(); }
+    }
+
     // ── 7c. Untouched config: the opt-in groups are not offered ─────────
     {
       const c = await newPage(browser, { theme: 'light', providers: null });
