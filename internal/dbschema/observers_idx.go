@@ -163,6 +163,9 @@ func observersColumnsInfo(ctx context.Context, q interface {
 // table — on any column the canonical shape doesn't know (the rebuild would
 // drop it; that includes an idx that is not the rowid alias) or a NULL id (a
 // legacy `TEXT PRIMARY KEY` admits one; the new NOT NULL would reject it).
+// Indexes, triggers and views the operator added are recreated over the new
+// table (captureLocalObservers); one that no longer applies rolls the whole
+// rebuild back, naming it.
 //
 // MUST run last in Apply: the ensure*Column steps before it bring a legacy
 // table up to (a subset of) the canonical columns.
@@ -210,6 +213,20 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 			_ = tx.Rollback()
 		}
 	}()
+
+	// Take the write lock before the first read. A deferred transaction
+	// that reads and then writes, while another process rebuilds the same
+	// file, holds a stale WAL snapshot and fails with "database is locked"
+	// without waiting (busy_timeout does not apply to a snapshot upgrade).
+	// A write as the first statement waits on busy_timeout instead, so
+	// concurrent rebuilds serialise and the later one sees the table done.
+	// The driver has no per-transaction BEGIN IMMEDIATE; this no-op write
+	// is the equivalent. WHERE 0 touches no row, so no trigger or foreign
+	// key action fires, and it names no column, so the refusals below still
+	// report a malformed table themselves.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM observers WHERE 0`); err != nil {
+		return fmt.Errorf("lock observers: %w", err)
+	}
 
 	// Re-read inside the transaction so the checks and the copy see the
 	// same table.
@@ -263,10 +280,18 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 	}
 	colList := strings.Join(copyCols, ", ")
 
+	local, err := captureLocalObservers(ctx, tx)
+	if err != nil {
+		return err
+	}
+
 	// packets_v joins observers; modern SQLite refuses ALTER TABLE RENAME
 	// while a view references a table that no longer exists.
 	if _, err := tx.ExecContext(ctx, `DROP VIEW IF EXISTS packets_v`); err != nil {
 		return fmt.Errorf("drop packets_v: %w", err)
+	}
+	if err := dropLocalObservers(ctx, tx, local); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS observers_new`); err != nil {
 		return fmt.Errorf("drop stale observers_new: %w", err)
@@ -306,6 +331,13 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 			return fmt.Errorf("observers rebuild: %q: %w", s, err)
 		}
 	}
+	for _, o := range local {
+		if _, err := tx.ExecContext(ctx, o.sql); err != nil {
+			return fmt.Errorf("observers rebuild could not recreate %s %s: %w; rolled back. "+
+				"To continue, drop it (DROP %s %s) and recreate it after the upgrade, "+
+				"or run the previous CoreScope version", o.kind, o.name, err, strings.ToUpper(o.kind), o.name)
+		}
+	}
 	if err := checkObserversForeignKeys(ctx, tx); err != nil {
 		return err
 	}
@@ -313,7 +345,138 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 		return fmt.Errorf("commit observers rebuild: %w", err)
 	}
 	logf("[dbschema] rebuilt observers with explicit idx primary key (%d rows, every rowid preserved as idx)", after)
+	if len(local) > 0 {
+		names := make([]string, len(local))
+		for i, o := range local {
+			names[i] = o.kind + " " + o.name
+		}
+		logf("[dbschema] observers rebuild recreated %d local object(s): %s", len(local), strings.Join(names, ", "))
+	}
 	return nil
+}
+
+// localObserver is a schema object the operator added that the observers
+// rebuild has to take down and put back (#2443).
+type localObserver struct{ kind, name, table, sql string }
+
+// captureLocalObservers lists, in creation (sqlite_master rowid) order,
+// every index, trigger and view the rebuild would otherwise lose or trip
+// over, leaving out the ones it recreates itself (packets_v and the two
+// observers indexes):
+//   - indexes and triggers on observers: DROP TABLE takes them with it;
+//   - views, and triggers on other tables, whose SQL mentions observers,
+//     packets_v, or a view already captured: while one exists, ALTER TABLE
+//     RENAME fails ("error in view v: no such table: main.observers"), and
+//     a view on a dropped view breaks it the same way. A trigger on a
+//     captured view (INSTEAD OF) mentions the view, so it is captured too —
+//     DROP VIEW takes it with it.
+//
+// The mention test is a case-insensitive whole-word match; a false positive
+// only means an unrelated view or trigger is dropped and recreated as is.
+// Indexes on other tables cannot reference observers and are never touched.
+// SQL is NULL for SQLite's own auto-indexes, which follow their table.
+func captureLocalObservers(ctx context.Context, tx *sql.Tx) ([]localObserver, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT type, name, tbl_name, sql FROM sqlite_master
+		WHERE type IN ('index', 'trigger', 'view') AND sql IS NOT NULL ORDER BY rowid`)
+	if err != nil {
+		return nil, fmt.Errorf("list observers dependents: %w", err)
+	}
+	var all []localObserver
+	for rows.Next() {
+		var o localObserver
+		if err := rows.Scan(&o.kind, &o.name, &o.table, &o.sql); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		all = append(all, o)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	owned := func(o localObserver) bool {
+		switch o.kind {
+		case "view":
+			return strings.EqualFold(o.name, "packets_v")
+		case "index":
+			return strings.EqualFold(o.name, "idx_observers_last_seen") || strings.EqualFold(o.name, "idx_observers_iata_norm")
+		}
+		return false
+	}
+	referenced := []string{"observers", "packets_v"}
+	captured := make([]bool, len(all))
+	// A view can mention one created after it, so repeat until nothing new
+	// is captured. The schema has tens of objects; quadratic is fine.
+	for changed := true; changed; {
+		changed = false
+		for i, o := range all {
+			if captured[i] || owned(o) {
+				continue
+			}
+			hit := strings.EqualFold(o.table, "observers")
+			if !hit && o.kind != "index" {
+				for _, name := range referenced {
+					if mentionsIdentifier(o.sql, name) {
+						hit = true
+						break
+					}
+				}
+			}
+			if hit {
+				captured[i], changed = true, true
+				if o.kind == "view" {
+					referenced = append(referenced, o.name)
+				}
+			}
+		}
+	}
+	var local []localObserver
+	for i, o := range all {
+		if captured[i] {
+			local = append(local, o)
+		}
+	}
+	return local, nil
+}
+
+// dropLocalObservers drops the captured views and the captured triggers on
+// other tables, newest first. Indexes and triggers on observers go with the
+// table; IF EXISTS covers a trigger its view already took.
+func dropLocalObservers(ctx context.Context, tx *sql.Tx, local []localObserver) error {
+	for i := len(local) - 1; i >= 0; i-- {
+		o := local[i]
+		if o.kind == "index" || (o.kind == "trigger" && strings.EqualFold(o.table, "observers")) {
+			continue
+		}
+		q := `DROP ` + strings.ToUpper(o.kind) + ` IF EXISTS "` + strings.ReplaceAll(o.name, `"`, `""`) + `"`
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("observers rebuild: %s: %w", q, err)
+		}
+	}
+	return nil
+}
+
+// mentionsIdentifier reports whether sqlText contains name as a whole word,
+// ignoring case. Word characters are those of an unquoted SQLite identifier
+// (ASCII letters, digits, _ and $, plus every non-ASCII byte), so quoted,
+// bracketed and schema-qualified uses all count.
+func mentionsIdentifier(sqlText, name string) bool {
+	text, word := strings.ToLower(sqlText), strings.ToLower(name)
+	isWord := func(c byte) bool {
+		return c == '_' || c == '$' || c >= 0x80 || ('a' <= c && c <= 'z') || ('0' <= c && c <= '9')
+	}
+	for from := 0; ; {
+		i := strings.Index(text[from:], word)
+		if i < 0 {
+			return false
+		}
+		start, end := from+i, from+i+len(word)
+		if (start == 0 || !isWord(text[start-1])) && (end == len(text) || !isWord(text[end])) {
+			return true
+		}
+		from = start + 1
+	}
 }
 
 // seedObserversSequence makes AUTOINCREMENT start above every integer an
