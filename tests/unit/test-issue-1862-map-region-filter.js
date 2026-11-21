@@ -60,6 +60,7 @@ function makeSandbox(stored) {
   // (PR #2386 CI catch: map.js calls MC_isDarkTheme() during page render.)
   ctx.window.MC_isDarkTheme = () => false;
   ctx.window.MC_resolveTile = () => ({ type: 'light', id: null, url: 'https://tiles.example/{z}/{x}/{y}.png', attribution: 'test', maxZoom: 19, refUrl: null, invertFilter: null });
+  ctx.window.MC_attachAutoTiles = () => ({ group: {}, sync() {}, destroy() {} });
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
   vm.runInContext(fs.readFileSync('public/map.js', 'utf8'), ctx);
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
@@ -369,6 +370,7 @@ async function makePage(opts) {
   // depends on them (index.html load order).
   ctx.window.MC_isDarkTheme = () => false;
   ctx.window.MC_resolveTile = () => ({ type: 'light', id: null, url: 'https://tiles.example/{z}/{x}/{y}.png', attribution: 'test', maxZoom: 19, refUrl: null, invertFilter: null });
+  ctx.window.MC_attachAutoTiles = () => ({ group: {}, sync() {}, destroy() {} });
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
   vm.runInContext(fs.readFileSync('public/map.js', 'utf8'), ctx);
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
