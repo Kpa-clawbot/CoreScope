@@ -287,13 +287,19 @@ func TestObserversIdxNeverReused(t *testing.T) {
 
 func legacyFullDB(t *testing.T) *sql.DB {
 	t.Helper()
+	return legacyDBWith(t, legacyObserversDDL, `INSERT INTO observers (id, name) VALUES ('a', 'A'), ('b', 'B')`)
+}
+
+// legacyDBWith is legacyFullDB with the given observers table and seed rows.
+func legacyDBWith(t *testing.T, observersDDL, seed string) *sql.DB {
+	t.Helper()
 	db := writerDB(t, filepath.Join(t.TempDir(), "legacy.db"))
 	mustExec(t, db,
 		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY AUTOINCREMENT, raw_hex TEXT NOT NULL, hash TEXT NOT NULL UNIQUE, first_seen TEXT NOT NULL, route_type INTEGER, payload_type INTEGER, payload_version INTEGER, decoded_json TEXT, created_at TEXT)`,
 		`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT, transmission_id INTEGER NOT NULL REFERENCES transmissions(id), observer_idx INTEGER, direction TEXT, snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp INTEGER NOT NULL, raw_hex TEXT)`,
-		legacyObserversDDL,
+		observersDDL,
 		`CREATE INDEX idx_observers_last_seen ON observers(last_seen)`,
-		`INSERT INTO observers (id, name) VALUES ('a', 'A'), ('b', 'B')`,
+		seed,
 	)
 	// As the ingestor leaves it before dbschema.Apply: the legacy-shape view.
 	if err := EnsurePacketsView(db); err != nil {

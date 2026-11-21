@@ -21,6 +21,22 @@ func TestAssertReadyRequiresObserversIdxPrimaryKey(t *testing.T) {
 			`ALTER TABLE observers ADD COLUMN idx INTEGER`,
 			`UPDATE observers SET idx = rowid`,
 		}, "observers.idx (not the primary key)"},
+		{"idx TEXT primary key", []string{
+			`DROP TABLE observers`,
+			idxTextPKObserversDDL,
+		}, "observers.idx (not the primary key)"},
+		{"composite primary key", []string{
+			`DROP TABLE observers`,
+			idxCompositePKObserversDDL,
+		}, "observers.idx (not the primary key)"},
+		{"INTEGER PRIMARY KEY DESC", []string{
+			`DROP TABLE observers`,
+			idxDescPKObserversDDL,
+		}, "observers.idx (not the primary key)"},
+		{"WITHOUT ROWID", []string{
+			`DROP TABLE observers`,
+			idxWithoutRowidObserversDDL,
+		}, "observers.idx (not the primary key)"},
 		{"no idx column", []string{
 			`DROP TABLE observers`,
 			legacyObserversDDL,

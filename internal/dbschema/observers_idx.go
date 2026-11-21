@@ -104,7 +104,12 @@ func EnsurePacketsView(rw *sql.DB) error {
 
 // observersColumnsInfo returns the observers table's column names
 // (lower-cased; empty if the table doesn't exist) and whether idx is already
-// its INTEGER PRIMARY KEY.
+// its rowid alias — the only key observations.observer_idx can rely on. That
+// takes all of: idx is the sole primary-key column, declared exactly INTEGER,
+// and the key has no separate index. SQLite builds a "pk"-origin index for
+// any primary key that is not the rowid, which also catches the two shapes
+// that pass the first tests yet alias nothing: `INTEGER PRIMARY KEY DESC`
+// (a documented quirk) and a WITHOUT ROWID table.
 func observersColumnsInfo(ctx context.Context, q interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }) (cols []string, idxIsPK bool, err error) {
@@ -113,6 +118,7 @@ func observersColumnsInfo(ctx context.Context, q interface {
 		return nil, false, err
 	}
 	defer rows.Close()
+	idxIntegerPK, otherPK := false, false
 	for rows.Next() {
 		var cid, notnull, pk int
 		var name string
@@ -122,19 +128,40 @@ func observersColumnsInfo(ctx context.Context, q interface {
 		}
 		name = strings.ToLower(name)
 		cols = append(cols, name)
-		if name == "idx" && pk == 1 {
-			idxIsPK = true
+		switch {
+		case name == "idx" && pk == 1:
+			idxIntegerPK = strings.EqualFold(strings.TrimSpace(ctype.String), "INTEGER")
+		case pk > 0:
+			otherPK = true
 		}
 	}
-	return cols, idxIsPK, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	// Close before the next query: on a one-connection pool (the ingestor's)
+	// a second query with these rows still open would wait forever.
+	rows.Close()
+	if !idxIntegerPK || otherPK {
+		return cols, false, nil
+	}
+	pkIndexes, err := q.QueryContext(ctx, `SELECT 1 FROM pragma_index_list('observers') WHERE origin = 'pk'`)
+	if err != nil {
+		return nil, false, err
+	}
+	defer pkIndexes.Close()
+	if pkIndexes.Next() {
+		return cols, false, nil
+	}
+	return cols, true, pkIndexes.Err()
 }
 
 // ensureObserversIdx rebuilds a legacy observers table (implicit rowid only)
 // into the explicit-idx shape, preserving every row's rowid as its idx so all
 // existing observations.observer_idx values keep pointing at the same
-// observer. Idempotent: a table that already has idx as its primary key is
-// left alone. Fails closed — without touching the table — on any column the
-// canonical shape doesn't know (the rebuild would drop it) or a NULL id (a
+// observer. Idempotent: a table whose idx is already the rowid alias (see
+// observersColumnsInfo) is left alone. Fails closed — without touching the
+// table — on any column the canonical shape doesn't know (the rebuild would
+// drop it; that includes an idx that is not the rowid alias) or a NULL id (a
 // legacy `TEXT PRIMARY KEY` admits one; the new NOT NULL would reject it).
 //
 // MUST run last in Apply: the ensure*Column steps before it bring a legacy
@@ -201,8 +228,9 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 	hasCol := make(map[string]bool, len(cols))
 	for _, c := range cols {
 		hasCol[c] = true
-		// idx is canonical only as the PRIMARY KEY; a plain idx column here
-		// would be clobbered by the copy, so it counts as unknown.
+		// idx is canonical only as the rowid alias; any other idx column
+		// (plain, or a key that is not the rowid) would be clobbered by the
+		// copy, so it counts as unknown.
 		if !known[c] || c == "idx" {
 			unknown = append(unknown, c)
 		}
