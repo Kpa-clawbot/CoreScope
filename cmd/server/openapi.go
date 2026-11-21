@@ -226,6 +226,7 @@ func routeDescriptions() map[string]routeMeta {
 			}},
 
 		// Analytics
+		"GET /api/analytics/roles":           {Summary: "Node roles and clock-skew statistics", Description: "Groups this instance's cached node roster by role. Query parameters do not filter the result. Results may lag newly loaded data. An unavailable store or empty roster returns totalNodes: 0 and roles: []. Responses use Cache-Control: no-store.", Tag: "analytics", Response: schemaRef("RoleAnalyticsResponse")},
 		"GET /api/analytics/rf":              {Summary: "RF analytics", Description: "SNR/RSSI distributions and statistics.", Tag: "analytics"},
 		"GET /api/analytics/topology":        {Summary: "Network topology", Description: "Hop-count distribution and route analysis.", Tag: "analytics"},
 		"GET /api/analytics/channels":        {Summary: "Channel analytics", Description: "Message counts and activity per channel.", Tag: "analytics"},
@@ -401,6 +402,28 @@ func componentSchemas() map[string]interface{} {
 				"thresholds": {Type: "object", Required: []string{"low_mv", "critical_mv"}, Properties: map[string]openAPISchema{
 					"low_mv":      {Type: "integer", Description: "Configured low-battery threshold in millivolts; default 3300."},
 					"critical_mv": {Type: "integer", Description: "Configured critical-battery threshold in millivolts; default 3000."},
+				}},
+			},
+		},
+		"RoleAnalyticsResponse": openAPISchema{
+			Type: "object", Required: []string{"totalNodes", "roles"},
+			Properties: map[string]openAPISchema{
+				"totalNodes": {Type: "integer", Description: "Total nodes in the cached roster, including nodes without clock-skew data."},
+				"roles": {Type: "array", Description: "Role groups ordered by nodeCount descending, then role name ascending. Empty array when no nodes are available.", Items: &openAPISchema{
+					Type: "object", Description: "Each group summarizes one role's population and clock skew. For each node with clock-skew data, the mean and median use the absolute corrected recentMedianSkewSec, falling back to the absolute lastSkewSec when the recent median is zero. Both statistics are in seconds, rounded to two decimal places, and zero when no clock-skew data is available. The five severity counters exclude bimodal_clock, so their sum can be smaller than withSkew.",
+					Required: []string{"role", "nodeCount", "withSkew", "meanAbsSkewSec", "medianAbsSkewSec", "okCount", "warningCount", "criticalCount", "absurdCount", "noClockCount"},
+					Properties: map[string]openAPISchema{
+						"role":             {Type: "string", Description: "The stored role has surrounding whitespace removed and letters lowercased. Empty roles become `unknown`."},
+						"nodeCount":        {Type: "integer", Description: "Nodes in this role in the cached roster, including nodes without clock-skew data."},
+						"withSkew":         {Type: "integer", Description: "Nodes in this role with clock-skew data, including no_clock and bimodal_clock classifications."},
+						"meanAbsSkewSec":   {Type: "number", Description: "This is the mean absolute corrected skew in seconds across nodes with clock-skew data."},
+						"medianAbsSkewSec": {Type: "number", Description: "This is the median absolute corrected skew in seconds across nodes with clock-skew data."},
+						"okCount":          {Type: "integer", Description: "Nodes whose clock-skew severity is ok."},
+						"warningCount":     {Type: "integer", Description: "Nodes whose clock-skew severity is warning."},
+						"criticalCount":    {Type: "integer", Description: "Nodes whose clock-skew severity is critical."},
+						"absurdCount":      {Type: "integer", Description: "Nodes whose clock-skew severity is absurd."},
+						"noClockCount":     {Type: "integer", Description: "Nodes whose clock-skew severity is no_clock. Does not count nodes with missing clock-skew data."},
+					},
 				}},
 			},
 		},
