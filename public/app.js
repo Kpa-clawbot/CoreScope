@@ -1423,6 +1423,9 @@ function navigate() {
     }
     // #630-7: SPA focus management — move focus to first heading or main content
     requestAnimationFrame(function() {
+      // A preview may remain open on detail routes. Check now, after any
+      // cross-page hashchange cleanup has closed it, to preserve route focus.
+      if (window.SlideOver && window.SlideOver.isOpen()) return;
       var heading = app.querySelector('h1, h2, h3, [role="heading"]');
       if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); }
       else { app.setAttribute('tabindex', '-1'); app.focus({ preventScroll: true }); }
