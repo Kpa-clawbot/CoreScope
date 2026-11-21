@@ -301,6 +301,13 @@
     history.replaceState(null, '', '#/nodes' + subpath + buildNodesQuery(activeTab, search));
   }
 
+  function effectiveLastHeardIso(n, stats) {
+    // Retain the health timestamp so status helpers use the same observations.
+    n._lastHeard = stats.lastHeard || n.last_seen;
+    const heardMs = window.getEffectiveHeardMs(n);
+    return isNaN(heardMs) ? null : new Date(heardMs).toISOString();
+  }
+
   function renderNodeTimestampHtml(isoString) {
     if (typeof renderTimestampHtml !== 'function') {
       return escapeHtml(typeof timeAgo === 'function' ? timeAgo(isoString) : '—');
@@ -944,12 +951,7 @@
       const observers = h.observers || [];
       const relayObserverCount = Number(h.relayObserverCount) || 0;
       const recent = h.recentPackets || [];
-      // Attach health lastHeard for shared helpers. Displayed: the newest of
-      // it, the node's last_heard and last_seen (#2260); either fetch may be
-      // the fresher one.
-      n._lastHeard = stats.lastHeard || n.last_seen;
-      const effMs = window.getEffectiveHeardMs(n);
-      const lastHeard = isNaN(effMs) ? null : new Date(effMs).toISOString();
+      const lastHeard = effectiveLastHeardIso(n, stats);
       const si = getStatusInfo(n);
       const roleColor = si.roleColor;
       const statusLabel = si.statusLabel;
@@ -2031,7 +2033,8 @@
         const name = n.name || n.advert_name;
         if (titleEl) titleEl.textContent = name || (n.public_key ? n.public_key.slice(0, 10) : 'Node');
         var role = (n.role || '').toString();
-        var lastHeard = n.last_heard || n.last_seen;
+        const stats = data?.healthData?.stats || {};
+        const lastHeard = effectiveLastHeardIso(n, stats);
         so.innerHTML =
           '<dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
             '<dt>Name</dt><dd>' + escapeHtml(name || '—') + '</dd>' +
@@ -2085,11 +2088,7 @@
     const hasLoc = n.lat != null && n.lon != null;
     const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
 
-    // Status calculation via shared helper. Displayed: the newest of the
-    // health lastHeard, the node's last_heard and last_seen (#2260).
-    n._lastHeard = stats.lastHeard || n.last_seen;
-    const effMs = window.getEffectiveHeardMs(n);
-    const lastHeard = isNaN(effMs) ? null : new Date(effMs).toISOString();
+    const lastHeard = effectiveLastHeardIso(n, stats);
     const si = getStatusInfo(n);
     const roleColor = si.roleColor;
     const totalPackets = stats.totalTransmissions || stats.totalPackets || n.advert_count || 0;
