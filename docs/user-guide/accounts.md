@@ -367,6 +367,48 @@ The feed is JSON, at most 1 MB, fetched once per check while someone has the eve
   The server log says when the feed stops and starts being usable.
 - The server only reads the feed; the states live in `users.db` like the other events.
 
+#### Pushover (optional)
+
+[Pushover](https://pushover.net) delivers alerts to its own app on iOS, Android and the
+desktop. With it on, each user can add their Pushover user key and get the same alerts
+as email, in the Pushover app. CoreScope sends them straight to Pushover; no relay is
+involved.
+
+1. Create an application at [pushover.net/apps/build](https://pushover.net/apps/build)
+   and copy its 30-character API token.
+2. Set `CORESCOPE_PUSHOVER_TOKEN` to that token in the server environment. Keep it out
+   of `config.json` and the web customizer.
+3. Add a `pushover` block inside `userManagement.notifications` and restart:
+
+```json
+"notifications": {
+  "enabled": true,
+  "pushover": { "maxPerMonth": 7500 }
+}
+```
+
+CoreScope refuses to start with the block but without a valid token.
+
+Users then open **My account → Notifications → Pushover**, enter the user key from their
+pushover.net dashboard, and use **Send test** to check it. CoreScope checks every key
+with Pushover before saving it.
+
+- Pushover uses the events a user chose for notifications, and has its own on and off:
+  turning notification mails off, or the unsubscribe link in a mail, doesn't stop
+  Pushover, and the reverse.
+- All of a user's changes in one check go into one message, with a link to the node or,
+  for several changes, to the notification settings. CoreScope sends Pushover the
+  instance's host name as the title and the same lines a mail would contain: node
+  names, what changed and when.
+- Messages wait in `users.db` and are sent within seconds. A message Pushover can't take
+  is retried with backoff for up to an hour, then dropped. If Pushover rejects a user's
+  key, CoreScope turns Pushover off for that user; saving the key again turns it back on.
+- `maxPerMonth` (default 7,500) caps the messages the instance sends in 30 days, test
+  messages included. Pushover's free tier allows 10,000 per application per month.
+  Messages queued after the cap is reached expire unsent.
+- The key is personal data: the account export includes it, and deleting the account or
+  the key removes it and any queued messages.
+
 #### Mobile push (optional)
 
 With push enabled, a signed-in user's watched-node alerts also arrive as push

@@ -244,6 +244,58 @@ test('a failed load shows the server message', async () => {
   assert.strictEqual(env.els.notifyMsg.textContent, 'internal error');
 });
 
+console.log('notifications.js: Pushover');
+
+const POKEY = 'u'.repeat(30);
+
+test('no Pushover block unless the instance offers it', async () => {
+  const env = load();
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  assert(env.els.notifySection.innerHTML.indexOf('Pushover') === -1, env.els.notifySection.innerHTML);
+});
+
+test('Pushover key form checks the key, saves it and redraws the saved state', async () => {
+  const saved = STATE({ pushover: { configured: true, enabled: true, keyHint: '<i>' } });
+  const env = load({ routes: (m) => ({ ok: true, status: 200, data: m === 'GET' ? STATE({ pushover: { configured: false, enabled: false } }) : saved }) });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  assert(env.els.notifySection.innerHTML.indexOf('id="notifyPushoverKey"') !== -1, env.els.notifySection.innerHTML);
+  env.document.getElementById('notifyPushoverKey').value = 'too short';
+  await env.els.notifyPushoverForm.handlers.submit({ preventDefault() {} });
+  assert.strictEqual(env.calls.length, 1, 'a malformed key was sent');
+  assert(/30 letters and digits/.test(env.els.notifyMsg.textContent));
+  env.document.getElementById('notifyPushoverKey').value = '  ' + POKEY + ' ';
+  await env.els.notifyPushoverForm.handlers.submit({ preventDefault() {} });
+  assert.deepStrictEqual(plain(env.calls[1]), { method: 'PUT', p: '/api/account/notifications/pushover', body: { userKey: POKEY } });
+  const html = env.els.notifySection.innerHTML;
+  assert(html.indexOf('ending in &lt;i&gt;') !== -1 && html.indexOf('<i>') === -1, html);
+  assert(html.indexOf('id="notifyPushoverEnabled" checked') !== -1, html);
+});
+
+test('saved Pushover key: turn off, test, remove', async () => {
+  const on = STATE({ pushover: { configured: true, enabled: true, keyHint: 'uuuu' } });
+  let testOk = true;
+  const env = load({ routes: (m, p, body) => {
+    if (p.endsWith('/test')) return testOk ? { ok: true, status: 204, data: null } : { ok: false, status: 400, data: { error: "Pushover doesn't recognize this user key." } };
+    if (m === 'PUT') return { ok: true, status: 200, data: STATE({ pushover: { configured: true, enabled: body.enabled, keyHint: 'uuuu' } }) };
+    if (m === 'DELETE') return { ok: true, status: 200, data: STATE({ pushover: { configured: false, enabled: false } }) };
+    return { ok: true, status: 200, data: on };
+  } });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  await env.els.notifyPushoverTest.handlers.click();
+  assert.deepStrictEqual(plain(env.calls[1]), { method: 'POST', p: '/api/account/notifications/pushover/test' });
+  assert(/Test sent/.test(env.els.notifyMsg.textContent));
+  testOk = false;
+  await env.els.notifyPushoverTest.handlers.click();
+  assert(/doesn't recognize/.test(env.els.notifyMsg.textContent));
+  assert.strictEqual(env.calls[3].method, 'GET', 'a failed test reloads the state');
+  await env.els.notifyPushoverEnabled.handlers.change({ target: { checked: false } });
+  assert.deepStrictEqual(plain(env.calls[4]), { method: 'PUT', p: '/api/account/notifications/pushover', body: { enabled: false } });
+  assert(env.els.notifySection.innerHTML.indexOf('id="notifyPushoverTest" disabled') !== -1, 'test stays off while Pushover is off');
+  await env.els.notifyPushoverRemove.handlers.click();
+  assert.strictEqual(env.calls[5].method, 'DELETE');
+  assert(env.els.notifySection.innerHTML.indexOf('id="notifyPushoverKey"') !== -1, 'the key form is back');
+});
+
 test('a second click while a request is in flight sends nothing', async () => {
   let release;
   const gate = new Promise((res) => { release = res; });

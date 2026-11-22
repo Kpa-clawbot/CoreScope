@@ -128,6 +128,27 @@
     }).join('') + '</ul>';
   }
 
+  // pushoverHtml is the Pushover block, shown only while the instance
+  // offers it: a field for the user key, or the saved key's controls.
+  function pushoverHtml(data) {
+    var po = data.pushover;
+    if (!po) return '';
+    var html = '<h4>Pushover</h4>';
+    if (!po.configured) {
+      return html + '<p class="account-hint">Get these alerts in the Pushover app too. Enter the user key shown on your pushover.net dashboard. Pushover uses the events chosen above and has its own on and off, separate from mail.</p>' +
+        '<form id="notifyPushoverForm" class="account-form" novalidate>' +
+        '<label class="account-field" for="notifyPushoverKey">Pushover user key' +
+        '<input type="text" id="notifyPushoverKey" autocomplete="off" spellcheck="false" maxlength="30" inputmode="text"></label>' +
+        '<button type="submit" class="account-btn account-btn-primary">Save key</button></form>';
+    }
+    return html + '<p class="account-hint">' + escapeHtml('Pushover user key ending in ' + (po.keyHint || '…') + '.') + '</p>' +
+      '<label class="account-check" for="notifyPushoverEnabled"><input type="checkbox" id="notifyPushoverEnabled"' + (po.enabled ? ' checked' : '') +
+      '> Send alerts to Pushover</label>' +
+      '<div class="account-actions">' +
+      '<button type="button" class="account-btn account-btn-secondary" id="notifyPushoverTest"' + (po.enabled ? '' : ' disabled') + '>Send test</button>' +
+      '<button type="button" class="account-btn account-btn-secondary" id="notifyPushoverRemove">Remove key</button></div>';
+  }
+
   function sectionHtml(data) {
     var lim = data.limits || {};
     return '<form id="notifyForm" class="account-form" novalidate>' +
@@ -135,6 +156,7 @@
       '<fieldset class="account-fieldset"><legend>Events</legend>' + eventsHtml(data) + '</fieldset>' +
       '<p class="account-hint">' + escapeHtml('At most ' + lim.perUserPerDay + ' mails per 24 hours; sent in the last 24 hours: ' + lim.mailsLast24h + '.') + '</p>' +
       '<button type="submit" class="account-btn account-btn-primary">Save</button></form>' +
+      pushoverHtml(data) +
       '<h4>' + escapeHtml('Watched nodes (' + data.watches.length + ' of ' + lim.maxWatches + ')') + '</h4>' +
       '<div id="notifyWatches">' + watchesHtml(data) + '</div>' +
       '<button type="button" class="account-btn account-btn-secondary" id="notifyMyNodes">Watch my nodes</button>';
@@ -180,6 +202,7 @@
         }, failed(msgId));
       });
     });
+    if (data.pushover) bindPushover(el, msgId, data, guarded);
     document.getElementById('notifyMyNodes').addEventListener('click', function () {
       return guarded(function () {
         return window.CSAuth.request('POST', '/api/account/notifications/watch-my-nodes').then(function (r) {
@@ -189,6 +212,51 @@
           sayIn(msgId, (d.added + d.already + d.skipped) === 0
             ? 'Your synced My nodes list is empty. Add nodes to My nodes on the Nodes page and turn on settings sync.'
             : 'Added ' + d.added + ', already watched ' + d.already + ', skipped ' + d.skipped + '.', true);
+        }, failed(msgId));
+      });
+    });
+  }
+
+  function bindPushover(el, msgId, data, guarded) {
+    var path = '/api/account/notifications/pushover';
+    function update(method, body, done) {
+      return guarded(function () {
+        return window.CSAuth.request(method, path, body).then(function (r) {
+          if (!r.ok) { sayIn(msgId, window.CSAuth.errText(r), false); return; }
+          draw(el, msgId, store(r.data));
+          sayIn(msgId, done, true);
+        }, failed(msgId));
+      });
+    }
+    if (!data.pushover.configured) {
+      document.getElementById('notifyPushoverForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var key = document.getElementById('notifyPushoverKey');
+        var value = key ? String(key.value || '').trim() : '';
+        if (!/^[A-Za-z0-9]{30}$/.test(value)) {
+          sayIn(msgId, 'A Pushover user key is 30 letters and digits.', false);
+          return;
+        }
+        return update('PUT', { userKey: value }, 'Pushover is on. Send a test to check it.');
+      });
+      return;
+    }
+    document.getElementById('notifyPushoverEnabled').addEventListener('change', function (e) {
+      var on = !!e.target.checked;
+      return update('PUT', { enabled: on }, on ? 'Pushover is on.' : 'Pushover is off.');
+    });
+    document.getElementById('notifyPushoverRemove').addEventListener('click', function () {
+      return update('DELETE', undefined, 'Pushover key removed.');
+    });
+    document.getElementById('notifyPushoverTest').addEventListener('click', function () {
+      return guarded(function () {
+        return window.CSAuth.request('POST', path + '/test').then(function (r) {
+          if (!r.ok) {
+            sayIn(msgId, window.CSAuth.errText(r), false);
+            // A rejected key is turned off on the server; show that.
+            return mountSection(el, msgId);
+          }
+          sayIn(msgId, 'Test sent. It should arrive in Pushover in a few seconds.', true);
         }, failed(msgId));
       });
     });
