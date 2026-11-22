@@ -299,13 +299,28 @@ The feed is JSON, at most 1 MB, fetched once per check while someone has the eve
   The server log says when the feed stops and starts being usable.
 - The server only reads the feed; the states live in `users.db` like the other events.
 
-#### NodeScope push pilot
+#### NodeScope push (optional)
 
-Use a separate relay enrollment, analyzer data directory and accounts for staging.
-Enable user management and keep `userManagement.notifications.enabled` set to
-`true`. Configure [Brevo or Postal](#1-get-a-brevo-account) so test users can
-receive their account activation email. Give each analyzer hostname its own
-HTTPS route at your reverse proxy or tunnel, pointing to the correct analyzer.
+[NodeScope](https://nodescope.app) is a mobile app for CoreScope. With push
+enabled, a signed-in NodeScope user's watched-node alerts also arrive as push
+notifications on their phone. CoreScope decides when an alert fires, with the
+same rules as email; it sends each alert to the NodeScope push relay, which
+forwards it to Apple or Google for delivery.
+
+For each alert, CoreScope sends the relay the alert type, the node's public key
+and name, when it happened, and the opaque subscription ID of the device link.
+Linking a device passes the relay the device's installation ID and a one-time
+proof from the app. CoreScope sends no email addresses, account names,
+locations or messages. Phones register their push tokens with the relay
+themselves, so CoreScope never sees them. The relay's source code and API are
+public at
+[github.com/anieto/nodescope-push-relay](https://github.com/anieto/nodescope-push-relay),
+so you can check what it receives and keeps.
+
+Push needs user management with `userManagement.notifications.enabled` set to
+`true`, and a public HTTPS address in `userManagement.publicBaseUrl`. Nothing is
+sent to a relay until an admin enables it. For a staging deployment, use a
+separate relay enrollment, analyzer data directory and accounts.
 
 **Enroll from the admin page**
 
@@ -345,7 +360,8 @@ relay cannot reach the proof endpoint.
    `{"code":"<enrollment-code>","request_id":"enrollment-1"}`.
    HTTP 201 returns
    `{"analyzer_id":"<analyzer-id>","sender_credential":"<sender-credential>"}`.
-   See the NodeScope relay documentation for enrollment details.
+   See the [relay's README](https://github.com/anieto/nodescope-push-relay)
+   for enrollment details.
 4. Call `GET /v1/analyzer` with the sender credential as a bearer token.
    HTTP 200 returns
    `{"analyzer_id":"<analyzer-id>","origin":"https://analyzer.example.org","contract_version":1}`.
@@ -356,7 +372,7 @@ relay cannot reach the proof endpoint.
    in the service environment as `CORESCOPE_NODESCOPE_PUSH_CREDENTIAL`.
    Keep the credential out of the web customizer and logs.
 6. Restart CoreScope. Run one CoreScope notifier per analyzer account
-   database during the pilot.
+   database.
 7. Sign in to CoreScope and confirm that `GET /api/account/notifications`
    includes `nodeScopePush` with the expected relay origin, analyzer ID
    and platforms.
