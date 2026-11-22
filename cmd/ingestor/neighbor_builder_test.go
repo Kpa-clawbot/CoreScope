@@ -424,6 +424,8 @@ func TestNeighborEdgesBuilderSkipsTraceAndDirectRoutePaths(t *testing.T) {
 	add("direct-advert", RouteDirect, payloadADVERT, "aaaaaaaaaa", `["bb"]`)
 	add("transport-direct-txt", RouteTransportDirect, PayloadTXT_MSG, "", `["bb"]`)
 	add("zero-hop", RouteDirect, payloadADVERT, "cccccccccc", `[]`)
+	// sendDirect's last leg: empty path after removeSelfFromPath, sent by the forwarder.
+	add("direct-anon-req-empty", RouteDirect, payloadAnonReq, "aaaaaaaaaa", `[]`)
 
 	if _, err := store.buildAndPersistNeighborEdges(trustAllPrefixes()); err != nil {
 		t.Fatalf("buildAndPersistNeighborEdges: %v", err)

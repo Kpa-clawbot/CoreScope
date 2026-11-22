@@ -312,16 +312,20 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 	// Phase 1: Extract edges from every transmission + observation.
 	for _, p := range packets {
 		tx := p.tx
-		// TRACE reuses the path bytes for per-hop SNR values: they name no node.
-		if tx.PayloadType != nil && !packetpath.PathBytesAreHops(byte(*tx.PayloadType)) {
+		// Only a path that lists transmitted hops names a neighbour
+		// (packetpath.PathHopsTransmitted: flood, not TRACE), and an empty
+		// path only when it proves the originator was heard
+		// (packetpath.EmptyPathHeardOriginator). A missing route or payload
+		// type proves nothing.
+		if tx.RouteType == nil || tx.PayloadType == nil {
 			continue
 		}
-		// A direct route carries the REMAINING route: a forwarder removes
-		// itself before retransmitting (firmware Mesh.cpp removeSelfFromPath),
-		// so a non-empty path names neither the node the observer heard nor a
-		// neighbour of the originator. Only its zero hop (Mesh::sendZeroHop)
-		// says who was heard.
-		directRoute := tx.RouteType != nil && (*tx.RouteType == RouteDirect || *tx.RouteType == RouteTransportDirect)
+		rt, pt := *tx.RouteType, byte(*tx.PayloadType)
+		hopsTransmitted := packetpath.PathHopsTransmitted(rt, pt)
+		emptyHeardOrigin := packetpath.EmptyPathHeardOriginator(rt, pt)
+		if !hopsTransmitted && !emptyHeardOrigin {
+			continue
+		}
 		isAdvert := tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT
 		isAnonReq := tx.PayloadType != nil && *tx.PayloadType == PayloadANON_REQ
 		// #1777: ANON_REQ's ephemeralPubKey is a full Ed25519 pubkey — the
@@ -347,14 +351,14 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 
 			if len(path) == 0 {
 				// Zero-hop
-				if hasFullOriginator && fromLower != "" {
+				if emptyHeardOrigin && hasFullOriginator && fromLower != "" {
 					if fromLower != observerPK { // self-edge guard
 						g.upsertEdge(fromLower, observerPK, "", observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
 					}
 				}
 				continue
 			}
-			if directRoute {
+			if !hopsTransmitted {
 				continue
 			}
 
