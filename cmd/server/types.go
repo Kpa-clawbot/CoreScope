@@ -557,6 +557,20 @@ type SnrTrendEntry struct {
 	ObserverName interface{} `json:"observer_name"`
 }
 
+// HeardByObserver is one fixed observer that heard the node directly in the
+// analytics window. SNR fields are nil when no reception carried an SNR;
+// the two change medians are nil unless the change column applies.
+type HeardByObserver struct {
+	ObserverID       string   `json:"observer_id"`
+	ObserverName     string   `json:"observer_name"`
+	Count            int      `json:"count"`
+	MedianSNR        *float64 `json:"medianSnr"`
+	P10SNR           *float64 `json:"p10Snr"`
+	P90SNR           *float64 `json:"p90Snr"`
+	RecentMedianSNR  *float64 `json:"recentMedianSnr"`
+	EarlierMedianSNR *float64 `json:"earlierMedianSnr"`
+}
+
 type PayloadTypeCount struct {
 	PayloadType int `json:"payload_type"`
 	Count       int `json:"count"`
@@ -601,6 +615,7 @@ type NodeAnalyticsResponse struct {
 	TimeRange           TimeRangeResp           `json:"timeRange"`
 	ActivityTimeline    []TimeBucket            `json:"activityTimeline"`
 	SnrTrend            []SnrTrendEntry         `json:"snrTrend"`
+	HeardBy             []HeardByObserver       `json:"heardBy"`
 	PacketTypeBreakdown []PayloadTypeCount      `json:"packetTypeBreakdown"`
 	ObserverCoverage    []NodeObserverStatsResp `json:"observerCoverage"`
 	HopDistribution     []HopDistEntry          `json:"hopDistribution"`
@@ -608,6 +623,8 @@ type NodeAnalyticsResponse struct {
 	UptimeHeatmap       []HeatmapCell           `json:"uptimeHeatmap"`
 	ComputedStats       ComputedNodeStats       `json:"computedStats"`
 	ClockSkew           *NodeClockSkew          `json:"clockSkew,omitempty"`
+	// MobileReceptions is set only when clientRxCoverage is enabled.
+	MobileReceptions *MobileReceptionsSummary `json:"mobileReceptions,omitempty"`
 }
 
 // NodeHopPacket is one flood packet this node forwarded, with the hop count

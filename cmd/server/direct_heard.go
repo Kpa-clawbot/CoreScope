@@ -28,6 +28,7 @@ package main
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/meshcore-analyzer/packetpath"
 )
@@ -40,6 +41,18 @@ type directHeardAgg struct {
 	SNRCount     int
 	RSSISum      float64
 	RSSICount    int
+	// Hours holds hourly reception counts and SNR histograms, keyed by hours
+	// since the Unix epoch. Recent holds the newest receptions (at most
+	// heardRecentMax after the pass), oldest first.
+	Hours  map[int32]*heardHour
+	Recent []heardSample
+
+	// lastKey/lastHour skip the map lookup for consecutive receptions in
+	// the same hour, the common case in a time-ordered store.
+	lastKey  int32
+	lastHour *heardHour
+	// recentHead is the next slot to overwrite once Recent is full.
+	recentHead int
 }
 
 // directHeardIndex maps node pubkey (lowercase) to observer id to aggregate.
@@ -175,9 +188,58 @@ func buildDirectHeardIndex(packets []*StoreTx, pm *prefixMap) directHeardIndex {
 				agg.RSSISum += *obs.RSSI
 				agg.RSSICount++
 			}
+			if t, ok := obs.ParsedTime(); ok {
+				agg.addReception(t, obs.SNR, obs.RSSI)
+			}
+		}
+	}
+	for _, byObs := range idx {
+		for _, agg := range byObs {
+			agg.trimRecent()
 		}
 	}
 	return idx
+}
+
+// addReception records one timed reception in the hourly histogram and the
+// ring. Once the ring is full each reception overwrites the oldest;
+// trimRecent restores arrival order after the pass.
+func (a *directHeardAgg) addReception(t time.Time, snr, rssi *float64) {
+	if a.Hours == nil {
+		a.Hours = make(map[int32]*heardHour, 8)
+	}
+	key := int32(t.Unix() / 3600)
+	h := a.lastHour
+	if h == nil || a.lastKey != key {
+		h = a.Hours[key]
+		if h == nil {
+			h = &heardHour{Bins: make([]snrBin, 0, 8)}
+			a.Hours[key] = h
+		}
+		a.lastKey, a.lastHour = key, h
+	}
+	h.N++
+	if snr != nil {
+		h.addSNR(*snr)
+	}
+	smp := newHeardSample(t, snr, rssi)
+	if len(a.Recent) < heardRecentMax {
+		a.Recent = append(a.Recent, smp)
+		return
+	}
+	a.Recent[a.recentHead] = smp
+	a.recentHead = (a.recentHead + 1) % heardRecentMax
+}
+
+// trimRecent puts a wrapped ring back in arrival order, oldest first.
+func (a *directHeardAgg) trimRecent() {
+	if a.recentHead == 0 {
+		return
+	}
+	r := make([]heardSample, 0, len(a.Recent))
+	r = append(r, a.Recent[a.recentHead:]...)
+	a.Recent = append(r, a.Recent[:a.recentHead]...)
+	a.recentHead = 0
 }
 
 // computeDirectHeard rebuilds the whole index from the current store. Run by

@@ -10220,6 +10220,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	toISO := now.Format(time.RFC3339)
 	// Before s.mu: its rare inline rebuild must not run under the read lock.
 	_, pm := s.getCachedNodesAndPM()
+	// Also before s.mu, so the lock order stays s.mu → analyticsRecomputerMu.
+	directByObs := directHeardFor(s.loadDirectHeard(), pubkey)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -10272,19 +10274,11 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		}
 	}
 
-	// SNR trend
-	snrTrend := make([]SnrTrendEntry, 0)
-	for _, p := range packets {
-		if p.SNR != nil {
-			snrTrend = append(snrTrend, SnrTrendEntry{
-				Timestamp:    p.FirstSeen,
-				SNR:          floatPtrOrNil(p.SNR),
-				RSSI:         floatPtrOrNil(p.RSSI),
-				ObserverID:   strOrNil(p.ObserverID),
-				ObserverName: strOrNil(p.ObserverName),
-			})
-		}
-	}
+	// Signal: only receptions in which a fixed observer heard this node
+	// itself, from the direct-heard snapshot. A relayed copy measures the
+	// last relay's link, not this node's.
+	heardBy := heardByRows(directByObs, coveredFrom, now)
+	snrTrend := heardSnrTrend(directByObs, coveredFrom, snrTrendMax)
 
 	// Packet type breakdown
 	typeBuckets := map[int]int{}
@@ -10484,39 +10478,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 
 	longestSilenceMs, longestSilenceStart := longestSilence(certainKeys, coveredFrom, now)
 
-	// Signal grade & SNR stats
-	var snrMean, snrStdDev float64
-	if len(snrTrend) > 0 {
-		var sum float64
-		for _, e := range snrTrend {
-			if v, ok := e.SNR.(float64); ok {
-				sum += v
-			}
-		}
-		snrMean = sum / float64(len(snrTrend))
-		if len(snrTrend) > 1 {
-			var sqSum float64
-			for _, e := range snrTrend {
-				if v, ok := e.SNR.(float64); ok {
-					sqSum += (v - snrMean) * (v - snrMean)
-				}
-			}
-			snrStdDev = math.Sqrt(sqSum / float64(len(snrTrend)))
-		}
-	}
-
-	signalGrade := "D"
-	if snrMean > 15 && snrStdDev < 2 {
-		signalGrade = "A"
-	} else if snrMean > 15 {
-		signalGrade = "A-"
-	} else if snrMean > 12 && snrStdDev < 3 {
-		signalGrade = "B+"
-	} else if snrMean > 8 {
-		signalGrade = "B"
-	} else if snrMean > 3 {
-		signalGrade = "C"
-	}
+	// Signal grade & SNR stats, each observer weighted once.
+	snrMean, snrStdDev, signalGrade := signalFromMedians(heardBy)
 
 	var relayPct float64
 	if totalWithPath > 0 {
@@ -10531,6 +10494,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days, DataFrom: dataFrom, DataFromReason: dataFromReason, Partial: dataFrom != ""},
 		ActivityTimeline:    activityTimeline,
 		SnrTrend:            snrTrend,
+		HeardBy:             heardBy,
 		PacketTypeBreakdown: packetTypeBreakdown,
 		ObserverCoverage:    observerCoverage,
 		HopDistribution:     hopDistribution,
@@ -10545,7 +10509,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 			SnrStdDev:           round(snrStdDev, 1),
 			RelayPct:            relayPct,
 			TotalPackets:        totalPackets,
-			UniqueObservers:     len(observerCoverage),
+			UniqueObservers:     len(heardBy),
 			UniquePeers:         len(peerSlice),
 			AvgPacketsPerDay:    avgPacketsPerDay,
 		},

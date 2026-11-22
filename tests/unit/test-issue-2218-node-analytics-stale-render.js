@@ -35,7 +35,7 @@ function load() {
   const calls = [];
   const nav = { gen: 0 };
   const hop = { loads: 0 };
-  const mkEl = () => ({ style: {}, textContent: '', innerHTML: '',
+  const mkEl = () => ({ style: {}, textContent: '', innerHTML: '', addEventListener() {},
     insertAdjacentText(position, text) { this.textContent += text; },
   });
   const ctx = {
