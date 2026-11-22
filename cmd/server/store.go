@@ -10002,8 +10002,6 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 	for _, n := range nodes {
 		packets := s.byNode[n.pk]
 		var packetsToday int
-		var snrSum float64
-		var snrCount int
 		// Certain evidence only (#2260): packets merely attributed to the node
 		// (an ambiguous 1-byte hop) still count in the stats below.
 		lastHeard := s.certainHeard[n.pk]
@@ -10021,10 +10019,6 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 			if pkt.FirstSeen > todayStart {
 				packetsToday++
 			}
-			if pkt.SNR != nil {
-				snrSum += *pkt.SNR
-				snrCount++
-			}
 			if pkt.ObserverID != "" {
 				relayObservers[pkt.ObserverID] = struct{}{}
 			}
@@ -10034,10 +10028,8 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 		observerRows := buildDirectObserverRows(directByObs, nonRelaySet, seenSet)
 		relayObserverCount := relayOnlyObserverCount(relayObservers, directByObs)
 
-		var avgSnr interface{}
-		if snrCount > 0 {
-			avgSnr = snrSum / float64(snrCount)
-		}
+		// Direct receptions only, see direct_heard.go.
+		avgSnr := directAvgSNR(directByObs)
 		var lhVal interface{}
 		if lastHeard != "" {
 			lhVal = lastHeard
@@ -10102,8 +10094,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	todayStart := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 
 	var packetsToday int
-	var snrSum float64
-	var snrCount int
 	var totalHops, hopCount int
 	// Certain evidence only (#2260): see GetBulkHealth.
 	lastHeard := s.certainHeard[pubkey]
@@ -10121,10 +10111,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		if pkt.FirstSeen > todayStart {
 			packetsToday++
 		}
-		if pkt.SNR != nil {
-			snrSum += *pkt.SNR
-			snrCount++
-		}
 		// Hop counting
 		hops := txGetParsedPath(pkt)
 		if len(hops) > 0 {
@@ -10140,10 +10126,8 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	observerRows := buildDirectObserverRows(directByObs, nonRelaySet, seenSet)
 	relayObserverCount := relayOnlyObserverCount(relayObservers, directByObs)
 
-	var avgSnr interface{}
-	if snrCount > 0 {
-		avgSnr = snrSum / float64(snrCount)
-	}
+	// Direct receptions only, see direct_heard.go.
+	avgSnr := directAvgSNR(directByObs)
 	avgHops := 0
 	if hopCount > 0 {
 		avgHops = int(math.Round(float64(totalHops) / float64(hopCount)))
