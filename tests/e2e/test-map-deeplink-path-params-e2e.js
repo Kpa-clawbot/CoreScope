@@ -6,10 +6,13 @@
  *       isolated in the path picker (row active), as if the row was clicked.
  *   #/map?packet=<hash>&paths=all
  *     → the picker opens in its "All" union view, as if All was clicked.
+ *   Clicking All writes paths=all to the hash; isolating a path removes it.
  *
  * Uses the CI-seeded #1486 transmission (SEED_HASH): three observations,
  * observers idx 1/2/3 on paths ["AA"], ["BB"], ["CC"]. When running
  * locally, seed the same row (see .github/workflows/deploy.yml for the SQL).
+ * One-hop paths have no edge to draw, so the All button case serves that
+ * packet with three two-hop paths between located fixture nodes.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-map-deeplink-path-params-e2e.js
  */
@@ -98,6 +101,65 @@ const active = s => s.rows.filter(r => r.active).map(r => r.key);
   await step('unknown observer falls back to the default view', async () => {
     const s = await openRoute(page, '&observer=00000000');
     assert(active(s).length === 0 && !s.union, 'expected the default view');
+  });
+
+  await step('All writes paths=all to the hash, and a reload draws every path again', async () => {
+    const nodes = ((await (await ctx.request.get(BASE + '/api/nodes?limit=2000')).json()).nodes || [])
+      .filter(n => n.lat && n.lon && n.public_key);
+    // Hops far enough apart that no two paths can share an edge.
+    const byPrefix = new Map();
+    const places = new Set();
+    for (const n of nodes) {
+      const prefix = n.public_key.slice(0, 6).toUpperCase();
+      const place = n.lat + ',' + n.lon;
+      if (byPrefix.has(prefix) || places.has(place)) continue;
+      places.add(place);
+      byPrefix.set(prefix, n);
+      if (byPrefix.size === 6) break;
+    }
+    const hops = [...byPrefix.keys()];
+    assert(hops.length === 6, 'fixture needs 6 located nodes, got ' + hops.length);
+    const paths = [hops.slice(0, 2), hops.slice(2, 4), hops.slice(4, 6)];
+
+    const p = await ctx.newPage();
+    p.setDefaultTimeout(15000);
+    await p.route('**/api/packets/' + SEED_HASH, async route => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.observations.forEach((o, i) => {
+        o.path_json = JSON.stringify(paths[i]);
+        o.resolved_path = null;
+      });
+      await route.fulfill({ response, json });
+    });
+    const drawn = () => p.locator('path.mc-rt-edge-union').count();
+    const waitForAll = () => p.waitForFunction(
+      want => document.querySelectorAll('path.mc-rt-edge-union').length === want, paths.length);
+    const param = async name => new URLSearchParams((await p.evaluate(() => location.hash)).split('?')[1]).get(name);
+
+    try {
+      await p.goto(BASE + '/#/map?packet=' + SEED_HASH + '&observer=' + pubkey, { waitUntil: 'domcontentloaded' });
+      await p.waitForSelector('.mc-rt-path-row.mc-rt-path-active');
+      assert(await drawn() === 0, 'All view should not be drawn before the click');
+      const entries = await p.evaluate(() => history.length);
+
+      await p.click('.mc-rt-path-clear');
+      await waitForAll();
+      assert(await param('paths') === 'all', 'All should write paths=all to the hash');
+      assert(await param('observer') === pubkey, 'All should keep observer=');
+      assert(await param('packet') === SEED_HASH, 'All should keep packet=');
+      assert(await p.evaluate(() => history.length) === entries, 'All should not add a history entry');
+
+      await p.reload({ waitUntil: 'domcontentloaded' });
+      await waitForAll();
+      assert(await p.locator('.mc-rt-path-active').count() === 0, 'no path should be isolated after the reload');
+      assert(await param('paths') === 'all', 'the reload should keep paths=all');
+
+      await p.locator('.mc-rt-path-row').first().click();
+      assert(await param('paths') === null, 'isolating a path should remove paths=all');
+    } finally {
+      await p.close();
+    }
   });
 
   await browser.close();
