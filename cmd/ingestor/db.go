@@ -2168,10 +2168,7 @@ func (s *Store) LogStats() {
 // bytes being SNR, so neither proves a hop transmitted. Same rule as the
 // server's certain liveness (cmd/server/certain_heard.go relayHopHexLen).
 func pathHopsTransmitted(data *PacketData) bool {
-	if !packetpath.PathBytesAreHops(byte(data.PayloadType)) {
-		return false
-	}
-	return data.RouteType == packetpath.RouteFlood || data.RouteType == packetpath.RouteTransportFlood
+	return packetpath.PathHopsTransmitted(data.RouteType, byte(data.PayloadType))
 }
 
 // touchRelayNodesLocked refreshes nodes.last_seen for nodes observed as
