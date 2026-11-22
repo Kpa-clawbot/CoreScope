@@ -60,9 +60,13 @@ The admin picks the relay on **Admin → Notifications → Mobile push**: a pres
    ```
 3. The relay generates a 32-byte challenge and fetches `GET <origin>/api/push-relay/enrollment-proof?challenge=<base64url>` from the analyzer. It requires a public DNS hostname with public addresses only and a valid certificate, and rejects redirects. CoreScope answers only while this admin request is in flight:
    ```json
-   {"signature": "<base64url Ed25519 signature over the decoded challenge>"}
+   {"signature": "<base64url Ed25519 signature>"}
    ```
-   Otherwise the route answers 404. A relay may fall back to the pre-rename path `/api/nodescope/enrollment-proof` when the current path answers 404.
+   The signature covers the relay's own origin as well as the challenge, so a proof obtained by one relay does not verify at another:
+   ```
+   "corescope-push-relay-proof-v1" LF <relay origin> LF <decoded 32-byte challenge>
+   ```
+   `<relay origin>` is the origin CoreScope sent the enrollment to: `https://`, the lowercase host, and `:<port>` only when it isn't 443, with no trailing slash (for example `https://push.nodescope.app`). The relay verifies against its own public origin in that form and rejects a signature over the bare challenge. Otherwise the route answers 404.
 4. After verifying the signature, the relay answers `201 {"analyzer_id": "...", "sender_credential": "..."}`.
 5. CoreScope confirms with `GET /v1/analyzer` (below) that the analyzer ID and origin match, then saves the enrollment and removes the pending file.
 

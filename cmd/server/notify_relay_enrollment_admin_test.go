@@ -22,6 +22,12 @@ func TestPushRelayAdminEnrollment(t *testing.T) {
 	t.Run("custom relay", func(t *testing.T) {
 		testRelayAdminEnrollment(t, nil, " https://Relay.Example.org/ ", "https://relay.example.org", "ios,android")
 	})
+	t.Run("preset entered with its default port", func(t *testing.T) {
+		testRelayAdminEnrollment(t, nil, "https://PUSH.nodescope.app:443", "https://push.nodescope.app", "ios,android")
+	})
+	t.Run("custom relay on another port", func(t *testing.T) {
+		testRelayAdminEnrollment(t, nil, "https://relay.example.org:8443", "https://relay.example.org:8443", "ios,android")
+	})
 	t.Run("origin locked in the server configuration", func(t *testing.T) {
 		lock := func(a *authService) {
 			a.set.selfEnrollOrigin, a.set.selfEnrollPlatforms = "https://push-staging.nodescope.app", []string{"android"}
@@ -100,8 +106,14 @@ func testRelayAdminEnrollment(t *testing.T, setup func(*authService), requested,
 			}
 			sig, _ := base64.RawURLEncoding.DecodeString(result.Signature)
 			key, _ := base64.RawURLEncoding.DecodeString(req.PublicKey)
-			if len(key) != ed25519.PublicKeySize || !ed25519.Verify(ed25519.PublicKey(key), challenge, sig) {
-				t.Error("relay challenge signature does not match the enrollment key")
+			if len(key) != ed25519.PublicKeySize || !ed25519.Verify(ed25519.PublicKey(key), relayProofMessage(relayOrigin, challenge), sig) {
+				t.Error("relay challenge signature does not match the enrollment key and relay")
+			}
+			// A proof made for this relay must not verify anywhere else, nor as
+			// a signature over the bare challenge.
+			if ed25519.Verify(ed25519.PublicKey(key), challenge, sig) ||
+				ed25519.Verify(ed25519.PublicKey(key), relayProofMessage("https://other-relay.example.org", challenge), sig) {
+				t.Error("relay proof is not bound to the relay it was made for")
 			}
 			writeJSONStatus(w, http.StatusCreated, notifyRelayEnrollment{AnalyzerID: "an_test", SenderCredential: req.SenderCredential})
 		case "/v1/analyzer":
@@ -311,5 +323,15 @@ func TestResolveSelfEnrollRelay(t *testing.T) {
 		if origin != tc.origin || strings.Join(platforms, ",") != tc.platforms || (err == nil) != (tc.origin != "") {
 			t.Errorf("resolveSelfEnrollRelay(%+v) = %q, %v, %v", tc.cfg, origin, platforms, err)
 		}
+	}
+}
+
+// The proof format is part of the push relay contract; relays rebuild these
+// bytes to verify, so a change here is a contract version bump.
+func TestRelayProofMessageFormat(t *testing.T) {
+	challenge := []byte(strings.Repeat("c", 32))
+	want := "corescope-push-relay-proof-v1\nhttps://push.nodescope.app\n" + strings.Repeat("c", 32)
+	if got := string(relayProofMessage("https://push.nodescope.app", challenge)); got != want {
+		t.Fatalf("proof message = %q, want %q", got, want)
 	}
 }

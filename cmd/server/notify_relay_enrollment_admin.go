@@ -51,13 +51,31 @@ func relayPresetFor(origin string) (relayPreset, bool) {
 }
 
 // canonicalRelayOrigin returns the origin as the relay client uses it, with
-// a lowercase host, so presets and saved enrollments compare equal.
+// a lowercase host and no default port, so presets and saved enrollments
+// compare equal. The enrollment proof signs this form.
 func canonicalRelayOrigin(raw string) (string, error) {
 	client, err := newNotifyRelayClient(strings.TrimSuffix(strings.TrimSpace(raw), "/"), nil)
 	if err != nil {
 		return "", err
 	}
-	return strings.ToLower(client.origin), nil
+	return strings.TrimSuffix(strings.ToLower(client.origin), ":443"), nil
+}
+
+// relayProofContext separates enrollment proofs from any other use of the
+// key. Spec: docs/specs/2026-11-22-push-relay-contract.md, Enrollment step 3.
+const relayProofContext = "corescope-push-relay-proof-v1"
+
+// relayProofMessage is what the analyzer signs for a relay's challenge. It
+// names the relay the enrollment was sent to, so a relay cannot pass a proof
+// it obtained on to another relay.
+func relayProofMessage(relayOrigin string, challenge []byte) []byte {
+	return append([]byte(relayProofContext+"\n"+relayOrigin+"\n"), challenge...)
+}
+
+// relayProofSigner exists only while an enrollment request is in flight.
+type relayProofSigner struct {
+	key         ed25519.PrivateKey
+	relayOrigin string
 }
 
 // relayPendingPath names the pending enrollment file after the relay, so a
@@ -69,7 +87,7 @@ func relayPendingPath(dbPath, relayOrigin string) string {
 
 type relayEnrollmentFlow struct {
 	mu        sync.Mutex
-	proofKey  atomic.Pointer[ed25519.PrivateKey]
+	proofKey  atomic.Pointer[relayProofSigner]
 	transport http.RoundTripper // Override in tests.
 }
 
@@ -159,11 +177,12 @@ func (s *Server) handlePushRelayEnrollmentStatus(w http.ResponseWriter, _ *http.
 }
 
 // The signing key exists only while an authenticated admin request is enrolling.
-// Passing a relay challenge to this endpoint proves control of the public origin.
+// Passing a relay challenge to this endpoint proves control of the public origin
+// to the relay that enrollment was sent to, and to no other.
 func (s *Server) handlePushRelayEnrollmentProof(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	key := s.auth.relayEnrollment.proofKey.Load()
-	if key == nil {
+	signer := s.auth.relayEnrollment.proofKey.Load()
+	if signer == nil {
 		writeError(w, http.StatusNotFound, "no enrollment in progress")
 		return
 	}
@@ -180,7 +199,7 @@ func (s *Server) handlePushRelayEnrollmentProof(w http.ResponseWriter, r *http.R
 	}
 	writeJSON(w, struct {
 		Signature string `json:"signature"`
-	}{base64.RawURLEncoding.EncodeToString(ed25519.Sign(*key, challenge))})
+	}{base64.RawURLEncoding.EncodeToString(ed25519.Sign(signer.key, relayProofMessage(signer.relayOrigin, challenge)))})
 }
 
 type relayPendingEnrollment struct {
@@ -274,7 +293,7 @@ func (s *Server) handlePushRelayEnable(w http.ResponseWriter, r *http.Request, a
 		writeError(w, http.StatusInternalServerError, "Could not configure the push relay client.")
 		return
 	}
-	flow.proofKey.Store(&privateKey)
+	flow.proofKey.Store(&relayProofSigner{key: privateKey, relayOrigin: relayOrigin})
 	defer flow.proofKey.Store(nil)
 	req := notifyRelaySelfEnrollmentRequest{
 		Origin: status.PublicOrigin, PublicKey: base64.RawURLEncoding.EncodeToString(publicKey), SenderCredential: credential,

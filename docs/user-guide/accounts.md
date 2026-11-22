@@ -464,8 +464,10 @@ On every start with user management enabled and a relay enrollment in
 place, CoreScope removes stored device links for any other analyzer. It
 keeps the enrolled analyzer's links even when notifications are disabled.
 With no enrollment at all, it removes nothing and push stays off, so a
-configuration mistake can't unlink every device. Disconnect relay removes
-the links.
+configuration mistake can't unlink every device. Push deliveries that were
+already queued also stay in `notification_push_jobs` until the next
+enrollment or a disconnect; nothing new is queued meanwhile. Disconnect relay
+removes the links and the queue.
 If cleanup fails, CoreScope logs the error, continues starting and retries
 on the next start.
 
