@@ -135,13 +135,6 @@ message TopPair {
   optional string pubkey_b = 7 [json_name = "pubkeyB"];
 }
 
-// Hop count vs average SNR data point.
-message HopsVsSnr {
-  int32 hops = 1;
-  int32 count = 2;
-  double avg_snr = 3 [json_name = "avgSnr"];
-}
-
 // Lightweight observer reference (id + name).
 message ObserverRef {
   string id = 1;
@@ -232,8 +225,9 @@ message TopologyResponse {
   repeated TopRepeater top_repeaters = 6 [json_name = "topRepeaters"];
   // Top co-occurring relay pairs.
   repeated TopPair top_pairs = 7 [json_name = "topPairs"];
-  // Hop count vs average SNR.
-  repeated HopsVsSnr hops_vs_snr = 8 [json_name = "hopsVsSnr"];
+  // Was hops_vs_snr: the last hop's SNR against the path length, which measured nothing.
+  reserved 8;
+  reserved "hops_vs_snr";
   // All observers referenced in this analysis.
   repeated ObserverRef observers = 9;
   // Per-observer reach rings, keyed by observer_id.
@@ -328,12 +322,16 @@ message DistanceHop {
   double dist = 5;
   // Hop category: "R↔R", "C↔R", "C↔C".
   string type = 6;
-  // SNR at this hop (null if unavailable).
-  optional double snr = 7;
+  // Was snr: the transmission SNR, measured by the observer on the last
+  // hop, not on this hop between two nodes.
+  reserved 7;
+  reserved "snr";
   // Packet hash.
   string hash = 8;
   // Observation timestamp (ISO 8601).
   string timestamp = 9;
+  // Observations of this node pair.
+  int32 obs_count = 10 [json_name = "obsCount"];
 }
 
 // Longest path record.
