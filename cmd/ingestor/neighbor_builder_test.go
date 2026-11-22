@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meshcore-analyzer/packetpath"
@@ -382,5 +383,68 @@ func TestNeighborEdgesBuilderSkipsOwnTransmissions(t *testing.T) {
 	}
 	if got != 0 {
 		t.Fatalf("a tx observation produced %d neighbor_edges rows, want 0", got)
+	}
+}
+
+// The persisted edges follow the same rule as the server's neighbor graph:
+// TRACE path bytes are SNR values, and a direct route carries the REMAINING
+// route (removeSelfFromPath), so neither names a node next to the observer
+// or the originator. A zero hop on a direct route (sendZeroHop) does.
+func TestNeighborEdgesBuilderSkipsTraceAndDirectRoutePaths(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "route.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?), (?, ?)`,
+		"aaaaaaaaaa", "originator", "bbbbbbbbbb", "hop", "cccccccccc", "zero-hop-advertiser"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO observers (id, name) VALUES (?, ?)`, "obs-1", "observer-1"); err != nil {
+		t.Fatal(err)
+	}
+	var obsIdx int64
+	if err := store.db.QueryRow(`SELECT idx FROM observers WHERE id = ?`, "obs-1").Scan(&obsIdx); err != nil {
+		t.Fatal(err)
+	}
+	add := func(hash string, routeType, payloadType int, from, path string) {
+		t.Helper()
+		res, err := store.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
+			VALUES ('', ?, '2026-01-01T00:00:00Z', ?, ?, 0, '{}', ?)`, hash, routeType, payloadType, from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		if _, err := store.db.Exec(`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (?, ?, ?, ?)`,
+			id, obsIdx, path, int64(1735689600)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("trace", RouteFlood, PayloadTRACE, "", `["bb"]`)
+	add("direct-advert", RouteDirect, payloadADVERT, "aaaaaaaaaa", `["bb"]`)
+	add("transport-direct-txt", RouteTransportDirect, PayloadTXT_MSG, "", `["bb"]`)
+	add("zero-hop", RouteDirect, payloadADVERT, "cccccccccc", `[]`)
+	// sendDirect's last leg: empty path after removeSelfFromPath, sent by the forwarder.
+	add("direct-anon-req-empty", RouteDirect, payloadAnonReq, "aaaaaaaaaa", `[]`)
+
+	if _, err := store.buildAndPersistNeighborEdges(trustAllPrefixes()); err != nil {
+		t.Fatalf("buildAndPersistNeighborEdges: %v", err)
+	}
+	rows, err := store.db.Query(`SELECT node_a, node_b FROM neighbor_edges ORDER BY node_a, node_b`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var a, b string
+		if err := rows.Scan(&a, &b); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, a+"|"+b)
+	}
+	want := []string{"cccccccccc|obs-1"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("edges = %v, want %v (only the zero-hop advertiser↔observer)", got, want)
 	}
 }

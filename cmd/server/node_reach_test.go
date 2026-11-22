@@ -19,7 +19,7 @@ func newReachScanTestDB(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 	stmts := []string{
-		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, from_pubkey TEXT, payload_type INTEGER)`,
+		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, from_pubkey TEXT, payload_type INTEGER, route_type INTEGER DEFAULT 1)`,
 		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, inactive INTEGER)`,
 		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, snr REAL, path_json TEXT, timestamp INTEGER)`,
 		`INSERT INTO observers (id) VALUES ('OBS1')`, // rowid 1
@@ -337,5 +337,29 @@ func TestReachScanStartsFromObservationsTimeIndex(t *testing.T) {
 	}
 	if !strings.Contains(steps[0], "o USING INDEX idx_observations_timestamp") {
 		t.Fatalf("reach scan must start from observations by timestamp; plan: %q", steps)
+	}
+}
+
+// Only a path that lists transmitted hops says who heard whom
+// (packetpath.PathHopsTransmitted). A direct-route path is the remaining
+// route and TRACE path bytes are SNR values: neither may add direction
+// counts or an observer SNR.
+func TestAttributeDirections_SkipsDirectRouteAndTrace(t *testing.T) {
+	unique := map[string]string{"AA": "aa00", "BB": "bb00"}
+	rows := []pathRow{
+		{routeType: RouteDirect, observerPK: "obs1", payloadType: 2, path: []string{"AA", "01FA"}, snr: 9, snrValid: true},
+		{routeType: RouteTransportDirect, observerPK: "obs1", payloadType: 2, path: []string{"AA", "01FA", "BB"}},
+		{routeType: RouteFlood, observerPK: "obs2", payloadType: PayloadTRACE, path: []string{"01FA"}, snr: 9, snrValid: true},
+		{routeType: -1, observerPK: "obs3", payloadType: 2, path: []string{"01FA"}, snr: 9, snrValid: true},
+	}
+	d := attributeDirections(rows, map[string]bool{"01FA": true}, "01fa326b", testResolver(unique))
+	if d.relay != 0 || len(d.we) != 0 || len(d.they) != 0 || len(d.obs) != 0 {
+		t.Fatalf("non-flood rows were attributed: relay=%d we=%v they=%v obs=%v", d.relay, d.we, d.they, d.obs)
+	}
+	d = attributeDirections([]pathRow{
+		{routeType: RouteFlood, observerPK: "obs1", payloadType: 2, path: []string{"AA", "01FA"}, snr: 9, snrValid: true},
+	}, map[string]bool{"01FA": true}, "01fa326b", testResolver(unique))
+	if a := d.obs["obs1"]; a.count != 1 || a.snrN != 1 {
+		t.Fatalf("flood row not attributed: %+v", d.obs)
 	}
 }
