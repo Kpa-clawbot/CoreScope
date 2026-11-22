@@ -195,10 +195,11 @@
     var key = String(params.observer || '').trim().toLowerCase();
     if (!chosen && key) {
       if (OBSERVER_KEY_RE.test(key)) {
-        // One observer can hear a packet several times (direct, then via
-        // more repeaters). The shortest observed path is the most direct
-        // route; ties go to the earliest, then the lower id. An empty or
-        // unparseable path has nothing to draw, so it ranks last.
+        // One observer can hear a packet over several paths. Of those that
+        // can be drawn, the fewest hops wins; ties go to the earliest, then
+        // the lower id. A 0-hop (heard direct) or unparseable path ranks
+        // last, not first: it has no picker row to isolate, and as the
+        // canonical path the map would fall back to the longest one.
         var best = null, bestLen = Infinity, bestTs = Infinity;
         observations.forEach(function (o) {
           if (String(o.observer_id || '').toLowerCase().indexOf(key) !== 0) return;
@@ -236,7 +237,8 @@
 
   // The hash with ?paths=all added (on) or removed (!on), the other params
   // untouched. Only a #/map?packet=<hash> deep link reloads into the All
-  // view, so any other hash comes back as it was.
+  // view (#/map?route=1 reads its paths from sessionStorage, once), so any
+  // other hash comes back as it was.
   function withPathsAllParam(hash, on) {
     hash = String(hash || '');
     var q = hash.indexOf('?');
