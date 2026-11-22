@@ -80,7 +80,7 @@ esac
 # held to the shape the server accepts (cmd/server/site_url.go): no quote,
 # &, | or backslash can reach either.
 if [ -n "$CORESCOPE_URL" ]; then
-  CORESCOPE_URL="${CORESCOPE_URL%/}"
+  while [[ "$CORESCOPE_URL" == */ ]]; do CORESCOPE_URL="${CORESCOPE_URL%/}"; done
   [[ "$CORESCOPE_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] ||
     fail "CORESCOPE_URL must be http(s)://host[:port] with an optional path: $CORESCOPE_URL"
 fi

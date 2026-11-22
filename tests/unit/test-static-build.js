@@ -109,6 +109,15 @@ test('CORESCOPE_URL makes og:url, og:image and twitter:image absolute on it', ()
   assert.ok(!html.includes(OG_FALLBACK), 'no GitHub fallback');
 });
 
+test('every trailing slash of CORESCOPE_URL is dropped, as the server does', () => {
+  for (const [given, want] of [['https://example.org//', 'https://example.org'], ['https://example.org/corescope///', 'https://example.org/corescope']]) {
+    const r = run(Object.assign({}, OK, { CORESCOPE_URL: given }));
+    assert.strictEqual(r.status, 0, r.stderr);
+    const html = fs.readFileSync(path.join(r.out, 'index.html'), 'utf8');
+    assert.ok(html.includes('<meta property="og:image" content="' + want + '/og-image.png">'), given);
+  }
+});
+
 // A static host has no request to take an origin from: without CORESCOPE_URL
 // the build keeps what shipped before the placeholder, no og:url (#1890) and
 // the project's own image.
