@@ -164,7 +164,7 @@ async function setOverlayUi(page, on) {
 // What the page shows right now, for every live map: the cells the ducting
 // layers hold, the LoRa outline layers (cells, style), edge lines, field
 // images, any interactive layer of the overlay (there must be none), and
-// the legend/time boxes.
+// the panel with its legend/time sections.
 function inPageState() {
   const maps = ((window.__mcHarness && window.__mcHarness.maps) || [])
     .filter(m => m && m._container && m._container.isConnected && m._loaded);
@@ -191,6 +191,7 @@ function inPageState() {
     interactive,
     fields,
     edges,
+    panels: q('.mc-duct-panel').length,
     legends: q('.mc-duct-legend').length,
     times: q('.mc-duct-time').length,
     legendVisible: q('.mc-duct-legend').some(vis),
@@ -208,13 +209,13 @@ async function waitCells(page, min) {
   }, min || 1, { timeout: 25000, polling: 100 });
 }
 
-// Bounding boxes of the controls that must not overlap the legend / time box.
+// Bounding boxes of the controls that must not overlap the ducting panel.
 function inPageOverlaps() {
   const boxes = (el) => { const r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width, h: r.height }; };
   const visible = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
-  const mine = Array.prototype.slice.call(document.querySelectorAll('.mc-duct-legend, .mc-duct-time')).filter(visible);
+  const mine = Array.prototype.slice.call(document.querySelectorAll('.mc-duct-panel')).filter(visible);
   const others = Array.prototype.slice.call(document.querySelectorAll('.leaflet-control, #mapControls, #mapControlsToggle'))
-    .filter(el => visible(el) && !el.matches('.mc-duct-legend, .mc-duct-time') && !mine.some(m => m.contains(el) || el.contains(m)));
+    .filter(el => visible(el) && !el.matches('.mc-duct-panel') && !mine.some(m => m.contains(el) || el.contains(m)));
   const hits = [];
   mine.forEach((m, i) => {
     const a = boxes(m);
@@ -233,7 +234,9 @@ function inPageOverlaps() {
     const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
     if (a.l < -1 || a.t < -1 || a.r > vw + 1 || a.b > vh + 1) hits.push(`${name(m)} outside the viewport (${Math.round(a.l)},${Math.round(a.t)},${Math.round(a.r)},${Math.round(a.b)} in ${vw}x${vh})`);
   });
-  return { hits, mine: mine.length };
+  // The panel's own sections: the legend body and the timeline inside it.
+  const inside = mine.map(m => ['.mc-duct-legend', '.mc-duct-time'].filter(sel => { const e = m.querySelector(sel); return e && visible(e); }).length);
+  return { hits, mine: mine.length, inside };
 }
 
 function cssVars(page) {
@@ -376,7 +379,7 @@ function inPagePoint(a) {
   const r = m.getContainer().getBoundingClientRect();
   const x = r.left + p.x, y = r.top + p.y;
   const el = document.elementFromPoint(x, y);
-  const blocked = !el || !!el.closest('.leaflet-marker-icon, .leaflet-interactive, .leaflet-control, .leaflet-popup, #mapControls, .mc-duct-legend, .mc-duct-time, .leaflet-marker-pane, .leaflet-tooltip')
+  const blocked = !el || !!el.closest('.leaflet-marker-icon, .leaflet-interactive, .leaflet-control, .leaflet-popup, #mapControls, .mc-duct-panel, .leaflet-marker-pane, .leaflet-tooltip')
     || x < r.left + 40 || y < r.top + 40 || x > r.right - 40 || y > r.bottom - 40;
   return { x, y, blocked };
 }
@@ -399,13 +402,66 @@ async function pointsIn(page, c, step, max) {
   return out;
 }
 
-async function setSlider(page, idx) {
-  await page.evaluate((i) => {
-    const s = document.querySelector('.mc-duct-time input[type=range]');
-    s.value = String(i);
-    s.dispatchEvent(new Event('input', { bubbles: true }));
-  }, idx);
+// The timeline (a role=slider strip): the shown index, and moving it with
+// the keyboard as a user does (ArrowLeft / ArrowRight from where it is).
+const timeIdx = (page) => page.evaluate(() => parseInt(document.querySelector('.mc-duct-timeline').getAttribute('aria-valuenow'), 10));
+async function setTime(page, idx) {
+  const tl = page.locator('.mc-duct-timeline').first();
+  await tl.focus();
+  const cur = await timeIdx(page);
+  for (let k = 0; k < Math.abs(idx - cur); k++) await page.keyboard.press(idx > cur ? 'ArrowRight' : 'ArrowLeft');
+  await page.waitForFunction((i) => document.querySelector('.mc-duct-timeline').getAttribute('aria-valuenow') === String(i), idx, { timeout: 5000 });
 }
+// The first live map's view, the ducting layer's strip state.
+function inPageView() {
+  const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
+  const c = m.getCenter();
+  let layer = null;
+  m.eachLayer((l) => { if (l._mcDuct) layer = l; });
+  const tl = document.querySelector('.mc-duct-timeline');
+  const o = m.getPixelOrigin(), pp = m._getMapPanePos();
+  return {
+    lat: c.lat, lng: c.lng, zoom: m.getZoom(), px: o.x - pp.x, py: o.y - pp.y,
+    idx: tl ? parseInt(tl.getAttribute('aria-valuenow'), 10) : -1,
+    scrollLeft: tl ? tl.scrollLeft : null,
+    xs: layer && layer._tlLayout ? layer._tlLayout.xs : [],
+    times: layer && layer._data ? layer._data.times : [],
+  };
+}
+// Waits until the strip has settled: the shown time sits under the centre.
+async function settled(page) {
+  await page.waitForFunction(() => {
+    const m = window.__mcHarness.maps.filter(x => x._container && x._container.isConnected && x._loaded)[0];
+    let layer = null;
+    m.eachLayer((l) => { if (l._mcDuct) layer = l; });
+    const tl = document.querySelector('.mc-duct-timeline');
+    if (!layer || !layer._tlLayout || !tl) return false;
+    return Math.abs(tl.scrollLeft - layer._tlLayout.xs[layer._idx]) <= 1;
+  }, null, { timeout: 4000, polling: 50 }).catch(() => {});
+  return page.evaluate(inPageView);
+}
+// Same view: same zoom and the same pixel at the top left (getCenter() may
+// round differently once the map has been touched, without any move).
+const sameView = (a, b) => a.zoom === b.zoom && Math.abs(a.px - b.px) < 0.5 && Math.abs(a.py - b.py) < 0.5;
+// The panel's box, where it lives, and its stored state.
+function inPagePanel() {
+  const p = document.querySelector('.mc-duct-panel');
+  if (!p) return null;
+  const r = p.getBoundingClientRect();
+  const vis = (sel) => { const e = p.querySelector(sel); if (!e) return false; const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(e).display !== 'none'; };
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem('mc-duct-panel')); } catch (_) {}
+  return {
+    l: r.left, t: r.top, w: r.width, h: r.height,
+    floating: p.classList.contains('mc-duct-panel-floating'),
+    inCorner: !!p.closest('.leaflet-bottom.leaflet-left'),
+    inMap: p.parentNode && p.parentNode.classList.contains('leaflet-container'),
+    legend: vis('.mc-duct-legend'), time: vis('.mc-duct-time'), reset: vis('.mc-duct-reset'),
+    expanded: p.querySelector('.mc-duct-collapse').getAttribute('aria-expanded'),
+    stored,
+  };
+}
+const panelState = (page) => page.evaluate(inPagePanel);
 
 async function run() {
   console.log(`\nDucting overlay E2E — ${BASE}\n`);
@@ -465,7 +521,7 @@ async function run() {
       const seen = new Set();
       data.cells.forEach(c => c.c.forEach(v => seen.add(v)));
       [1, 2, 3, 4].forEach(k => assert(seen.has(k), `no class ${k} cell in the data (fixture has too few nodes? cells=${data.cells.length})`));
-      assert(data.cells.some(c => new Set(c.c).size > 1), 'no cell changes over the forecast hours; the slider could not change a colour');
+      assert(data.cells.some(c => new Set(c.c).size > 1), 'no cell changes over the forecast hours; the timeline could not change a colour');
     });
 
     await test('the fake saw valid, batched requests only', async () => {
@@ -496,7 +552,7 @@ async function run() {
       assert(st.legends === 0 && st.times === 0 && !st.cells && !st.lora.length && !st.fields.length, 'legend/time/cells/field present with the overlay off');
     });
 
-    await test('enabling it draws cells, with a visible, unobstructed legend and time slider', async () => {
+    await test('enabling it draws cells, with one visible, unobstructed panel: timeline and legend', async () => {
       await setOverlayUi(page, true);
       await waitCells(page, 1);
       await page.mouse.move(5, 5);
@@ -505,10 +561,10 @@ async function run() {
       assert(st.maps === 1 && st.cells === data.cells.length, `maps=${st.maps} cells drawn=${st.cells} cells=${data.cells.length}`);
       assert(!st.interactive.length, 'interactive overlay layers: ' + st.interactive.join(','));
       assert(st.fields.length === 1 && st.fields[0].inDom && st.fields[0].pane === 'mcDuctFieldPane', 'field images: ' + JSON.stringify(st.fields));
-      assert(st.legends === 1 && st.times === 1 && st.legendVisible && st.timeVisible, `legends=${st.legends} times=${st.times}`);
+      assert(st.panels === 1 && st.legends === 1 && st.times === 1 && st.legendVisible && st.timeVisible, `panels=${st.panels} legends=${st.legends} times=${st.times}`);
       assert(st.legendText.includes('may carry LoRa at ' + LORA_FREQS.map(fmtFreq).join(' / ') + ' MHz') && /Above normal/.test(st.legendText) && /Very high/.test(st.legendText) && !/Enhanced|Strong/.test(st.legendText) && /lowest 1\.5 km \(N\/km\)/.test(st.legendText) && /Updated/.test(st.legendText), 'legend text: ' + st.legendText.slice(0, 200));
       const ov = await page.evaluate(inPageOverlaps);
-      assert(ov.mine === 2, 'legend and time box not both visible');
+      assert(ov.mine === 1 && ov.inside[0] === 2, 'panel, legend and timeline not all visible: ' + JSON.stringify(ov));
       assert(!ov.hits.length, ov.hits.join('; '));
     });
 
@@ -548,7 +604,7 @@ async function run() {
     // On a short viewport the expanded picker list is taller than the space
     // beside the legend, so the boxes may intersect; what must hold is that the
     // picker is on top: every sampled point of it hits the picker itself.
-    await test('the expanded layers picker is on top of the legend and time slider', async () => {
+    await test('the expanded layers picker is on top of the ducting panel', async () => {
       await openPicker(page);
       await sleep(300);
       const res = await page.evaluate(() => {
@@ -571,8 +627,8 @@ async function run() {
     });
 
     await test('the field image matches the data at the current forecast hour, aligned with the map', async () => {
-      idx0 = await page.evaluate(() => { const s = document.querySelector('.mc-duct-time input[type=range]'); return parseInt(s.value, 10); });
-      assert(idx0 >= 0 && idx0 < data.times.length, 'slider index ' + idx0);
+      idx0 = await timeIdx(page);
+      assert(idx0 >= 0 && idx0 < data.times.length, 'timeline index ' + idx0);
       const f = await fieldProblems(page, data, idx0);
       assert(!f.probs.length, f.probs.slice(0, 5).join(' | '));
       assert(f.calm > 0, 'no calm cell to check for transparency');
@@ -588,20 +644,27 @@ async function run() {
       assert(o.n > 0, 'no LoRa duct at hour ' + idx0);
     });
 
-    await test('moving the time slider changes the field, the outlines and the label', async () => {
+    await test('the timeline keys (End, ArrowLeft) change the field, the outlines and the label', async () => {
       const before = (await page.evaluate(inPageFieldProbe, { idx: idx0, cells: [] })).sum;
       const label0 = await page.locator('.mc-duct-time-label').first().textContent();
-      const max = await page.evaluate(() => parseInt(document.querySelector('.mc-duct-time input[type=range]').max, 10));
-      assert(max === data.times.length - 1, `slider max ${max}`);
-      await setSlider(page, max);
+      const max = await page.evaluate(() => parseInt(document.querySelector('.mc-duct-timeline').getAttribute('aria-valuemax'), 10));
+      assert(max === data.times.length - 1, `timeline max ${max}`);
+      await page.locator('.mc-duct-timeline').first().focus();
+      await page.keyboard.press('End');
+      assert((await timeIdx(page)) === max, 'End did not go to the last time');
+      await page.keyboard.press('ArrowLeft');
+      assert((await timeIdx(page)) === max - 1, 'ArrowLeft did not step back');
+      await page.keyboard.press('ArrowRight');
       const after = await fieldProblems(page, data, max);
       assert(after.r.sum !== before, 'field image did not change');
       assert(!after.probs.length, after.probs.slice(0, 5).join(' | '));
       const o = outlineProblems(await pageState(page), data, max, (await cssVars(page)).lora);
       assert(!o.probs.length, o.probs.slice(0, 5).join(' | '));
       assert((await page.locator('.mc-duct-time-label').first().textContent()) !== label0, 'label did not change');
-      assert((await pageState(page)).fields.length === 1, 'slider added a field image');
-      await setSlider(page, idx0);
+      assert((await pageState(page)).fields.length === 1, 'the timeline added a field image');
+      const vt = await page.evaluate(() => document.querySelector('.mc-duct-timeline').getAttribute('aria-valuetext'));
+      assert((await page.locator('.mc-duct-time-label').first().textContent()) === 'Forecast time: ' + vt, 'aria-valuetext differs from the label: ' + vt);
+      await setTime(page, idx0);
       const back = await fieldProblems(page, data, idx0);
       assert(!back.probs.length && back.r.sum === before, 'after moving back: ' + back.probs.slice(0, 3).join(' | '));
     });
@@ -644,7 +707,7 @@ async function run() {
       assert(lines.length === LORA_FREQS.length && lines.every(l => / MHz: not trapped by this layer$/.test(l)), 'popup LoRa lines: ' + JSON.stringify(lines));
       assert(!/Trapping layer/.test(r.text), 'popup: ' + r.text);
     });
-    await test('a map click in the forecast area reaches the page\'s own map click listeners; the popup follows the slider', async () => {
+    await test('a map click in the forecast area reaches the page\'s own map click listeners; the popup follows the timeline', async () => {
       const cell = data.cells.find(c => c.c[idx0] === 4);
       const pts = await pointsIn(page, cell, data.stepDeg, 1);
       assert(pts.length, 'no free point in the cell');
@@ -665,10 +728,10 @@ async function run() {
       // Another hour: the open popup shows that hour's analysis of the same cell.
       const other = cell.c.findIndex((v, h) => h !== idx0 && v >= 1 && v !== 4);
       if (other >= 0) {
-        await setSlider(page, other);
+        await setTime(page, other);
         const t = await page.locator('.leaflet-popup .mc-duct-popup').first().innerText().catch(() => '');
         assert(t && !/Surface-based duct/.test(t), `popup at hour ${other} (class ${cell.c[other]}): ${t}`);
-        await setSlider(page, idx0);
+        await setTime(page, idx0);
       }
       await page.evaluate(() => window.__mcHarness.maps.forEach(m => m.closePopup && m.closePopup()));
     });
@@ -699,6 +762,194 @@ async function run() {
       await MH.setTheme(page, 'light');
     });
 
+    // ── The panel and the timeline by pointer ──
+    await test('collapse hides only the legend body; header and timeline stay', async () => {
+      const btn = page.locator('.mc-duct-collapse').first();
+      assert((await btn.getAttribute('aria-label')) === 'Collapse ducting legend', 'label: ' + await btn.getAttribute('aria-label'));
+      const h0 = (await panelState(page)).h;
+      await btn.click();
+      let p = await panelState(page);
+      assert(!p.legend && p.time && p.expanded === 'false', 'collapsed: ' + JSON.stringify(p));
+      assert(p.h < h0 - 40, `panel did not shrink (${h0} -> ${p.h})`);
+      assert(await page.locator('.mc-duct-title').first().isVisible(), 'title hidden');
+      assert((await btn.getAttribute('aria-label')) === 'Expand ducting legend');
+      assert(p.stored && p.stored.collapsed === true, 'not stored: ' + JSON.stringify(p.stored));
+      const ov = await page.evaluate(inPageOverlaps);
+      assert(!ov.hits.length, 'collapsed: ' + ov.hits.join('; '));
+      await btn.click();
+      p = await panelState(page);
+      assert(p.legend && p.time && p.expanded === 'true', 'expanded again: ' + JSON.stringify(p));
+    });
+
+    await test('wheel, drag and click on the strip change the hour; the map neither pans nor zooms', async () => {
+      await page.evaluate(() => window.__mcHarness.maps.forEach(m => m.closePopup && m.closePopup()));
+      await setTime(page, 0);
+      const v0 = await page.evaluate(inPageView);
+      const box = await page.locator('.mc-duct-timeline').first().boundingBox();
+      const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+      await page.mouse.move(cx, cy);
+      await page.mouse.wheel(0, 60);
+      await page.waitForFunction(() => document.querySelector('.mc-duct-timeline').getAttribute('aria-valuenow') !== '0', null, { timeout: 3000 });
+      await sleep(300);
+      let v = await settled(page);
+      assert(v.idx > 0, 'wheel did not move the hour');
+      assert(sameView(v0, v), `wheel moved the map: ${JSON.stringify([v0.px, v0.py, v0.zoom])} -> ${JSON.stringify([v.px, v.py, v.zoom])}`);
+      assert(Math.abs(v.scrollLeft - v.xs[v.idx]) <= 1, `not settled: scrollLeft ${v.scrollLeft}, time x ${v.xs[v.idx]}`);
+      // Drag left by 40 px: later by ~40 px of strip.
+      const i1 = v.idx, x1 = v.scrollLeft;
+      await page.mouse.move(cx, cy);
+      await page.mouse.down();
+      await page.mouse.move(cx - 20, cy, { steps: 4 });
+      await page.mouse.move(cx - 40, cy, { steps: 4 });
+      await page.mouse.up();
+      await sleep(300);
+      v = await settled(page);
+      assert(v.idx > i1, `drag did not move the hour (${i1} -> ${v.idx})`);
+      assert(Math.abs(v.xs[v.idx] - (x1 + 40)) <= (v.xs[1] - v.xs[0]), `drag landed at ${v.xs[v.idx]}, want ~${x1 + 40}`);
+      assert(Math.abs(v.scrollLeft - v.xs[v.idx]) <= 1, `not settled after the drag: ${v.scrollLeft} vs ${v.xs[v.idx]}`);
+      assert(sameView(v0, v), 'drag on the strip moved the map');
+      // A click 30 px right of the centre picks the time ~30 px later.
+      const i2 = v.idx, x2 = v.scrollLeft;
+      await page.mouse.click(cx + 30, cy);
+      v = await settled(page);
+      assert(v.idx > i2 && Math.abs(v.xs[v.idx] - (x2 + 30)) <= (v.xs[1] - v.xs[0]), `click picked ${v.idx} (x ${v.xs[v.idx]}), want ~x ${x2 + 30}`);
+      assert(sameView(v0, v), 'click on the strip moved the map');
+      // The field follows the picked time.
+      const f = await fieldProblems(page, data, v.idx);
+      assert(!f.probs.length, f.probs.slice(0, 3).join(' | '));
+    });
+
+    await test('Now returns to the current hour', async () => {
+      await page.locator('.mc-duct-timeline').first().focus();
+      await page.keyboard.press('End');
+      await page.locator('.mc-duct-now').first().click();
+      const v = await settled(page);
+      const nowS = await page.evaluate(() => Date.now() / 1000);
+      let want = 0;
+      v.times.forEach((t, i) => { if (t <= nowS) want = i; });
+      assert(v.idx === want, `Now picked ${v.idx}, want ${want}`);
+      assert(Math.abs(v.scrollLeft - v.xs[want]) <= 1, `strip not on the hour: ${v.scrollLeft} vs ${v.xs[want]}`);
+      idx0 = v.idx;
+    });
+
+    await test('dragging the handle moves the panel and the map stays put; Reset puts it back', async () => {
+      const v0 = await page.evaluate(inPageView);
+      const p0 = await panelState(page);
+      assert(p0.inCorner && !p0.floating && !p0.reset, 'not docked at the start: ' + JSON.stringify(p0));
+      const hb = await page.locator('.mc-duct-drag').first().boundingBox();
+      await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(hb.x + hb.width / 2 + 200, hb.y + hb.height / 2 - 150, { steps: 8 });
+      await page.mouse.move(hb.x + hb.width / 2 + 400, hb.y + hb.height / 2 - 300, { steps: 8 });
+      await page.mouse.up();
+      const p = await panelState(page);
+      assert(p.floating && p.inMap && !p.inCorner && p.reset, 'not floating: ' + JSON.stringify(p));
+      assert(Math.abs(p.l - p0.l - 400) <= 2 && Math.abs(p.t - p0.t + 300) <= 2, `moved by ${p.l - p0.l},${p.t - p0.t}, want 400,-300`);
+      assert(p.stored && p.stored.pos && p.stored.pos.fx > 0 && p.stored.pos.fy >= 0, 'position not stored: ' + JSON.stringify(p.stored));
+      const v = await settled(page);
+      assert(sameView(v0, v), 'the map moved with the panel');
+      assert(v.idx === v0.idx && Math.abs(v.scrollLeft - v.xs[v.idx]) <= 1, `strip lost its place in the move: idx ${v0.idx}->${v.idx}, scrollLeft ${v.scrollLeft} vs ${v.xs[v.idx]}`);
+      // Dragging far outside: it stays 8 px inside the map, and where the
+      // page's Map Controls cover the map's right side it stops beside them,
+      // its handle, collapse and Now buttons still clickable.
+      const hb2 = await page.locator('.mc-duct-drag').first().boundingBox();
+      await page.mouse.move(hb2.x + 5, hb2.y + 5);
+      await page.mouse.down();
+      await page.mouse.move(5000, -500, { steps: 6 });
+      await page.mouse.up();
+      const clamp = await page.evaluate(() => {
+        const panel = document.querySelector('.mc-duct-panel');
+        const p = panel.getBoundingClientRect(), c = panel.parentNode.getBoundingClientRect();
+        const covered = ['.mc-duct-drag', '.mc-duct-collapse', '.mc-duct-now'].filter((sel) => {
+          const r = panel.querySelector(sel).getBoundingClientRect();
+          return [r.left + r.width / 2, r.right - 2].some(x => !panel.contains(document.elementFromPoint(x, r.top + r.height / 2)));
+        });
+        const mc = document.getElementById('mapControls');
+        const mcr = mc && mc.offsetParent ? mc.getBoundingClientRect() : null;
+        return { right: c.right - p.right, top: p.top - c.top, left: p.left - c.left, covered, besideMc: mcr ? p.right <= mcr.left + 4 : null };
+      });
+      assert(Math.abs(clamp.top - 8) <= 1 && clamp.right >= 7 && clamp.left >= 7, 'not 8 px inside the map: ' + JSON.stringify(clamp));
+      assert(!clamp.covered.length, 'covered: ' + JSON.stringify(clamp));
+      assert(clamp.besideMc !== false || Math.abs(clamp.right - 8) <= 1, 'neither at the right margin nor beside Map Controls: ' + JSON.stringify(clamp));
+      assert(sameView(v0, await page.evaluate(inPageView)), 'the map moved');
+      // The expanded picker is still on top of the moved panel.
+      const ov = await page.evaluate(inPageOverlaps);
+      const onTop = await page.evaluate(() => {
+        const ctl = document.querySelector('.leaflet-control-zoom');
+        if (!ctl) return true;
+        const r = ctl.getBoundingClientRect(), el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return ctl.contains(el);
+      });
+      assert(onTop, 'zoom control covered by the moved panel ' + ov.hits.join('; '));
+      await page.locator('.mc-duct-reset').first().click();
+      const back = await panelState(page);
+      assert(back.inCorner && !back.floating && !back.reset, 'not back in the corner: ' + JSON.stringify(back));
+      assert(Math.abs(back.l - p0.l) <= 1 && Math.abs(back.t - p0.t) <= 1, `corner place changed: ${back.l},${back.t} vs ${p0.l},${p0.t}`);
+      assert(back.stored && back.stored.pos === null, 'position still stored');
+      const vb = await settled(page);
+      assert(Math.abs(vb.scrollLeft - vb.xs[vb.idx]) <= 1, `strip lost its place on reset: ${vb.scrollLeft} vs ${vb.xs[vb.idx]}`);
+      const ov2 = await page.evaluate(inPageOverlaps);
+      assert(!ov2.hits.length, 'after reset: ' + ov2.hits.join('; '));
+    });
+
+    await test('the strip is wide enough to slide to an hour: >= 220 px at 1440x900, >= 200 px at 390x844; the time is never cut', async () => {
+      let wp = null;
+      const measure = () => wp.page.evaluate(() => {
+        const tl = document.querySelector('.mc-duct-timeline');
+        const lab = document.querySelector('.mc-duct-time-label'), val = document.querySelector('.mc-duct-time-value');
+        const now = document.querySelector('.mc-duct-time-head .mc-duct-now');
+        const lr = lab.getBoundingClientRect(), vr = val.getBoundingClientRect();
+        // Every day label inside the strip shows its whole text (none narrower than its content).
+        const cut = Array.prototype.filter.call(document.querySelectorAll('.mc-duct-day-label'), (d) => d.scrollWidth > d.clientWidth + 1).length;
+        return { strip: tl.clientWidth, panel: document.querySelector('.mc-duct-panel').getBoundingClientRect().width, oneLine: lr.height < 24, timeShown: vr.right <= lr.right + 0.5 && vr.left >= lr.left - 0.5, now: !!now, cut };
+      });
+      // A fresh page per size: the map page lays itself out for the size it loads at.
+      for (const [w, h, min] of [[1440, 900, 220], [390, 844, 200]]) {
+        wp = await track({ theme: 'light', overlays: ['ducting'] });
+        await wp.page.setViewportSize({ width: w, height: h });
+        await gotoRoute(wp.page, '#/map');
+        await waitCells(wp.page, 1);
+        await wp.page.waitForSelector('.mc-duct-timeline', { state: 'visible' });
+        await sleep(300);
+        const m = await measure();
+        assert(m.strip >= min, `${w}x${h}: strip ${m.strip}px < ${min}px (panel ${m.panel}px)`);
+        assert(m.oneLine && m.timeShown && m.now, `${w}x${h}: forecast-time line ${JSON.stringify(m)}`);
+        assert(!m.cut, `${w}x${h}: ${m.cut} day labels cut`);
+        const ov = await wp.page.evaluate(inPageOverlaps);
+        assert(!ov.hits.length, `${w}x${h}: ` + ov.hits.join('; '));
+        assert(!wp.page.__errors.length, wp.page.__errors.slice(0, 3).join(' | '));
+      }
+    });
+
+    await test('a moved, collapsed panel keeps its place and state across a reload', async () => {
+      const rp = await track({ theme: 'light', overlays: ['ducting'] });
+      await gotoRoute(rp.page, '#/map');
+      await waitCells(rp.page, 1);
+      await rp.page.waitForSelector('.mc-duct-panel', { state: 'visible' });
+      await rp.page.mouse.move(5, 5);
+      const hb = await rp.page.locator('.mc-duct-drag').first().boundingBox();
+      await rp.page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+      await rp.page.mouse.down();
+      await rp.page.mouse.move(hb.x + hb.width / 2 + 300, hb.y + hb.height / 2 - 250, { steps: 8 });
+      await rp.page.mouse.up();
+      await rp.page.locator('.mc-duct-collapse').first().click();
+      const before = await panelState(rp.page);
+      assert(before.floating && !before.legend && before.time, 'before reload: ' + JSON.stringify(before));
+      await rp.page.reload({ waitUntil: 'domcontentloaded' });
+      await waitCells(rp.page, 1);
+      await rp.page.waitForSelector('.mc-duct-panel', { state: 'visible' });
+      await sleep(300);
+      const after = await panelState(rp.page);
+      assert(after.floating && after.inMap && !after.legend && after.time && after.expanded === 'false', 'after reload: ' + JSON.stringify(after));
+      assert(Math.abs(after.l - before.l) <= 2 && Math.abs(after.t - before.t) <= 2, `place changed: ${before.l},${before.t} -> ${after.l},${after.t}`);
+      const va = await settled(rp.page);
+      assert(Math.abs(va.scrollLeft - va.xs[va.idx]) <= 1, `restored panel's strip not on the shown time: ${va.scrollLeft} vs ${va.xs[va.idx]}`);
+      await rp.page.locator('.mc-duct-reset').first().click();
+      const reset = await panelState(rp.page);
+      assert(reset.inCorner && !reset.legend, 'reset keeps collapsed, docks: ' + JSON.stringify(reset));
+      assert(!rp.page.__errors.length, rp.page.__errors.slice(0, 3).join(' | '));
+    });
+
     // Leaflet 1.9.4: a map move redraws the canvas at once and orphans the
     // queued frame; switching off before that frame used to throw from the
     // orphan ("reading 'clearRect'", stress gate seed 303, scenario g).
@@ -724,19 +975,19 @@ async function run() {
       await waitCells(page, 1);
     });
 
-    await test('disabling the overlay removes legend, time slider and cells', async () => {
+    await test('disabling the overlay removes the panel (legend, timeline) and cells', async () => {
       await setOverlayUi(page, false);
-      await page.waitForFunction(() => !document.querySelector('.mc-duct-legend') && !document.querySelector('.mc-duct-time'), null, { timeout: 5000 });
+      await page.waitForFunction(() => !document.querySelector('.mc-duct-panel') && !document.querySelector('.mc-duct-legend') && !document.querySelector('.mc-duct-time'), null, { timeout: 5000 });
       const st = await pageState(page);
       assert(!st.cells && !st.lora.length && !st.edges.length, `${st.cells} cells, ${st.lora.length} outlines, ${st.edges.length} edges still drawn`);
       assert(!(await page.evaluate(() => document.querySelectorAll('.leaflet-mcDuctLine-pane canvas').length)), 'line canvas left in the DOM');
       assert(!st.fields.length, 'field image left on the map');
       assert(!(await page.evaluate(() => document.querySelectorAll('.mc-duct-field').length)), 'field canvas left in the DOM');
-      assert(st.legends === 0 && st.times === 0, 'legend/time boxes left');
+      assert(st.panels === 0 && st.legends === 0 && st.times === 0, 'panel/legend/time boxes left');
       assert(await page.evaluate(() => JSON.parse(localStorage.getItem('mc-tile-overlays') || '[]').indexOf('ducting') < 0), 'preference still has ducting');
     });
 
-    await test('re-enabling after a disable draws one legend and one slider, no duplicates', async () => {
+    await test('re-enabling after a disable draws one panel with one legend and one timeline, no duplicates', async () => {
       await setOverlayUi(page, true);
       await waitCells(page, 1);
       await setOverlayUi(page, false);
@@ -744,7 +995,7 @@ async function run() {
       await waitCells(page, data.cells.length);
       await sleep(300);
       const st = await pageState(page);
-      assert(st.legends === 1 && st.times === 1 && st.cells === data.cells.length && st.edges.length === 1 && st.lora.length <= 1, `legends=${st.legends} times=${st.times} cells=${st.cells} edges=${st.edges.length} outlines=${st.lora.length}`);
+      assert(st.panels === 1 && st.legends === 1 && st.times === 1 && st.cells === data.cells.length && st.edges.length === 1 && st.lora.length <= 1, `legends=${st.legends} times=${st.times} cells=${st.cells} edges=${st.edges.length} outlines=${st.lora.length}`);
       assert(st.fields.length === 1 && await page.evaluate(() => document.querySelectorAll('.mc-duct-field').length) === 1, 'field images: ' + st.fields.length);
       await setOverlayUi(page, false);
     });
@@ -843,7 +1094,7 @@ async function run() {
         await pp.page.waitForSelector('.mc-duct-legend', { state: 'visible' });
         await pp.page.mouse.move(5, 5);
         assert(!(await pp.page.locator('path.mc-pl-cov-site').count()), 'a site before any click');
-        const idx = await pp.page.evaluate(() => parseInt(document.querySelector('.mc-duct-time input[type=range]').value, 10));
+        const idx = await timeIdx(pp.page);
         // A cell with data at the shown hour, so its popup would open if the click went to the overlay.
         const cell = data.cells.find(c => c.c[idx] >= 3) || data.cells.find(c => c.c[idx] >= 1);
         const pts = await pointsIn(pp.page, cell, data.stepDeg, 4);

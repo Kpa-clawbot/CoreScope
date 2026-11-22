@@ -22,7 +22,7 @@
  *     events
  *   - map clicks: MC_ductCellAt lattice lookup (world copies), one map click
  *     handler that never stops the event and opens the cell popup only when
- *     the click did nothing else; the popup follows the slider and refreshes
+ *     the click did nothing else; the popup follows the shown hour and refreshes
  *   - the forecast area's dotted outline (merged boundary runs, antimeridian
  *     seam, one layer per build, colour from --mc-duct-edge) and the wider
  *     fade at the area's outer edge
@@ -33,6 +33,13 @@
  *     pending; no rebuild when a refresh brings the same generatedAt
  *   - remove during an in-flight fetch, timer cleanup, refresh cadence
  *   - overlay registry + MC_buildOverlayLayer (factory absent -> null)
+ *   - the panel: one control (header, timeline, legend body), collapse and
+ *     its persistence (storage missing, null or throwing), moving it
+ *     (pointer drag, arrow keys, fractions restored and re-clamped, reset,
+ *     off on phones, no corner lift while moved) and its teardown
+ *   - the timeline: built once per set of times, aria state, keys, buttons,
+ *     Now, wheel, mouse drag, click, rAF-coalesced user scrolls that settle
+ *     on a time, code positioning that never counts as a user pick
  *
  * Runs via: node tests/unit/test-map-ducting.js
  */
@@ -60,17 +67,50 @@ function test(name, fn) { queue.push([name, fn]); }
 
 // ── fakes ───────────────────────────────────────────────────────────────────
 
+// Elements whose scrollLeft changed: the browser fires 'scroll' on them
+// later (flushScroll), never synchronously.
+const scrolled = new Set();
+function flushScroll() { const l = Array.from(scrolled); scrolled.clear(); l.forEach(e => e.fire('scroll')); }
+
 function makeEl(tag) {
   const listeners = {};
   let text = '';
+  let scrollLeft = 0;
   const el = {
-    tagName: tag, className: '', children: [], attrs: {}, parentNode: null, value: '', listeners, style: {},
-    appendChild(c) { el.children.push(c); c.parentNode = el; return c; },
+    tagName: tag, className: '', children: [], attrs: {}, parentNode: null, value: '', listeners, style: {}, rect: null,
+    appendChild(c) {
+      if (c.parentNode && c.parentNode.removeChild) c.parentNode.removeChild(c);
+      el.children.push(c); c.parentNode = el; return c;
+    },
+    insertBefore(c, ref) {
+      if (c.parentNode && c.parentNode.removeChild) c.parentNode.removeChild(c);
+      const i = ref ? el.children.indexOf(ref) : -1;
+      if (i < 0) el.children.push(c); else el.children.splice(i, 0, c);
+      c.parentNode = el; return c;
+    },
+    removeChild(c) { el.children = el.children.filter(x => x !== c); c.parentNode = null; return c; },
+    get nextSibling() { const p = el.parentNode; return p ? p.children[p.children.indexOf(el) + 1] || null : null; },
     setAttribute(k, v) { el.attrs[k] = String(v); },
+    removeAttribute(k) { delete el.attrs[k]; },
+    getBoundingClientRect() { return el.rect || { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
     addEventListener(t, f) { (listeners[t] = listeners[t] || []).push(f); },
     removeEventListener(t, f) { listeners[t] = (listeners[t] || []).filter(x => x !== f); },
-    fire(t) { (listeners[t] || []).slice().forEach(f => f({ type: t })); },
+    // Fires t with an event carrying props; returns it (defaultPrevented, stopped).
+    fire(t, props) {
+      const ev = Object.assign({ type: t, defaultPrevented: false, stopped: false }, props);
+      ev.preventDefault = () => { ev.defaultPrevented = true; };
+      ev.stopPropagation = () => { ev.stopped = true; };
+      (listeners[t] || []).slice().forEach(f => f(ev));
+      return ev;
+    },
+    setPointerCapture(id) { el.captured = id; },
+    releasePointerCapture() { el.captured = null; },
+    focus() { el.focused = true; },
   };
+  Object.defineProperty(el, 'scrollLeft', {
+    get() { return scrollLeft; },
+    set(v) { const n = Math.max(0, Number(v) || 0); if (n !== scrollLeft) { scrollLeft = n; scrolled.add(el); } },
+  });
   Object.defineProperty(el, 'textContent', {
     get() { return text + el.children.map(c => c.textContent).join('\n'); },
     set(v) { text = String(v); el.children = []; },
@@ -104,11 +144,14 @@ function makeLeaflet(stats) {
   };
   L.Control = function (opts) { this.options = opts || {}; };
   L.Control.prototype.addTo = function (map) {
-    this._map = map; this._container = this.onAdd(map); this._container.parentNode = map.corner; map._controls.push(this); return this;
+    this._map = map; this._container = this.onAdd(map); this._container.className += ' leaflet-control';
+    map.corner.appendChild(this._container); map._controls.push(this); return this;
   };
   L.Control.prototype.remove = function () {
     if (this._map._gone) throw new Error('map gone');
-    this._map._controls = this._map._controls.filter(c => c !== this); this._removed = true; return this;
+    const c = this._container;
+    if (c.parentNode) c.parentNode.removeChild(c);
+    this._map._controls = this._map._controls.filter(x => x !== this); this._removed = true; return this;
   };
   L.extend = Object.assign;
   L.latLngBounds = (b) => ({ b });
@@ -162,7 +205,14 @@ function makeMap() {
   m.off = (ev, f) => { ev.split(' ').forEach(e => { m._on[e] = (m._on[e] || []).filter(x => x !== f); }); return m; };
   m.fire = (e, arg) => (m._on[e] || []).slice().forEach(f => f(arg));
   m.closePopup = (p) => { p = p || m._popup; if (p) p.open = false; return m; };
-  m.corner = { style: { marginBottom: '' }, getBoundingClientRect: () => ({ left: 0, right: 270 }) };
+  m.corner = makeEl('div');
+  m.corner.style.marginBottom = '';
+  m.corner.rect = { left: 0, right: 270 };
+  // The map container: 1000 x 700 at the page's origin.
+  m.el = makeEl('div');
+  m.el.clientWidth = 1000; m.el.clientHeight = 700;
+  m.el.rect = { left: 0, top: 0, right: 1000, bottom: 700, width: 1000, height: 700 };
+  m.getContainer = () => m.el;
   m.attr = { offsetHeight: 36, rect: { left: 0 }, getBoundingClientRect() { return this.rect; } };
   m.attributionControl = { getContainer: () => m.attr };
   m.addLayer = (l) => { m._layers.push(l); return m; };
@@ -183,6 +233,8 @@ function makeSandbox(opts) {
   opts = opts || {};
   const stats = { renderers: [], fields: [], lines: [], polys: [], popups: [] };
   const timers = [];
+  const timeouts = [];   // { id, fn, ms } from setTimeout
+  const frames = [];     // { id, fn } from requestAnimationFrame
   const cleared = [];
   let nextId = 1;
   const winL = {};
@@ -196,13 +248,35 @@ function makeSandbox(opts) {
     getComputedStyle: () => ({ getPropertyValue: (n) => vars[n] || '' }),
     setInterval(fn, ms) { const id = nextId++; timers.push({ id, fn, ms }); return id; },
     clearInterval(id) { cleared.push(id); const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); },
+    setTimeout(fn, ms) { const id = nextId++; timeouts.push({ id, fn, ms }); return id; },
+    clearTimeout(id) { const i = timeouts.findIndex(t => t.id === id); if (i >= 0) timeouts.splice(i, 1); },
+    requestAnimationFrame(fn) { const id = nextId++; frames.push({ id, fn }); return id; },
+    cancelAnimationFrame(id) { const i = frames.findIndex(t => t.id === id); if (i >= 0) frames.splice(i, 1); },
   };
+  if ('storage' in opts) ctx.localStorage = opts.storage;
+  if (opts.narrow) ctx.matchMedia = (q) => ({ matches: /max-width: 600px/.test(q) });
   ctx.window = ctx;
   ctx.CSApi = makeApi();
   if (!opts.noLeaflet) ctx.L = makeLeaflet(stats);
   vm.createContext(ctx);
   vm.runInContext(SRC, ctx, { filename: 'map-ducting.js' });
-  return { ctx, stats, timers, cleared, api: ctx.CSApi, vars, winL };
+  // Runs the queued frames / timeouts (and what they queue in turn).
+  const runFrames = () => { let n = 0; while (frames.length && n++ < 50) frames.shift().fn(); };
+  const runTimeouts = () => { let n = 0; while (timeouts.length && n++ < 50) timeouts.shift().fn(); };
+  // What the browser does after scrollLeft changes: scroll events, then a frame.
+  const settleScroll = () => { flushScroll(); runFrames(); };
+  return { ctx, stats, timers, cleared, api: ctx.CSApi, vars, winL, timeouts, frames, runFrames, runTimeouts, settleScroll };
+}
+
+// A Map-like localStorage; throwing: every call throws.
+function makeStorage(init, throwing) {
+  const data = Object.assign({}, init);
+  const boom = () => { throw new Error('SecurityError'); };
+  return {
+    data,
+    getItem: throwing ? boom : (k) => (k in data ? data[k] : null),
+    setItem: throwing ? boom : (k, v) => { data[k] = String(v); },
+  };
 }
 
 const tick = () => new Promise(r => setImmediate(r));
@@ -227,8 +301,8 @@ function find(node, pred, out) {
 
 // Adds a layer to a fresh map with time frozen at `now`, resolves the fetch.
 // los: window.MC_LOS_CFG (the site's line-of-sight config), unset by default.
-async function mount(body, now, los) {
-  const s = makeSandbox();
+async function mount(body, now, los, opts) {
+  const s = makeSandbox(opts);
   if (los) s.ctx.MC_LOS_CFG = los;
   const realNow = Date.now;
   Date.now = () => (now != null ? now : T1 + 60) * 1000;
@@ -242,6 +316,12 @@ async function mount(body, now, los) {
   } finally { Date.now = realNow; }
 }
 const legendText = (s) => s.map._controls.map(c => c._container.textContent).join('\n');
+// The forecast-time label as the browser reads it (the fake joins children with newlines).
+const labelText = (layer) => layer._timeLabel.textContent.replace(/\n/g, '');
+const byClass = (node, cls) => find(node, n => String(n.className || '').split(' ').includes(cls));
+const one = (node, cls) => byClass(node, cls)[0];
+// Every listener left on node and its descendants.
+const listenerCount = (node) => find(node, () => true).reduce((a, n) => a + Object.values(n.listeners || {}).reduce((b, l) => b + l.length, 0), 0);
 
 // ── pure helpers ────────────────────────────────────────────────────────────
 
@@ -255,6 +335,123 @@ test('MC_ductTimeIndex: before first, between, after last, empty', () => {
   assert.strictEqual(ti(SAMPLE.times, T2 + 99999), 2);
   assert.strictEqual(ti([], 5), -1);
   assert.strictEqual(ti(null, 5), -1);
+});
+
+// ── timeline and panel geometry ─────────────────────────────────────────────
+
+// Local-clock seconds, so the expectations follow the test machine's zone
+// exactly as the code does.
+function localSec(y, mo, d, h) { return new Date(y, mo, d, h || 0).getTime() / 1000; }
+
+test('MC_ductTimelineLayout: hourly steps, x follows time, a day is 240 px', () => {
+  const { ctx } = makeSandbox();
+  const start = localSec(2026, 10, 22, 13);
+  const times = [];
+  for (let i = 0; i < 48; i++) times.push(start + i * 3600);
+  const l = ctx.MC_ductTimelineLayout(times);
+  assert.strictEqual(l.pxPerSec, 240 / 86400);
+  assert.strictEqual(l.xs.length, 48);
+  assert.strictEqual(l.xs[0], 0);
+  assert.ok(Math.abs(l.xs[1] - 10) < 1e-9, 'hourly step is 10 px');
+  assert.ok(Math.abs(l.width - 47 * 10) < 1e-9);
+  // First day starts mid-day: a label at x 0, then the two midnights inside.
+  assert.deepStrictEqual(Array.from(l.days, d => d.sec), [start, localSec(2026, 10, 23), localSec(2026, 10, 24)]);
+  assert.strictEqual(l.days[0].x, 0);
+  // 18:00 on day one, 06/12/18 on day two, 06/12 on day three (ends 12:00).
+  assert.deepStrictEqual(Array.from(l.hours, h => h.sec), [
+    localSec(2026, 10, 22, 18),
+    localSec(2026, 10, 23, 6), localSec(2026, 10, 23, 12), localSec(2026, 10, 23, 18),
+    localSec(2026, 10, 24, 6), localSec(2026, 10, 24, 12),
+  ]);
+  for (const h of l.hours) assert.ok(Math.abs(h.x - (h.sec - start) * l.pxPerSec) < 1e-6);
+});
+
+test('MC_ductTimelineLayout: 3-hour steps widen to 8 px per step minimum only when needed; uneven steps keep their gaps', () => {
+  const { ctx } = makeSandbox();
+  const start = localSec(2026, 10, 20, 0);
+  const three = [];
+  for (let i = 0; i < 9; i++) three.push(start + i * 3 * 3600);
+  const l3 = ctx.MC_ductTimelineLayout(three);
+  assert.strictEqual(l3.pxPerSec, 240 / 86400, '3 h = 30 px, above the 8 px floor');
+  assert.strictEqual(l3.days[0].sec, start, 'starts at midnight: no extra x-0 label');
+  assert.strictEqual(l3.days.filter(d => d.x === 0).length, 1);
+  // 10-minute steps: the 8 px floor sets the scale.
+  const ten = [start, start + 600, start + 1200];
+  assert.ok(Math.abs(ctx.MC_ductTimelineLayout(ten).pxPerSec - 8 / 600) < 1e-12);
+  // History every 3 h, then a gap, then hourly: x is proportional to time.
+  const mixed = [start, start + 10800, start + 21600, start + 25200, start + 28800];
+  const lm = ctx.MC_ductTimelineLayout(mixed);
+  for (let i = 0; i < mixed.length; i++) assert.ok(Math.abs(lm.xs[i] - (mixed[i] - start) * lm.pxPerSec) < 1e-9);
+});
+
+test('MC_ductTimelineLayout: labels stay on the local clock across DST changes', () => {
+  const { ctx } = makeSandbox();
+  // 24 Oct 00:00 to 3 Nov 00:00 local, hourly: covers the EU (25 Oct) and
+  // US (1 Nov) 2026 changes; run under several TZ values to exercise them.
+  const start = localSec(2026, 9, 24), end = localSec(2026, 10, 3);
+  const times = [];
+  for (let t = start; t <= end; t += 3600) times.push(t);
+  const l = ctx.MC_ductTimelineLayout(times);
+  assert.strictEqual(l.days.length, 11, '24 Oct .. 3 Nov midnights');
+  for (const d of l.days) {
+    const dt = new Date(d.sec * 1000);
+    assert.strictEqual(dt.getHours() * 60 + dt.getMinutes(), 0, 'day label at local midnight: ' + dt);
+  }
+  assert.strictEqual(l.hours.length, 30, 'three hour labels per full day');
+  for (const h of l.hours) assert.ok([6, 12, 18].includes(new Date(h.sec * 1000).getHours()), 'hour label off the local clock');
+});
+
+test('MC_ductTimelineLayout: empty, single, bad input', () => {
+  const { ctx } = makeSandbox();
+  for (const bad of [null, [], 'x', [NaN], [5, 1]]) {
+    const l = ctx.MC_ductTimelineLayout(bad);
+    assert.strictEqual(l.width, 0);
+    assert.strictEqual(l.xs.length, 0);
+    assert.strictEqual(l.days.length, 0);
+  }
+  const one = ctx.MC_ductTimelineLayout([localSec(2026, 10, 22, 9)]);
+  assert.deepStrictEqual(Array.from(one.xs), [0]);
+  assert.strictEqual(one.width, 0);
+  assert.strictEqual(one.days.length, 1, 'the one time still gets its day label');
+});
+
+test('MC_ductTimelineIndexAt: nearest, ties to the earlier, clamped at the ends', () => {
+  const { ctx } = makeSandbox();
+  const at = ctx.MC_ductTimelineIndexAt;
+  const xs = [0, 10, 20, 50];
+  assert.strictEqual(at(xs, -99), 0);
+  assert.strictEqual(at(xs, 0), 0);
+  assert.strictEqual(at(xs, 4.9), 0);
+  assert.strictEqual(at(xs, 5), 0, 'tie goes to the earlier time');
+  assert.strictEqual(at(xs, 5.1), 1);
+  assert.strictEqual(at(xs, 34), 2);
+  assert.strictEqual(at(xs, 36), 3);
+  assert.strictEqual(at(xs, 999), 3);
+  assert.strictEqual(at([], 3), -1);
+  assert.strictEqual(at(null, 3), -1);
+  assert.strictEqual(at([7], 100), 0);
+});
+
+test('MC_ductClampPos / MC_ductPosToFrac / MC_ductPosFromFrac: the panel stays inside the map', () => {
+  const { ctx } = makeSandbox();
+  const c = (...a) => { const p = ctx.MC_ductClampPos(...a); return [p.left, p.top]; };
+  assert.deepStrictEqual(c(50, 60, 100, 80, 800, 600, 8), [50, 60]);
+  assert.deepStrictEqual(c(-20, -5, 100, 80, 800, 600, 8), [8, 8]);
+  assert.deepStrictEqual(c(9999, 9999, 100, 80, 800, 600, 8), [692, 512]);
+  assert.deepStrictEqual(c(300, 300, 900, 700, 800, 600, 8), [8, 8], 'bigger than the map: pinned to the margin');
+  assert.deepStrictEqual(c(NaN, 40, 100, 80, 800, 600, 8), [8, 40]);
+  assert.deepStrictEqual(c(-3, 700, 100, 80, 800, 600), [0, 520], 'margin defaults to 0');
+  const f = ctx.MC_ductPosToFrac(350, 260, 100, 80, 800, 600);
+  assert.ok(Math.abs(f.fx - 0.5) < 1e-9 && Math.abs(f.fy - 0.5) < 1e-9);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(ctx.MC_ductPosToFrac(-50, 9999, 100, 80, 800, 600))), { fx: 0, fy: 1 });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(ctx.MC_ductPosToFrac(10, 10, 900, 80, 800, 600))), { fx: 0, fy: 10 / 520 });
+  // Same fractions on a smaller map: same relative spot, still inside.
+  const p = ctx.MC_ductPosFromFrac({ fx: 0.5, fy: 1 }, 100, 80, 400, 300, 8);
+  assert.deepStrictEqual([p.left, p.top], [150, 212]);
+  const q = ctx.MC_ductPosFromFrac(null, 100, 80, 400, 300, 8);
+  assert.deepStrictEqual([q.left, q.top], [8, 8]);
+  const r = ctx.MC_ductPosFromFrac({ fx: 'x', fy: Infinity }, 100, 80, 400, 300, 8);
+  assert.deepStrictEqual([r.left, r.top], [8, 8]);
 });
 
 // ── colour bands ────────────────────────────────────────────────────────────
@@ -681,7 +878,7 @@ test('edge outline: no colour variable -> stroke off, never invented', async () 
 test('legend: dotted-line row for the forecast area edge', async () => {
   const s = await mount(SAMPLE);
   assert.ok(legendText(s).includes('Dotted line: edge of the forecast area (no forecast beyond it)'));
-  assert.strictEqual(find(s.map._controls[1]._container, n => /mc-duct-swatch-edge/.test(n.className || '')).length, 1);
+  assert.strictEqual(find(s.layer._legendEl, n => /mc-duct-swatch-edge/.test(n.className || '')).length, 1);
 });
 
 test('field: one image layer in its own pane below markers, over the cells\' outer edges', async () => {
@@ -844,8 +1041,7 @@ test('changing time redraws the field in place: same cells, image layer, rendere
   const calls = s.api.calls.length;
   const cv = s.layer._canvas, puts = cv.puts;
   const before = pixelAt(s, 51.25, -0.25).rgba;
-  s.layer._slider.value = '2';
-  s.layer._slider.fire('input');
+  s.layer._tl.fire('keydown', { key: 'End' });
   assert.ok(s.layer._cells.every((c, i) => c === cells[i]) && s.layer._cells.length === cells.length);
   assert.strictEqual(s.stats.renderers.length, 1);
   assert.strictEqual(s.stats.fields.length, 1);
@@ -864,8 +1060,8 @@ test('changing time redraws the field in place: same cells, image layer, rendere
   s.ctx.dispatch('theme-changed');
   assert.strictEqual(s.stats.polys.length, polys, 'same outlined cells and colour: outline not rebuilt');
   assert.strictEqual(loraLayer(s), l);
-  assert.ok(/Forecast time:/.test(s.layer._timeLabel.textContent));
-  assert.strictEqual(s.layer._slider.max, '2');
+  assert.ok(/^Forecast time: \S/.test(labelText(s.layer)), labelText(s.layer));
+  assert.strictEqual(s.layer._tl.attrs['aria-valuemax'], '2');
 });
 
 // Correctness only: wall-clock bounds do not belong in the unit gate.
@@ -898,11 +1094,17 @@ test('field build on a Gulf-sized lattice (860 cells): full width, pixels drawn'
   assert.ok(drawn > 0, 'pixels drawn');
 });
 
-test('slider is disabled until data arrives', () => {
+test('timeline is disabled until data arrives', () => {
   const s = makeSandbox();
   const layer = s.ctx.MC_createDuctingLayer({});
   layer.onAdd(makeMap());
-  assert.strictEqual(layer._slider.disabled, true);
+  assert.strictEqual(layer._tl.attrs['aria-disabled'], 'true');
+  assert.strictEqual(layer._tl.attrs['aria-valuemax'], '0');
+  assert.ok(!('aria-valuenow' in layer._tl.attrs));
+  assert.ok(layer._prevEl.disabled && layer._nextEl.disabled && layer._nowEl.disabled);
+  assert.strictEqual(labelText(layer), 'Forecast time');
+  const ev = layer._tl.fire('keydown', { key: 'End' });
+  assert.ok(!ev.defaultPrevented, 'keys ignored without times');
 });
 
 // ── popup ───────────────────────────────────────────────────────────────────
@@ -1056,7 +1258,7 @@ test('click: no popup when it hit an interactive layer or another handler drew o
   assert.ok(/Surface-based duct/.test(popupText(s)), 'a plain click still opens it');
 });
 
-test('open popup follows the slider, closes where the hour has no data, and goes with the layer', async () => {
+test('open popup follows the shown hour, closes where the hour has no data, and goes with the layer', async () => {
   const body = clone(SAMPLE);
   const s = await mount(body, T2);
   click(s, 51.8, -0.3); await tick();                      // cell c: class 1 at t2
@@ -1091,7 +1293,7 @@ test('legend: banded bar from the field variables, scale labels, LoRa row, attri
   assert.ok(t.includes('NOAA GFS') && t.includes('Open-Meteo.com (CC BY 4.0)'), t);
   assert.ok(/Updated /.test(t));
   assert.ok(t.includes('Indicator only: model levels are ~200 m apart, so thinner ducts are not visible.'));
-  const box = s.map._controls[1]._container;
+  const box = s.layer._legendEl;
   const bar = find(box, n => n.className === 'mc-duct-scale-bar')[0];
   assert.ok(bar && /^linear-gradient\(to right, transparent 0%/.test(bar.style.background), bar && bar.style.background);
   for (let k = 1; k <= 8; k++) assert.ok(bar.style.background.includes(`var(--mc-duct-s${k})`), 's' + k);
@@ -1122,7 +1324,7 @@ test('legend: banded bar from the field variables, scale labels, LoRa row, attri
   assert.ok(/mc-duct-scale-label-end/.test(labels[3].className), 'Very high right-aligned at the end');
   const sw = find(box, n => /mc-duct-swatch-/.test(n.className));
   assert.deepStrictEqual(sw.map(n => n.className), ['mc-duct-swatch mc-duct-swatch-lora', 'mc-duct-swatch mc-duct-swatch-edge']);
-  assert.ok(s.map._controls.every(c => c.options.position === 'bottomleft'));
+  assert.ok(s.map._controls.length === 1 && s.map._controls[0].options.position === 'bottomleft', 'one bottom-left control');
 });
 
 test('pending status shows the preparing message and draws nothing', async () => {
@@ -1194,8 +1396,8 @@ test('no data yet: retries every minute until data arrives, then every 30 minute
 
 test('a refresh with a new forecast rebuilds and keeps a user-picked time', async () => {
   const s = await mount(SAMPLE, T1 + 60);
-  s.layer._slider.value = '2';
-  s.layer._slider.fire('input');
+  s.layer._tl.fire('keydown', { key: 'ArrowRight' });
+  assert.ok(s.layer._userPicked && s.layer._idx === 2);
   s.timers[0].fn();
   const body = clone(SAMPLE);
   body.generatedAt = SAMPLE.generatedAt + 3600;
@@ -1296,15 +1498,17 @@ test('remove after data: the field image layer leaves the map with the cells', a
   assert.strictEqual(s.map._layers.filter(l => l._mcField).length, 1, 'one field per map');
 });
 
-test('remove clears the slider listener; a late failure and a gone map never throw', async () => {
+test('remove clears the panel listeners; a late failure and a gone map never throw', async () => {
   const s = makeSandbox();
   const map = makeMap();
   const layer = s.ctx.MC_createDuctingLayer({});
   layer.onAdd(map);
-  const slider = layer._slider;
+  const panel = layer._panelEl;
+  assert.ok(listenerCount(panel) > 0);
   map._gone = true;
   assert.doesNotThrow(() => layer.onRemove(map));
-  assert.strictEqual((slider.listeners.input || []).length, 0);
+  assert.strictEqual(listenerCount(panel), 0, 'listeners left on the panel');
+  assert.strictEqual(panel.parentNode, null, 'panel left in the corner');
   assert.doesNotThrow(() => layer.onRemove(map), 'double remove');
   s.api.calls[0].fail();
   await tick(); await tick();
@@ -1410,7 +1614,7 @@ test('out-of-date notice: on error and failure while old data is drawn, not on p
       await refresh(body);
       assert.ok(legendText(s).includes(MSG), JSON.stringify(body));
       assert.strictEqual(s.layer._cells.length, 3, 'old data still drawn');
-      const status = find(s.map._controls[1]._container, n => n.className === 'mc-duct-legend-status');
+      const status = find(s.layer._legendEl, n => n.className === 'mc-duct-legend-status');
       assert.strictEqual(status.length, 1, 'one status line');
     }
     const body = clone(SAMPLE); body.generatedAt += 60;
@@ -1463,21 +1667,22 @@ test('legend shows only the attribution, not the model twice', async () => {
   assert.ok(!/NOAA GFS\. /.test(t));
 });
 
-test('legend is collapsible and starts collapsed on narrow screens', async () => {
-  const s = makeSandbox();
-  s.ctx.matchMedia = (q) => ({ matches: /max-width: 600px/.test(q) });
-  const map = makeMap();
-  const layer = s.ctx.MC_createDuctingLayer({});
-  layer.onAdd(map);
-  s.api.calls[0].ok(SAMPLE);
-  await tick(); await tick();
-  const box = map._controls[1]._container;
-  const head = () => find(box, n => n.tagName === 'button')[0];
-  assert.strictEqual(head().attrs['aria-expanded'], 'false');
-  assert.ok(!box.textContent.includes('Indicator only'), 'body hidden when compact');
-  head().fire('click');
-  assert.strictEqual(head().attrs['aria-expanded'], 'true');
-  assert.ok(box.textContent.includes('Indicator only'));
+test('legend is collapsible and starts collapsed on narrow screens; header and timeline stay', async () => {
+  const s = await mount(SAMPLE, T1 + 60, null, { narrow: true });
+  const btn = s.layer._collapseEl, body = s.layer._legendEl, panel = s.layer._panelEl;
+  assert.strictEqual(btn.attrs['aria-expanded'], 'false');
+  assert.strictEqual(btn.attrs['aria-label'], 'Expand ducting legend');
+  assert.strictEqual(body.hidden, true, 'body hidden when compact');
+  assert.ok(/mc-duct-panel-collapsed/.test(panel.className) && /leaflet-control/.test(panel.className));
+  assert.ok(body.textContent.includes('Indicator only'), 'content kept, only hidden');
+  btn.fire('click');
+  assert.strictEqual(btn.attrs['aria-expanded'], 'true');
+  assert.strictEqual(btn.attrs['aria-label'], 'Collapse ducting legend');
+  assert.strictEqual(body.hidden, false);
+  assert.ok(!/mc-duct-panel-collapsed/.test(panel.className) && /leaflet-control/.test(panel.className), panel.className);
+  btn.fire('click');
+  assert.strictEqual(body.hidden, true);
+  assert.ok(!one(panel, 'mc-duct-time').hidden && !one(panel, 'mc-duct-head').hidden, 'timeline and header stay');
 });
 
 test('bottom-left corner is lifted above the attribution bar, re-measured, and released', () => {
@@ -1499,6 +1704,500 @@ test('bottom-left corner is lifted above the attribution bar, re-measured, and r
   assert.strictEqual(map.corner.style.marginBottom, '', 'released on remove');
   assert.strictEqual((map._on.resize || []).length, 0);
   assert.strictEqual((map._on.layeradd || []).length, 0);
+});
+
+// ── panel and timeline ──────────────────────────────────────────────────────
+
+// SAMPLE stretched to n hourly times (the cells' per-time arrays repeat).
+function longBody(n) {
+  const b = clone(SAMPLE);
+  b.times = Array.from({ length: n }, (_, i) => T0 + i * 3600);
+  b.cells.forEach((c) => {
+    Object.keys(c).forEach((k) => { if (Array.isArray(c[k])) { const a = c[k]; c[k] = Array.from({ length: n }, (_, i) => a[i % a.length]); } });
+  });
+  return b;
+}
+const xsOf = (s) => s.layer._tlLayout.xs;
+
+test('MC_ductTimelineKeyIndex: arrows, page by 24 h (at least one step), home/end, clamped; other keys -1', () => {
+  const { ctx } = makeSandbox();
+  const ki = ctx.MC_ductTimelineKeyIndex;
+  const lay = ctx.MC_ductTimelineLayout(Array.from({ length: 73 }, (_, i) => T0 + i * 3600));
+  const xs = lay.xs, pps = lay.pxPerSec;
+  assert.strictEqual(ki('ArrowRight', 5, xs, pps), 6);
+  assert.strictEqual(ki('ArrowUp', 5, xs, pps), 6);
+  assert.strictEqual(ki('ArrowLeft', 5, xs, pps), 4);
+  assert.strictEqual(ki('ArrowDown', 5, xs, pps), 4);
+  assert.strictEqual(ki('ArrowLeft', 0, xs, pps), 0, 'clamped at the first');
+  assert.strictEqual(ki('ArrowRight', 72, xs, pps), 72, 'clamped at the last');
+  assert.strictEqual(ki('PageUp', 5, xs, pps), 29);
+  assert.strictEqual(ki('PageDown', 29, xs, pps), 5);
+  assert.strictEqual(ki('PageUp', 60, xs, pps), 72);
+  assert.strictEqual(ki('PageDown', 10, xs, pps), 0);
+  assert.strictEqual(ki('Home', 40, xs, pps), 0);
+  assert.strictEqual(ki('End', 4, xs, pps), 72);
+  assert.strictEqual(ki('Enter', 4, xs, pps), -1);
+  assert.strictEqual(ki('End', 0, [], pps), -1);
+  assert.strictEqual(ki('ArrowRight', -1, xs, pps), 1, 'no index yet counts as the first');
+  // A two-day gap: PageUp still moves one step, never stays put.
+  const gap = ctx.MC_ductTimelineLayout([T0, T0 + 3600, T0 + 3 * 86400]);
+  assert.strictEqual(ki('PageUp', 0, gap.xs, gap.pxPerSec), 1);
+  assert.strictEqual(ki('PageDown', 2, gap.xs, gap.pxPerSec), 1);
+});
+
+test('MC_ductTimelineDaySpans: start to next start, the last to the end; a too-short first day is left out', () => {
+  const { ctx } = makeSandbox();
+  const sp = (lay, min) => JSON.parse(JSON.stringify(ctx.MC_ductTimelineDaySpans(lay, min)));
+  const lay = { width: 600, days: [{ x: 0, sec: 1 }, { x: 40, sec: 2 }, { x: 280, sec: 3 }, { x: 520, sec: 4 }] };
+  assert.deepStrictEqual(sp(lay, 96), [{ x: 40, w: 240, sec: 2 }, { x: 280, w: 240, sec: 3 }, { x: 520, w: 80, sec: 4 }],
+    'the 40 px first day goes; the last keeps its short span (nothing follows it)');
+  assert.deepStrictEqual(sp(lay, 30).map(d => d.w), [40, 240, 240, 80]);
+  assert.deepStrictEqual(sp({ width: 0, days: [] }, 96), []);
+  assert.deepStrictEqual(sp(null, 96), []);
+  // Spans tile the strip: each ends where the next starts.
+  const real = ctx.MC_ductTimelineLayout(Array.from({ length: 73 }, (_, i) => T0 + 5 * 3600 + i * 3600));
+  const r = sp(real, 96);
+  for (let k = 0; k + 1 < r.length; k++) assert.strictEqual(r[k].x + r[k].w, r[k + 1].x);
+  assert.strictEqual(r[r.length - 1].x + r[r.length - 1].w, real.width);
+});
+
+test('MC_ductPanelPrefs: validated, clamped, unreadable is nothing stored', () => {
+  const { ctx } = makeSandbox();
+  const pp = (v) => JSON.parse(JSON.stringify(ctx.MC_ductPanelPrefs(v)));
+  const none = { collapsed: null, pos: null };
+  assert.deepStrictEqual(pp(JSON.stringify({ collapsed: true, pos: { fx: 0.25, fy: 1 } })), { collapsed: true, pos: { fx: 0.25, fy: 1 } });
+  assert.deepStrictEqual(pp(JSON.stringify({ collapsed: false, pos: null })), { collapsed: false, pos: null });
+  assert.deepStrictEqual(pp(JSON.stringify({ pos: { fx: -2, fy: 7 } })), { collapsed: null, pos: { fx: 0, fy: 1 } });
+  assert.deepStrictEqual(pp(JSON.stringify({ collapsed: 'yes', pos: { fx: '0.5', fy: 0.5 } })), none);
+  for (const v of [null, undefined, '', '{', 'null', '42', '[]', 7, {}]) assert.deepStrictEqual(pp(v), none, String(v));
+});
+
+// L.Layer's own methods (L.Evented and L.Layer, Leaflet 1.9.4): overriding
+// one breaks Leaflet silently (a DOM helper named _on swallowed layer.on()
+// calls, so the layers control never heard 'add' and the overlay pick was
+// not saved).
+test('the layer overrides none of L.Evented / L.Layer\'s methods', () => {
+  const s = makeSandbox();
+  const proto = Object.getPrototypeOf(s.ctx.MC_createDuctingLayer({}));
+  const leaflet = ['on', 'off', 'fire', 'once', 'listens', 'addEventParent', 'removeEventParent', 'addEventListener', 'removeEventListener',
+    'clearAllEventListeners', 'addOneTimeEventListener', 'fireEvent', 'hasEventListeners', '_on', '_off', '_listens', '_propagateEvent',
+    'addTo', 'remove', 'removeFrom', 'getPane', 'addInteractiveTarget', 'removeInteractiveTarget', 'getAttribution', '_layerAdd',
+    'bindPopup', 'unbindPopup', 'openPopup', 'closePopup', 'togglePopup', 'isPopupOpen', 'setPopupContent', 'getPopup', '_openPopup',
+    'bindTooltip', 'unbindTooltip', 'openTooltip', 'closeTooltip', 'toggleTooltip', 'isTooltipOpen', 'setTooltipContent', 'getTooltip'];
+  const clash = leaflet.filter(k => Object.prototype.hasOwnProperty.call(proto, k));
+  assert.deepStrictEqual(clash, []);
+});
+
+test('panel: one control holding header, timeline and legend body, in order, wired for assistive tech', async () => {
+  const s = await mount(SAMPLE, T1 + 60);
+  assert.strictEqual(s.map._controls.length, 1);
+  const panel = s.map._controls[0]._container;
+  assert.strictEqual(panel, s.layer._panelEl);
+  assert.ok(/(^| )mc-duct-panel( |$)/.test(panel.className));
+  assert.deepStrictEqual(panel.children.map(c => c.className), ['mc-duct-head', 'mc-duct-time', 'mc-duct-legend']);
+  assert.strictEqual(byClass(panel, 'mc-duct-legend').length, 1);
+  assert.strictEqual(byClass(panel, 'mc-duct-time').length, 1);
+  const head = panel.children[0];
+  assert.deepStrictEqual(head.children.map(c => c.className), ['mc-duct-drag', 'mc-duct-title', 'mc-duct-reset', 'mc-duct-collapse']);
+  assert.strictEqual(one(head, 'mc-duct-title').textContent, 'Tropospheric ducting');
+  assert.strictEqual(one(head, 'mc-duct-drag').attrs['aria-label'], 'Move ducting panel');
+  assert.strictEqual(one(head, 'mc-duct-reset').hidden, true, 'reset only once moved');
+  assert.strictEqual(one(head, 'mc-duct-reset').attrs['aria-label'], 'Reset position');
+  const coll = one(head, 'mc-duct-collapse');
+  assert.strictEqual(coll.attrs['aria-controls'], s.layer._legendEl.id);
+  assert.ok(/^mc-duct-legend-\d+$/.test(s.layer._legendEl.id));
+  assert.strictEqual(coll.attrs['aria-expanded'], 'true');
+  head.children.forEach(b => assert.strictEqual(b.tagName === 'button' ? b.type : 'button', 'button'));
+  const vp = s.layer._tl;
+  assert.ok(/(^| )mc-duct-timeline( |$)/.test(vp.className));
+  assert.deepStrictEqual([vp.attrs.role, vp.attrs.tabindex, vp.attrs['aria-label'], vp.attrs['aria-valuemin'], vp.attrs['aria-valuemax'], vp.attrs['aria-valuenow']],
+    ['slider', '0', 'Ducting forecast time', '0', '2', '1']);
+  assert.ok(!('aria-disabled' in vp.attrs));
+  assert.strictEqual(vp.attrs['aria-valuetext'], labelText(s.layer).replace('Forecast time: ', ''));
+  // Forecast-time line: the label (prefix that may shorten, the time) and Now; then ◀ strip ▶.
+  const time = one(panel, 'mc-duct-time');
+  assert.deepStrictEqual(time.children.map(c => c.className), ['mc-duct-time-head', 'mc-duct-tl-row']);
+  const thead = time.children[0];
+  assert.deepStrictEqual(thead.children.map(c => c.className), ['mc-duct-time-label', 'mc-duct-now']);
+  assert.deepStrictEqual(thead.children[0].children.map(c => c.className), ['mc-duct-time-prefix', 'mc-duct-time-value']);
+  assert.strictEqual(one(thead, 'mc-duct-time-value').textContent, vp.attrs['aria-valuetext'], 'the time is its own span');
+  assert.strictEqual(s.layer._timeLabel.title, labelText(s.layer), 'full text on hover');
+  assert.strictEqual(one(thead, 'mc-duct-now').textContent, 'Now');
+  const row = one(panel, 'mc-duct-tl-row');
+  assert.deepStrictEqual(row.children.map(c => c.className.split(' ').pop()), ['mc-duct-step-prev', 'mc-duct-timeline-wrap', 'mc-duct-step-next']);
+  assert.strictEqual(one(row, 'mc-duct-step-prev').attrs['aria-label'], 'Earlier');
+  assert.strictEqual(one(row, 'mc-duct-step-next').attrs['aria-label'], 'Later');
+  assert.strictEqual(byClass(panel, 'mc-duct-timeline-cursor').length, 1);
+  // The map never sees a press on the panel.
+  assert.ok(panel.fire('pointerdown').stopped);
+});
+
+test('timeline: one tick per time placed by time, day and hour labels, now line; built only when the times change', async () => {
+  const body = longBody(49);
+  const s = await mount(body, T0 + 5 * 3600 + 1800);
+  const inner = s.layer._tlInner, lay = s.layer._tlLayout;
+  const ticks = byClass(inner, 'mc-duct-tick');
+  assert.strictEqual(ticks.length, 49);
+  assert.deepStrictEqual(ticks.map(t => parseFloat(t.style.left)), Array.from(lay.xs));
+  assert.strictEqual(s.layer._tlTrack.style.width, lay.width + 'px');
+  const days = byClass(inner, 'mc-duct-day');
+  assert.ok(days.length >= 2, 'two days in 48 h');
+  const spans = s.ctx.MC_ductTimelineDaySpans(lay, 96);
+  assert.deepStrictEqual(days.map(d => [parseFloat(d.style.left), parseFloat(d.style.width)]), Array.from(spans, d => [d.x, d.w]), 'one span per day, start to next start');
+  assert.ok(days.every(d => d.children.length === 1 && d.children[0].className === 'mc-duct-day-label'), 'label inside its span (sticky)');
+  const d0 = new Date(lay.days[lay.days.length - 1].sec * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  assert.strictEqual(days[days.length - 1].textContent, d0);
+  const dayTicks = ticks.filter(t => /mc-duct-tick-day/.test(t.className));
+  assert.strictEqual(dayTicks.length, lay.days.filter(d => body.times.includes(d.sec)).length);
+  const hours = byClass(inner, 'mc-duct-hour');
+  assert.strictEqual(hours.length, lay.hours.length);
+  assert.strictEqual(hours[0].textContent, new Date(lay.hours[0].sec * 1000).toLocaleTimeString([], { hour: '2-digit' }));
+  const now = one(inner, 'mc-duct-now-line');
+  assert.ok(!now.hidden);
+  assert.strictEqual(parseFloat(now.style.left), (5.5 * 3600) * lay.pxPerSec);
+  // A new forecast with the same times: same strip nodes.
+  const first = ticks[0];
+  s.timers[0].fn();
+  const same = clone(body); same.generatedAt += 3600;
+  s.api.calls[1].ok(same);
+  await tick(); await tick();
+  assert.strictEqual(byClass(s.layer._tlInner, 'mc-duct-tick')[0], first, 'strip not rebuilt');
+  // Other times: rebuilt.
+  s.timers[0].fn();
+  const other = longBody(25); other.generatedAt += 7200;
+  s.api.calls[2].ok(other);
+  await tick(); await tick();
+  assert.strictEqual(byClass(s.layer._tlInner, 'mc-duct-tick').length, 25);
+  assert.notStrictEqual(byClass(s.layer._tlInner, 'mc-duct-tick')[0], first);
+  // Now outside the times: no now line.
+  const late = await mount(SAMPLE, T2 + 7200);
+  assert.strictEqual(one(late.layer._tlInner, 'mc-duct-now-line').hidden, true);
+});
+
+test('timeline: keys and buttons pick a time: label, aria, field, strip position; user-picked; ends disable the steps', async () => {
+  const s = await mount(longBody(49), T0 + 3600);
+  const L0 = s.layer, vp = L0._tl, xs = xsOf(s);
+  assert.strictEqual(L0._idx, 1);
+  assert.strictEqual(vp.scrollLeft, xs[1], 'strip at the shown time');
+  assert.ok(!L0._userPicked);
+  const puts = L0._canvas.puts;
+  const key = (k) => vp.fire('keydown', { key: k });
+  let ev = key('ArrowRight');
+  assert.ok(ev.defaultPrevented && ev.stopped);
+  assert.strictEqual(L0._idx, 2);
+  assert.ok(L0._userPicked);
+  assert.strictEqual(L0._canvas.puts, puts + 1, 'one redraw');
+  assert.strictEqual(vp.attrs['aria-valuenow'], '2');
+  assert.strictEqual(vp.attrs['aria-valuetext'], labelText(L0).replace('Forecast time: ', ''));
+  assert.strictEqual(vp.scrollLeft, xs[2]);
+  key('PageUp'); assert.strictEqual(L0._idx, 26);
+  key('PageDown'); assert.strictEqual(L0._idx, 2);
+  key('End'); assert.strictEqual(L0._idx, 48);
+  assert.ok(L0._nextEl.disabled && !L0._prevEl.disabled, 'Later off at the last time');
+  key('ArrowRight'); assert.strictEqual(L0._idx, 48, 'clamped');
+  key('Home'); assert.strictEqual(L0._idx, 0);
+  assert.ok(L0._prevEl.disabled && !L0._nextEl.disabled, 'Earlier off at the first time');
+  ev = key('a');
+  assert.ok(!ev.defaultPrevented, 'other keys pass');
+  L0._nextEl.fire('click'); assert.strictEqual(L0._idx, 1);
+  L0._nextEl.fire('click'); assert.strictEqual(L0._idx, 2);
+  L0._prevEl.fire('click'); assert.strictEqual(L0._idx, 1);
+  assert.strictEqual(vp.scrollLeft, xs[1]);
+  // The scroll events of that positioning are not user picks.
+  L0._userPicked = false;
+  s.settleScroll();
+  assert.ok(!L0._userPicked && L0._idx === 1);
+});
+
+test('timeline: Now returns to the current hour and follows it again', async () => {
+  const s = await mount(longBody(49), T0 + 10 * 3600 + 60);
+  const L0 = s.layer;
+  L0._tl.fire('keydown', { key: 'End' });
+  assert.ok(L0._userPicked && L0._idx === 48);
+  const realNow = Date.now;
+  Date.now = () => (T0 + 10 * 3600 + 60) * 1000;
+  try { L0._nowEl.fire('click'); } finally { Date.now = realNow; }
+  assert.strictEqual(L0._idx, 10);
+  assert.strictEqual(L0._tl.scrollLeft, xsOf(s)[10]);
+  assert.strictEqual(L0._userPicked, false, 'refreshes follow the clock again');
+});
+
+test('timeline: a user scroll picks the time under the centre once per frame, then settles on it', async () => {
+  const s = await mount(longBody(49), T0 + 60);
+  const L0 = s.layer, vp = L0._tl, xs = xsOf(s);
+  s.settleScroll();
+  const puts = L0._canvas.puts;
+  vp.fire('touchstart');
+  vp.scrollLeft = xs[7] - 3;
+  vp.fire('scroll'); vp.fire('scroll'); vp.fire('scroll');
+  assert.strictEqual(s.frames.length, 1, 'coalesced to one frame');
+  assert.strictEqual(L0._idx, 0, 'nothing before the frame');
+  s.runFrames();
+  assert.strictEqual(L0._idx, 7);
+  assert.ok(L0._userPicked);
+  assert.strictEqual(L0._canvas.puts, puts + 1);
+  assert.strictEqual(vp.scrollLeft, xs[7] - 3, 'the strip stays under the finger');
+  vp.scrollLeft = xs[7] + 2;     // same time under the centre: no redraw
+  s.settleScroll();
+  assert.strictEqual(L0._canvas.puts, puts + 1);
+  s.runTimeouts();
+  assert.strictEqual(vp.scrollLeft, xs[7] + 2, 'no settling while the finger is down');
+  vp.fire('touchend');
+  s.runTimeouts();
+  assert.strictEqual(vp.scrollLeft, xs[7], 'settled on the time');
+  s.settleScroll();
+  assert.strictEqual(L0._tlTarget, null, 'settling done');
+  assert.strictEqual(L0._idx, 7);
+  // scrollend settles at once.
+  vp.fire('touchstart'); vp.scrollLeft = xs[3] + 4; s.settleScroll(); vp.fire('touchend');
+  vp.fire('scrollend');
+  assert.strictEqual(vp.scrollLeft, xs[3]);
+  assert.strictEqual(L0._idx, 3);
+});
+
+test('timeline: positioning from code (refresh, _setIndex) never counts as a user pick', async () => {
+  const s = await mount(longBody(49), T0 + 60);
+  const L0 = s.layer, vp = L0._tl, xs = xsOf(s);
+  L0._setIndex(20);
+  assert.strictEqual(vp.scrollLeft, xs[20]);
+  s.settleScroll();
+  s.runTimeouts();
+  assert.ok(!L0._userPicked);
+  assert.strictEqual(L0._idx, 20);
+  // Interrupted by the user mid-way (wheel): their scroll counts.
+  L0._setIndex(30);
+  vp.fire('wheel', { deltaY: 40, deltaX: 0, deltaMode: 0 });
+  s.settleScroll();
+  assert.ok(L0._userPicked);
+  assert.strictEqual(L0._idx, ductIdx(xs, xs[30] + 40));
+});
+const ductIdx = (xs, x) => { let b = 0; xs.forEach((v, i) => { if (Math.abs(v - x) < Math.abs(xs[b] - x)) b = i; }); return b; };
+
+test('timeline: wheel scrolls sideways (map never zooms), mouse drag scrolls, a click picks the nearest time', async () => {
+  const s = await mount(longBody(49), T0 + 60);
+  const L0 = s.layer, vp = L0._tl, xs = xsOf(s);
+  s.settleScroll();
+  let ev = vp.fire('wheel', { deltaY: 100, deltaX: 0, deltaMode: 0 });
+  assert.ok(ev.defaultPrevented);
+  assert.strictEqual(vp.scrollLeft, 100);
+  ev = vp.fire('wheel', { deltaY: 1, deltaX: 0, deltaMode: 1 });
+  assert.strictEqual(vp.scrollLeft, 116, 'line mode: 16 px a line');
+  ev = vp.fire('wheel', { deltaY: 2, deltaX: 30, deltaMode: 0 });
+  assert.ok(!ev.defaultPrevented, 'sideways wheel scrolls natively');
+  s.settleScroll();
+  assert.strictEqual(L0._idx, ductIdx(xs, 116));
+  s.runTimeouts();
+  const at0 = vp.scrollLeft;
+  // Mouse drag: left by 50 px -> later by 50 px; no click pick after it.
+  vp.fire('pointerdown', { pointerType: 'mouse', button: 0, clientX: 300, pointerId: 1 });
+  assert.strictEqual(vp.captured, 1);
+  assert.ok(/mc-duct-timeline-dragging/.test(vp.className));
+  vp.fire('pointermove', { clientX: 298 });
+  assert.strictEqual(vp.scrollLeft, at0, 'under 4 px is not a drag');
+  vp.fire('pointermove', { clientX: 250 });
+  assert.strictEqual(vp.scrollLeft, at0 + 50);
+  s.settleScroll();
+  s.runTimeouts();
+  assert.strictEqual(vp.scrollLeft, at0 + 50, 'no settling while the button is down');
+  vp.fire('pointerup', { pointerId: 1 });
+  vp.fire('click', { clientX: 250 });
+  assert.strictEqual(L0._idx, ductIdx(xs, at0 + 50));
+  s.runTimeouts();
+  assert.strictEqual(vp.scrollLeft, xs[L0._idx], 'settled after the drag');
+  // Touch: no drag handling, native scroll.
+  vp.fire('pointerdown', { pointerType: 'touch', button: 0, clientX: 300, pointerId: 2 });
+  assert.strictEqual(L0._tlDrag, null);
+  // Click: viewport 200 px wide at x 0, centre at 100; 30 px right = 3 h later.
+  s.settleScroll();
+  vp.clientWidth = 200; vp.rect = { left: 0, top: 0 };
+  const before = L0._idx;
+  vp.fire('pointerdown', { pointerType: 'mouse', button: 0, clientX: 130, pointerId: 3 });
+  vp.fire('pointerup', { pointerId: 3 });
+  vp.fire('click', { clientX: 130 });
+  assert.strictEqual(L0._idx, before + 3);
+  assert.ok(L0._userPicked);
+});
+
+test('timeline: fewer than two times is disabled; a refresh keeps a user pick that still exists', async () => {
+  const single = clone(SAMPLE);
+  single.times = [T0];
+  single.cells.forEach(c => Object.keys(c).forEach(k => { if (Array.isArray(c[k])) c[k] = c[k].slice(0, 1); }));
+  const s1 = await mount(single, T0 + 60);
+  assert.strictEqual(s1.layer._tl.attrs['aria-disabled'], 'true');
+  assert.strictEqual(s1.layer._tl.attrs['aria-valuenow'], '0');
+  assert.ok(s1.layer._prevEl.disabled && s1.layer._nextEl.disabled && !s1.layer._nowEl.disabled);
+  assert.ok(!s1.layer._tl.fire('keydown', { key: 'End' }).defaultPrevented);
+  assert.ok(!s1.layer._tl.fire('wheel', { deltaY: 50, deltaX: 0 }).defaultPrevented);
+
+  const s = await mount(longBody(49), T0 + 60);
+  s.layer._tl.fire('keydown', { key: 'End' });
+  s.timers[0].fn();
+  const b = longBody(60); b.generatedAt += 3600;
+  s.api.calls[1].ok(b);
+  await tick(); await tick();
+  assert.strictEqual(s.layer._idx, 48, 'picked time kept');
+  assert.strictEqual(s.layer._tl.attrs['aria-valuemax'], '59');
+  assert.strictEqual(s.layer._tl.scrollLeft, xsOf(s)[48]);
+});
+
+test('collapse persists; stored state is restored and overrides the narrow default; storage null or throwing never breaks', async () => {
+  let st = makeStorage();
+  const s = await mount(SAMPLE, T1 + 60, null, { storage: st });
+  s.layer._collapseEl.fire('click');
+  assert.deepStrictEqual(JSON.parse(st.data['mc-duct-panel']), { collapsed: true, pos: null });
+  s.layer._collapseEl.fire('click');
+  assert.deepStrictEqual(JSON.parse(st.data['mc-duct-panel']), { collapsed: false, pos: null });
+  // Narrow screen, stored expanded: expanded.
+  const n1 = await mount(SAMPLE, T1 + 60, null, { storage: makeStorage({ 'mc-duct-panel': '{"collapsed":false,"pos":null}' }), narrow: true });
+  assert.strictEqual(n1.layer._legendEl.hidden, false);
+  // Wide screen, stored collapsed: collapsed.
+  const w1 = await mount(SAMPLE, T1 + 60, null, { storage: makeStorage({ 'mc-duct-panel': '{"collapsed":true}' }) });
+  assert.strictEqual(w1.layer._legendEl.hidden, true);
+  // Nothing chosen yet: a move stores collapsed null, so phones keep their default.
+  const m = await mount(SAMPLE, T1 + 60, null, { storage: st = makeStorage() });
+  m.layer._panelEl.offsetWidth = 260; m.layer._panelEl.offsetHeight = 300;
+  m.layer._dragEl.fire('keydown', { key: 'ArrowUp' });
+  assert.strictEqual(JSON.parse(st.data['mc-duct-panel']).collapsed, null);
+  // Garbage, null storage, throwing storage, no storage at all.
+  for (const storage of [makeStorage({ 'mc-duct-panel': '{oops' }), null, makeStorage({}, true), undefined]) {
+    const x = await mount(SAMPLE, T1 + 60, null, { storage });
+    assert.strictEqual(x.layer._legendEl.hidden, false, 'wide default: expanded');
+    assert.doesNotThrow(() => x.layer._collapseEl.fire('click'));
+    assert.strictEqual(x.layer._legendEl.hidden, true);
+    assert.doesNotThrow(() => x.layer._dragEl.fire('keydown', { key: 'ArrowDown' }));
+  }
+});
+
+// The panel docked in the corner, 260 x 300, at (10, 390) in a 1000 x 700 map.
+function sizePanel(s) {
+  const p = s.layer._panelEl;
+  p.offsetWidth = 260; p.offsetHeight = 300;
+  p.rect = { left: 10, top: 390, right: 270, bottom: 690, width: 260, height: 300 };
+  return p;
+}
+
+test('moving the panel: the drag floats it into the map container, clamped, saved as fractions; the map never sees it', async () => {
+  const st = makeStorage();
+  const s = await mount(SAMPLE, T1 + 60, null, { storage: st });
+  const p = sizePanel(s), h = s.layer._dragEl;
+  assert.strictEqual(p.parentNode, s.map.corner);
+  s.layer._tl.scrollLeft = 0;   // what a browser does to a re-parented scroller (no scroll event)
+  flushScroll();
+  const down = h.fire('pointerdown', { pointerType: 'mouse', button: 0, clientX: 20, clientY: 400, pointerId: 5 });
+  assert.ok(down.stopped && down.defaultPrevented, 'map never pans');
+  assert.ok(h.fire('mousedown').stopped && h.fire('touchstart').stopped);
+  assert.strictEqual(p.parentNode, s.map.el, 'in the map container');
+  assert.strictEqual(h.captured, 5);
+  assert.ok(/mc-duct-panel-floating/.test(p.className) && /mc-duct-panel-dragging/.test(p.className));
+  assert.deepStrictEqual([p.style.left, p.style.top], ['10px', '390px'], 'where it was');
+  assert.strictEqual(s.layer._tl.scrollLeft, xsOf(s)[s.layer._idx], 'strip back on the shown time after the move in the DOM');
+  assert.strictEqual(s.layer._resetEl.hidden, false);
+  h.fire('pointermove', { clientX: 520, clientY: 100 });
+  assert.deepStrictEqual([p.style.left, p.style.top], ['510px', '90px']);
+  h.fire('pointermove', { clientX: 5000, clientY: -500 });
+  assert.deepStrictEqual([p.style.left, p.style.top], ['732px', '8px'], 'clamped 8 px inside');
+  h.fire('pointerup', { pointerId: 5 });
+  assert.strictEqual(h.captured, null);
+  assert.ok(!/mc-duct-panel-dragging/.test(p.className));
+  const saved = JSON.parse(st.data['mc-duct-panel']);
+  assert.ok(Math.abs(saved.pos.fx - 732 / 740) < 1e-9 && Math.abs(saved.pos.fy - 8 / 400) < 1e-9, JSON.stringify(saved));
+  h.fire('pointermove', { clientX: 0, clientY: 0 });
+  assert.strictEqual(p.style.left, '732px', 'no move after the release');
+  // No corner lift while moved.
+  s.map.fire('resize');
+  assert.strictEqual(s.map.corner.style.marginBottom, '');
+  // Map resized: re-clamped from the fractions.
+  s.map.el.clientWidth = 500; s.map.el.clientHeight = 400;
+  s.map.fire('resize');
+  // 500 x 400: free space 240 x 100; fx ~0.99 -> 237 > 232 (right margin), fy 0.02 -> 2 < 8.
+  assert.deepStrictEqual([p.style.left, p.style.top], ['232px', '8px']);
+  s.map.el.clientWidth = 2000; s.map.el.clientHeight = 1400;
+  s.map.fire('resize');
+  assert.deepStrictEqual([p.style.left, p.style.top], [732 / 740 * 1740 + 'px', 8 / 400 * 1100 + 'px'], 'same fractions on a larger map');
+  s.map.el.clientWidth = 500; s.map.el.clientHeight = 400;
+  s.map.fire('resize');
+  // Panel grows (expand): stays inside.
+  p.offsetHeight = 390;
+  s.layer._collapseEl.fire('click');
+  s.layer._collapseEl.fire('click');
+  assert.strictEqual(p.style.top, '8px', 'taller than the room left: at the top margin');
+  p.offsetHeight = 300;
+  s.layer._collapseEl.fire('click');
+  assert.strictEqual(p.style.top, '8px');
+  // Reset: back in the corner, lifted again, nothing stored.
+  s.map.el.clientWidth = 1000; s.map.el.clientHeight = 700;
+  s.layer._tl.scrollLeft = 0; flushScroll();
+  s.layer._resetEl.fire('click');
+  assert.strictEqual(p.parentNode, s.map.corner);
+  assert.strictEqual(s.layer._tl.scrollLeft, xsOf(s)[s.layer._idx], 'strip restored after docking');
+  assert.deepStrictEqual([p.style.left, p.style.top], ['', '']);
+  assert.ok(!/mc-duct-panel-floating/.test(p.className) && /leaflet-control/.test(p.className));
+  assert.strictEqual(s.layer._resetEl.hidden, true);
+  assert.strictEqual(s.map.corner.style.marginBottom, '36px', 'lifted above the attribution again');
+  assert.strictEqual(JSON.parse(st.data['mc-duct-panel']).pos, null);
+  assert.ok(s.layer._dragEl.focused, 'focus back on the handle');
+});
+
+test('moving the panel: arrow keys on the handle; restored on a wide screen only; off on phones', async () => {
+  const st = makeStorage();
+  const s = await mount(SAMPLE, T1 + 60, null, { storage: st });
+  const p = sizePanel(s), h = s.layer._dragEl;
+  let ev = h.fire('keydown', { key: 'ArrowUp' });
+  assert.ok(ev.defaultPrevented);
+  assert.deepStrictEqual([p.style.left, p.style.top], ['10px', '374px']);
+  h.fire('keydown', { key: 'ArrowRight', shiftKey: true });
+  assert.strictEqual(p.style.left, '74px');
+  assert.ok(!h.fire('keydown', { key: 'Enter' }).defaultPrevented);
+  const saved = st.data['mc-duct-panel'];
+  // Re-add on a wide screen: floating at the stored place.
+  const s2 = makeSandbox({ storage: makeStorage({ 'mc-duct-panel': saved }) });
+  const map2 = makeMap(), layer2 = s2.ctx.MC_createDuctingLayer({});
+  const realCreate = s2.ctx.document.createElement;
+  s2.ctx.document.createElement = (t) => { const e = realCreate(t); e.offsetWidth = 260; e.offsetHeight = 300; return e; };
+  layer2.onAdd(map2);
+  assert.strictEqual(layer2._panelEl.parentNode, map2.el);
+  assert.deepStrictEqual([layer2._panelEl.style.left, layer2._panelEl.style.top], ['74px', '374px']);
+  assert.strictEqual(map2.corner.style.marginBottom, '', 'no lift');
+  // Phone: docked, keys and drags do nothing; a phone-sized resize docks a moved panel.
+  const s3 = await mount(SAMPLE, T1 + 60, null, { storage: makeStorage({ 'mc-duct-panel': saved }), narrow: true });
+  const p3 = sizePanel(s3);
+  assert.strictEqual(p3.parentNode, s3.map.corner);
+  assert.ok(!s3.layer._dragEl.fire('keydown', { key: 'ArrowUp' }).defaultPrevented);
+  s3.layer._dragEl.fire('pointerdown', { pointerType: 'touch', button: 0, clientX: 1, clientY: 1, pointerId: 1 });
+  assert.strictEqual(p3.parentNode, s3.map.corner);
+  s2.ctx.matchMedia = (q) => ({ matches: /max-width: 600px/.test(q) });
+  map2.fire('resize');
+  assert.strictEqual(layer2._panelEl.parentNode, map2.corner, 'docked on a narrow resize');
+  s2.ctx.matchMedia = () => ({ matches: false });
+  map2.fire('resize');
+  assert.strictEqual(layer2._panelEl.parentNode, map2.el, 'moved back when wide again');
+});
+
+test('teardown: panel gone from the corner or the map container, every listener, frame and timer removed; re-add gives one panel', async () => {
+  for (const moved of [false, true]) {
+    const s = await mount(longBody(49), T0 + 60, null, { storage: makeStorage() });
+    const p = sizePanel(s);
+    if (moved) s.layer._dragEl.fire('keydown', { key: 'ArrowUp' });
+    assert.strictEqual(p.parentNode, moved ? s.map.el : s.map.corner);
+    // A pending frame and idle timer.
+    s.layer._tl.fire('touchstart');
+    s.layer._tl.scrollLeft = 55;
+    flushScroll();
+    s.layer._tl.fire('touchend');
+    assert.ok(s.frames.length === 1 && s.timeouts.length === 1);
+    s.layer.onRemove(s.map);
+    assert.strictEqual(p.parentNode, null);
+    assert.strictEqual(s.map.el.children.length + s.map.corner.children.length, 0, 'nothing left');
+    assert.strictEqual(listenerCount(p), 0);
+    assert.strictEqual(s.frames.length + s.timeouts.length, 0, 'frame and timer cancelled');
+    assert.strictEqual((s.map._on.resize || []).length, 0);
+    assert.strictEqual(s.map.corner.style.marginBottom, '');
+    s.layer.onAdd(s.map);
+    assert.strictEqual(s.map._controls.length, 1);
+    assert.strictEqual(byClass(s.map.el, 'mc-duct-panel').length + byClass(s.map.corner, 'mc-duct-panel').length, 1);
+    assert.strictEqual(byClass(s.map.corner, 'mc-duct-legend').length + byClass(s.map.el, 'mc-duct-legend').length, 1);
+    s.layer.onRemove(s.map);
+  }
 });
 
 // ── theme & missing variables ───────────────────────────────────────────────

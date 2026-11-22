@@ -15,7 +15,9 @@
  *       Fetches /api/ducting when added to a map, refreshes every 30 min while
  *       on it (every minute until it has data), draws the field as one canvas
  *       image overlay, the LoRa outlines and the forecast-area edge as
- *       non-interactive lines, a legend and a forecast-time slider.
+ *       non-interactive lines, and one panel (bottom left; collapsible,
+ *       movable, see _buildPanel) holding the forecast-time timeline and
+ *       the legend.
  *       A layer removed mid-fetch never touches the map afterwards.
  *       Nothing it draws takes pointer events: a click on the map is looked
  *       up in the lattice (MC_ductCellAt) by one map click handler, which
@@ -36,6 +38,13 @@
  *   window.MC_ductFieldValues(grid, vals) -> { g, a } Float32Arrays, one entry
  *       per image pixel: what the field image is coloured from
  *   window.MC_ductRowLat(y, h, north, south)   -> latitude of image row y
+ *   window.MC_ductTimelineLayout(times) / MC_ductTimelineIndexAt(xs, x) /
+ *       MC_ductTimelineKeyIndex(key, i, xs, pxPerSec) /
+ *       MC_ductTimelineDaySpans(layout, minPx) -> the timeline's geometry,
+ *       the time under an x, the time a key moves to, the day label spans
+ *   window.MC_ductClampPos / MC_ductPosToFrac / MC_ductPosFromFrac -> the
+ *       moved panel's position inside the map
+ *   window.MC_ductPanelPrefs(raw) -> the stored panel state, validated
  *
  * The field image:
  *   - The cells sit on a regular lattice: centre = floor(x/step)*step + step/2.
@@ -157,6 +166,160 @@
     } catch (_) { return String(sec); }
   }
 
+  // ── Timeline and panel geometry (pure) ────────────────────────────────────
+
+  var DAY_S = 24 * HOUR_S;
+  var TL_DAY_PX = 240;        // a day on the timeline is at least this wide
+  var TL_MIN_STEP_PX = 8;     // and the usual step between times at least this
+  var TL_HOUR_EVERY = 6;      // hour labels at 06, 12 and 18 local time
+  var TL_DAY_MIN_PX = 96;     // a day label needs this much room before the next
+  var TL_MAX_DAYS = 400;      // label loop bound; the server never sends this much
+
+  // Median gap between consecutive times, in seconds; HOUR_S when there are
+  // fewer than two times or no positive gap.
+  function medianStep(times) {
+    var gaps = [];
+    for (var i = 1; i < times.length; i++) {
+      var g = times[i] - times[i - 1];
+      if (g > 0) gaps.push(g);
+    }
+    if (!gaps.length) return HOUR_S;
+    gaps.sort(function (a, b) { return a - b; });
+    return gaps[Math.floor(gaps.length / 2)];
+  }
+
+  // Lays the timeline out from the times (ascending Unix seconds). Positions
+  // follow time, not index, so uneven steps (history then forecast) sit where
+  // they belong. Returns:
+  //   pxPerSec  scale: a day >= TL_DAY_PX and the median step >= TL_MIN_STEP_PX
+  //   width     px from the first time to the last
+  //   xs        x of every time (xs[0] = 0)
+  //   days      { x, sec } at each local midnight inside the range, plus one
+  //             at x 0 for the first time's day when it does not start at midnight
+  //   hours     { x, sec } at 06, 12 and 18 local time inside the range
+  // Labels follow the local clock (DST days included); their text is the
+  // caller's to format. Empty input gives width 0 and empty lists.
+  function ductTimelineLayout(times) {
+    var out = { pxPerSec: TL_DAY_PX / DAY_S, width: 0, xs: [], days: [], hours: [] };
+    if (!Array.isArray(times) || !times.length) return out;
+    var t0 = Number(times[0]), tn = Number(times[times.length - 1]);
+    if (!isFinite(t0) || !isFinite(tn) || tn < t0) return out;
+    var pps = Math.max(TL_DAY_PX / DAY_S, TL_MIN_STEP_PX / medianStep(times));
+    out.pxPerSec = pps;
+    out.width = (tn - t0) * pps;
+    for (var i = 0; i < times.length; i++) out.xs.push((Number(times[i]) - t0) * pps);
+    var d = new Date(t0 * 1000);
+    d.setHours(0, 0, 0, 0);
+    for (var n = 0; n < TL_MAX_DAYS; n++) {
+      var mid = d.getTime() / 1000;
+      if (mid > tn) break;
+      if (mid >= t0) out.days.push({ x: (mid - t0) * pps, sec: mid });
+      else if (n === 0) out.days.push({ x: 0, sec: t0 });
+      for (var h = TL_HOUR_EVERY; h < 24; h += TL_HOUR_EVERY) {
+        var hs = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h).getTime() / 1000;
+        if (hs >= t0 && hs <= tn) out.hours.push({ x: (hs - t0) * pps, sec: hs });
+      }
+      d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+    }
+    return out;
+  }
+
+  // Index of the x in xs (ascending) nearest to x; ties go to the earlier
+  // time; -1 for an empty list.
+  function ductTimelineIndexAt(xs, x) {
+    if (!xs || !xs.length) return -1;
+    var lo = 0, hi = xs.length - 1;
+    if (!(x > xs[0])) return 0;
+    if (x >= xs[hi]) return hi;
+    while (hi - lo > 1) {
+      var m = (lo + hi) >> 1;
+      if (xs[m] <= x) lo = m; else hi = m;
+    }
+    return (x - xs[lo] <= xs[hi] - x) ? lo : hi;
+  }
+
+  // Top-left of a w x h box kept inside an areaW x areaH area, at least
+  // margin from every edge; a box larger than the area sits at the margin.
+  function ductClampPos(left, top, w, h, areaW, areaH, margin) {
+    var m = margin > 0 ? margin : 0;
+    function clamp(v, size, area) {
+      var max = area - size - m;
+      if (!(max > m)) return m;
+      if (!isFinite(v)) return m;
+      return Math.min(Math.max(v, m), max);
+    }
+    return { left: clamp(left, w, areaW), top: clamp(top, h, areaH) };
+  }
+
+  // A position as fractions of the free space (0 = left/top edge, 1 =
+  // right/bottom), so it survives a resized map; and back, clamped.
+  function ductPosToFrac(left, top, w, h, areaW, areaH) {
+    function f(v, size, area) {
+      var free = area - size;
+      if (!(free > 0)) return 0;
+      return Math.min(Math.max(v / free, 0), 1);
+    }
+    return { fx: f(left, w, areaW), fy: f(top, h, areaH) };
+  }
+
+  function ductPosFromFrac(frac, w, h, areaW, areaH, margin) {
+    var fx = frac && isFinite(frac.fx) ? frac.fx : 0;
+    var fy = frac && isFinite(frac.fy) ? frac.fy : 0;
+    return ductClampPos(fx * (areaW - w), fy * (areaH - h), w, h, areaW, areaH, margin);
+  }
+
+  // The day spans of a timeline layout: { x, w, sec } from each day's start
+  // to the next day's (the last to the end of the times). A day shorter than
+  // minPx that another follows (a first day starting late) is left out: its
+  // label could not fit before the next one.
+  function ductTimelineDaySpans(lay, minPx) {
+    var out = [], days = (lay && lay.days) || [];
+    for (var k = 0; k < days.length; k++) {
+      var x1 = days[k + 1] ? days[k + 1].x : lay.width;
+      var w = Math.max(x1 - days[k].x, 0);
+      if (days[k + 1] && w < minPx) continue;
+      out.push({ x: days[k].x, w: w, sec: days[k].sec });
+    }
+    return out;
+  }
+
+  // The index a timeline key moves to from i: ArrowLeft/ArrowDown one
+  // earlier, ArrowRight/ArrowUp one later, PageDown/PageUp the time nearest
+  // 24 h earlier/later (at least one step, so a gap in the times never
+  // traps the key), Home/End the first/last; clamped. -1 for any other key
+  // or no times.
+  function ductTimelineKeyIndex(key, i, xs, pxPerSec) {
+    var n = xs ? xs.length : 0;
+    if (!n) return -1;
+    var cur = Math.min(Math.max(isFinite(i) ? Math.round(i) : 0, 0), n - 1);
+    var day = DAY_S * (pxPerSec > 0 ? pxPerSec : 0);
+    switch (key) {
+      case 'ArrowLeft': case 'ArrowDown': return Math.max(cur - 1, 0);
+      case 'ArrowRight': case 'ArrowUp': return Math.min(cur + 1, n - 1);
+      case 'PageDown': return Math.max(Math.min(ductTimelineIndexAt(xs, xs[cur] - day), cur - 1), 0);
+      case 'PageUp': return Math.min(Math.max(ductTimelineIndexAt(xs, xs[cur] + day), cur + 1), n - 1);
+      case 'Home': return 0;
+      case 'End': return n - 1;
+    }
+    return -1;
+  }
+
+  // The stored panel state (a JSON string, or anything else) as
+  // { collapsed: true | false | null (never chosen), pos: { fx, fy } | null };
+  // anything unreadable is "nothing stored". Fractions are clamped to 0..1.
+  function ductPanelPrefs(raw) {
+    var out = { collapsed: null, pos: null };
+    var o = null;
+    try { o = typeof raw === 'string' ? JSON.parse(raw) : null; } catch (_) { o = null; }
+    if (!o || typeof o !== 'object') return out;
+    if (typeof o.collapsed === 'boolean') out.collapsed = o.collapsed;
+    var p = o.pos;
+    if (p && typeof p === 'object' && typeof p.fx === 'number' && typeof p.fy === 'number' && isFinite(p.fx) && isFinite(p.fy)) {
+      out.pos = { fx: Math.min(Math.max(p.fx, 0), 1), fy: Math.min(Math.max(p.fy, 0), 1) };
+    }
+    return out;
+  }
+
   function at(arr, i) { return (arr && arr[i] != null) ? Number(arr[i]) : 0; }
 
   // The field value of `cell` at time index i: n (N/km), or NaN when there is
@@ -203,6 +366,79 @@
     if (cls) e.className = cls;
     if (text != null) e.textContent = text;
     return e;
+  }
+
+  function button(cls, text, label) {
+    var b = el('button', cls, text);
+    b.type = 'button';
+    if (label) { b.setAttribute('aria-label', label); b.title = label; }
+    return b;
+  }
+
+  // ── panel and timeline plumbing ───────────────────────────────────────────
+
+  var PANEL_KEY = 'mc-duct-panel';      // localStorage: { collapsed, pos: { fx, fy } }
+  var PANEL_MARGIN = 8;                 // a moved panel stays this far inside the map
+  var PANEL_KEY_STEP = 16;              // px per arrow key on the move handle (Shift: x4)
+  var NARROW_Q = '(max-width: 600px)';  // phones: legend collapsed by default, no moving
+  var TL_IDLE_MS = 120;                 // no scroll for this long = the scroll has ended
+  var TL_DRAG_PX = 4;                   // a mouse press moving less than this is a click
+  var panelSeq = 0;                     // ids unique per panel (several maps on a page)
+
+  function matches(q) {
+    try { return !!(window.matchMedia && window.matchMedia(q).matches); } catch (_) { return false; }
+  }
+  function narrowScreen() { return matches(NARROW_Q); }
+  function reducedMotion() { return matches('(prefers-reduced-motion: reduce)'); }
+
+  // Storage may be missing, null or throw (private mode, blocked site data).
+  function loadPanelPrefs() {
+    try {
+      var st = window.localStorage;
+      return ductPanelPrefs(st ? st.getItem(PANEL_KEY) : null);
+    } catch (_) { return ductPanelPrefs(null); }
+  }
+  function savePanelPrefs(collapsed, pos) {
+    try {
+      var st = window.localStorage;
+      if (st) st.setItem(PANEL_KEY, JSON.stringify({ collapsed: collapsed, pos: pos ? { fx: pos.fx, fy: pos.fy } : null }));
+    } catch (_) {}
+  }
+
+  // requestAnimationFrame / setTimeout with fallbacks (the unit sandbox and
+  // old browsers may lack either); each returns a handle for its cancel.
+  function frame(fn) {
+    if (typeof requestAnimationFrame === 'function') return { raf: requestAnimationFrame(fn) };
+    if (typeof setTimeout === 'function') return { to: setTimeout(fn, 16) };
+    fn();
+    return null;
+  }
+  function cancelFrame(h) {
+    if (!h) return;
+    try {
+      if (h.raf != null) cancelAnimationFrame(h.raf);
+      else if (h.to != null) clearTimeout(h.to);
+    } catch (_) {}
+  }
+  function later(fn, ms) { return typeof setTimeout === 'function' ? setTimeout(fn, ms) : null; }
+  function cancelLater(id) { if (id != null) { try { clearTimeout(id); } catch (_) {} } }
+
+  // Adds or removes one class (keeps the others, e.g. Leaflet's).
+  function setClass(e, cls, on) {
+    var parts = String(e.className || '').split(/\s+/).filter(Boolean), i = parts.indexOf(cls);
+    if (on && i < 0) parts.push(cls);
+    else if (!on && i >= 0) parts.splice(i, 1);
+    else return;
+    e.className = parts.join(' ');
+  }
+
+  function stopEvent(e) { if (e && e.stopPropagation) e.stopPropagation(); }
+
+  function dayText(sec) {
+    try { return new Date(sec * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }); } catch (_) { return ''; }
+  }
+  function hourText(sec) {
+    try { return new Date(sec * 1000).toLocaleTimeString([], { hour: '2-digit' }); } catch (_) { return String(new Date(sec * 1000).getHours()); }
   }
 
   // Popup body for cell `cell` at time index `i` (DOM nodes, textContent only).
@@ -750,19 +986,14 @@
         if (this._abort) { try { this._abort.abort(); } catch (_) {} this._abort = null; }
         var m = map || this._map;
         if (this._onTheme) { try { window.removeEventListener('theme-changed', this._onTheme); } catch (_) {} this._onTheme = null; }
-        if (this._slider && this._onSlide) {
-          try { this._slider.removeEventListener('input', this._onSlide); } catch (_) {}
-        }
         this._unwatchAttribution(m);
         this._unwatchClicks(m);
-        if (this._legendCtl) { try { this._legendCtl.remove(); } catch (_) {} }
-        if (this._timeCtl) { try { this._timeCtl.remove(); } catch (_) {} }
+        this._removePanel(m);
         if (this._group && m) { try { m.removeLayer(this._group); } catch (_) {} }
         if (this._field && m) { try { m.removeLayer(this._field); } catch (_) {} }
         if (this._renderer && m) { try { m.removeLayer(this._renderer); } catch (_) {} }
         this._map = this._group = this._renderer = this._field = this._canvas = this._grid = this._img = null;
-        this._legendCtl = this._timeCtl = this._legendEl = this._statusEl = this._metaEl = null;
-        this._slider = this._timeLabel = this._onSlide = null;
+        this._statusEl = this._metaEl = null;
         this._cells = [];
         this._edge = this._lora = null;
         this._loraKey = '';
@@ -850,55 +1081,624 @@
         this._popup.setContent(popupContent(cell, this._idx));
       },
 
-      // ── controls ──
+      // ── the panel ──
+      // One Leaflet control in the bottom-left corner: a header (move
+      // handle, title, reset, collapse), the forecast-time timeline and the
+      // legend body. Collapsing hides only the legend body. Dragging the
+      // handle (wide screens only) takes the panel out of the corner into
+      // the map container, absolutely positioned and kept inside it; its
+      // place is remembered as fractions of the free space (survives a
+      // resized map) in localStorage with the collapsed state. Every
+      // listener goes through _listen and is removed in _removePanel.
       _addControls: function (map) {
         var self = this;
+        var prefs = loadPanelPrefs();
+        this._collapsedPref = prefs.collapsed;
+        this._pos = prefs.pos;
+        if (prefs.collapsed != null) this._legendOpen = !prefs.collapsed;
+        else if (this._legendOpen == null) this._legendOpen = !narrowScreen();   // compact on phones
+        this._offs = [];
+        this._floating = false;
+        this._tlKey = null;
         try {
-          var timeCtl = new L.Control({ position: 'bottomleft' });
-          timeCtl.onAdd = function () {
-            var box = el('div', 'mc-duct-time');
-            var label = el('label', 'mc-duct-time-label', 'Forecast time');
-            label.setAttribute('for', 'mc-duct-time-input');
-            var slider = el('input');
-            slider.type = 'range';
-            slider.id = 'mc-duct-time-input';
-            slider.min = '0';
-            slider.max = '0';
-            slider.step = '1';
-            slider.value = '0';
-            slider.disabled = true;
-            slider.setAttribute('aria-label', 'Ducting forecast time');
-            self._onSlide = function () {
-              var i = parseInt(slider.value, 10);
-              if (isFinite(i)) { self._userPicked = true; self._setIndex(i); }
-            };
-            slider.addEventListener('input', self._onSlide);
-            box.appendChild(label);
-            box.appendChild(slider);
-            self._timeLabel = label;
-            self._slider = slider;
-            if (L.DomEvent && L.DomEvent.disableClickPropagation) L.DomEvent.disableClickPropagation(box);
-            return box;
-          };
-          this._timeCtl = timeCtl;
-          timeCtl.addTo(map);
-
-          var legendCtl = new L.Control({ position: 'bottomleft' });
-          legendCtl.onAdd = function () {
-            var box = el('div', 'mc-duct-legend');
-            self._legendEl = box;
-            if (L.DomEvent && L.DomEvent.disableClickPropagation) L.DomEvent.disableClickPropagation(box);
-            return box;
-          };
-          this._legendCtl = legendCtl;
-          legendCtl.addTo(map);
+          var ctl = new L.Control({ position: 'bottomleft' });
+          ctl.onAdd = function () { return self._buildPanel(); };
+          this._panelCtl = ctl;
+          ctl.addTo(map);
         } catch (_) { /* map already gone */ }
+        this._onMapResize = function () { self._placePanel(); };
+        try { map.on('resize', this._onMapResize); } catch (_) {}
+        try {
+          if (this._panelEl && typeof ResizeObserver === 'function') {
+            this._panelRo = new ResizeObserver(function () { self._onPanelResize(); });
+            this._panelRo.observe(this._panelEl);
+          }
+        } catch (_) { this._panelRo = null; }
+        this._placePanel();
+        this._tlState();
+      },
+
+      // addEventListener that _removePanel undoes. (Not _on: that is
+      // L.Evented's, which layer.on() relies on.)
+      _listen: function (target, type, fn, opts) {
+        try {
+          target.addEventListener(type, fn, opts || false);
+          this._offs.push(function () { try { target.removeEventListener(type, fn, opts || false); } catch (_) {} });
+        } catch (_) {}
+      },
+
+      _buildPanel: function () {
+        var self = this, uid = ++panelSeq;
+        var panel = el('div', 'mc-duct-panel');
+        panel.setAttribute('role', 'region');
+        panel.setAttribute('aria-label', 'Tropospheric ducting');
+        this._panelEl = panel;
+
+        var head = el('div', 'mc-duct-head');
+        var drag = button('mc-duct-drag', null, 'Move ducting panel');
+        var title = el('span', 'mc-duct-title', 'Tropospheric ducting');
+        var reset = button('mc-duct-reset', 'Reset', 'Reset position');
+        reset.hidden = true;
+        var coll = button('mc-duct-collapse');
+        coll.setAttribute('aria-controls', 'mc-duct-legend-' + uid);
+        head.appendChild(drag);
+        head.appendChild(title);
+        head.appendChild(reset);
+        head.appendChild(coll);
+        panel.appendChild(head);
+        this._dragEl = drag;
+        this._resetEl = reset;
+        this._collapseEl = coll;
+
+        var time = el('div', 'mc-duct-time');
+        // "Forecast time: <time>" and Now on one line; on a narrow panel
+        // the prefix gives way (ellipsis), never the time.
+        var thead = el('div', 'mc-duct-time-head');
+        var label = el('div', 'mc-duct-time-label');
+        var prefix = el('span', 'mc-duct-time-prefix', 'Forecast time');
+        var value = el('span', 'mc-duct-time-value', '');
+        label.appendChild(prefix);
+        label.appendChild(value);
+        var row = el('div', 'mc-duct-tl-row');
+        var prev = button('mc-duct-step mc-duct-step-prev', null, 'Earlier');
+        var next = button('mc-duct-step mc-duct-step-next', null, 'Later');
+        var now = button('mc-duct-now', 'Now', 'Jump to the current hour');
+        var wrap = el('div', 'mc-duct-timeline-wrap');
+        var vp = el('div', 'mc-duct-timeline');
+        vp.setAttribute('role', 'slider');
+        vp.setAttribute('tabindex', '0');
+        vp.setAttribute('aria-label', 'Ducting forecast time');
+        vp.setAttribute('aria-valuemin', '0');
+        var track = el('div', 'mc-duct-timeline-track');
+        var inner = el('div', 'mc-duct-timeline-inner');
+        var cursor = el('div', 'mc-duct-timeline-cursor');
+        cursor.setAttribute('aria-hidden', 'true');
+        track.appendChild(inner);
+        vp.appendChild(track);
+        wrap.appendChild(vp);
+        wrap.appendChild(cursor);
+        row.appendChild(prev);
+        row.appendChild(wrap);
+        row.appendChild(next);
+        thead.appendChild(label);
+        thead.appendChild(now);
+        time.appendChild(thead);
+        time.appendChild(row);
+        panel.appendChild(time);
+        this._timeLabel = label;
+        this._timePrefix = prefix;
+        this._timeValue = value;
+        this._tl = vp;
+        this._tlTrack = track;
+        this._tlInner = inner;
+        this._prevEl = prev;
+        this._nextEl = next;
+        this._nowEl = now;
+
+        var body = el('div', 'mc-duct-legend');
+        body.id = 'mc-duct-legend-' + uid;
+        panel.appendChild(body);
+        this._legendEl = body;
+
+        if (L.DomEvent) {
+          if (L.DomEvent.disableClickPropagation) L.DomEvent.disableClickPropagation(panel);
+          if (L.DomEvent.disableScrollPropagation) L.DomEvent.disableScrollPropagation(panel);
+        }
+        // The map pans on pointer/mouse/touch down anywhere in its container.
+        this._listen(panel, 'pointerdown', stopEvent);
+        this._listen(coll, 'click', function () { self._setCollapsed(!self._legendOpen); });
+        this._listen(reset, 'click', function () { self._resetPanel(); });
+        this._bindDrag(drag);
+        this._bindTimeline(vp);
+        this._listen(prev, 'click', function () { self._step(-1); });
+        this._listen(next, 'click', function () { self._step(1); });
+        this._listen(now, 'click', function () { self._toNow(); });
+        this._syncCollapse();
+        return panel;
+      },
+
+      _removePanel: function (map) {
+        var offs = this._offs || [];
+        for (var i = 0; i < offs.length; i++) offs[i]();
+        this._offs = [];
+        if (this._panelRo) { try { this._panelRo.disconnect(); } catch (_) {} this._panelRo = null; }
+        if (this._onMapResize && map) { try { map.off('resize', this._onMapResize); } catch (_) {} }
+        cancelFrame(this._tlFrame);
+        cancelLater(this._tlIdleTimer);
+        var p = this._panelEl;
+        // Leaflet removes the control's container wherever it is (corner
+        // or, moved, the map container); a gone map may throw first.
+        if (this._panelCtl) { try { this._panelCtl.remove(); } catch (_) {} }
+        if (p && p.parentNode && p.parentNode.removeChild) { try { p.parentNode.removeChild(p); } catch (_) {} }
+        this._panelCtl = this._panelEl = this._legendEl = this._timeLabel = this._timePrefix = this._timeValue = null;
+        this._dragEl = this._resetEl = this._collapseEl = this._prevEl = this._nextEl = this._nowEl = null;
+        this._tl = this._tlTrack = this._tlInner = this._tlNow = this._tlLayout = null;
+        this._onMapResize = this._tlFrame = this._tlIdleTimer = this._drag = this._tlDrag = null;
+        this._tlTarget = null;
+        this._tlTouch = this._tlMoved = this._floating = false;
+        this._dock = null;
+        this._tlKey = null;
+      },
+
+      // ── collapse ──
+      _setCollapsed: function (open) {
+        this._legendOpen = !!open;
+        this._collapsedPref = !open;
+        savePanelPrefs(this._collapsedPref, this._pos);
+        this._syncCollapse();
+        this._placePanel();
+      },
+
+      _syncCollapse: function () {
+        var open = !!this._legendOpen, b = this._collapseEl;
+        if (this._legendEl) this._legendEl.hidden = !open;
+        if (b) {
+          var name = open ? 'Collapse ducting legend' : 'Expand ducting legend';
+          b.setAttribute('aria-expanded', open ? 'true' : 'false');
+          b.setAttribute('aria-label', name);
+          b.title = name;
+        }
+        var p = this._panelEl;
+        if (p) {
+          setClass(p, 'mc-duct-panel-floating', this._floating);
+          setClass(p, 'mc-duct-panel-collapsed', !open);
+          setClass(p, 'mc-duct-panel-dragging', !!this._drag);
+        }
+      },
+
+      // ── position ──
+      _mapEl: function () {
+        try { return this._map && this._map.getContainer ? this._map.getContainer() : null; } catch (_) { return null; }
+      },
+
+      // Size of the panel and of the map container, for the clamp helpers.
+      _geom: function () {
+        var p = this._panelEl, c = this._mapEl();
+        if (!p || !c) return null;
+        return { w: p.offsetWidth || 0, h: p.offsetHeight || 0, aw: c.clientWidth || 0, ah: c.clientHeight || 0 };
+      },
+
+      // Out of the corner into the map container, where it is now on screen.
+      _float: function () {
+        var p = this._panelEl, c = this._mapEl();
+        if (!p || !c) return false;
+        if (this._floating && p.parentNode === c) return true;
+        var left = 0, top = 0;
+        try {
+          var pr = p.getBoundingClientRect(), cr = c.getBoundingClientRect();
+          left = pr.left - cr.left;
+          top = pr.top - cr.top;
+        } catch (_) {}
+        this._dock = { parent: p.parentNode, next: p.nextSibling };
+        c.appendChild(p);
+        this._floating = true;
+        this._setPos(left, top);
+        this._tlRestore();
+        this._syncCollapse();
+        this._applyLift();                 // releases the corner's lift
+        if (this._resetEl) this._resetEl.hidden = false;
+        return true;
+      },
+
+      // Back into the corner, where Leaflet put it.
+      _dockPanel: function () {
+        var p = this._panelEl;
+        if (!p || !this._floating) return;
+        var d = this._dock || {};
+        var parent = d.parent || (this._map && this._map._controlCorners && this._map._controlCorners.bottomleft);
+        if (parent) {
+          var next = d.next && d.next.parentNode === parent ? d.next : null;
+          if (next && parent.insertBefore) parent.insertBefore(p, next);
+          else parent.appendChild(p);
+        }
+        this._floating = false;
+        this._dock = null;
+        p.style.left = p.style.top = '';
+        this._tlRestore();
+        this._syncCollapse();
+        if (this._resetEl) this._resetEl.hidden = true;
+        this._applyLift();
+      },
+
+      // Moving the panel in the DOM resets the strip's scroll to 0 (without
+      // a scroll event): put the shown time back under the centre.
+      _tlRestore: function () {
+        this._tlTarget = null;
+        this._tlScrollTo(this._idx, false);
+      },
+
+      // left/top clamped inside the map; returns the clamped position.
+      _setPos: function (left, top) {
+        var g = this._geom(), p = this._panelEl;
+        if (!g || !p) return null;
+        var pos = ductClampPos(left, top, g.w, g.h, g.aw, g.ah, PANEL_MARGIN);
+        p.style.left = pos.left + 'px';
+        p.style.top = pos.top + 'px';
+        return pos;
+      },
+
+      // The one rule for where the panel lives: moved (a stored position)
+      // and on a wide screen -> floating at that position, re-clamped to
+      // the current map and panel size; otherwise docked in the corner.
+      _placePanel: function () {
+        if (!this._panelEl || this._drag) return;
+        if (this._pos && !narrowScreen()) {
+          if (!this._float()) return;
+          var g = this._geom();
+          var pos = ductPosFromFrac(this._pos, g.w, g.h, g.aw, g.ah, PANEL_MARGIN);
+          this._panelEl.style.left = pos.left + 'px';
+          this._panelEl.style.top = pos.top + 'px';
+          this._keepReachable();
+        } else {
+          this._dockPanel();
+        }
+      },
+
+      // Pages lay their own panels over the map (Map Controls on the right
+      // sits above the whole map, whatever the z-index inside it), so a
+      // moved panel may land under one and be lost, Reset button and all.
+      // When the centre or right end of its move handle, collapse button or
+      // Now button (right end of the forecast-time line) is covered, it
+      // slides left in 8 px steps to the nearest place where all three can
+      // be clicked, only on a drop, restore or resize, and stays put if
+      // there is no such place.
+      _keepReachable: function () {
+        var p = this._panelEl, c = this._mapEl();
+        if (!this._floating || !p || !c || typeof document.elementFromPoint !== 'function') return;
+        var hits = [this._dragEl, this._collapseEl, this._nowEl];
+        var ok = function () {
+          for (var k = 0; k < hits.length; k++) {
+            var r = hits[k] && hits[k].getBoundingClientRect();
+            if (!r || !r.width) continue;               // hidden (phones): not needed
+            var y = r.top + r.height / 2;
+            var a = document.elementFromPoint(r.left + r.width / 2, y), b = document.elementFromPoint(r.right - 2, y);
+            if (!a || !b || !p.contains(a) || !p.contains(b)) return false;
+          }
+          return true;
+        };
+        try {
+          if (!c.getBoundingClientRect().width || ok()) return;
+          var left = parseFloat(p.style.left) || 0, top = parseFloat(p.style.top) || 0;
+          for (var x = left - 8; x >= PANEL_MARGIN - 8; x -= 8) {
+            this._setPos(x, top);
+            if (ok()) return;
+          }
+          this._setPos(left, top);
+        } catch (_) {}
+      },
+
+      _savePos: function () {
+        var g = this._geom(), p = this._panelEl;
+        if (!g || !p) return;
+        this._pos = ductPosToFrac(parseFloat(p.style.left) || 0, parseFloat(p.style.top) || 0, g.w, g.h, g.aw, g.ah);
+        savePanelPrefs(this._collapsedPref, this._pos);
+      },
+
+      _resetPanel: function () {
+        this._pos = null;
+        savePanelPrefs(this._collapsedPref, null);
+        this._placePanel();
+        try { if (this._dragEl) this._dragEl.focus(); } catch (_) {}
+      },
+
+      _onPanelResize: function () {
+        this._placePanel();
+        this._applyLift();
+        // A panel laid out late (hidden map) gets its strip position now.
+        if (!this._tlDrag && !this._tlTouch && this._tlTarget == null) this._tlScrollTo(this._idx, false);
+      },
+
+      // Pointer drag (setPointerCapture on the handle; the map never sees
+      // it) and arrow keys on the handle. Off on phones.
+      _bindDrag: function (h) {
+        var self = this;
+        var stopAll = function (e) { stopEvent(e); };
+        this._listen(h, 'mousedown', stopAll);
+        this._listen(h, 'touchstart', stopAll);
+        this._listen(h, 'pointerdown', function (e) {
+          stopEvent(e);
+          if (narrowScreen() || (e.pointerType === 'mouse' && e.button !== 0)) return;
+          if (e.preventDefault) e.preventDefault();
+          if (!self._float()) return;
+          var p = self._panelEl;
+          self._drag = { id: e.pointerId, x: e.clientX, y: e.clientY, left: parseFloat(p.style.left) || 0, top: parseFloat(p.style.top) || 0 };
+          try { h.setPointerCapture(e.pointerId); } catch (_) {}
+          self._syncCollapse();
+        });
+        this._listen(h, 'pointermove', function (e) {
+          var d = self._drag;
+          if (!d) return;
+          self._setPos(d.left + (e.clientX - d.x), d.top + (e.clientY - d.y));
+        });
+        var end = function (e) {
+          var d = self._drag;
+          if (!d) return;
+          self._drag = null;
+          try { h.releasePointerCapture(e.pointerId); } catch (_) {}
+          self._keepReachable();
+          self._savePos();
+          self._syncCollapse();
+        };
+        this._listen(h, 'pointerup', end);
+        this._listen(h, 'pointercancel', end);
+        this._listen(h, 'keydown', function (e) {
+          var k = e.key, step = PANEL_KEY_STEP * (e.shiftKey ? 4 : 1);
+          var dx = k === 'ArrowLeft' ? -step : k === 'ArrowRight' ? step : 0;
+          var dy = k === 'ArrowUp' ? -step : k === 'ArrowDown' ? step : 0;
+          if ((!dx && !dy) || narrowScreen()) return;
+          if (e.preventDefault) e.preventDefault();
+          stopEvent(e);
+          if (!self._float()) return;
+          var p = self._panelEl;
+          self._setPos((parseFloat(p.style.left) || 0) + dx, (parseFloat(p.style.top) || 0) + dy);
+          self._savePos();
+        });
+      },
+
+      // ── the timeline ──
+      // A horizontally scrolling strip, one tick per time, placed by time
+      // (ductTimelineLayout). The track is padded by half the viewport on
+      // each side, so scrollLeft is the x of the time under the centre
+      // marker. Scrolls are coalesced to one frame; when they stop the
+      // strip settles on the nearest time. Positioning from code (_setIndex,
+      // buttons, keys) records the scrollLeft it aims at in _tlTarget, so
+      // its scroll events never count as a user pick.
+      _bindTimeline: function (vp) {
+        var self = this;
+        this._listen(vp, 'scroll', function () {
+          self._tlIdleLater();
+          if (self._tlFrame) return;
+          self._tlFrame = frame(function () { self._tlFrame = null; self._tlOnScroll(); });
+        });
+        this._listen(vp, 'scrollend', function () { self._tlIdle(); });
+        this._listen(vp, 'wheel', function (e) {
+          var dx = e.deltaX || 0, dy = e.deltaY || 0;
+          // Sideways (trackpad) scrolls natively; never the map either way.
+          if (!self._tlEnabled() || Math.abs(dx) >= Math.abs(dy)) { self._tlTarget = null; return; }
+          if (e.preventDefault) e.preventDefault();
+          self._tlTarget = null;
+          var k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? (vp.clientWidth || 100) : 1;
+          vp.scrollLeft = (vp.scrollLeft || 0) + dy * k;
+        }, { passive: false });
+        this._listen(vp, 'touchstart', function () { self._tlTouch = true; self._tlTarget = null; }, { passive: true });
+        var touchEnd = function () { self._tlTouch = false; self._tlIdleLater(); };
+        this._listen(vp, 'touchend', touchEnd);
+        this._listen(vp, 'touchcancel', touchEnd);
+        // Mouse drag-to-scroll; touch and pen scroll natively (touch-action: pan-x).
+        this._listen(vp, 'pointerdown', function (e) {
+          self._tlMoved = false;
+          if (e.pointerType !== 'mouse' || e.button !== 0 || !self._tlEnabled()) return;
+          // Not prevented: the press still focuses the strip (keys work next)
+          // without a focus ring; user-select: none stops text selection.
+          self._tlTarget = null;
+          self._tlDrag = { id: e.pointerId, x: e.clientX, left: vp.scrollLeft || 0, moved: false };
+          setClass(vp, 'mc-duct-timeline-dragging', true);
+          try { vp.setPointerCapture(e.pointerId); } catch (_) {}
+        });
+        this._listen(vp, 'pointermove', function (e) {
+          var d = self._tlDrag;
+          if (!d) return;
+          var dx = e.clientX - d.x;
+          if (!d.moved && Math.abs(dx) < TL_DRAG_PX) return;
+          d.moved = true;
+          vp.scrollLeft = d.left - dx;
+        });
+        var up = function (e) {
+          var d = self._tlDrag;
+          if (!d) return;
+          self._tlDrag = null;
+          setClass(vp, 'mc-duct-timeline-dragging', false);
+          try { vp.releasePointerCapture(e.pointerId); } catch (_) {}
+          self._tlMoved = d.moved;
+          if (d.moved) self._tlIdleLater();
+        };
+        this._listen(vp, 'pointerup', up);
+        this._listen(vp, 'pointercancel', up);
+        // A click (no drag) picks the time nearest the clicked x.
+        this._listen(vp, 'click', function (e) {
+          if (self._tlMoved) { self._tlMoved = false; return; }
+          var lay = self._tlLayout;
+          if (!lay || !self._tlEnabled()) return;
+          var left = 0;
+          try { left = vp.getBoundingClientRect().left; } catch (_) {}
+          var x = (vp.scrollLeft || 0) + (e.clientX - left) - (vp.clientWidth || 0) / 2;
+          self._pick(ductTimelineIndexAt(lay.xs, x));
+        });
+        this._listen(vp, 'keydown', function (e) {
+          var lay = self._tlLayout;
+          if (!lay || !self._tlEnabled()) return;
+          var i = ductTimelineKeyIndex(e.key, self._idx, lay.xs, lay.pxPerSec);
+          if (i < 0) return;
+          if (e.preventDefault) e.preventDefault();
+          stopEvent(e);
+          self._pick(i);
+        });
+      },
+
+      _tlEnabled: function () {
+        return !!(this._data && this._data.times && this._data.times.length >= 2 && this._tlLayout);
+      },
+
+      // One frame of scrolling: the time under the centre becomes the shown
+      // hour (a user pick), unless code is positioning the strip.
+      _tlOnScroll: function () {
+        var vp = this._tl, lay = this._tlLayout;
+        if (!vp || !lay || !lay.xs.length) return;
+        var x = vp.scrollLeft || 0;
+        if (this._tlTarget != null) {
+          if (Math.abs(x - this._tlTarget) < 1) this._tlTarget = null;   // arrived
+          return;
+        }
+        var i = ductTimelineIndexAt(lay.xs, x);
+        if (i >= 0 && i !== this._idx) {
+          this._userPicked = true;
+          this._setIndex(i, true);
+        }
+      },
+
+      _tlIdleLater: function () {
+        var self = this;
+        cancelLater(this._tlIdleTimer);
+        this._tlIdleTimer = later(function () { self._tlIdleTimer = null; self._tlIdle(); }, TL_IDLE_MS);
+      },
+
+      // The scroll has stopped: code's scroll is done; a user's settles
+      // (smoothly) on the time under the centre. Not while a finger or the
+      // mouse still holds the strip.
+      _tlIdle: function () {
+        cancelLater(this._tlIdleTimer);
+        this._tlIdleTimer = null;
+        if (this._tlDrag || this._tlTouch) return;
+        if (this._tlTarget != null) { this._tlTarget = null; return; }
+        cancelFrame(this._tlFrame);
+        this._tlFrame = null;
+        this._tlOnScroll();
+        this._tlScrollTo(this._idx, true);
+      },
+
+      // Puts time i under the centre marker (smooth unless reduced motion).
+      _tlScrollTo: function (i, smooth) {
+        var vp = this._tl, lay = this._tlLayout;
+        if (!vp || !lay || !(i >= 0) || i >= lay.xs.length) return;
+        var x = lay.xs[i];
+        var max = (vp.scrollWidth || 0) - (vp.clientWidth || 0);
+        if (max > 0) x = Math.min(Math.max(x, 0), max);
+        else if (vp.scrollWidth) x = 0;          // laid out, nothing to scroll
+        if (Math.abs((vp.scrollLeft || 0) - x) < 1) { this._tlTarget = null; return; }
+        this._tlTarget = x;
+        if (smooth && !reducedMotion() && typeof vp.scrollTo === 'function') {
+          try { vp.scrollTo({ left: x, behavior: 'smooth' }); return; } catch (_) {}
+        }
+        vp.scrollLeft = x;
+      },
+
+      // A time picked by the user (click, key, button).
+      _pick: function (i) {
+        var d = this._data;
+        if (!d || !(i >= 0) || i >= d.times.length) return;
+        this._userPicked = true;
+        if (i === this._idx) this._tlScrollTo(i, true);
+        else this._setIndex(i, false, true);
+      },
+
+      _step: function (delta) {
+        if (!this._tlEnabled()) return;
+        var n = this._data.times.length;
+        this._pick(Math.min(Math.max(this._idx + delta, 0), n - 1));
+      },
+
+      // Back to the current hour, and following it again on refreshes.
+      _toNow: function () {
+        var d = this._data;
+        if (!d || !d.times.length) return;
+        var i = ductTimeIndex(d.times, Date.now() / 1000);
+        this._userPicked = false;
+        if (i === this._idx) this._tlScrollTo(i, true);
+        else this._setIndex(i, false, true);
+      },
+
+      // The strip's ticks and labels; rebuilt only when the times change.
+      // O(times), a few hundred at most.
+      _tlBuild: function () {
+        var inner = this._tlInner, d = this._data;
+        if (!inner) return;
+        var times = (d && d.times) || [];
+        var key = times.join(',');
+        if (key === this._tlKey) { this._tlPlaceNow(); return; }
+        this._tlKey = key;
+        var lay = this._tlLayout = ductTimelineLayout(times);
+        inner.textContent = '';
+        if (this._tlTrack) this._tlTrack.style.width = lay.width + 'px';
+        inner.style.width = lay.width + 'px';
+        var dayStart = {}, labelled = {}, k;
+        for (k = 0; k < lay.days.length; k++) dayStart[lay.days[k].sec] = true;
+        for (k = 0; k < lay.hours.length; k++) labelled[lay.hours[k].sec] = true;
+        for (var i = 0; i < lay.xs.length; i++) {
+          var t = el('span', 'mc-duct-tick' + (dayStart[times[i]] ? ' mc-duct-tick-day' : labelled[times[i]] ? ' mc-duct-tick-major' : ''));
+          t.style.left = lay.xs[i] + 'px';
+          inner.appendChild(t);
+        }
+        // Each day's label sticks to the strip's left edge inside its day's
+        // span, so the next day's label pushes it off (CSS sticky; the span
+        // is never narrower than its label, see .mc-duct-day).
+        var spans = ductTimelineDaySpans(lay, TL_DAY_MIN_PX);
+        for (k = 0; k < spans.length; k++) {
+          var dl = el('span', 'mc-duct-day');
+          dl.appendChild(el('span', 'mc-duct-day-label', dayText(spans[k].sec)));
+          dl.style.left = spans[k].x + 'px';
+          dl.style.width = spans[k].w + 'px';
+          inner.appendChild(dl);
+        }
+        for (k = 0; k < lay.hours.length; k++) {
+          var hl = el('span', 'mc-duct-hour', hourText(lay.hours[k].sec));
+          hl.style.left = lay.hours[k].x + 'px';
+          inner.appendChild(hl);
+        }
+        this._tlNow = el('span', 'mc-duct-now-line');
+        this._tlNow.setAttribute('aria-hidden', 'true');
+        inner.appendChild(this._tlNow);
+        this._tlPlaceNow();
+      },
+
+      _tlPlaceNow: function () {
+        var line = this._tlNow, lay = this._tlLayout, d = this._data;
+        if (!line || !lay || !d || !d.times.length) return;
+        var now = Date.now() / 1000, t0 = Number(d.times[0]), tn = Number(d.times[d.times.length - 1]);
+        var inside = now >= t0 && now <= tn;
+        line.hidden = !inside;
+        if (inside) line.style.left = (now - t0) * lay.pxPerSec + 'px';
+      },
+
+      // Range and disabled state of the slider and its buttons.
+      _tlState: function () {
+        var vp = this._tl;
+        if (!vp) return;
+        var n = (this._data && this._data.times) ? this._data.times.length : 0;
+        var off = n < 2;
+        vp.setAttribute('aria-valuemax', String(Math.max(n - 1, 0)));
+        if (off) vp.setAttribute('aria-disabled', 'true');
+        else if (vp.removeAttribute) vp.removeAttribute('aria-disabled');
+        else vp.setAttribute('aria-disabled', 'false');
+        if (this._nowEl) this._nowEl.disabled = !n;
+        this._tlAria();
+      },
+
+      _tlAria: function () {
+        var vp = this._tl, d = this._data, i = this._idx;
+        var n = (d && d.times) ? d.times.length : 0;
+        if (vp && i >= 0 && i < n) {
+          vp.setAttribute('aria-valuenow', String(i));
+          vp.setAttribute('aria-valuetext', fmtTime(d.times[i]));
+        }
+        if (this._prevEl) this._prevEl.disabled = n < 2 || i <= 0;
+        if (this._nextEl) this._nextEl.disabled = n < 2 || i >= n - 1;
       },
 
       // The bottom-left corner shares the map's bottom edge with Leaflet's
       // attribution bar, which wraps to several lines on narrow screens.
       // Lift the corner by the bar's measured height whenever the two overlap
       // horizontally; re-measured on resize, layer changes and bar resizes.
+      // A moved panel is not in the corner: no lift.
       _watchAttribution: function (map) {
         var self = this;
         this._lift = function () { self._applyLift(); };
@@ -926,7 +1726,11 @@
       },
 
       _applyLift: function () {
-        var box = this._legendEl, attr = this._attrEl();
+        if (this._floating) {
+          if (this._corner) { try { this._corner.style.marginBottom = ''; } catch (_) {} }
+          return;
+        }
+        var box = this._panelEl, attr = this._attrEl();
         var corner = box && box.parentNode;
         if (!corner || !corner.style) return;
         this._corner = corner;
@@ -944,20 +1748,7 @@
       _renderLegend: function () {
         var box = this._legendEl;
         if (!box) return;
-        var self = this;
-        if (this._legendOpen == null) {
-          // Compact by default on phones so the legend does not cover the map.
-          var narrow = false;
-          try { narrow = !!(window.matchMedia && window.matchMedia('(max-width: 600px)').matches); } catch (_) {}
-          this._legendOpen = !narrow;
-        }
         box.textContent = '';
-        var head = el('button', 'mc-duct-legend-title', 'Tropospheric ducting');
-        head.type = 'button';
-        head.setAttribute('aria-expanded', this._legendOpen ? 'true' : 'false');
-        head.addEventListener('click', function () { self._legendOpen = !self._legendOpen; self._renderLegend(); });
-        box.appendChild(head);
-        if (!this._legendOpen) return;
         var d = this._data;
         if (!d) {
           var st = el('div', 'mc-duct-legend-status', this._state === 'pending' ? MSG_PENDING : this._state === 'error' ? MSG_ERROR : 'Loading ducting forecast');
@@ -983,6 +1774,8 @@
           if (d.generatedAt) box.appendChild(el('div', 'mc-duct-legend-meta', 'Updated ' + fmtTime(d.generatedAt)));
         }
         box.appendChild(el('div', 'mc-duct-legend-note', NOTE));
+        // A moved panel that grew stays inside the map (no ResizeObserver: now).
+        if (!this._panelRo) this._placePanel();
       },
 
       // Bar of the same colour bands as the field (hard stops: each colour
@@ -1088,6 +1881,7 @@
           // The forecast already drawn: no rebuild (an open popup stays
           // open); only the hour moves on, unless the user picked one.
           this._setStale(false);
+          this._tlPlaceNow();
           if (!this._userPicked) {
             var idx = ductTimeIndex(held.times, Date.now() / 1000);
             if (idx !== this._idx) this._setIndex(idx);
@@ -1099,7 +1893,7 @@
         this._show();
       },
 
-      // Draws the held forecast: cells, slider range, legend and the hour (a
+      // Draws the held forecast: cells, timeline, legend and the hour (a
       // user-picked one while it is still in the forecast, else the latest <= now).
       _show: function () {
         var d = this._data;
@@ -1110,12 +1904,10 @@
           var keep = d.times.indexOf(prevTime);
           if (keep >= 0) idx = keep;
         }
-        if (this._slider) {
-          this._slider.max = String(d.times.length - 1);
-          this._slider.disabled = d.times.length < 2;
-        }
+        this._tlBuild();
         this._renderLegend();
         this._setIndex(idx);
+        this._tlState();
       },
 
       // The cells that have data (class >= 1) at some hour, the lattice the
@@ -1152,13 +1944,22 @@
         } catch (_) { this._edge = null; }
       },
 
-      _setIndex: function (i) {
+      // Shows hour i. fromScroll: the user's scroll put it under the centre
+      // (the strip stays where it is); otherwise the strip moves to it,
+      // smoothly when smooth.
+      _setIndex: function (i, fromScroll, smooth) {
         var d = this._data;
         if (!d || i < 0 || i >= d.times.length) return;
         this._idx = i;
         this._shown = d.times[i];
-        if (this._slider) this._slider.value = String(i);
-        if (this._timeLabel) this._timeLabel.textContent = 'Forecast time: ' + fmtTime(d.times[i]);
+        if (this._timeValue) {
+          var t = fmtTime(d.times[i]);
+          this._timePrefix.textContent = 'Forecast time: ';
+          this._timeValue.textContent = t;
+          this._timeLabel.title = 'Forecast time: ' + t;
+        }
+        this._tlAria();
+        if (!fromScroll) this._tlScrollTo(i, !!smooth);
         this._restyle();
         this._syncPopup();
       },
@@ -1260,4 +2061,12 @@
   window.MC_ductSample = sample;
   window.MC_ductFieldValues = fieldValues;
   window.MC_ductRowLat = rowLat;
+  window.MC_ductTimelineLayout = ductTimelineLayout;
+  window.MC_ductTimelineIndexAt = ductTimelineIndexAt;
+  window.MC_ductClampPos = ductClampPos;
+  window.MC_ductPosToFrac = ductPosToFrac;
+  window.MC_ductPosFromFrac = ductPosFromFrac;
+  window.MC_ductTimelineKeyIndex = ductTimelineKeyIndex;
+  window.MC_ductTimelineDaySpans = ductTimelineDaySpans;
+  window.MC_ductPanelPrefs = ductPanelPrefs;
 })();

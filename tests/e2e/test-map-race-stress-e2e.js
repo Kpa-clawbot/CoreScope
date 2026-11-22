@@ -29,8 +29,8 @@
  *      `ducting` block; otherwise noted and skipped): per iteration 25-45
  *      seeded actions, 0-150 ms apart (some 0.3-1.2 s): the overlay on/off
  *      through the public API and through the picker, theme flips, map <->
- *      live <-> planner navigation right after enabling (mid-fetch), time
- *      slider moves; /api/ducting answers are delayed 0-2.5 s through
+ *      live <-> planner navigation right after enabling (mid-fetch), forecast
+ *      timeline scrolls (scrollLeft, as a user scroll); /api/ducting answers are delayed 0-2.5 s through
  *      page.route and some are turned into 'pending' / HTTP 500. Then a
  *      differential phase (overlay off, on, off, on with real answers): the
  *      'theme-changed' listener count must be exactly +1 while on and
@@ -1521,14 +1521,16 @@ async function scenarioG(browser) {
         else if (roll < 0.70) await navigate();
         else if (roll < 0.85) {
           const v = rng.next();
+          // Scroll the forecast timeline to a random place, as a user does
+          // (the browser fires 'scroll'; the overlay picks the time under the
+          // centre on the next frame).
           const res = await page.evaluate((x) => {
-            const s = document.querySelector('.mc-duct-time input[type=range]');
-            if (!s) return 'none';
-            s.value = String(Math.floor(x * (parseInt(s.max, 10) + 1)));
-            s.dispatchEvent(new Event('input', { bubbles: true }));
-            return s.value;
+            const t = document.querySelector('.mc-duct-timeline');
+            if (!t) return 'none';
+            t.scrollLeft = Math.round(x * Math.max(t.scrollWidth - t.clientWidth, 0));
+            return String(t.scrollLeft);
           }, v);
-          log.push('slider ' + res);
+          log.push('timeline ' + res);
         } else {
           // Enable and leave straight away, then flip the preference again.
           await toggleApi(true);

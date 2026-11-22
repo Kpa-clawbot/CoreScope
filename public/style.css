@@ -5693,7 +5693,9 @@ body { touch-action: pan-y; }
  * down to the next stop (s8: -90 and beyond); weaker is transparent. Flat, no
  * blending; hex or rgb() only (read by JS). alpha = field opacity, the same for every band. lora = dashed outline of cells where a duct
  * may carry LoRa 868/915 MHz (lowest trapped frequency <= 868 MHz). edge =
- * dotted line around the forecast area. */
+ * dotted line around the forecast area. cursor = the timeline's centre
+ * marker, now = its current-time line, hover = button hover wash, shadow =
+ * a moved (floating) panel's drop shadow. */
 :root {
   --mc-duct-s1: #8e3fd0;
   --mc-duct-s2: #3d5ee6;
@@ -5706,6 +5708,10 @@ body { touch-action: pan-y; }
   --mc-duct-alpha: 0.8;
   --mc-duct-lora: #111827;
   --mc-duct-edge: rgba(71, 85, 105, 0.85);
+  --mc-duct-cursor: #2563eb;
+  --mc-duct-now: #dc2626;
+  --mc-duct-hover: rgba(15, 23, 42, 0.08);
+  --mc-duct-shadow: rgba(15, 23, 42, 0.28);
 }
 [data-theme="dark"] {
   --mc-duct-s1: #a557f0;
@@ -5719,6 +5725,10 @@ body { touch-action: pan-y; }
   --mc-duct-alpha: 0.8;
   --mc-duct-lora: #f8fafc;
   --mc-duct-edge: rgba(148, 163, 184, 0.9);
+  --mc-duct-cursor: #60a5fa;
+  --mc-duct-now: #f87171;
+  --mc-duct-hover: rgba(241, 245, 249, 0.12);
+  --mc-duct-shadow: rgba(0, 0, 0, 0.55);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -5733,35 +5743,192 @@ body { touch-action: pan-y; }
     --mc-duct-alpha: 0.8;
     --mc-duct-lora: #f8fafc;
     --mc-duct-edge: rgba(148, 163, 184, 0.9);
+    --mc-duct-cursor: #60a5fa;
+    --mc-duct-now: #f87171;
+    --mc-duct-hover: rgba(241, 245, 249, 0.12);
+    --mc-duct-shadow: rgba(0, 0, 0, 0.55);
   }
 }
-.mc-duct-legend,
-.mc-duct-time {
+.mc-duct-panel {
+  box-sizing: border-box;
+  /* Phones: just wide enough for a 200 px timeline strip beside 32 px
+   * step buttons; wider screens below. */
+  width: min(300px, calc(100vw - 80px));
   background: var(--mc-route-legend-bg);
   color: var(--mc-route-legend-fg);
   border: 1px solid var(--mc-route-legend-border);
   border-radius: 6px;
-  padding: 8px 10px;
+  padding: 4px 8px 8px;
   font-size: 12px;
   line-height: 1.4;
-  max-width: 260px;
 }
-.mc-duct-legend-title {
-  display: block;
-  width: 100%;
-  margin: 0 0 4px;
-  padding: 0;
-  border: 0;
+.mc-duct-panel [hidden] { display: none !important; }
+/* Moved: out of the Leaflet corner, inside the map container (left/top set
+ * by JS); just under the corners (1000), so the expanded layers picker and
+ * the zoom buttons stay on top. Two classes: .leaflet-control (relative,
+ * z 800) is as specific and loads later. */
+.mc-duct-panel.mc-duct-panel-floating {
+  position: absolute;
+  z-index: 999;
+  margin: 0 !important;
+  box-shadow: 0 4px 16px var(--mc-duct-shadow);
+}
+.mc-duct-head { display: flex; align-items: center; gap: 4px; margin: 0 -4px 4px; }
+.mc-duct-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-duct-drag,
+.mc-duct-reset,
+.mc-duct-collapse,
+.mc-duct-step,
+.mc-duct-now {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
   background: none;
   color: inherit;
   font: inherit;
-  font-weight: 600;
-  text-align: left;
   cursor: pointer;
 }
-.mc-duct-legend-title::after { content: " \25BE"; }
-.mc-duct-legend-title[aria-expanded="false"] { margin-bottom: 0; }
-.mc-duct-legend-title[aria-expanded="false"]::after { content: " \25B8"; }
+.mc-duct-reset,
+.mc-duct-step,
+.mc-duct-now { border-color: var(--mc-route-legend-border); }
+.mc-duct-now { font-weight: 600; }
+.mc-duct-drag:hover,
+.mc-duct-reset:hover,
+.mc-duct-collapse:hover,
+.mc-duct-step:hover:not(:disabled),
+.mc-duct-now:hover:not(:disabled) { background: var(--mc-duct-hover); }
+.mc-duct-step:disabled,
+.mc-duct-now:disabled { opacity: 0.4; cursor: default; }
+/* Grip: 2 x 3 dots. */
+.mc-duct-drag { padding: 0; cursor: grab; touch-action: none; }
+.mc-duct-panel-dragging .mc-duct-drag { cursor: grabbing; }
+.mc-duct-drag::before {
+  content: "";
+  width: 10px;
+  height: 16px;
+  background-image: radial-gradient(circle, currentColor 1.3px, transparent 1.7px);
+  background-size: 5px 5.33px;
+}
+/* Chevrons drawn with borders: up = collapse (expanded), down = expand. */
+.mc-duct-collapse { padding: 0; }
+.mc-duct-collapse::before,
+.mc-duct-step::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+}
+.mc-duct-collapse::before { transform: translateY(2px) rotate(-135deg); }
+.mc-duct-collapse[aria-expanded="false"]::before { transform: translateY(-2px) rotate(45deg); }
+.mc-duct-step { width: 28px; min-width: 28px; padding: 0; }
+.mc-duct-step-prev::before { transform: translateX(2px) rotate(135deg); }
+.mc-duct-step-next::before { transform: translateX(-2px) rotate(-45deg); }
+.mc-duct-time-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+/* One line: the "Forecast time:" prefix gives way (ellipsis), never the time. */
+.mc-duct-time-label { display: flex; flex: 1 1 auto; min-width: 0; font-weight: 600; white-space: nowrap; }
+.mc-duct-time-prefix { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.mc-duct-time-value { flex: none; }
+.mc-duct-time-head .mc-duct-now { height: 28px; padding: 0 8px; }
+.mc-duct-tl-row { display: flex; align-items: stretch; gap: 4px; }
+.mc-duct-tl-row .mc-duct-step { height: auto; min-height: 32px; }
+.mc-duct-timeline-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
+.mc-duct-timeline {
+  height: 48px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  scroll-behavior: auto;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  border: 1px solid var(--mc-route-legend-border);
+  border-radius: 4px;
+}
+.mc-duct-timeline::-webkit-scrollbar { display: none; }
+.mc-duct-timeline-dragging { cursor: grabbing; }
+.mc-duct-timeline[aria-disabled="true"] { cursor: default; opacity: 0.6; }
+/* Half the viewport of padding on each side (width set by JS), so the
+ * first and last time can sit under the centre: scrollLeft = x. */
+.mc-duct-timeline-track { box-sizing: content-box; height: 100%; padding: 0 50%; }
+.mc-duct-timeline-inner { position: relative; height: 100%; }
+.mc-duct-tick {
+  position: absolute;
+  bottom: 16px;
+  width: 1px;
+  height: 6px;
+  background: var(--mc-route-legend-fg);
+  opacity: 0.45;
+}
+.mc-duct-tick-major { height: 9px; opacity: 0.7; }
+.mc-duct-tick-day { bottom: 0; height: 100%; opacity: 0.8; }
+.mc-duct-day,
+.mc-duct-hour { position: absolute; font-size: 11px; line-height: 13px; white-space: nowrap; pointer-events: none; }
+/* A day's span (from its midnight to the next) holds its label, which
+ * sticks to the strip's left edge and is pushed off by the next day's span;
+ * never narrower than the label, so the label always shows in full. */
+.mc-duct-day { top: 2px; font-weight: 600; min-width: max-content; }
+.mc-duct-day-label { position: sticky; left: 0; display: inline-block; padding: 0 4px; }
+.mc-duct-hour { bottom: 2px; transform: translateX(-50%); }
+/* Like the centre marker, only in the tick band: labels stay clear. */
+.mc-duct-now-line {
+  position: absolute;
+  top: 16px;
+  bottom: 15px;
+  width: 0;
+  border-left: 2px dashed var(--mc-duct-now);
+  pointer-events: none;
+}
+/* The centre marker spans only the tick band: it never covers a label. */
+.mc-duct-timeline-cursor {
+  position: absolute;
+  top: 18px;
+  bottom: 16px;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--mc-duct-cursor);
+  pointer-events: none;
+}
+.mc-duct-timeline-cursor::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border: 5px solid transparent;
+  border-top-color: var(--mc-duct-cursor);
+}
+.mc-duct-legend {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--mc-route-legend-border);
+}
+@media (min-width: 601px) {
+  .mc-duct-panel { width: min(320px, calc(100vw - 80px)); }
+}
+@media (max-width: 600px) {
+  .mc-duct-drag { display: none; }
+  .mc-duct-title { padding-left: 4px; }
+  .mc-duct-step { width: 32px; min-width: 32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mc-duct-timeline { scroll-behavior: auto; }
+}
 .mc-duct-legend-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
 .mc-duct-swatch {
   flex: none;
@@ -5800,10 +5967,6 @@ body { touch-action: pan-y; }
 .mc-duct-legend-status { margin: 4px 0; font-weight: 600; }
 .mc-duct-legend-note,
 .mc-duct-legend-meta { margin-top: 4px; color: var(--mc-route-legend-fg); opacity: 0.8; }
-.mc-duct-time-label { display: block; font-weight: 600; margin-bottom: 4px; }
-.mc-duct-time input[type="range"] { width: 100%; min-width: 180px; }
-.leaflet-bottom.leaflet-left .mc-duct-legend,
-.leaflet-bottom.leaflet-left .mc-duct-time { max-width: min(260px, calc(100vw - 80px)); }
 .mc-duct-popup-title { font-weight: 600; margin-bottom: 2px; }
 
 .mc-route-marker-icon { background: transparent !important; border: none !important; }

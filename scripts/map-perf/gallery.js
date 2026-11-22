@@ -165,7 +165,7 @@ async function resolveDuctingViews(baseUrl) {
   const val = (c, i) => (hasN ? (c.n && c.n[i]) || 0 : c.g[i]);
   const strong = (c, i) => c.c[i] >= 1 && val(c, i) !== 0 && val(c, i) <= (hasN ? -54 : -157);
   const tinted = (c, i) => c.c[i] >= 1 && val(c, i) !== 0 && val(c, i) <= (hasN ? -44 : -79);
-  // The forecast hour with the most strong cells: the shots set the slider
+  // The forecast hour with the most strong cells: the shots set the timeline
   // there and say which time they show.
   const idx = (() => {
     let b = 0, most = -1;
@@ -322,18 +322,20 @@ async function capture(browser, e, views, outDir, base) {
         return n > 0 && !!document.querySelector('.mc-duct-legend');
       }, null, { timeout: 20000 }).then(() => true, () => false);
       if (!drawn) rec.failures.push('ducting cells or legend not drawn');
-      // A forecast-map shot: Map Controls collapsed, slider at the chosen hour.
+      // A forecast-map shot: Map Controls collapsed, timeline at the chosen hour.
       await page.evaluate(() => {
         const b = document.getElementById('mapControlsToggle');
         if (b && b.getAttribute('aria-expanded') === 'true') b.click();
       });
       if (v.ductIdx != null) {
         rec.ductTime = await page.evaluate((i) => {
-          const s = document.querySelector('.mc-duct-time input[type=range]');
+          // The timeline's keys: Home, then one step right per hour.
+          const s = document.querySelector('.mc-duct-timeline');
           if (!s) return null;
-          s.value = String(i);
-          s.dispatchEvent(new Event('input', { bubbles: true }));
-          const l = document.querySelector('.mc-duct-time');
+          const key = (k) => s.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+          key('Home');
+          for (let k = 0; k < i; k++) key('ArrowRight');
+          const l = document.querySelector('.mc-duct-time-label');
           return l ? l.textContent.trim() : null;
         }, v.ductIdx);
       }
@@ -346,8 +348,8 @@ async function capture(browser, e, views, outDir, base) {
     if (e.ductPopup) {
       const opened = await page.evaluate(() => {
         const m = window.__mcHarness.maps.filter((x) => x._container && x._container.isConnected && x._loaded)[0];
-        const s = document.querySelector('.mc-duct-time input[type=range]');
-        const idx = s ? parseInt(s.value, 10) : 0;
+        const s = document.querySelector('.mc-duct-timeline');
+        const idx = s ? parseInt(s.getAttribute('aria-valuenow'), 10) || 0 : 0;
         // The duct cell nearest the view centre (the view's own cell; the
         // restored view need not be exactly on the cell centre), opened the
         // way a map click opens it.
