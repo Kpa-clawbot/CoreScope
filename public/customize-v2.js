@@ -45,6 +45,7 @@
   var THEME_CSS_MAP = {
     accent: '--accent', accentHover: '--accent-hover',
     navBg: '--nav-bg', navBg2: '--nav-bg2', navText: '--nav-text', navTextMuted: '--nav-text-muted',
+    navVersionMismatch: '--nav-version-mismatch',
     navActiveBg: '--nav-active-bg',
     background: '--surface-0', text: '--text', textMuted: '--text-muted', border: '--border',
     statusGreen: '--status-green', statusYellow: '--status-yellow', statusRed: '--status-red',

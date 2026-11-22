@@ -24,6 +24,7 @@ node tests/unit/test-anonymous-mode.js
 node tests/unit/test-api-base.js
 node tests/unit/test-area-filter.js
 node tests/unit/test-beta-ui.js
+node tests/unit/test-build-info.js
 node tests/unit/test-channel-color-picker.js
 node tests/unit/test-channel-colors.js
 node tests/unit/test-channel-decrypt-ecb.js

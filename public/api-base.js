@@ -76,6 +76,7 @@
     embedded: !base && (dep.channel || 'classic') === 'classic',
     channel: dep.channel || 'classic',
     commit: dep.commit || null,
+    version: dep.version || null,
     url: url,
     wsUrl: wsUrl,
     fetch: apiFetch,
