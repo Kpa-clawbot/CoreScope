@@ -34,6 +34,13 @@ func TestAccountExportSections(t *testing.T) {
 	if err := st.AddWatch(uid, exportPubkey, 10); err != nil {
 		t.Fatal(err)
 	}
+	staged, err := st.StagePushBinding("an_export", "inst_export", uid, "bind_export", "proof-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ActivatePushBinding(staged, "sub_export", time.Now().Add(30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Audit(&bossID, "user.role", &uid, map[string]string{"role": "user"}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +106,10 @@ func TestAccountExportSections(t *testing.T) {
 		len(n.Watches) != 1 || n.Watches[0].Pubkey != exportPubkey || n.Watches[0].CreatedAt == "" {
 		t.Fatalf("notifications = %+v", n)
 	}
+	if len(n.PushDevices) != 1 || n.PushDevices[0].AnalyzerID != "an_export" || n.PushDevices[0].InstallationID != "inst_export" ||
+		n.PushDevices[0].ExpiresAt == "" {
+		t.Fatalf("push devices = %+v", n.PushDevices)
+	}
 	var role *exportAuditEntry
 	for i := range x.Audit {
 		switch x.Audit[i].Action {
@@ -133,6 +144,9 @@ func TestAccountExportSections(t *testing.T) {
 		"reset token hash":   users.HashToken(reset),
 		"email change token": change,
 		"email change hash":  users.HashToken(change),
+		"push proof hash":    "proof-hash",
+		"push binding id":    "bind_export",
+		"push subscription":  "sub_export",
 	}
 	for name, v := range secrets {
 		if v == "" {

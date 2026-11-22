@@ -19,6 +19,27 @@ type PushBinding struct {
 	ExpiresAt                  time.Time
 }
 
+// PushBindingsFor lists userID's active device links, oldest expiry first.
+func (s *Store) PushBindingsFor(userID int64) ([]PushBinding, error) {
+	rows, err := s.db.Query(`SELECT analyzer_id, installation_id, user_id, binding_id, proof_hash, subscription_id, expires_at
+		FROM notification_push_bindings WHERE user_id = ? ORDER BY expires_at, analyzer_id, installation_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PushBinding
+	for rows.Next() {
+		var b PushBinding
+		var exp int64
+		if err := rows.Scan(&b.AnalyzerID, &b.InstallationID, &b.UserID, &b.BindingID, &b.ProofHash, &b.SubscriptionID, &exp); err != nil {
+			return nil, err
+		}
+		b.ExpiresAt = fromUnix(exp)
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // StagePushBinding reserves an idempotency key before CoreScope calls the relay.
 // A pending cross-account link cannot change the active binding.
 func (s *Store) StagePushBinding(analyzerID, installationID string, userID int64, bindingID, proofHash string) (PushBinding, error) {
