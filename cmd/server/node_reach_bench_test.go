@@ -29,7 +29,7 @@ func benchReachDB(b *testing.B, nObs, matchEvery int, lowerHops bool) *DB {
 		b.Fatal(err)
 	}
 	schema := []string{
-		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, hash TEXT, first_seen TEXT, payload_type INTEGER, from_pubkey TEXT)`,
+		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, hash TEXT, first_seen TEXT, payload_type INTEGER, from_pubkey TEXT, route_type INTEGER DEFAULT 1)`,
 		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, inactive INTEGER)`,
 		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, snr REAL, path_json TEXT, timestamp INTEGER)`,
 		`CREATE INDEX idx_obs_ts ON observations(timestamp)`,
