@@ -621,7 +621,7 @@ func TestSQLiteHotPathSQLUnchanged(t *testing.T) {
 	const originalInsert = "\n\t\tINSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, scope_name, from_pubkey, last_seen, code1, code2)\n\t\tVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n\t"
 	originalClamps := []string{
 		"last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?)",           // nodes upsert
-		"last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?),",          // observers upsert
+		"last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?),",          // observers upsert and its update-first UPDATE
 		"last_seen      = MAX(MIN(COALESCE(last_seen, ''), ?), ?),",     // observers UPDATE
 		"last_packet_at = MAX(MIN(COALESCE(last_packet_at, ''), ?), ?)", // observers UPDATE
 	}
@@ -635,8 +635,8 @@ func TestSQLiteHotPathSQLUnchanged(t *testing.T) {
 			t.Errorf("SQLite statements lack the original clamp %q", c)
 		}
 	}
-	if n := strings.Count(sqlite, "MAX(MIN(COALESCE("); n != 4 {
-		t.Errorf("SQLite statements carry %d original clamps, want 4", n)
+	if n := strings.Count(sqlite, "MAX(MIN(COALESCE("); n != 5 {
+		t.Errorf("SQLite statements carry %d original clamps, want 5", n)
 	}
 	if strings.Contains(sqlite, "AS clamp)") || strings.Contains(sqlite, originalInsert+"RETURNING") {
 		t.Errorf("SQLite statements carry a Postgres form")
@@ -646,8 +646,8 @@ func TestSQLiteHotPathSQLUnchanged(t *testing.T) {
 	if strings.Contains(pg, "MAX(MIN(") {
 		t.Errorf("Postgres statements carry SQLite's two-argument MAX/MIN")
 	}
-	if n := strings.Count(pg, "AS clamp)"); n != 4 {
-		t.Errorf("Postgres statements carry %d clampedMaxSQL clamps, want 4", n)
+	if n := strings.Count(pg, "AS clamp)"); n != 5 {
+		t.Errorf("Postgres statements carry %d clampedMaxSQL clamps, want 5", n)
 	}
 	if !strings.Contains(pg, originalInsert+"RETURNING id\n") {
 		t.Errorf("Postgres transmissions insert does not return its id")
