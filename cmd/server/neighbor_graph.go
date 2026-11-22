@@ -312,6 +312,16 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 	// Phase 1: Extract edges from every transmission + observation.
 	for _, p := range packets {
 		tx := p.tx
+		// TRACE reuses the path bytes for per-hop SNR values: they name no node.
+		if tx.PayloadType != nil && !packetpath.PathBytesAreHops(byte(*tx.PayloadType)) {
+			continue
+		}
+		// A direct route carries the REMAINING route: a forwarder removes
+		// itself before retransmitting (firmware Mesh.cpp removeSelfFromPath),
+		// so a non-empty path names neither the node the observer heard nor a
+		// neighbour of the originator. Only its zero hop (Mesh::sendZeroHop)
+		// says who was heard.
+		directRoute := tx.RouteType != nil && (*tx.RouteType == RouteDirect || *tx.RouteType == RouteTransportDirect)
 		isAdvert := tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT
 		isAnonReq := tx.PayloadType != nil && *tx.PayloadType == PayloadANON_REQ
 		// #1777: ANON_REQ's ephemeralPubKey is a full Ed25519 pubkey — the
@@ -344,14 +354,19 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 				}
 				continue
 			}
+			if directRoute {
+				continue
+			}
 
-			// Edge 1: originator ↔ path[0] — ADVERT and ANON_REQ only (#1777)
+			// Edge 1: originator ↔ path[0] — ADVERT and ANON_REQ only (#1777).
+			// No SNR: the observer measured its reception of path[last], not
+			// the originator's link to path[0].
 			if hasFullOriginator && fromLower != "" {
 				firstHop := cachedToLower(lowerCache, path[0])
 				if fromLower != firstHop { // self-edge guard (shouldn't happen but spec says check)
 					if packetpath.MeetsPathTrust(len(path[0])/2, opts.PathTrust) {
 						candidates := pm.m[firstHop]
-						g.upsertEdgeWithCandidates(fromLower, firstHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp), lowerCache)
+						g.upsertEdgeWithCandidates(fromLower, firstHop, candidates, observerPK, nil, parseTimestamp(obs.Timestamp), lowerCache)
 					}
 				}
 			}
