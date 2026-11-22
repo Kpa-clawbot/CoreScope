@@ -195,7 +195,14 @@ var migrations = [][]string{
 			updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
 		)`,
 	},
-	// v10: rate-limit counters shared by server replicas (RateLimitHit), one
+	// v10: a repeater_info revision for conditional edits. It counts saves
+	// from 1; a repeater without a row is at revision 0, so the rows that
+	// exist start at 1.
+	{
+		`ALTER TABLE repeater_info ADD COLUMN revision INTEGER NOT NULL DEFAULT 0`,
+		`UPDATE repeater_info SET revision = 1`,
+	},
+	// v11: rate-limit counters shared by server replicas (RateLimitHit), one
 	// row per key and fixed window (window_start in Unix seconds).
 	{
 		`CREATE TABLE rate_limits (

@@ -162,8 +162,8 @@ func TestMigrationV10AddsRateLimits(t *testing.T) {
 		t.Fatalf("Open v9 db: %v", err)
 	}
 	defer st.Close()
-	if v, err := st.SchemaVersion(); err != nil || v != 10 {
-		t.Fatalf("SchemaVersion = %d, %v; want 10", v, err)
+	if v, err := st.SchemaVersion(); err != nil || v != 11 {
+		t.Fatalf("SchemaVersion = %d, %v; want 11", v, err)
 	}
 	if ok, err := st.RateLimitHit(context.Background(), "k", time.Minute, 1, time.Unix(0, 0)); err != nil || !ok {
 		t.Fatalf("RateLimitHit on migrated db = %v, %v", ok, err)

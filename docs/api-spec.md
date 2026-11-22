@@ -164,7 +164,7 @@ Error codes you can get on the routes above:
 | `502` | `"mail provider unavailable"` (mail refresh) |
 | `503` | `"mail could not be sent, try again later"` |
 
-With user management on, every endpoint that needs `X-API-Key` also accepts an admin session (plus the CSRF header for unsafe methods). A request that sends `X-API-Key` is judged on the key alone. `GET /api/config/client` gains `"userManagement": {"enabled": true}` only when the feature is on; that block also carries `"companionLinking": true` on servers with the device-token and companion routes, which CoreDrive RX checks before it shows its login (an older server answers those paths with the SPA page).
+With user management on, every endpoint that needs `X-API-Key` also accepts an admin session (plus the CSRF header for unsafe methods). A request that sends `X-API-Key` is judged on the key alone. `GET /api/config/client` gains `"userManagement": {"enabled": true}` only when the feature is on; that block also carries `"companionLinking": true` on servers with the device-token and companion routes, which CoreDrive RX checks before it shows its login (an older server answers those paths with the SPA page), and `"repeaterTokens": true` on servers whose device tokens can ask for the `repeater:claim` and `repeater:edit` scopes and whose repeater edits take a `baseRevision` (a mobile client offers native repeater claims and edits only then).
 
 ---
 
@@ -528,7 +528,7 @@ Returns a JSON array (not wrapped in an object):
       "totalObservations":  number,
       "totalPackets":       number,   // same as totalTransmissions (backward compat)
       "packetsToday":       number,
-      "avgSnr":             number | null,
+      "avgSnr":             number | null,  // direct receptions only, see /health
       "lastHeard":          string (ISO) | null
     },
     // Direct-RF only, same shape and rule as GET /api/nodes/:pubkey/health.
@@ -643,7 +643,8 @@ Detailed health information for a single node.
   // Observers that received this node's OWN transmission off the air:
   // a flood packet whose last path hop resolves unambiguously to this
   // node, or a flood ADVERT it originated that arrived with an empty
-  // path. Only here do avgSnr/avgRssi describe this node's signal.
+  // path. These rows and stats.avgSnr below are the only signal numbers
+  // that describe this node.
   // Direct routes never qualify: their path is the remaining route,
   // not the travelled one.
   "observers": [
@@ -665,6 +666,10 @@ Detailed health information for a single node.
     "totalObservations":  number,
     "totalPackets":       number,    // same as totalTransmissions (backward compat)
     "packetsToday":       number,
+    // Mean SNR over every direct reception in "observers" (all samples, all
+    // observers). null when no observer heard the node directly. Before
+    // #2451 this averaged every transmission involving the node, relayed
+    // copies included.
     "avgSnr":             number | null,
     "avgHops":            number,    // rounded integer
     "lastHeard":          string (ISO) | null
@@ -756,7 +761,9 @@ Per-node analytics over a time range.
   "activityTimeline": [
     { "bucket": string (ISO),  "count": number }   // hourly buckets
   ],
-  "snrTrend": [
+  "snrTrend": [                     // direct receptions by fixed observers only
+                                     // (see heardBy), newest 500 in the window,
+                                     // oldest first
     {
       "timestamp":     string (ISO),
       "snr":           number,
@@ -765,10 +772,29 @@ Per-node analytics over a time range.
       "observer_name": string | null
     }
   ],
+  "heardBy": [                      // fixed observers that heard this node itself:
+                                     // the last path hop names it with 2 or more
+                                     // bytes and no other node shares that prefix,
+                                     // or a zero-hop advert. Sorted by medianSnr,
+                                     // best first; rows without an SNR last.
+    {
+      "observer_id":      string,
+      "observer_name":    string,
+      "count":            number,        // direct receptions in the window
+      "medianSnr":        number | null, // null: no reception carried an SNR
+      "p10Snr":           number | null,
+      "p90Snr":           number | null,
+      "recentMedianSnr":  number | null, // last 24 h; both change medians are
+      "earlierMedianSnr": number | null  // null unless the window is >= 3 days
+                                         // and each part has >= 3 receptions
+    }
+  ],
   "packetTypeBreakdown": [
     { "payload_type": number, "count": number }
   ],
-  "observerCoverage": [
+  "observerCoverage": [              // deprecated: every observer that saw a
+                                     // packet attributed to this node, relayed
+                                     // or not. The analytics page uses heardBy.
     {
       "observer_id":   string,
       "observer_name": string | null,
@@ -797,17 +823,38 @@ Per-node analytics over a time range.
     "availabilityPct":    number,     // 0–100
     "longestSilenceMs":   number,
     "longestSilenceStart": string (ISO) | null,
-    "signalGrade":        string,     // "A", "A-", "B+", "B", "C", "D"
-    "snrMean":            number,
-    "snrStdDev":          number,
+    "signalGrade":        string,     // "A", "A-", "B+", "B", "C", "D", from
+                                      // snrMean and snrStdDev
+    "snrMean":            number,     // mean of heardBy medianSnr: each observer
+                                      // counts once; 0 when there is none
+    "snrStdDev":          number,     // spread of those medians
     "relayPct":           number,     // % of packets with >1 hop
     "totalPackets":       number,
-    "uniqueObservers":    number,
+    "uniqueObservers":    number,     // fixed observers in heardBy
     "uniquePeers":        number,
     "avgPacketsPerDay":   number
   }
 }
 ```
+
+When `clientRxCoverage` is enabled the response also carries
+`mobileReceptions` (absent otherwise, and when there are none):
+
+```jsonc
+"mobileReceptions": {
+  "receptions":    number,        // mobile client receptions since timeRange.from
+  "receivers":     number,        // distinct receiving clients
+  "medianSnr":     number | null,
+  "maxDistanceKm": number | null  // null when the node has no position
+}
+```
+
+A reception counts when its heard key is this node's full key, its 8-byte
+discover prefix, or a 2- or 3-byte prefix that no other known node and no
+retired repeater shares. These receptions do not enter `computedStats`.
+
+`hopDistribution`, `peerInteractions` and `computedStats.relayPct` are
+deprecated: the analytics page will stop showing them.
 
 ### Response `404`
 
@@ -2108,9 +2155,6 @@ Network topology analytics.
       "pubkeyB": string | null
     }
   ],
-  "hopsVsSnr": [
-    { "hops": number, "count": number, "avgSnr": number }
-  ],
   "observers": [
     { "id": string, "name": string }
   ],
@@ -2318,7 +2362,7 @@ Hop distance analytics.
       "toPk":     string,
       "dist":     number,      // km
       "type":     string,      // "R↔R" | "C↔R" | "C↔C"
-      "snr":      number | null,
+      "obsCount": number,      // observations of this node pair
       "hash":     string,
       "timestamp": string (ISO)
     }

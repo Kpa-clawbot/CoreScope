@@ -181,7 +181,11 @@ var pgMigrations = [][]string{
 			updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL
 		)`,
 	},
-	{ // v10: rate_limits
+	{ // v10: repeater_info revision (see migrations[9])
+		`ALTER TABLE repeater_info ADD COLUMN revision BIGINT NOT NULL DEFAULT 0`,
+		`UPDATE repeater_info SET revision = 1`,
+	},
+	{ // v11: rate_limits
 		`CREATE TABLE rate_limits (
 			key TEXT COLLATE "C" NOT NULL,
 			window_start BIGINT NOT NULL,

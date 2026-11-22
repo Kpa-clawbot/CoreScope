@@ -194,6 +194,27 @@ test('clears mc-dark-tile-provider localStorage key', () => {
   assert.strictEqual(env.localStorage.getItem('mc-dark-tile-provider'), null);
 });
 
+test('clears the map picked in a layer picker (mc-tile-pinned) through its setter', () => {
+  const env = loadCustomizer();
+  const calls = [];
+  env.ctx.window.MC_setPinnedTileProvider = (id) => { calls.push(id); env.localStorage.removeItem('mc-tile-pinned'); return true; };
+  env.localStorage.setItem('mc-tile-pinned', 'eox-s2-2025');
+  env.api.resetAll();
+  assert.deepStrictEqual(calls, [null], 'MC_setPinnedTileProvider(null) called once');
+  assert.strictEqual(env.localStorage.getItem('mc-tile-pinned'), null);
+});
+
+test('a light/dark map choice in the customizer clears the layer-picker pin first', () => {
+  const env = loadCustomizer();
+  const calls = [];
+  env.ctx.window.MC_setPinnedTileProvider = (id) => { calls.push(['pin', id]); return true; };
+  env.ctx.window.MC_setLightTileProvider = (id) => { calls.push(['light', id]); return true; };
+  env.ctx.window.MC_setDarkTileProvider = (id) => { calls.push(['dark', id]); return true; };
+  assert.strictEqual(env.api.setThemeTile('light', 'carto-voyager'), true);
+  assert.strictEqual(env.api.setThemeTile('dark', 'positron-dark'), true);
+  assert.deepStrictEqual(calls, [['pin', null], ['light', 'carto-voyager'], ['pin', null], ['dark', 'positron-dark']]);
+});
+
 test('removes data-cb-preset body attribute', () => {
   const env = loadCustomizer();
   env.body.setAttribute('data-cb-preset', 'deut');

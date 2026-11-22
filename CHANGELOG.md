@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- **More map providers** (#2428) - new groups, each off until the operator sets `map.tiles.providers.<group>.enabled: true` (an upgrade changes nothing in the picker): EOX (Sentinel-2 satellite 2025 and 2016, Terrain Light, place-label overlays), OSM France (Humanitarian, CyclOSM, OSM Gray, OSM Gray Dark), and the vector styles OpenFreeMap (Liberty, Bright, Positron, Dark, Fiord) and VersaTiles (Colorful, Muted, Gray, Colorful Dark, Gray Dark). Check each group's terms before turning it on: EOX 2025 imagery is non-commercial (CC BY-NC-SA 4.0), OSM France is volunteer-run fair use.
+- **Your own tile servers** - `map.tiles.custom` adds raster (XYZ), vector (MapLibre style) and raster overlay entries as `custom-<id>`, usable in `darkDefault` / `lightDefault`. Invalid entries are skipped with a console warning.
+- **Overlays** - a hillshade overlay shaded in the browser from Terrarium elevation tiles (`map.tiles.providers.hillshade.url` can point at a mirror) and EOX place labels, ticked from a new Overlays group in the picker (each with its group turned on).
+- **The picked map is saved** - a map pinned in the picker survives a reload and applies on every page (the small maps without a picker use it when it suits the current theme); **Auto** clears it.
+- **MapLibre GL vendored** in `public/vendor/` and lazy-loaded (about 380 KB gzipped) only when a vector map is picked; without WebGL the map falls back to the default raster map.
 - **PostgreSQL as an alternative database** - set `db.driver` to `postgres` and `db.dsn` (or `DB_DRIVER` / `DB_DSN`). SQLite stays the default and nothing migrates automatically. The ingestor is the only writer; the server connects with a read-only role and refuses to start if its role can write. Optional user accounts stay in the SQLite `users.db` unless you opt in to keeping them in PostgreSQL (`userManagement.dsn` / `DB_DSN_ACCOUNTS`, their own role, several server replicas; `corescope-migrate copy-users` moves an existing `users.db`). See [docs/postgresql.md](docs/postgresql.md).
 - `corescope-migrate copy -from <db> -to <db>` and `corescope-migrate verify -a <db> -b <db>` move an installation between SQLite and Postgres in either direction and compare the result. `<db>` is `sqlite:<path>` or a `postgres://` URL. The copy refuses a non-empty target and is verified before it commits. See [cmd/migrate/README.md](cmd/migrate/README.md).
 - The Docker image takes `DB_DSN_INGESTOR` (writer role) and `DB_DSN_SERVER` (read-only role), so the server process never sees the writer credentials.
@@ -29,10 +34,14 @@
 - `scripts/postgres-roles.sh` refuses a `PG_ADMIN_URL` that contains a password, and refuses to adopt a database or role it did not create unless `CORESCOPE_ADOPT=1`.
 
 ### Changed
+- **Every map page follows the provider choice**, including the home page mini-map, with one shared picker (Auto, Street, Topographic, Satellite, Overlays).
+- `docs/deployment.md` Map Tile Providers rewritten to match the real config keys.
 - `GET /api/perf` `sqlite` block gains `engine` (`"sqlite"` or `"postgres"`). On Postgres `dbSizeMB` is the database size, `rows` are planner estimates, and the WAL and freelist figures are 0. The Perf page labels the card and hides the WAL and freelist rows accordingly.
 - On Postgres, `GET /api/perf/sqlite` answers 404 and `GET /api/backup` answers 501 (use `pg_dump`).
-- `users.db` migrates to schema v10 with user accounts on (a `rate_limits` table, shared by several server replicas for the account rate limits and notification claims). A v3.18.x binary refuses it afterwards, so keep the pre-upgrade copy for a rollback.
+- `users.db` migrates to schema v11 with user accounts on (a `rate_limits` table, shared by several server replicas for the account rate limits and notification claims). A v3.18.x binary refuses it afterwards, so keep the pre-upgrade copy for a rollback.
 - CI runs the Go tests and every E2E shard against both SQLite and Postgres, and a new musl job tests the static build.
+
+Closes #2428.
 
 ## [3.18.0] - 2026-11-17
 

@@ -52,9 +52,19 @@ var observersColumns = []struct{ name, ddl string }{
 	{"can_relay_seen", "can_relay_seen INTEGER DEFAULT 0"},
 }
 
+// The observers key packets_v joins observations.observer_idx on.
+// legacyObserversKey is the implicit rowid of a table not yet rebuilt; in
+// SQLite both name the same value (idx is the rowid alias), so the view
+// resolves the same observer either way.
+const (
+	observersKey       = "idx"
+	legacyObserversKey = "rowid"
+)
+
 // packetsViewSQL is the single definition of packets_v (v3 schema:
-// observations.observer_idx → observers.idx).
-const packetsViewSQL = `
+// observations.observer_idx → observers.<key>).
+func packetsViewSQL(key string) string {
+	return `
 	CREATE VIEW packets_v AS
 		SELECT o.id, COALESCE(o.raw_hex, t.raw_hex) AS raw_hex,
 			   datetime(o.timestamp, 'unixepoch') AS timestamp,
@@ -64,16 +74,29 @@ const packetsViewSQL = `
 			   t.created_at
 		FROM observations o
 		JOIN transmissions t ON t.id = o.transmission_id
-		LEFT JOIN observers obs ON obs.idx = o.observer_idx AND (obs.inactive IS NULL OR obs.inactive = 0)`
+		LEFT JOIN observers obs ON obs.` + key + ` = o.observer_idx AND (obs.inactive IS NULL OR obs.inactive = 0)`
+}
 
 // EnsurePacketsView drops and recreates packets_v. The ingestor calls it on
 // every boot so the view always matches packetsViewSQL; fresh installs need
-// it or readers get "no such table: packets_v".
+// it or readers get "no such table: packets_v". It joins on idx once
+// observers has it, and on the rowid while observers is still the legacy
+// shape: before the rebuild, or for good when the rebuild refused. SQLite
+// checks a view's columns only when it is read, so an idx join over a
+// legacy table would be created fine and then fail every read.
 func EnsurePacketsView(rw *sql.DB) error {
+	cols, idxIsPK, err := observersColumnsInfo(context.Background(), rw)
+	if err != nil {
+		return fmt.Errorf("inspect observers: %w", err)
+	}
+	key := observersKey
+	if len(cols) > 0 && !idxIsPK {
+		key = legacyObserversKey
+	}
 	if _, err := rw.Exec(`DROP VIEW IF EXISTS packets_v`); err != nil {
 		return fmt.Errorf("drop packets_v: %w", err)
 	}
-	if _, err := rw.Exec(packetsViewSQL); err != nil {
+	if _, err := rw.Exec(packetsViewSQL(key)); err != nil {
 		return fmt.Errorf("create packets_v: %w", err)
 	}
 	return nil
@@ -185,7 +208,9 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 		}
 	}
 	if len(unknown) > 0 {
-		return fmt.Errorf("observers has columns outside the canonical shape (%s); refusing to rebuild it — they would be dropped", strings.Join(unknown, ", "))
+		return fmt.Errorf("observers has columns outside the canonical shape (%s); refusing to rebuild it — they would be dropped. "+
+			"To continue, save their data and drop or rename them (ALTER TABLE observers DROP COLUMN <name>), "+
+			"or run the previous CoreScope version", strings.Join(unknown, ", "))
 	}
 	if !hasCol["id"] {
 		return fmt.Errorf("observers has no id column; refusing to rebuild it")
@@ -195,7 +220,9 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 		return fmt.Errorf("count NULL observer ids: %w", err)
 	}
 	if nullIDs > 0 {
-		return fmt.Errorf("observers has %d row(s) with NULL id; refusing to rebuild it (the new id column is NOT NULL)", nullIDs)
+		return fmt.Errorf("observers has %d row(s) with NULL id; refusing to rebuild it (the new id column is NOT NULL). "+
+			"To continue, delete or fix those rows (SELECT rowid, * FROM observers WHERE id IS NULL), "+
+			"or run the previous CoreScope version", nullIDs)
 	}
 
 	defs := make([]string, 0, len(observersColumns))
@@ -245,7 +272,7 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 	for _, s := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_observers_last_seen ON observers(last_seen)`,
 		`CREATE INDEX IF NOT EXISTS idx_observers_iata_norm ON observers(UPPER(TRIM(iata)))`,
-		packetsViewSQL,
+		packetsViewSQL(observersKey),
 	} {
 		if _, err := tx.ExecContext(ctx, s); err != nil {
 			return fmt.Errorf("observers rebuild: %q: %w", s, err)

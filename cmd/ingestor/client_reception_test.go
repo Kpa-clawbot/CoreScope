@@ -823,3 +823,40 @@ func TestHandleClientPacketRejectsNonHexPubkey(t *testing.T) {
 		t.Fatalf("non-hex pubkey must write nothing, got %d receptions, %d observers", nRecept, nObs)
 	}
 }
+
+// TestDeriveHeardKey_MatchesPacketpath pins deriveHeardKey to the shared
+// packetpath.HeardKey rule for every case that rule covers.
+func TestDeriveHeardKey_MatchesPacketpath(t *testing.T) {
+	cases := []struct {
+		name         string
+		routeType    int
+		payloadType  int
+		lastHop      string
+		advertPubkey string
+	}{
+		{"flood, 2-byte last hop", packetpath.RouteFlood, 0x05, "BB11", ""},
+		{"transport flood counts as flood", packetpath.RouteTransportFlood, 0x05, "bb11", ""},
+		{"3-byte last hop", packetpath.RouteFlood, 0x05, "bbccdd", ""},
+		{"1-byte last hop refused", packetpath.RouteFlood, 0x05, "BB", ""},
+		{"direct route with a path refused", packetpath.RouteDirect, 0x05, "bb11", ""},
+		{"transport direct with a path refused", packetpath.RouteTransportDirect, 0x05, "bb11", ""},
+		{"TRACE refused even on flood", packetpath.RouteFlood, packetpath.PayloadTRACE, "bb11", ""},
+		{"0-hop advert on flood", packetpath.RouteFlood, 0x04, "", "ABCDEF01"},
+		{"0-hop advert on direct (sendZeroHop)", packetpath.RouteDirect, 0x04, "", "abcdef01"},
+		{"empty path, no advert pubkey", packetpath.RouteFlood, 0x05, "", ""},
+		{"TRACE with empty path refused", packetpath.RouteFlood, packetpath.PayloadTRACE, "", "abcdef01"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var hops []string
+			if c.lastHop != "" {
+				hops = []string{"aa", c.lastHop}
+			}
+			wantKey, wantSrc, wantOK := packetpath.HeardKey(c.routeType, byte(c.payloadType), c.lastHop, c.advertPubkey)
+			key, keylen, src, ok := deriveHeardKey("rx", c.routeType, c.payloadType, hops, c.advertPubkey, c.advertPubkey != "", false, "")
+			if key != wantKey || src != wantSrc || ok != wantOK || keylen != len(wantKey)/2 {
+				t.Errorf("deriveHeardKey = (%q, %d, %q, %v), HeardKey = (%q, %q, %v)", key, keylen, src, ok, wantKey, wantSrc, wantOK)
+			}
+		})
+	}
+}

@@ -675,7 +675,6 @@ type distHopRecord struct {
 	ToPk       string
 	Dist       float64
 	Type       string // "R↔R", "C↔R", "C↔C"
-	SNR        *float64
 	Hash       string
 	Timestamp  string
 	HourBucket string
@@ -683,14 +682,12 @@ type distHopRecord struct {
 }
 
 // dedupeHopsByPair groups hops by unordered node-pair, keeps the max-distance
-// record per pair, and computes obsCount / bestSnr / medianSnr.  limit caps the
-// number of returned entries (sorted by distance descending).
+// record per pair, and computes obsCount. limit caps the number of returned
+// entries (sorted by distance descending).
 func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} {
 	type pairAgg struct {
 		best     *distHopRecord
 		obsCount int
-		maxSNR   *float64
-		snrs     []float64
 	}
 	pairMap := make(map[string]*pairAgg)
 	for i := range hops {
@@ -706,13 +703,6 @@ func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} 
 			pairMap[key] = agg
 		}
 		agg.obsCount++
-		if h.SNR != nil {
-			agg.snrs = append(agg.snrs, *h.SNR)
-			if agg.maxSNR == nil || *h.SNR > *agg.maxSNR {
-				v := *h.SNR
-				agg.maxSNR = &v
-			}
-		}
 		if agg.best == nil || h.Dist > agg.best.Dist {
 			agg.best = h
 		}
@@ -732,25 +722,10 @@ func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} 
 			break
 		}
 		h := pe.agg.best
-		var medianSNR *float64
-		if len(pe.agg.snrs) > 0 {
-			sorted := make([]float64, len(pe.agg.snrs))
-			copy(sorted, pe.agg.snrs)
-			sort.Float64s(sorted)
-			mid := len(sorted) / 2
-			if len(sorted)%2 == 0 {
-				v := (sorted[mid-1] + sorted[mid]) / 2
-				medianSNR = &v
-			} else {
-				v := sorted[mid]
-				medianSNR = &v
-			}
-		}
 		result = append(result, map[string]interface{}{
 			"fromName": h.FromName, "fromPk": h.FromPk,
 			"toName": h.ToName, "toPk": h.ToPk,
 			"dist": h.Dist, "type": h.Type,
-			"bestSnr": floatPtrOrNil(pe.agg.maxSNR), "medianSnr": floatPtrOrNil(medianSNR),
 			"obsCount": pe.agg.obsCount,
 			"hash":     h.Hash, "timestamp": h.Timestamp,
 		})
@@ -5804,7 +5779,7 @@ func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterS
 			FromName: a.Name, FromPk: a.PublicKey,
 			ToName: b.Name, ToPk: b.PublicKey,
 			Dist: roundedDist, Type: hopType,
-			SNR: tx.SNR, Hash: tx.Hash, Timestamp: tx.FirstSeen,
+			Hash: tx.Hash, Timestamp: tx.FirstSeen,
 			HourBucket: hourBucket, tx: tx,
 		})
 		hopDetails = append(hopDetails, distHopDetail{
@@ -7878,7 +7853,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 
 	hopCounts := map[int]int{}
 	var allHopsList []int
-	hopSnr := map[int][]float64{}
 	hopFreq := map[string]int{}
 	pairFreq := map[string]int{}
 	observerMap := map[string]string{} // observer_id → observer_name
@@ -7910,9 +7884,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		n := len(hops)
 		hopCounts[n]++
 		allHopsList = append(allHopsList, n)
-		if tx.SNR != nil {
-			hopSnr[n] = append(hopSnr[n], *tx.SNR)
-		}
 		for _, h := range hops {
 			// Area filter: only count hops belonging to nodes in the area.
 			if areaNodes != nil {
@@ -8152,24 +8123,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		topPairs = append(topPairs, entry)
 	}
 
-	// Hops vs SNR
-	hopsVsSnr := make([]map[string]interface{}, 0)
-	for h, snrs := range hopSnr {
-		if h > 20 {
-			continue
-		}
-		sum := 0.0
-		for _, v := range snrs {
-			sum += v
-		}
-		hopsVsSnr = append(hopsVsSnr, map[string]interface{}{
-			"hops": h, "count": len(snrs), "avgSnr": sum / float64(len(snrs)),
-		})
-	}
-	sort.Slice(hopsVsSnr, func(i, j int) bool {
-		return hopsVsSnr[i]["hops"].(int) < hopsVsSnr[j]["hops"].(int)
-	})
-
 	// Observers list
 	observers := make([]map[string]interface{}, 0)
 	for id, name := range observerMap {
@@ -8301,7 +8254,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		"hopDistribution":  hopDist,
 		"topRepeaters":     topRepeaters,
 		"topPairs":         topPairs,
-		"hopsVsSnr":        hopsVsSnr,
 		"observers":        observers,
 		"perObserverReach": perObserverReach,
 		"multiObsNodes":    multiObsNodes,
@@ -10010,8 +9962,6 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 	for _, n := range nodes {
 		packets := s.byNode[n.pk]
 		var packetsToday int
-		var snrSum float64
-		var snrCount int
 		// Certain evidence only (#2260): packets merely attributed to the node
 		// (an ambiguous 1-byte hop) still count in the stats below.
 		lastHeard := s.certainHeard[n.pk]
@@ -10029,10 +9979,6 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 			if pkt.FirstSeen > todayStart {
 				packetsToday++
 			}
-			if pkt.SNR != nil {
-				snrSum += *pkt.SNR
-				snrCount++
-			}
 			if pkt.ObserverID != "" {
 				relayObservers[pkt.ObserverID] = struct{}{}
 			}
@@ -10042,10 +9988,8 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 		observerRows := buildDirectObserverRows(directByObs, nonRelaySet, seenSet)
 		relayObserverCount := relayOnlyObserverCount(relayObservers, directByObs)
 
-		var avgSnr interface{}
-		if snrCount > 0 {
-			avgSnr = snrSum / float64(snrCount)
-		}
+		// Direct receptions only, see direct_heard.go.
+		avgSnr := directAvgSNR(directByObs)
 		var lhVal interface{}
 		if lastHeard != "" {
 			lhVal = lastHeard
@@ -10110,8 +10054,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	todayStart := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 
 	var packetsToday int
-	var snrSum float64
-	var snrCount int
 	var totalHops, hopCount int
 	// Certain evidence only (#2260): see GetBulkHealth.
 	lastHeard := s.certainHeard[pubkey]
@@ -10129,10 +10071,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		if pkt.FirstSeen > todayStart {
 			packetsToday++
 		}
-		if pkt.SNR != nil {
-			snrSum += *pkt.SNR
-			snrCount++
-		}
 		// Hop counting
 		hops := txGetParsedPath(pkt)
 		if len(hops) > 0 {
@@ -10148,10 +10086,8 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	observerRows := buildDirectObserverRows(directByObs, nonRelaySet, seenSet)
 	relayObserverCount := relayOnlyObserverCount(relayObservers, directByObs)
 
-	var avgSnr interface{}
-	if snrCount > 0 {
-		avgSnr = snrSum / float64(snrCount)
-	}
+	// Direct receptions only, see direct_heard.go.
+	avgSnr := directAvgSNR(directByObs)
 	avgHops := 0
 	if hopCount > 0 {
 		avgHops = int(math.Round(float64(totalHops) / float64(hopCount)))
@@ -10292,6 +10228,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	toISO := now.Format(time.RFC3339)
 	// Before s.mu: its rare inline rebuild must not run under the read lock.
 	_, pm := s.getCachedNodesAndPM()
+	// Also before s.mu, so the lock order stays s.mu → analyticsRecomputerMu.
+	directByObs := directHeardFor(s.loadDirectHeard(), pubkey)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -10344,19 +10282,11 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		}
 	}
 
-	// SNR trend
-	snrTrend := make([]SnrTrendEntry, 0)
-	for _, p := range packets {
-		if p.SNR != nil {
-			snrTrend = append(snrTrend, SnrTrendEntry{
-				Timestamp:    p.FirstSeen,
-				SNR:          floatPtrOrNil(p.SNR),
-				RSSI:         floatPtrOrNil(p.RSSI),
-				ObserverID:   strOrNil(p.ObserverID),
-				ObserverName: strOrNil(p.ObserverName),
-			})
-		}
-	}
+	// Signal: only receptions in which a fixed observer heard this node
+	// itself, from the direct-heard snapshot. A relayed copy measures the
+	// last relay's link, not this node's.
+	heardBy := heardByRows(directByObs, coveredFrom, now)
+	snrTrend := heardSnrTrend(directByObs, coveredFrom, snrTrendMax)
 
 	// Packet type breakdown
 	typeBuckets := map[int]int{}
@@ -10556,39 +10486,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 
 	longestSilenceMs, longestSilenceStart := longestSilence(certainKeys, coveredFrom, now)
 
-	// Signal grade & SNR stats
-	var snrMean, snrStdDev float64
-	if len(snrTrend) > 0 {
-		var sum float64
-		for _, e := range snrTrend {
-			if v, ok := e.SNR.(float64); ok {
-				sum += v
-			}
-		}
-		snrMean = sum / float64(len(snrTrend))
-		if len(snrTrend) > 1 {
-			var sqSum float64
-			for _, e := range snrTrend {
-				if v, ok := e.SNR.(float64); ok {
-					sqSum += (v - snrMean) * (v - snrMean)
-				}
-			}
-			snrStdDev = math.Sqrt(sqSum / float64(len(snrTrend)))
-		}
-	}
-
-	signalGrade := "D"
-	if snrMean > 15 && snrStdDev < 2 {
-		signalGrade = "A"
-	} else if snrMean > 15 {
-		signalGrade = "A-"
-	} else if snrMean > 12 && snrStdDev < 3 {
-		signalGrade = "B+"
-	} else if snrMean > 8 {
-		signalGrade = "B"
-	} else if snrMean > 3 {
-		signalGrade = "C"
-	}
+	// Signal grade & SNR stats, each observer weighted once.
+	snrMean, snrStdDev, signalGrade := signalFromMedians(heardBy)
 
 	var relayPct float64
 	if totalWithPath > 0 {
@@ -10603,6 +10502,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days, DataFrom: dataFrom, DataFromReason: dataFromReason, Partial: dataFrom != ""},
 		ActivityTimeline:    activityTimeline,
 		SnrTrend:            snrTrend,
+		HeardBy:             heardBy,
 		PacketTypeBreakdown: packetTypeBreakdown,
 		ObserverCoverage:    observerCoverage,
 		HopDistribution:     hopDistribution,
@@ -10617,7 +10517,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 			SnrStdDev:           round(snrStdDev, 1),
 			RelayPct:            relayPct,
 			TotalPackets:        totalPackets,
-			UniqueObservers:     len(observerCoverage),
+			UniqueObservers:     len(heardBy),
 			UniquePeers:         len(peerSlice),
 			AvgPacketsPerDay:    avgPacketsPerDay,
 		},

@@ -48,12 +48,6 @@
             "timestamp": {
               "type": "string"
             },
-            "bestSnr": {
-              "type": "number"
-            },
-            "medianSnr": {
-              "type": "number"
-            },
             "obsCount": {
               "type": "number"
             }
@@ -581,23 +575,6 @@
             },
             "pubkeyB": {
               "type": "nullable"
-            }
-          }
-        }
-      },
-      "hopsVsSnr": {
-        "type": "array",
-        "elementShape": {
-          "type": "object",
-          "keys": {
-            "hops": {
-              "type": "number"
-            },
-            "count": {
-              "type": "number"
-            },
-            "avgSnr": {
-              "type": "number"
             }
           }
         }

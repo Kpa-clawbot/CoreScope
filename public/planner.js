@@ -871,7 +871,7 @@
       map: null, tiles: null, layers: {}, nodeRenderer: null,
       rawNodes: [], nodes: [], nodeByCoord: new Map(), nodesState: 'loading', nodesPromise: null,
       mode: null, modeParams: {}, userMoved: false, source: null,
-      unlisten: [], themeObs: null, ro: null, roRaf: 0, sheetAuto: false,
+      unlisten: [], ro: null, roRaf: 0, sheetAuto: false,
       els: {
         map: root.querySelector('.mc-pl-map'),
         side: root.querySelector('.mc-pl-side'),
@@ -941,10 +941,10 @@
       Object.keys(MODULES).forEach(leaveModule);
       closePanel({ restoreFocus: false });
       s.unlisten.forEach(function (fn) { try { fn(); } catch (e) { /* already gone */ } });
-      if (s.themeObs) s.themeObs.disconnect();
+      if (s.tiles) s.tiles.destroy();
       if (s.ro) s.ro.disconnect();
       if (s.roRaf) UI.caf(s.roRaf);
-      if (s.map) { s.map.off(); s.map.remove(); }
+      window.MC_safeRemoveMap(s.map);
     } catch (e) {
       console.warn('[planner] destroy:', e);
     }
@@ -953,56 +953,11 @@
 
   // ─── Map ────────────────────────────────────────────────────────────────
 
-  function isDark() {
-    return typeof window.MC_isDarkTheme === 'function' ? !!window.MC_isDarkTheme() : false;
-  }
-
-  // Same tile handling as map.js: a theme-synced "auto" group the layer
-  // control can swap out, resolved through map-tile-providers.js.
-  function syncTiles() {
-    if (!S || !S.tiles || typeof window.MC_resolveTile !== 'function') return;
-    var dark = isDark();
-    var r;
-    try { r = window.MC_resolveTile(dark); } catch (e) { return; }
-    var t = S.tiles;
-    var opts = { attribution: r.attribution, maxZoom: r.maxZoom || 19 };
-    if (!t.base) {
-      t.base = L.tileLayer(r.url, opts).addTo(t.auto);
-    } else {
-      t.base.setUrl(r.url);
-      if (t.base.options) { t.base.options.attribution = r.attribution; t.base.options.maxZoom = opts.maxZoom; }
-    }
-    if (dark && r.refUrl) {
-      if (!t.ref) t.ref = L.tileLayer(r.refUrl, opts).addTo(t.auto);
-      else t.ref.setUrl(r.refUrl);
-    } else if (t.ref) {
-      t.auto.removeLayer(t.ref);
-      t.ref = null;
-    }
-    if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
-    if (S.map && S.map.attributionControl && S.map.attributionControl._update) {
-      try { S.map.attributionControl._update(); } catch (e) { /* not ready */ }
-    }
-  }
-
   function createMap() {
     var map = L.map(S.els.map, { zoomControl: true, worldCopyJump: true });
     S.map = map;
     map.setView(FALLBACK_VIEW.center, FALLBACK_VIEW.zoom);
-    S.tiles = { auto: L.layerGroup().addTo(map), base: null, ref: null };
-    syncTiles();
-    if (typeof window.MC_createLayerControl === 'function') {
-      try { window.MC_createLayerControl(map, S.tiles.auto, 'topleft'); } catch (e) { console.warn('[planner] layer control:', e); }
-    }
-    if (typeof MutationObserver === 'function') {
-      S.themeObs = new MutationObserver(function () { syncTiles(); });
-      S.themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    }
-    listen(window, 'mc-tile-provider-changed', function (e) {
-      var dark = isDark();
-      if (e && e.detail && e.detail.type && e.detail.type !== (dark ? 'dark' : 'light')) return;
-      syncTiles();
-    });
+    S.tiles = window.MC_attachAutoTiles(map, { controlPosition: 'topleft' });
 
     // Nodes sit in their own pane under the overlay pane, so legs always draw on top.
     map.createPane('mc-pl-nodes');

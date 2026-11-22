@@ -112,7 +112,8 @@ type Store struct {
 	hopMaintMu                 sync.Mutex         // serializes the hop index backfill and trim
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
-	stmtUpsertObserver         *sql.Stmt
+	stmtUpdateObserver         *sql.Stmt // UpsertObserverAt fast path; see upsertObserver
+	stmtUpsertObserver         *sql.Stmt // its INSERT fallback for a new observer
 	stmtGetObserverIdx         *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
@@ -607,9 +608,11 @@ func applySchema(db *sql.DB) error {
 	}
 
 	// Create/rebuild packets_v view (v3 schema: observer_idx → observers.idx).
-	// The Go server reads this view; without it fresh installs get "no such table: packets_v".
-	// On a legacy observers table (implicit rowid only) the view is rebuilt again
-	// by dbschema.Apply's observers rebuild once idx exists.
+	// cmd/server does not read it; external SQLite readers do, and without it
+	// fresh installs get "no such table: packets_v". On a legacy observers table
+	// (implicit rowid only) it joins on the rowid until dbschema.Apply's
+	// observers rebuild recreates it on idx, so it stays readable if the
+	// rebuild refuses.
 	if err := dbschema.EnsurePacketsView(db); err != nil {
 		return fmt.Errorf("packets_v view: %w", err)
 	}
@@ -1108,6 +1111,29 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
+	// Same SET as stmtUpsertObserver's DO UPDATE, args in the same order,
+	// with the id last for the WHERE.
+	s.stmtUpdateObserver, err = s.db.Prepare(`
+		UPDATE observers SET
+			name = COALESCE(?, name),
+			iata = COALESCE(?, iata),
+			last_seen = ` + lastSeenClampSQL(s.pg, "observers", "last_seen") + `,
+			packet_count = packet_count + 1,
+			model = COALESCE(?, model),
+			firmware = COALESCE(?, firmware),
+			client_version = COALESCE(?, client_version),
+			radio = COALESCE(?, radio),
+			battery_mv = COALESCE(?, battery_mv),
+			uptime_secs = COALESCE(?, uptime_secs),
+			noise_floor = COALESCE(?, noise_floor),
+			can_relay = COALESCE(?, can_relay),
+			can_relay_seen = CASE WHEN CAST(? AS BIGINT) IS NULL THEN can_relay_seen ELSE 1 END
+		WHERE id = ?
+	`)
+	if err != nil {
+		return err
+	}
+
 	s.stmtUpsertObserver, err = s.db.Prepare(`
 		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, can_relay, can_relay_seen)
 		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), CASE WHEN CAST(? AS BIGINT) IS NULL THEN 0 ELSE 1 END)
@@ -1438,13 +1464,10 @@ func (s *Store) UpsertObserverAt(id, name, iata string, meta *ObserverMeta, last
 	}
 	normalizedIATA := strings.TrimSpace(strings.ToUpper(iata))
 
-	model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay := observerMetaColumns(meta)
+	u := observerUpsert{id: id, name: name, iata: normalizedIATA, lastSeen: lastSeen, ingestNow: ingestNow}
+	u.model, u.firmware, u.clientVersion, u.radio, u.batteryMv, u.uptimeSecs, u.noiseFloor, u.canRelay = observerMetaColumns(meta)
 
-	_, err := s.stmtUpsertObserver.Exec(
-		id, name, normalizedIATA, lastSeen, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay, canRelay,
-		name, normalizedIATA, ingestNow, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay, canRelay,
-	)
-	if err != nil {
+	if err := s.upsertObserver(u); err != nil {
 		s.Stats.WriteErrors.Add(1)
 		return err
 	}
@@ -1453,6 +1476,51 @@ func (s *Store) UpsertObserverAt(id, name, iata string, meta *ObserverMeta, last
 	// Reactivate if this observer was previously marked inactive
 	s.db.Exec(`UPDATE observers SET inactive = 0 WHERE id = ? AND inactive = 1`, id)
 	return nil
+}
+
+// observerUpsert is one UpsertObserverAt write, shared by its UPDATE fast path
+// and its INSERT fallback.
+type observerUpsert struct {
+	id, name, iata, lastSeen, ingestNow string
+
+	model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay interface{}
+}
+
+// upsertObserver writes u with an UPDATE, and INSERTs only when no row has
+// that id. observers.idx is AUTOINCREMENT, and SQLite advances
+// sqlite_sequence for every INSERT it attempts, even one ON CONFLICT turns
+// into an update: as a plain upsert this would write the sequence page again
+// for every ingested packet. The fallback keeps its ON CONFLICT, so a row
+// created between the two statements is updated, not an error.
+func (s *Store) upsertObserver(u observerUpsert) error {
+	updated, err := s.updateObserver(u)
+	if err != nil || updated {
+		return err
+	}
+	return s.insertObserver(u)
+}
+
+// updateObserver applies u to an existing row and reports whether there was
+// one.
+func (s *Store) updateObserver(u observerUpsert) (bool, error) {
+	res, err := s.stmtUpdateObserver.Exec(
+		u.name, u.iata, u.ingestNow, u.lastSeen, u.model, u.firmware, u.clientVersion, u.radio, u.batteryMv, u.uptimeSecs, u.noiseFloor, u.canRelay, u.canRelay,
+		u.id,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// insertObserver is the INSERT ... ON CONFLICT DO UPDATE fallback.
+func (s *Store) insertObserver(u observerUpsert) error {
+	_, err := s.stmtUpsertObserver.Exec(
+		u.id, u.name, u.iata, u.lastSeen, u.lastSeen, u.model, u.firmware, u.clientVersion, u.radio, u.batteryMv, u.uptimeSecs, u.noiseFloor, u.canRelay, u.canRelay,
+		u.name, u.iata, u.ingestNow, u.lastSeen, u.model, u.firmware, u.clientVersion, u.radio, u.batteryMv, u.uptimeSecs, u.noiseFloor, u.canRelay, u.canRelay,
+	)
+	return err
 }
 
 // UpsertObserverRetained applies the metadata from a RETAINED status message
@@ -2175,10 +2243,7 @@ func (s *Store) LogStats() {
 // bytes being SNR, so neither proves a hop transmitted. Same rule as the
 // server's certain liveness (cmd/server/certain_heard.go relayHopHexLen).
 func pathHopsTransmitted(data *PacketData) bool {
-	if !packetpath.PathBytesAreHops(byte(data.PayloadType)) {
-		return false
-	}
-	return data.RouteType == packetpath.RouteFlood || data.RouteType == packetpath.RouteTransportFlood
+	return packetpath.PathHopsTransmitted(data.RouteType, byte(data.PayloadType))
 }
 
 // touchRelayNodesLocked refreshes nodes.last_seen for nodes observed as
@@ -2609,9 +2674,40 @@ func (s *Store) RecordNaiveSkew(observerID string, deltaSec int64, now time.Time
 	}
 	nowStr := now.UTC().Format(time.RFC3339)
 	cutoff := now.Add(-24 * time.Hour).UTC().Format(time.RFC3339)
-	// One INSERT-or-UPDATE round trip. ON CONFLICT path resets the rolling
-	// counter when the previous event is older than the 24h window, otherwise
-	// increments it.
+	// UPDATE first, INSERT only for an unknown observer, for the same reason
+	// as upsertObserver: an attempted INSERT advances sqlite_sequence.
+	updated, err := s.updateNaiveSkew(observerID, deltaSec, nowStr, cutoff)
+	if err != nil || updated {
+		return err
+	}
+	return s.insertNaiveSkew(observerID, deltaSec, nowStr, cutoff)
+}
+
+// updateNaiveSkew records a naive-clock event on an existing observer and
+// reports whether there was one. The rolling counter resets to 1 when the
+// previous event is older than the 24h window (cutoff), otherwise increments.
+func (s *Store) updateNaiveSkew(observerID string, deltaSec int64, nowStr, cutoff string) (bool, error) {
+	res, err := s.db.Exec(`
+		UPDATE observers SET
+			clock_skew_seconds = ?,
+			clock_last_naive_at = ?,
+			clock_skew_count_24h = CASE
+				WHEN clock_last_naive_at IS NULL OR clock_last_naive_at < ?
+					THEN 1
+				ELSE COALESCE(clock_skew_count_24h, 0) + 1
+			END
+		WHERE id = ?
+	`, deltaSec, nowStr, cutoff, observerID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// insertNaiveSkew is RecordNaiveSkew's INSERT ... ON CONFLICT DO UPDATE
+// fallback for an observer that has no row yet.
+func (s *Store) insertNaiveSkew(observerID string, deltaSec int64, nowStr, cutoff string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO observers (id, clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at)
 		VALUES (?, ?, 1, ?)

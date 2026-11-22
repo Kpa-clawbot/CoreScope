@@ -108,7 +108,9 @@ test('Every registry entry has a url function or string with {z}', () => {
   for (const id of Object.keys(reg)) {
     const p = reg[id];
     const url = typeof p.url === 'function' ? p.url() : p.url;
-    assert.ok(typeof url === 'string' && url.indexOf('{z}') >= 0, id + ' url must have {z}');
+    // A vector entry's url is its MapLibre style JSON, not an XYZ template.
+    if (p.format === 'vector') assert.ok(typeof url === 'string' && /^https:\/\//.test(url), id + ' style url must be https');
+    else assert.ok(typeof url === 'string' && url.indexOf('{z}') >= 0, id + ' url must have {z}');
     assert.ok(typeof p.attribution === 'string' && p.attribution.length > 0, id + ' needs attribution');
   }
 });
@@ -120,8 +122,13 @@ test('Every registry entry has a type of light or dark', () => {
   const reg = ctx.window.MC_TILE_PROVIDERS;
   assert.ok(Object.keys(reg).length >= 10, 'registry must contain all 10 providers when all enabled');
   for (const id of ALL_IDS) assert.ok(reg[id], 'missing provider: ' + id);
-  for (const id of Object.keys(reg)) {
+  // The original providers stay strictly light or dark; only entries added
+  // for #2428 (satellite) may be theme-neutral ('any').
+  for (const id of ALL_IDS) {
     assert.ok(reg[id].type === 'light' || reg[id].type === 'dark', id + ' must have type light or dark');
+  }
+  for (const id of Object.keys(reg)) {
+    assert.ok(['light', 'dark', 'any'].includes(reg[id].type), id + ' must have type light, dark or any');
   }
 });
 

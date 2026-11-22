@@ -119,8 +119,31 @@
         "_comment_usgs": "USGS topographical tile provider. Limited to zoom level 16.",
         "usgs": {
           "enabled": false
+        },
+        "_comment_eox": "EOX Sentinel-2 cloudless satellite (latest year and 2016), EOX Terrain Light, and the EOX place-labels overlay. No key. Off unless enabled is true. The 2016 imagery is CC BY 4.0; later years are CC BY-NC-SA 4.0 (non-commercial only) - a commercial deployment must leave it off or license them from EOX.",
+        "eox": {
+          "enabled": false
+        },
+        "_comment_osmfr": "OpenStreetMap France community servers: Humanitarian (HOT), CyclOSM (topographic, with hillshading and contours), and OSM Gray / OSM Gray Dark (the OSM France style shown in grayscale). No key, donation-funded fair use. Off unless enabled is true.",
+        "osmfr": {
+          "enabled": false
+        },
+        "_comment_openfreemap": "OpenFreeMap vector styles (Liberty, Bright, Positron, Dark, Fiord). No key, no limits. Loads the vendored MapLibre GL only when one of these is picked. Off unless enabled is true.",
+        "openfreemap": {
+          "enabled": false
+        },
+        "_comment_versatiles": "VersaTiles vector styles (Gray, Gray Dark, Muted, Colorful, Colorful Dark). No key. Loads the vendored MapLibre GL only when one of these is picked. Off unless enabled is true.",
+        "versatiles": {
+          "enabled": false
+        },
+        "_comment_hillshade": "Hillshade overlay, shaded in the browser from Terrarium elevation tiles. url defaults to AWS Open Data (the same bucket as terrain.tileUrl); point it at a mirror to self-host. Off unless enabled is true.",
+        "hillshade": {
+          "enabled": false,
+          "url": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
         }
-      }
+      },
+      "_comment_custom": "Your own tile servers. Each entry appears in the map picker as 'custom-<id>' and can be named in darkDefault/lightDefault. format 'raster' takes an XYZ url ({z}/{x}/{y}, optional {s} with subdomains); format 'vector' takes a MapLibre style JSON url. type is 'light', 'dark' or 'any'; category is 'street', 'topo' or 'satellite'. overlay true adds a raster overlay instead of a base map. url must be https://, http:// or a same-site path starting with '/'. At most 20 entries. Every value under map.tiles is sent to anonymous visitors: never put credentials in a URL, and restrict any provider key by domain in that provider's dashboard. A path starting with '/' resolves against the page's origin (on a static/CDN UI deployment, that is the UI host, not the API server). Example: {\"id\": \"ours\", \"label\": \"Our tile server\", \"type\": \"light\", \"category\": \"street\", \"format\": \"raster\", \"url\": \"https://tiles.example.org/{z}/{x}/{y}.png\", \"attribution\": \"(c) OpenStreetMap contributors\", \"maxZoom\": 19}",
+      "custom": []
     }
   },
   "home": {
