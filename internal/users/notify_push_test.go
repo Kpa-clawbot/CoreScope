@@ -74,7 +74,7 @@ func TestPushOutboxTracksWatchAndIgnoresEmailOptOut(t *testing.T) {
 		NodePubkey: nPkA, NodeName: "Milliways 1W", OccurredAt: clk.Now(), ExpiresAt: clk.Now().Add(time.Hour)}
 	states := []NotifyState{nState(u.ID, NotifyNodeOffline, nPkA, NotifyBad, clk.Now())}
 	for range 2 {
-		if err := st.ApplyNotifyChanges(nil, states, "analyzer", []PushEvent{event}); err != nil {
+		if err := st.ApplyNotifyChanges(nil, states, NotifyOutbox{PushAnalyzerID: "analyzer", PushEvents: []PushEvent{event}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -135,7 +135,7 @@ func TestPushOutboxRollbackKeepsPriorNotifyState(t *testing.T) {
 	next := nState(u.ID, NotifyNodeOffline, nPkA, NotifyBad, clk.Now())
 	event := PushEvent{UserID: u.ID, Event: NotifyNodeOffline, EventID: "event", Kind: "node.not_heard",
 		NodePubkey: nPkA, OccurredAt: clk.Now(), ExpiresAt: clk.Now().Add(time.Hour)}
-	if err := st.ApplyNotifyChanges(nil, []NotifyState{next}, "analyzer", []PushEvent{event}); err == nil {
+	if err := st.ApplyNotifyChanges(nil, []NotifyState{next}, NotifyOutbox{PushAnalyzerID: "analyzer", PushEvents: []PushEvent{event}}); err == nil {
 		t.Fatal("missing outbox unexpectedly committed")
 	}
 	if got := statesByKey(t, st)[prior.NotifyKey].State; got != NotifyGood {
@@ -228,7 +228,7 @@ func TestPrunePushState(t *testing.T) {
 				}
 				event := PushEvent{UserID: u.ID, Event: NotifyNodeOffline, EventID: "event", Kind: "node.not_heard",
 					NodePubkey: nPkA, OccurredAt: clk.Now(), ExpiresAt: clk.Now().Add(2 * time.Hour)}
-				if err := st.ApplyNotifyChanges(nil, nil, analyzer, []PushEvent{event}); err != nil {
+				if err := st.ApplyNotifyChanges(nil, nil, NotifyOutbox{PushAnalyzerID: analyzer, PushEvents: []PushEvent{event}}); err != nil {
 					t.Fatal(err)
 				}
 			}

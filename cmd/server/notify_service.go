@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/meshcore-analyzer/mailer"
@@ -31,10 +32,25 @@ type notifier struct {
 	externalErr string
 	// adaptive caches the learned offline thresholds (offlineWindows).
 	adaptive map[string]adaptiveEntry
+	// destinations receive every evaluation's changes (notifyDestination).
+	destinations []notifyDestination
 }
 
 func newNotifier(a *authService, src notifySource, now func() time.Time) *notifier {
-	return &notifier{a: a, src: src, now: now}
+	return &notifier{a: a, src: src, now: now, destinations: notifyDestinations(a, now)}
+}
+
+// workers starts each destination's own delivery loop until stop closes.
+func (n *notifier) workers(stop <-chan struct{}, wg *sync.WaitGroup) {
+	for _, d := range n.destinations {
+		if w, ok := d.(notifyWorker); ok {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				w.run(stop)
+			}()
+		}
+	}
 }
 
 // notifySendTimeout bounds one mail send inside a tick.
@@ -114,7 +130,9 @@ func (n *notifier) tick(ctx context.Context) {
 	if !n.src.ready() {
 		return
 	}
-	pushEpoch := n.a.relayDelivery.epoch.Load()
+	for _, d := range n.destinations {
+		d.beginTick()
+	}
 	started := time.Now()
 	now := n.now()
 	stale := n.checkIngest(now)
@@ -224,40 +242,36 @@ func (n *notifier) tick(ctx context.Context) {
 	res := evaluateNotifications(notifyInput{Now: now, Health: n.src.health(), LowMv: n.src.lowBatteryMv(),
 		Accounts: accounts, Prefs: prefs, Watches: watches, States: states, Nodes: nodes,
 		Heard: heard, SharedSeen: n.src.sharedPrefixSeen(infra), OfflineAfter: n.offlineWindows(pubkeys, now), NewestPacket: n.src.newestPacket(), Observers: observers, ObserverOwners: owners, IngestStale: stale, IngestResumedAt: n.ingestResumedAt, External: external})
-	if err := n.saveNotificationChanges(res, accounts, nodes, pushEpoch); err != nil {
-		log.Printf("[notify] save notification changes, nothing mailed this time: %v", err)
+	c := notifyChanges{byUser: res.Changes, accounts: accounts, prefs: byUser, nodes: nodes}
+	if err := n.saveNotificationChanges(res, c); err != nil {
+		log.Printf("[notify] save notification changes, nothing delivered this time: %v", err)
 		return
 	}
-	mails := n.deliver(ctx, now, res.Changes, accounts, byUser)
+	var counts strings.Builder
+	for _, d := range n.destinations {
+		sent := d.deliver(ctx, now, c)
+		if key := d.logKey(); key != "" {
+			fmt.Fprintf(&counts, " %s=%d", key, sent)
+		}
+	}
 	changes := 0
 	for _, list := range res.Changes {
 		changes += len(list)
 	}
-	log.Printf("[notify] tick: users=%d changes=%d mails=%d took=%.2fms lock=%.2fms",
-		len(accounts), changes, mails, msFloat(time.Since(started)), msFloat(lock))
+	log.Printf("[notify] tick: users=%d changes=%d%s took=%.2fms lock=%.2fms",
+		len(accounts), changes, counts.String(), msFloat(time.Since(started)), msFloat(lock))
 }
 
-func (n *notifier) saveNotificationChanges(res notifyResult, accounts map[int64]users.User, nodes map[string]notifyNode, pushEpoch uint64) error {
-	state := &n.a.relayDelivery
-	state.mu.RLock()
-	settings := n.a.relaySettings()
-	if settings.relay != nil {
-		defer state.mu.RUnlock()
-		var events []users.PushEvent
-		if !n.a.relayDeliveryPaused() && pushEpoch == state.epoch.Load() {
-			events = notifyPushEvents(res.Changes, accounts, nodes)
+// saveNotificationChanges writes the evaluation's states together with
+// every destination's staged rows, in one transaction.
+func (n *notifier) saveNotificationChanges(res notifyResult, c notifyChanges) error {
+	var out users.NotifyOutbox
+	for _, d := range n.destinations {
+		if done := d.stage(c, &out); done != nil {
+			defer done()
 		}
-		return n.a.st.ApplyNotifyChanges(res.Drop, res.States, settings.relayAnalyzerID, events)
 	}
-	state.mu.RUnlock()
-
-	if err := n.a.st.DeleteNotifyStates(res.Drop); err != nil {
-		return err
-	}
-	if len(res.States) > 0 {
-		return n.a.st.WriteNotifyStates(res.States)
-	}
-	return nil
+	return n.a.st.ApplyNotifyChanges(res.Drop, res.States, out)
 }
 
 // readExternal fetches and validates the externalAlerts feed. It returns
@@ -289,6 +303,9 @@ func (n *notifier) readExternal(now time.Time) *externalFeed {
 
 func msFloat(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
+// notifySkipEmailOff is the skip reason of a user who turned email off.
+const notifySkipEmailOff = "notifications off"
+
 // notifySkipReason says why a user's changes are not mailed; "" means send.
 // Skipped changes are already stored and are never mailed later.
 func notifySkipReason(u users.User, p users.NotifyPrefs, userMails, totalMails int, ns notifySettings) string {
@@ -298,7 +315,7 @@ func notifySkipReason(u users.User, p users.NotifyPrefs, userMails, totalMails i
 	case u.EmailBouncing:
 		return "address bounces"
 	case !p.Enabled:
-		return "notifications off"
+		return notifySkipEmailOff
 	case userMails >= ns.perUserPerDay:
 		return "daily limit for this user reached"
 	case totalMails >= ns.maxMailsPerDay:
@@ -307,19 +324,19 @@ func notifySkipReason(u users.User, p users.NotifyPrefs, userMails, totalMails i
 	return ""
 }
 
-// deliver sends one mail per user with changes, within the limits counted
+// deliver (emailDestination) sends one mail per user with changes, within the limits counted
 // from mail_log over the last 24 hours (this tick's mails included). A user
 // with changes but no preferences row was evaluated with the defaults; the
 // row (and so the unsubscribe token) is created before the first mail.
 // Once ctx is cancelled (shutdown) the remaining users are not mailed;
 // their changes are already stored, like any other skipped change. It
 // returns the number of mails sent.
-func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64][]notifyChange,
-	accounts map[int64]users.User, prefs map[int64]users.NotifyPrefs) int {
+func (d emailDestination) deliver(ctx context.Context, now time.Time, c notifyChanges) int {
+	changes, accounts, prefs := c.byUser, c.accounts, c.prefs
 	if len(changes) == 0 {
 		return 0
 	}
-	total, perUser, err := n.a.st.NotifyMailCounts(now.Add(-24 * time.Hour))
+	total, perUser, err := d.a.st.NotifyMailCounts(now.Add(-24 * time.Hour))
 	if err != nil {
 		log.Printf("[notify] count mails, nothing mailed this time: %v", err)
 		return 0
@@ -340,18 +357,22 @@ func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64
 		if !ok {
 			p = users.DefaultNotifyPrefs(uid)
 		}
-		if why := notifySkipReason(u, p, perUser[uid], total, n.a.set.notify); why != "" {
-			log.Printf("[notify] user #%d: %d change(s) not mailed: %s", uid, len(changes[uid]), why)
+		if why := notifySkipReason(u, p, perUser[uid], total, d.a.set.notify); why != "" {
+			// Users with email off are evaluated for the other destinations
+			// on every transition; that is their choice, not news.
+			if why != notifySkipEmailOff {
+				log.Printf("[notify] user #%d: %d change(s) not mailed: %s", uid, len(changes[uid]), why)
+			}
 			continue
 		}
 		if !ok {
-			if p, err = n.a.st.NotifyPrefsFor(uid); err != nil {
+			if p, err = d.a.st.NotifyPrefsFor(uid); err != nil {
 				log.Printf("[notify] user #%d: create preferences, %d change(s) not mailed: %v", uid, len(changes[uid]), err)
 				continue
 			}
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, notifySendTimeout)
-		err := n.a.sendMail(sendCtx, &u, users.NotifyMailPurpose, n.a.notifyMail(u, p, changes[uid]))
+		err := d.a.sendMail(sendCtx, &u, users.NotifyMailPurpose, d.a.notifyMail(u, p, changes[uid]))
 		cancel()
 		if err != nil {
 			continue // logged by sendMail; the changes stay recorded

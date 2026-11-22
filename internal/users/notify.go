@@ -398,7 +398,7 @@ func (s *Store) AllNotifyStates() ([]NotifyState, error) {
 // deleted since the caller read them are skipped instead of failing the
 // whole write on the foreign key.
 func (s *Store) WriteNotifyStates(list []NotifyState) error {
-	return s.ApplyNotifyChanges(nil, list, "", nil)
+	return s.ApplyNotifyChanges(nil, list, NotifyOutbox{})
 }
 
 func writeNotifyStates(tx *sql.Tx, list []NotifyState) error {
@@ -423,7 +423,7 @@ func writeNotifyStates(tx *sql.Tx, list []NotifyState) error {
 // DeleteNotifyStates deletes the rows of keys in one transaction; keys
 // without a row are ignored.
 func (s *Store) DeleteNotifyStates(keys []NotifyKey) error {
-	return s.ApplyNotifyChanges(keys, nil, "", nil)
+	return s.ApplyNotifyChanges(keys, nil, NotifyOutbox{})
 }
 
 func deleteNotifyStates(tx *sql.Tx, keys []NotifyKey) error {

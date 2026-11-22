@@ -94,6 +94,16 @@ func TestResolveNotifyRelayRequiresExplicitConfiguration(t *testing.T) {
 
 // A pushRelay block with an analyzerId is a manual enrollment; with only an
 // origin it locks self-service enrollment to that relay.
+// relayDest returns the notifier's push relay destination.
+func relayDest(n *notifier) *relayDestination {
+	for _, d := range n.destinations {
+		if r, ok := d.(*relayDestination); ok {
+			return r
+		}
+	}
+	panic("notifier has no push relay destination")
+}
+
 func TestPushRelayConfigModes(t *testing.T) {
 	noEnv := func(string) string { return "" }
 	withRelay := func(relay *NotifyRelayConfig) *UserManagementConfig {
@@ -187,7 +197,7 @@ func TestStartupPrunesPushStateWithNotificationsDisabled(t *testing.T) {
 				}
 				event := users.PushEvent{UserID: pat.me.ID, Event: users.NotifyNodeOffline, EventID: "event",
 					Kind: "node.not_heard", NodePubkey: evPkA, OccurredAt: f.clk.Now(), ExpiresAt: f.clk.Now().Add(time.Hour)}
-				if err := f.st.ApplyNotifyChanges(nil, nil, analyzer, []users.PushEvent{event}); err != nil {
+				if err := f.st.ApplyNotifyChanges(nil, nil, users.NotifyOutbox{PushAnalyzerID: analyzer, PushEvents: []users.PushEvent{event}}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -302,10 +312,10 @@ func TestNotifierQueuesAndRetriesPushWithEmailOff(t *testing.T) {
 	if mails := f.notifyMails(); len(mails) != 0 {
 		t.Fatalf("email opt-out produced %d messages", len(mails))
 	}
-	if err := f.n.dispatchPush(context.Background()); err != nil {
+	if err := relayDest(f.n).dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.n.dispatchPush(context.Background()); err != nil {
+	if err := relayDest(f.n).dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(attempts) != 1 {
@@ -314,7 +324,7 @@ func TestNotifierQueuesAndRetriesPushWithEmailOff(t *testing.T) {
 
 	f.clk.Advance(15 * time.Second)
 	restarted := newNotifier(f.srv.auth, f.src, f.clk.Now)
-	if err := restarted.dispatchPush(context.Background()); err != nil {
+	if err := relayDest(restarted).dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(attempts) != 2 {

@@ -156,7 +156,42 @@ func notifyPushRetry(err error, attempts int) time.Duration {
 	return (5 * time.Second) << attempts
 }
 
-func (n *notifier) pushLoop(stop <-chan struct{}) {
+// relayDestination queues push jobs for the enrolled relay with each
+// evaluation's states, and drains that queue on its own loop (run).
+type relayDestination struct {
+	a   *authService
+	now func() time.Time
+	// tickEpoch is the enrollment epoch when the current tick began. Only
+	// the notifier loop goroutine touches it.
+	tickEpoch uint64
+}
+
+func (d *relayDestination) beginTick() { d.tickEpoch = d.a.relayDelivery.epoch.Load() }
+
+// stage queues push jobs for the enrolled relay unless delivery is paused
+// or the enrollment changed since the tick began. It holds the delivery
+// state's read lock until the states and jobs are written, so a disconnect
+// or pause cannot slip between the check and the write.
+func (d *relayDestination) stage(c notifyChanges, out *users.NotifyOutbox) func() {
+	state := &d.a.relayDelivery
+	state.mu.RLock()
+	settings := d.a.relaySettings()
+	if settings.relay == nil {
+		state.mu.RUnlock()
+		return nil
+	}
+	if !d.a.relayDeliveryPaused() && d.tickEpoch == state.epoch.Load() {
+		out.PushAnalyzerID = settings.relayAnalyzerID
+		out.PushEvents = notifyPushEvents(c.byUser, c.accounts, c.nodes)
+	}
+	return state.mu.RUnlock
+}
+
+// deliver sends nothing within the tick: run drains the queue.
+func (d *relayDestination) deliver(context.Context, time.Time, notifyChanges) int { return 0 }
+func (d *relayDestination) logKey() string                                        { return "" }
+
+func (d *relayDestination) run(stop <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -173,23 +208,23 @@ func (n *notifier) pushLoop(stop <-chan struct{}) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := n.dispatchPush(ctx); err != nil && ctx.Err() == nil {
+			if err := d.dispatch(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("[notify] process push queue: %v", err)
 			}
 		}
 	}
 }
 
-func (n *notifier) dispatchPush(ctx context.Context) error {
-	state := &n.a.relayDelivery
+func (d *relayDestination) dispatch(ctx context.Context) error {
+	state := &d.a.relayDelivery
 	state.mu.RLock()
-	settings := n.a.relaySettings()
+	settings := d.a.relaySettings()
 	epoch := state.epoch.Load()
-	if settings.relay == nil || n.a.relayDeliveryPaused() {
+	if settings.relay == nil || d.a.relayDeliveryPaused() {
 		state.mu.RUnlock()
 		return nil
 	}
-	jobs, err := n.a.st.DuePushJobs(settings.relayAnalyzerID, n.now(), 25)
+	jobs, err := d.a.st.DuePushJobs(settings.relayAnalyzerID, d.now(), 25)
 	state.mu.RUnlock()
 	if err != nil {
 		return err
@@ -198,22 +233,22 @@ func (n *notifier) dispatchPush(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := n.dispatchPushJob(ctx, settings, job, epoch); err != nil {
+		if err := d.dispatchJob(ctx, settings, job, epoch); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (n *notifier) dispatchPushJob(ctx context.Context, settings notifySettings, job users.PushJob, epoch uint64) error {
-	state := &n.a.relayDelivery
+func (d *relayDestination) dispatchJob(ctx context.Context, settings notifySettings, job users.PushJob, epoch uint64) error {
+	state := &d.a.relayDelivery
 	state.mu.RLock()
 	defer state.mu.RUnlock()
-	if epoch != state.epoch.Load() || n.a.relayDeliveryPaused() {
+	if epoch != state.epoch.Load() || d.a.relayDeliveryPaused() {
 		return nil
 	}
-	st := n.a.st
-	eligible, err := st.PushJobEligible(job, n.now())
+	st := d.a.st
+	eligible, err := st.PushJobEligible(job, d.now())
 	if err != nil {
 		return err
 	}
@@ -231,7 +266,7 @@ func (n *notifier) dispatchPushJob(ctx context.Context, settings notifySettings,
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	now := n.now()
+	now := d.now()
 	delay := notifyPushRetry(err, job.Attempts)
 	if delay > 0 && now.Add(delay).Before(job.ExpiresAt) {
 		return st.RetryPushJob(job.ID, now.Add(delay))

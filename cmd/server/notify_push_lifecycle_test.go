@@ -49,7 +49,7 @@ func TestPushRelayPauseSkipsPushAndPreservesEmailAndLinks(t *testing.T) {
 		UserID: pat.me.ID, Event: users.NotifyNodeOffline, EventID: "before_pause",
 		Kind: "node.not_heard", NodePubkey: evPkA, OccurredAt: f.clk.Now(), ExpiresAt: f.clk.Now().Add(time.Hour),
 	}
-	if err := f.st.ApplyNotifyChanges(nil, nil, analyzer, []users.PushEvent{event}); err != nil {
+	if err := f.st.ApplyNotifyChanges(nil, nil, users.NotifyOutbox{PushAnalyzerID: analyzer, PushEvents: []users.PushEvent{event}}); err != nil {
 		t.Fatal(err)
 	}
 	if jobs, err := f.st.DuePushJobs(analyzer, f.clk.Now(), 10); err != nil || len(jobs) != 2 {
@@ -76,7 +76,7 @@ func TestPushRelayPauseSkipsPushAndPreservesEmailAndLinks(t *testing.T) {
 	if len(f.notifyMails()) != 1 {
 		t.Fatal("paused delivery affected email")
 	}
-	if err := f.n.dispatchPush(context.Background()); err != nil {
+	if err := relayDest(f.n).dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 0 {
@@ -93,7 +93,7 @@ func TestPushRelayPauseSkipsPushAndPreservesEmailAndLinks(t *testing.T) {
 		t.Fatalf("resume left a pause marker: %v", err)
 	}
 	f.tick()
-	if err := f.n.dispatchPush(context.Background()); err != nil {
+	if err := relayDest(f.n).dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 1 {

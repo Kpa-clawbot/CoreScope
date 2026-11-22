@@ -131,11 +131,7 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 			defer s.auth.wg.Done()
 			s.auth.notify.loop(s.auth.stop, set.notify.interval)
 		}()
-		s.auth.wg.Add(1)
-		go func() {
-			defer s.auth.wg.Done()
-			s.auth.notify.pushLoop(s.auth.stop)
-		}()
+		s.auth.notify.workers(s.auth.stop, &s.auth.wg)
 		log.Printf("[notify] node notifications enabled: every %s, at most %d mails per user and %d in total per 24 hours",
 			set.notify.interval, set.notify.perUserPerDay, set.notify.maxMailsPerDay)
 	}

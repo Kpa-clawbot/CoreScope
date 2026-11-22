@@ -228,8 +228,21 @@ type PushJob struct {
 }
 
 // ApplyNotifyChanges saves evaluator state and queues push deliveries atomically.
-func (s *Store) ApplyNotifyChanges(drop []NotifyKey, states []NotifyState, analyzerID string, events []PushEvent) error {
-	if len(drop) == 0 && len(states) == 0 && len(events) == 0 {
+// NotifyOutbox is what the delivery destinations queue with one
+// evaluation: rows written in the same transaction as its states, so an
+// alert is never recorded without its deliveries or the other way round.
+// Each destination fills its own fields.
+type NotifyOutbox struct {
+	// PushAnalyzerID and PushEvents: jobs for the push relay the analyzer
+	// is enrolled with, fanned out to the users' device links.
+	PushAnalyzerID string
+	PushEvents     []PushEvent
+}
+
+// ApplyNotifyChanges deletes drop, upserts states and queues out in one
+// transaction.
+func (s *Store) ApplyNotifyChanges(drop []NotifyKey, states []NotifyState, out NotifyOutbox) error {
+	if len(drop) == 0 && len(states) == 0 && len(out.PushEvents) == 0 {
 		return nil
 	}
 	tx, err := s.db.Begin()
@@ -243,8 +256,8 @@ func (s *Store) ApplyNotifyChanges(drop []NotifyKey, states []NotifyState, analy
 	if err := writeNotifyStates(tx, states); err != nil {
 		return err
 	}
-	if len(events) > 0 {
-		if err := queuePushEvents(tx, analyzerID, s.now(), events); err != nil {
+	if len(out.PushEvents) > 0 {
+		if err := queuePushEvents(tx, out.PushAnalyzerID, s.now(), out.PushEvents); err != nil {
 			return err
 		}
 	}
