@@ -152,6 +152,19 @@ func AssertReady(ro *sql.DB) error {
 			missing = append(missing, fmt.Sprintf("%s.%s", table, col))
 		}
 	}
+	// mustColAs reports a column that exists as present but wrong (what), and
+	// a missing one as missing.
+	mustColAs := func(table, col, what string) {
+		has, err := TableHasColumn(ro, table, col)
+		switch {
+		case err != nil:
+			missing = append(missing, fmt.Sprintf("%s.%s (probe error: %v)", table, col, err))
+		case has:
+			missing = append(missing, what)
+		default:
+			missing = append(missing, fmt.Sprintf("%s.%s", table, col))
+		}
+	}
 	mustTable := func(name string) {
 		has, err := TableExists(ro, name)
 		if err != nil {
@@ -210,8 +223,15 @@ func AssertReady(ro *sql.DB) error {
 	// observations.observer_idx references observers.idx, an explicit
 	// INTEGER PRIMARY KEY (== rowid) that survives dump-and-reload. A plain
 	// column named idx is not that: require the key itself, by the same test
-	// the ingestor's rebuild uses to decide it is done.
-	if cols, idxIsPK, err := observersColumnsInfo(context.Background(), ro); err != nil {
+	// the ingestor's rebuild uses to decide it is done. On Postgres the key is
+	// the identity column the baseline migration creates.
+	if idxIsPK, isPG, err := pgObserversIdxIsPK(ro); isPG {
+		if err != nil {
+			missing = append(missing, fmt.Sprintf("observers.idx (probe error: %v)", err))
+		} else if !idxIsPK {
+			mustColAs("observers", "idx", "observers.idx (not the primary key)")
+		}
+	} else if cols, idxIsPK, err := observersColumnsInfo(context.Background(), ro); err != nil {
 		missing = append(missing, fmt.Sprintf("observers.idx (probe error: %v)", err))
 	} else if !idxIsPK && slices.Contains(cols, "idx") {
 		missing = append(missing, "observers.idx (not the primary key)")
