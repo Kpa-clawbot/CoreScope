@@ -44,6 +44,10 @@
 .admin-notification-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 16px; }
 .admin-notification-actions .admin-notification-disconnect { color: var(--danger); }
 .admin-notification-description { margin: 8px 0 0; color: var(--text-muted); }
+.admin-notification-relay { margin-block-start: 16px; max-inline-size: 28rem; }
+.admin-notification-relay select { padding: 8px 10px; min-height: 48px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--input-bg); color: var(--text); font: inherit; box-sizing: border-box; }
+.admin-notification-card .account-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .admin-notification-details { margin: 16px 0 0; border-block-start: 1px solid var(--border); }
 .admin-notification-details div {
   display: grid;
@@ -63,4 +67,7 @@
 }
 @media (max-width: 540px) {
   .admin-notification-details div { grid-template-columns: minmax(0, 1fr); }
+}
+@media (pointer: fine) {
+  .admin-notification-relay select { min-height: 36px; padding: 4px 10px; }
 }

@@ -328,25 +328,27 @@ separate relay enrollment, analyzer data directory and accounts.
    address. Self-service enrollment requires a public DNS hostname on port 443.
    Route `GET /api/push-relay/enrollment-proof` to this analyzer without a login
    wall, redirect, or response cache so the relay can verify the public origin.
-2. CoreScope uses the production NodeScope relay (`https://push.nodescope.app`)
-   for self-service enrollment by default. For a staging deployment, set
-   `CORESCOPE_NODESCOPE_SELF_ENROLL_RELAY_ORIGIN=https://push-staging.nodescope.app`
-   in the CoreScope server environment and restart before enrolling. This
-   setting controls new enrollments. A connected analyzer keeps using the relay
-   it enrolled with. In CoreScope, open
-   **Admin → Notifications → NodeScope Push** and click **Enable**. CoreScope
-   proves control of its public origin and saves the verified enrollment on
-   the server.
+2. In CoreScope, open **Admin → Notifications → Mobile push**, choose a
+   relay and click **Enable**. **NodeScope** is the relay at
+   `https://push.nodescope.app`, for users of the NodeScope app. **Custom
+   relay** takes the HTTPS origin of any other relay that implements the push
+   relay contract; it reaches only the users of the app whose push
+   credentials it holds. CoreScope proves control of its public origin and
+   saves the verified enrollment on the server.
+
+   To fix the relay in the server configuration instead, add a `pushRelay`
+   block with only an `origin` (and optionally `platforms`) inside
+   `userManagement.notifications`. The card then enrolls only with that relay.
+   A connected analyzer keeps using the relay it enrolled with.
 3. When the card shows **Connected**, users can enable watched-node alerts from
    a NodeScope build that supports this relay and is signed in to this analyzer.
 
 CoreScope keeps the enrollment credential in the private
 `<users.db path>.push-relay.json` file next to the account database.
 Keep it private and on persistent storage. If a connection attempt is
-interrupted, click **Enable** again. CoreScope stores the retry credential in
-`<users.db path>.nodescope-pending-production.json` for production and
-`<users.db path>.nodescope-pending.json` for staging. Each relay has its own
-retry credential.
+interrupted, click **Enable** again with the same relay. CoreScope keeps the
+retry credential in a `<users.db path>.push-relay-pending-<hash>.json` file
+named after the relay, so each relay has its own.
 
 **Enroll manually**
 

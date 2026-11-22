@@ -273,15 +273,16 @@ test('unmount drops a response that arrives later', async () => {
 
 console.log('admin-notifications.js');
 
+const PRESETS = [{ id: 'nodescope', name: 'NodeScope', origin: 'https://push.nodescope.app', platforms: ['ios', 'android'], appUrl: 'https://nodescope.app' }];
+
 test('enrollment uses the admin API and only permits one in-flight Enable request', async () => {
   const endpoint = '/api/admin/notifications/push-relay';
-  const methods = [];
+  const calls = [];
   let finish;
   const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
     assert.strictEqual(p, endpoint);
-    assert.strictEqual(body, undefined, 'credentials and analyzer inputs are server-side');
-    methods.push(method);
-    return method === 'GET' ? OK({ state: 'available', publicOrigin: XSS })
+    calls.push([method, body]);
+    return method === 'GET' ? OK({ state: 'available', publicOrigin: XSS, presets: PRESETS })
       : new Promise((resolve) => { finish = resolve; });
   });
   const container = env.dom.mk('c');
@@ -289,25 +290,87 @@ test('enrollment uses the admin API and only permits one in-flight Enable reques
   await tick();
   assert(!container.innerHTML.includes('<img'), container.innerHTML);
   assert(container.innerHTML.includes('>&lt;img '), container.innerHTML);
+  assert(container.innerHTML.includes('id="adminEnablePushRelay" disabled'), 'nothing is picked by default: ' + container.innerHTML);
+  assert(container.innerHTML.includes('<option value="https://push.nodescope.app">NodeScope</option>'), container.innerHTML);
+  container.querySelector('#adminPushRelayChoice').handlers.change({ target: { value: 'https://push.nodescope.app' } });
+  assert(container.innerHTML.includes('users of the NodeScope app'), container.innerHTML);
+  assert(container.innerHTML.includes('href="https://nodescope.app"'), container.innerHTML);
   const click = container.querySelector('#adminEnablePushRelay').handlers.click;
   click();
   click();
   await tick();
-  assert.deepStrictEqual(methods, ['GET', 'POST']);
+  assert.strictEqual(JSON.stringify(calls), JSON.stringify([['GET', null], ['POST', { relayOrigin: 'https://push.nodescope.app' }]]));
   assert(container.innerHTML.includes('id="adminEnablePushRelay" disabled'), container.innerHTML);
-  finish(OK({ state: 'connected', analyzerId: 'an_test' }));
+  finish(OK({ state: 'connected', analyzerId: 'an_test', relayOrigin: 'https://push.nodescope.app', relayName: 'NodeScope' }));
   await tick();
   assert(container.innerHTML.includes('is-connected">Connected</span>'), container.innerHTML);
   assert(container.innerHTML.includes('an_test'), container.innerHTML);
+  assert(container.innerHTML.includes('NodeScope · https://push.nodescope.app'), container.innerHTML);
   assert(!container.innerHTML.includes('adminEnablePushRelay'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminPushRelayChoice'), container.innerHTML);
+});
+
+test('a custom relay needs an origin and is sent trimmed', async () => {
+  const posts = [];
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    if (method === 'GET') return OK({ state: 'available', presets: PRESETS });
+    posts.push(body);
+    return { ok: false, status: 400, data: { error: 'nope' } };
+  });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  container.querySelector('#adminPushRelayChoice').handlers.change({ target: { value: 'custom' } });
+  assert(container.innerHTML.includes('id="adminPushRelayOrigin"'), container.innerHTML);
+  assert(container.innerHTML.includes('id="adminEnablePushRelay" disabled'), 'empty origin: ' + container.innerHTML);
+  const html = container.innerHTML;
+  const enable = container.querySelector('#adminEnablePushRelay');
+  container.querySelector('#adminPushRelayOrigin').handlers.input({ target: { value: ' https://relay.example.org "x ' } });
+  assert.strictEqual(container.innerHTML, html, 'typing must not re-render (the field would lose focus)');
+  assert.strictEqual(enable.disabled, false);
+  container.querySelector('#adminPushRelayOrigin').handlers.input({ target: { value: '  ' } });
+  assert.strictEqual(enable.disabled, true);
+  container.querySelector('#adminPushRelayOrigin').handlers.input({ target: { value: ' https://relay.example.org "x ' } });
+  enable.handlers.click();
+  await tick();
+  assert(container.innerHTML.includes('value=" https://relay.example.org &quot;x "'), 'the typed origin survives an error: ' + container.innerHTML);
+  assert.strictEqual(JSON.stringify(posts), JSON.stringify([{ relayOrigin: 'https://relay.example.org "x' }]));
+  assert(container.innerHTML.includes('<option value="custom" selected>'), 'the pick survives an error: ' + container.innerHTML);
+});
+
+test('an origin locked in the server configuration offers no picker', async () => {
+  const posts = [];
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    if (method === 'GET') return OK({ state: 'available', relayOrigin: 'https://relay.example.org', originLocked: true });
+    posts.push(body);
+    return OK({ state: 'connected', relayOrigin: 'https://relay.example.org' });
+  });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  assert(!container.innerHTML.includes('adminPushRelayChoice'), container.innerHTML);
+  assert(container.innerHTML.includes('<dd>https://relay.example.org</dd>'), container.innerHTML);
+  container.querySelector('#adminEnablePushRelay').handlers.click();
+  await tick();
+  assert.strictEqual(JSON.stringify(posts), JSON.stringify([{ relayOrigin: 'https://relay.example.org' }]));
+});
+
+test('preset names and origins are escaped', async () => {
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', () =>
+    OK({ state: 'available', presets: [{ name: XSS, origin: 'https://x.example.org/"><img src=x>' }] }));
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  assert(!container.innerHTML.includes('<img'), container.innerHTML);
 });
 
 test('an enrollment failure leaves Enable available and escapes the API error', async () => {
   const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) =>
-    method === 'GET' ? OK({ state: 'available' }) : { ok: false, status: 422, data: { error: XSS } });
+    method === 'GET' ? OK({ state: 'available', presets: PRESETS }) : { ok: false, status: 422, data: { error: XSS } });
   const container = env.dom.mk('c');
   env.ctx.CSAdminNotifications.mount(container);
   await tick();
+  container.querySelector('#adminPushRelayChoice').handlers.change({ target: { value: 'https://push.nodescope.app' } });
   container.querySelector('#adminEnablePushRelay').handlers.click();
   await tick();
   assert(container.innerHTML.includes('role="alert">&lt;img '), container.innerHTML);

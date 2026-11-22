@@ -345,24 +345,27 @@ func (c *Config) UserManagementEnabled() bool {
 
 // userMgmtSettings is the validated, resolved form the auth service runs on.
 type userMgmtSettings struct {
-	dbPath                    string
-	adminEmails               map[string]bool
-	baseURL                   *url.URL // no trailing slash, no query or fragment
-	secureCookie              bool
-	sessionTTL                time.Duration
-	trustedProxies            []*net.IPNet
-	provider                  string // "brevo", "postal" or (e2etest builds only) "fake"
-	brevoAPIKey               string
-	postalBaseURL             string // no trailing slash
-	postalAPIKey              string
-	fromEmail                 string
-	fromName                  string
-	webhookSecret             string
-	proposals                 proposalSettings
-	notify                    notifySettings
-	nodeScopeSelfEnrollOrigin string
-	backup                    backupSettings
-	observerLogins            observerLoginSettings
+	dbPath         string
+	adminEmails    map[string]bool
+	baseURL        *url.URL // no trailing slash, no query or fragment
+	secureCookie   bool
+	sessionTTL     time.Duration
+	trustedProxies []*net.IPNet
+	provider       string // "brevo", "postal" or (e2etest builds only) "fake"
+	brevoAPIKey    string
+	postalBaseURL  string // no trailing slash
+	postalAPIKey   string
+	fromEmail      string
+	fromName       string
+	webhookSecret  string
+	proposals      proposalSettings
+	notify         notifySettings
+	// selfEnrollOrigin locks self-service enrollment to one relay: a
+	// pushRelay block with an origin and no analyzerId.
+	selfEnrollOrigin    string
+	selfEnrollPlatforms []string
+	backup              backupSettings
+	observerLogins      observerLoginSettings
 }
 
 const defaultSessionDays = 30
@@ -458,10 +461,11 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 	set.proposals = resolveProposals(u.ChannelProposals)
 	set.notify = resolveNotifications(u.Notifications)
 	if set.notify.enabled {
-		if u.Notifications.PushRelay == nil {
-			set.nodeScopeSelfEnrollOrigin = getenv(nodeScopeSelfEnrollOriginEnv)
-		}
-		if err = set.notify.configureRelay(u.Notifications.PushRelay, getenv); err != nil {
+		if relay := u.Notifications.PushRelay; relay != nil && strings.TrimSpace(relay.AnalyzerID) == "" {
+			if set.selfEnrollOrigin, set.selfEnrollPlatforms, err = resolveSelfEnrollRelay(relay); err != nil {
+				return nil, err
+			}
+		} else if err = set.notify.configureRelay(relay, getenv); err != nil {
 			return nil, err
 		}
 		if set.notify.external, err = resolveExternalAlerts(u.Notifications.ExternalAlerts); err != nil {

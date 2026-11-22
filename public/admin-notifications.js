@@ -8,6 +8,9 @@
     var mounted = ++sequence;
     var enrollment;
     var busy = null;
+    // The admin's relay pick survives re-renders: a preset origin, 'custom' or ''.
+    var choice = '';
+    var customOrigin = '';
 
     function render(message) {
       var detail = enrollment || {};
@@ -16,9 +19,7 @@
         connected: 'Users can enable watched-node alerts in the mobile app that uses this relay.',
         manual: 'This enrollment is managed in the server configuration.',
         notifications_disabled: 'Node notifications are disabled in the server configuration.',
-        unavailable: detail.relayOrigin
-          ? 'Self-service enrollment requires a publicly reachable HTTPS analyzer.'
-          : 'Set the server relay override to an official NodeScope HTTPS relay.'
+        unavailable: 'Self-service enrollment requires a publicly reachable HTTPS analyzer.'
       };
       var connected = detail.state === 'connected' || detail.state === 'manual';
       var paused = connected && detail.paused === true;
@@ -46,7 +47,10 @@
       if (detail.publicOrigin || detail.relayOrigin || detail.analyzerId) {
         html += '<dl class="admin-notification-details">';
         if (detail.publicOrigin) html += '<div><dt>Analyzer</dt><dd>' + escapeHtml(detail.publicOrigin) + '</dd></div>';
-        if (detail.relayOrigin) html += '<div><dt>Relay</dt><dd>' + escapeHtml(detail.relayOrigin) + '</dd></div>';
+        if (detail.relayOrigin) {
+          html += '<div><dt>Relay</dt><dd>' + (detail.relayName ? escapeHtml(detail.relayName) + ' · ' : '') +
+            escapeHtml(detail.relayOrigin) + '</dd></div>';
+        }
         if (detail.analyzerId) html += '<div><dt>Enrollment ID</dt><dd>' + escapeHtml(detail.analyzerId) + '</dd></div>';
         html += '</dl>';
       }
@@ -60,8 +64,13 @@
         html += '<p role="status">' + progress[busy] + '</p>';
       }
       if (message) html += '<p class="account-msg err" role="alert">' + escapeHtml(message) + '</p>';
+      var presets = detail.state === 'available' && !detail.originLocked && Array.isArray(detail.presets) ? detail.presets : [];
+      var preset = presets.filter(function (p) { return p.origin === choice; })[0];
       if (detail.state === 'available') {
-        html += '<p><button type="button" class="account-btn account-btn-primary" id="adminEnablePushRelay"' + (busy ? ' disabled' : '') + '>Enable</button></p>';
+        if (!detail.originLocked) html += relayPicker(presets, preset);
+        var ready = detail.originLocked || preset || (choice === 'custom' && customOrigin.trim() !== '');
+        html += '<div class="admin-notification-actions"><button type="button" class="account-btn account-btn-primary" id="adminEnablePushRelay"' +
+          (busy || !ready ? ' disabled' : '') + '>Enable</button></div>';
       } else if (connected) {
         var disabled = busy ? ' disabled' : '';
         html += '<div class="admin-notification-actions">';
@@ -82,7 +91,23 @@
       }
       container.innerHTML = html + '</section>';
       if (detail.state === 'available' && !busy) {
-        container.querySelector('#adminEnablePushRelay').addEventListener('click', function () { request('POST'); });
+        if (!detail.originLocked) {
+          container.querySelector('#adminPushRelayChoice').addEventListener('change', function (e) {
+            choice = e.target.value;
+            render();
+          });
+          if (choice === 'custom') {
+            // Toggle Enable in place: re-rendering would replace the field and drop focus.
+            container.querySelector('#adminPushRelayOrigin').addEventListener('input', function (e) {
+              customOrigin = e.target.value;
+              container.querySelector('#adminEnablePushRelay').disabled = customOrigin.trim() === '';
+            });
+          }
+        }
+        container.querySelector('#adminEnablePushRelay').addEventListener('click', function () {
+          var origin = detail.originLocked ? detail.relayOrigin : (choice === 'custom' ? customOrigin.trim() : choice);
+          if (origin) request('POST', { relayOrigin: origin });
+        });
       } else if (connected && !busy) {
         if (!disconnectPending) {
           container.querySelector('#adminPausePushRelay').addEventListener('click', function () {
@@ -102,6 +127,31 @@
       }
     }
 
+    // Presets are relays known to the server; Custom takes any HTTPS relay
+    // that implements the push relay contract. Nothing is picked by default.
+    function relayPicker(presets, preset) {
+      var options = '<option value=""' + (choice === '' ? ' selected' : '') + ' disabled>Choose a relay…</option>';
+      presets.forEach(function (p) {
+        options += '<option value="' + escapeHtml(p.origin) + '"' + (choice === p.origin ? ' selected' : '') + '>' +
+          escapeHtml(p.name) + '</option>';
+      });
+      options += '<option value="custom"' + (choice === 'custom' ? ' selected' : '') + '>Custom relay</option>';
+      var html = '<label class="account-field admin-notification-relay">Relay' +
+        '<select id="adminPushRelayChoice"' + (busy ? ' disabled' : '') + '>' + options + '</select></label>';
+      if (preset) {
+        html += '<p class="admin-notification-description">Alerts go to users of the ' + escapeHtml(preset.name) +
+          ' app, through ' + escapeHtml(preset.origin) + '.' +
+          (preset.appUrl ? ' <a href="' + escapeHtml(preset.appUrl) + '" target="_blank" rel="noopener">About ' + escapeHtml(preset.name) + '</a>' : '') +
+          '</p>';
+      } else if (choice === 'custom') {
+        html += '<label class="account-field admin-notification-relay">Relay origin' +
+          '<input type="url" id="adminPushRelayOrigin" placeholder="https://push.example.org" autocomplete="off" spellcheck="false" value="' +
+          escapeHtml(customOrigin) + '"' + (busy ? ' disabled' : '') + '></label>' +
+          '<p class="admin-notification-description">A relay reaches only the users of the app whose push credentials it holds.</p>';
+      }
+      return html;
+    }
+
     function request(method, body, previousError) {
       if (busy || mounted !== sequence) return;
       busy = method;
@@ -119,6 +169,7 @@
         if (!response.ok) { showError(CSAuth.errText(response)); return; }
         busy = null;
         enrollment = response.data;
+        if (enrollment && enrollment.state !== 'available') { choice = ''; customOrigin = ''; }
         render(previousError);
       }).catch(function () {
         if (mounted !== sequence) return;

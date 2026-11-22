@@ -13,12 +13,49 @@ import (
 	"github.com/meshcore-analyzer/users"
 )
 
-// NotifyRelayConfig enables a pre-enrolled push relay sender. The credential
+// NotifyRelayConfig configures the push relay. With analyzerId it enables a
+// pre-enrolled sender (manual enrollment); with only an origin it locks
+// self-service enrollment to that relay. The credential
 // comes from the environment so it never appears in the public configuration.
 type NotifyRelayConfig struct {
 	Origin     string   `json:"origin"`
 	AnalyzerID string   `json:"analyzerId"`
 	Platforms  []string `json:"platforms"`
+}
+
+func validRelayPlatforms(platforms []string) error {
+	if len(platforms) < 1 || len(platforms) > 2 {
+		return errors.New("pushRelay.platforms must contain ios or android")
+	}
+	seen := make(map[string]bool, len(platforms))
+	for _, platform := range platforms {
+		if (platform != "ios" && platform != "android") || seen[platform] {
+			return errors.New("pushRelay.platforms must contain distinct ios or android entries")
+		}
+		seen[platform] = true
+	}
+	return nil
+}
+
+// resolveSelfEnrollRelay reads a pushRelay block without an analyzerId: the
+// admin enrolls from the admin page, but only with this relay. Platforms
+// default to the matching preset's, or iOS and Android.
+func resolveSelfEnrollRelay(cfg *NotifyRelayConfig) (string, []string, error) {
+	origin, err := canonicalRelayOrigin(cfg.Origin)
+	if err != nil {
+		return "", nil, fmt.Errorf("pushRelay.origin: %w", err)
+	}
+	platforms := cfg.Platforms
+	if len(platforms) == 0 {
+		platforms = defaultRelayPlatforms
+		if preset, ok := relayPresetFor(origin); ok {
+			platforms = preset.Platforms
+		}
+	}
+	if err := validRelayPlatforms(platforms); err != nil {
+		return "", nil, err
+	}
+	return origin, append([]string(nil), platforms...), nil
 }
 
 func (ns *notifySettings) configureRelay(cfg *NotifyRelayConfig, getenv func(string) string) error {
@@ -29,15 +66,8 @@ func (ns *notifySettings) configureRelay(cfg *NotifyRelayConfig, getenv func(str
 	if credential == "" || strings.TrimSpace(cfg.AnalyzerID) == "" {
 		return errors.New("pushRelay requires analyzerId and CORESCOPE_PUSH_RELAY_CREDENTIAL")
 	}
-	if len(cfg.Platforms) < 1 || len(cfg.Platforms) > 2 {
-		return errors.New("pushRelay.platforms must contain ios or android")
-	}
-	seen := make(map[string]bool, len(cfg.Platforms))
-	for _, platform := range cfg.Platforms {
-		if (platform != "ios" && platform != "android") || seen[platform] {
-			return errors.New("pushRelay.platforms must contain distinct ios or android entries")
-		}
-		seen[platform] = true
+	if err := validRelayPlatforms(cfg.Platforms); err != nil {
+		return err
 	}
 	origin := strings.TrimSuffix(strings.TrimSpace(cfg.Origin), "/")
 	client, err := newNotifyRelayClient(origin, nil)

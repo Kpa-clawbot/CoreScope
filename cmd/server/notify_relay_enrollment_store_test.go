@@ -20,10 +20,11 @@ func TestPushRelayEnrollmentPersistsAndRestoresOnlyForItsPublicOrigin(t *testing
 		return &authService{set: &userMgmtSettings{dbPath: path, baseURL: base, notify: notifySettings{enabled: enabled}}}
 	}
 	first := newService(serverOrigin, true)
-	if err := first.activateRelayEnrollment(relay, "an_123", sender); err != nil {
+	if err := first.activateRelayEnrollment(relay, []string{"android"}, "an_123", sender); err != nil {
 		t.Fatal(err)
 	}
-	if active := first.relaySettings(); active.relay == nil || active.relayAnalyzerID != "an_123" || active.relayCredential != sender {
+	if active := first.relaySettings(); active.relay == nil || active.relayAnalyzerID != "an_123" || active.relayCredential != sender ||
+		strings.Join(active.relayPlatforms, ",") != "android" {
 		t.Fatal("enrollment did not immediately activate")
 	}
 	info, err := os.Stat(first.relayEnrollmentPath())

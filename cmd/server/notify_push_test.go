@@ -92,6 +92,40 @@ func TestResolveNotifyRelayRequiresExplicitConfiguration(t *testing.T) {
 	}
 }
 
+// A pushRelay block with an analyzerId is a manual enrollment; with only an
+// origin it locks self-service enrollment to that relay.
+func TestPushRelayConfigModes(t *testing.T) {
+	noEnv := func(string) string { return "" }
+	withRelay := func(relay *NotifyRelayConfig) *UserManagementConfig {
+		u := validUM()
+		u.Notifications = &NotificationsConfig{Enabled: true, PushRelay: relay}
+		return u
+	}
+	set, err := resolveUserManagement(withRelay(&NotifyRelayConfig{Origin: "https://Relay.Example.org/"}), "meshcore.db", noEnv)
+	if err != nil || set.selfEnrollOrigin != "https://relay.example.org" || strings.Join(set.selfEnrollPlatforms, ",") != "ios,android" || set.notify.relay != nil {
+		t.Fatalf("origin-only block: %+v, %v", set, err)
+	}
+	if _, err := resolveUserManagement(withRelay(&NotifyRelayConfig{Origin: "http://relay.example.org"}), "meshcore.db", noEnv); err == nil {
+		t.Fatal("accepted a locked origin without HTTPS")
+	}
+	manual := &NotifyRelayConfig{Origin: "https://relay.example.org", AnalyzerID: "an_manual", Platforms: []string{"ios"}}
+	if _, err := resolveUserManagement(withRelay(manual), "meshcore.db", noEnv); err == nil {
+		t.Fatal("accepted a manual enrollment without its credential")
+	}
+	set, err = resolveUserManagement(withRelay(manual), "meshcore.db", func(k string) string {
+		if k == "CORESCOPE_PUSH_RELAY_CREDENTIAL" {
+			return strings.Repeat("m", 43)
+		}
+		return ""
+	})
+	if err != nil || set.notify.relay == nil || set.notify.relayAnalyzerID != "an_manual" || set.selfEnrollOrigin != "" {
+		t.Fatalf("manual enrollment: %v", err)
+	}
+	if set, err := resolveUserManagement(withRelay(nil), "meshcore.db", noEnv); err != nil || set.selfEnrollOrigin != "" || set.notify.relay != nil {
+		t.Fatalf("no pushRelay block: %v", err)
+	}
+}
+
 func TestPruneUnconfiguredPushStateLogsOnlyRemovals(t *testing.T) {
 	f := newNotifyFixture(t, defaultNotifySettings())
 	pat := f.registerAndActivate(t, "pat@example.org", "Pat", pw)

@@ -11,10 +11,11 @@ import (
 )
 
 type relayEnrollment struct {
-	PublicOrigin     string `json:"public_origin"`
-	RelayOrigin      string `json:"relay_origin"`
-	AnalyzerID       string `json:"analyzer_id"`
-	SenderCredential string `json:"sender_credential"`
+	PublicOrigin     string   `json:"public_origin"`
+	RelayOrigin      string   `json:"relay_origin"`
+	AnalyzerID       string   `json:"analyzer_id"`
+	SenderCredential string   `json:"sender_credential"`
+	Platforms        []string `json:"platforms,omitempty"` // empty in files from before relay presets: iOS and Android
 }
 
 func (a *authService) relaySettings() notifySettings {
@@ -33,9 +34,11 @@ func (a *authService) configuredRelayEnrollment(record relayEnrollment) (*notify
 		return nil, errors.New("invalid push relay enrollment")
 	}
 	settings := a.set.notify
-	cfg := &NotifyRelayConfig{
-		Origin: record.RelayOrigin, AnalyzerID: record.AnalyzerID, Platforms: []string{"ios", "android"},
+	platforms := record.Platforms
+	if len(platforms) == 0 {
+		platforms = defaultRelayPlatforms
 	}
+	cfg := &NotifyRelayConfig{Origin: record.RelayOrigin, AnalyzerID: record.AnalyzerID, Platforms: platforms}
 	if err := settings.configureRelay(cfg, func(string) string { return record.SenderCredential }); err != nil {
 		return nil, err
 	}
@@ -43,7 +46,7 @@ func (a *authService) configuredRelayEnrollment(record relayEnrollment) (*notify
 }
 
 // activateRelayEnrollment is called only by the serialized admin enrollment handler.
-func (a *authService) activateRelayEnrollment(origin, analyzerID, senderCredential string) error {
+func (a *authService) activateRelayEnrollment(origin string, platforms []string, analyzerID, senderCredential string) error {
 	if !a.set.notify.enabled || a.relaySettings().relay != nil {
 		return errors.New("push relay enrollment is not possible in this configuration")
 	}
@@ -53,7 +56,7 @@ func (a *authService) activateRelayEnrollment(origin, analyzerID, senderCredenti
 	}
 	record := relayEnrollment{
 		PublicOrigin: publicOrigin, RelayOrigin: origin,
-		AnalyzerID: analyzerID, SenderCredential: senderCredential,
+		AnalyzerID: analyzerID, SenderCredential: senderCredential, Platforms: platforms,
 	}
 	settings, err := a.configuredRelayEnrollment(record)
 	if err != nil {
@@ -73,7 +76,7 @@ func (a *authService) activateRelayEnrollment(origin, analyzerID, senderCredenti
 // paused, and remove push state left by other analyzers.
 func (a *authService) restoreAndPrunePushState(notifications *NotificationsConfig) {
 	var keepAnalyzerID string
-	if notifications != nil && notifications.PushRelay != nil {
+	if notifications != nil && notifications.PushRelay != nil && notifications.PushRelay.AnalyzerID != "" {
 		keepAnalyzerID = notifications.PushRelay.AnalyzerID
 	} else {
 		var err error
@@ -95,7 +98,7 @@ func (a *authService) restoreAndPrunePushState(notifications *NotificationsConfi
 	}
 }
 
-// restoreRelayEnrollment runs before the workers and only if no manual config exists.
+// restoreRelayEnrollment runs before the workers and only without a manual enrollment.
 func (a *authService) restoreRelayEnrollment() (string, error) {
 	path := a.relayEnrollmentPath()
 	file, err := os.Open(path)

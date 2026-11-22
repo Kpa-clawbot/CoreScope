@@ -129,7 +129,7 @@ func TestPushRelayDisconnectRetriesWithoutRestoringDelivery(t *testing.T) {
 	a := f.srv.auth
 	pat := f.watcher(t, "pat@example.org", "Pat", evPkA)
 	linkLifecycleFixture(t, f, analyzer, "device", "sub_active", pat.me.ID)
-	if err := a.activateRelayEnrollment(relay.origin, analyzer, sender); err != nil {
+	if err := a.activateRelayEnrollment(relay.origin, nil, analyzer, sender); err != nil {
 		t.Fatal(err)
 	}
 	active := a.relaySettings()

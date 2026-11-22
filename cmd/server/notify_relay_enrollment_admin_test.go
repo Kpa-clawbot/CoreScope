@@ -16,15 +16,21 @@ type enrollmentRelayTransport func(*http.Request) (*http.Response, error)
 func (f enrollmentRelayTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestPushRelayAdminEnrollment(t *testing.T) {
-	t.Run("production default", func(t *testing.T) {
-		testRelayAdminEnrollment(t, "", "https://push.nodescope.app")
+	t.Run("NodeScope preset", func(t *testing.T) {
+		testRelayAdminEnrollment(t, nil, "https://push.nodescope.app", "https://push.nodescope.app", "ios,android")
 	})
-	t.Run("staging override", func(t *testing.T) {
-		testRelayAdminEnrollment(t, "https://push-staging.nodescope.app/", "https://push-staging.nodescope.app")
+	t.Run("custom relay", func(t *testing.T) {
+		testRelayAdminEnrollment(t, nil, " https://Relay.Example.org/ ", "https://relay.example.org", "ios,android")
+	})
+	t.Run("origin locked in the server configuration", func(t *testing.T) {
+		lock := func(a *authService) {
+			a.set.selfEnrollOrigin, a.set.selfEnrollPlatforms = "https://push-staging.nodescope.app", []string{"android"}
+		}
+		testRelayAdminEnrollment(t, lock, "", "https://push-staging.nodescope.app", "android")
 	})
 }
 
-func testRelayAdminEnrollment(t *testing.T, override, relayOrigin string) {
+func testRelayAdminEnrollment(t *testing.T, setup func(*authService), requested, relayOrigin, wantPlatforms string) {
 	t.Helper()
 	const adminEmail = "admin-enrollment@example.org"
 	const path = "/api/admin/notifications/push-relay"
@@ -32,7 +38,13 @@ func testRelayAdminEnrollment(t *testing.T, override, relayOrigin string) {
 	f := newAuthFixture(t, adminEmail)
 	a := f.srv.auth
 	a.set.notify.enabled = true
-	a.set.nodeScopeSelfEnrollOrigin = override
+	if setup != nil {
+		setup(a)
+	}
+	locked := a.set.selfEnrollOrigin != ""
+	enable := struct {
+		RelayOrigin string `json:"relayOrigin"`
+	}{requested}
 	admin := f.registerAndActivate(t, adminEmail, "Admin", pw)
 	member := f.registerAndActivate(t, "member-enrollment@example.org", "Member", pw)
 	if w := f.do(http.MethodGet, path, nil); w.Code != http.StatusUnauthorized {
@@ -40,13 +52,18 @@ func testRelayAdminEnrollment(t *testing.T, override, relayOrigin string) {
 	}
 	w := f.do(http.MethodGet, path, nil, as(admin))
 	var status relayEnrollmentStatus
-	if err := json.Unmarshal(w.Body.Bytes(), &status); w.Code != http.StatusOK || err != nil || status.State != "available" || status.RelayOrigin != relayOrigin {
+	wantStatusOrigin := ""
+	if locked {
+		wantStatusOrigin = relayOrigin
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &status); w.Code != http.StatusOK || err != nil || status.State != "available" ||
+		status.RelayOrigin != wantStatusOrigin || status.OriginLocked != locked || (len(status.Presets) == 0) == !locked {
 		t.Fatalf("available status: HTTP %d, %+v, %v", w.Code, status, err)
 	}
-	if w := f.do(http.MethodPost, path, nil, as(member)); w.Code != http.StatusForbidden {
+	if w := f.do(http.MethodPost, path, enable, as(member)); w.Code != http.StatusForbidden {
 		t.Fatalf("member enroll = %d", w.Code)
 	}
-	if w := f.do(http.MethodPost, path, nil, as(admin), header(csrfHeader, "invalid")); w.Code != http.StatusForbidden {
+	if w := f.do(http.MethodPost, path, enable, as(admin), header(csrfHeader, "invalid")); w.Code != http.StatusForbidden {
 		t.Fatalf("enroll without valid CSRF = %d", w.Code)
 	}
 	if w := f.do(http.MethodGet, proofPath, nil); w.Code != http.StatusNotFound {
@@ -98,17 +115,23 @@ func testRelayAdminEnrollment(t *testing.T, override, relayOrigin string) {
 		}
 		return w.Result(), nil
 	})
-	if w := f.do(http.MethodPost, path, nil, as(admin)); w.Code != http.StatusBadGateway {
+	if w := f.do(http.MethodPost, path, enable, as(admin)); w.Code != http.StatusBadGateway {
 		t.Fatalf("failed relay request returned %d", w.Code)
 	}
 	pending := relayPendingPath(a.set.dbPath, relayOrigin)
 	if info, err := os.Stat(pending); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("pending enrollment file missing or not private: %v", err)
 	}
-	w = f.do(http.MethodPost, path, nil, as(admin))
+	w = f.do(http.MethodPost, path, enable, as(admin))
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &status) != nil ||
 		status.State != "connected" || status.AnalyzerID != "an_test" || status.RelayOrigin != relayOrigin || strings.Contains(w.Body.String(), savedCredential) {
 		t.Fatalf("unexpected enrollment status: HTTP %d, state %q", w.Code, status.State)
+	}
+	if got := strings.Join(a.relaySettings().relayPlatforms, ","); got != wantPlatforms {
+		t.Fatalf("enrolled platforms = %s, want %s", got, wantPlatforms)
+	}
+	if _, isPreset := relayPresetFor(relayOrigin); (status.RelayName == "NodeScope") != isPreset {
+		t.Fatalf("relay name %q for %s", status.RelayName, relayOrigin)
 	}
 	if _, err := os.Stat(pending); !os.IsNotExist(err) {
 		t.Fatalf("pending enrollment file was not removed: %v", err)
@@ -116,7 +139,7 @@ func testRelayAdminEnrollment(t *testing.T, override, relayOrigin string) {
 	if w := f.do(http.MethodGet, proofPath, nil); w.Code != http.StatusNotFound {
 		t.Fatalf("proof survived enrollment: %d", w.Code)
 	}
-	if w := f.do(http.MethodPost, path, nil, as(admin)); w.Code != http.StatusOK || attempts != 2 {
+	if w := f.do(http.MethodPost, path, enable, as(admin)); w.Code != http.StatusOK || attempts != 2 {
 		t.Fatalf("connected analyzer re-enrolled: status %d, attempts %d", w.Code, attempts)
 	}
 }
@@ -130,12 +153,12 @@ func TestPushRelayAdminLifecycle(t *testing.T) {
 	admin := f.registerAndActivate(t, adminEmail, "Admin", pw)
 	member := f.registerAndActivate(t, "member-delivery@example.org", "Member", pw)
 	credential := strings.Repeat("a", 43)
-	if err := a.activateRelayEnrollment(nodeScopeSelfEnrollRelay, "an_lifecycle", credential); err != nil {
+	if err := a.activateRelayEnrollment("https://push.nodescope.app", nil, "an_lifecycle", credential); err != nil {
 		t.Fatal(err)
 	}
 	const otherCredential = "fixture-staging-pending"
-	legacyPending := relayPendingPath(a.set.dbPath, nodeScopeStagingRelay)
-	if err := os.WriteFile(legacyPending, []byte(otherCredential), 0o600); err != nil {
+	otherPending := relayPendingPath(a.set.dbPath, "https://push-staging.nodescope.app")
+	if err := os.WriteFile(otherPending, []byte(otherCredential), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	revokeCalls := 0
@@ -192,7 +215,7 @@ func TestPushRelayAdminLifecycle(t *testing.T) {
 		t.Fatalf("disconnected analyzer still has a saved credential: %v", err)
 	}
 	checkStatus(f.do(http.MethodDelete, path, nil, as(admin)), "available", false, false)
-	if contents, err := os.ReadFile(legacyPending); err != nil || string(contents) != otherCredential {
+	if contents, err := os.ReadFile(otherPending); err != nil || string(contents) != otherCredential {
 		t.Fatalf("disconnect modified another relay's pending file: %v", err)
 	}
 	if revokeCalls != 2 {
@@ -202,55 +225,91 @@ func TestPushRelayAdminLifecycle(t *testing.T) {
 
 func TestPushRelayPendingCredentialsAreScopedToTheRelay(t *testing.T) {
 	dbPath := t.TempDir() + "/users.db"
-	staging := relayPendingPath(dbPath, nodeScopeStagingRelay)
-	production := relayPendingPath(dbPath, nodeScopeSelfEnrollRelay)
-	if staging != dbPath+".nodescope-pending.json" || staging == production {
-		t.Fatal("pending paths do not preserve and isolate the legacy staging file")
+	first := relayPendingPath(dbPath, "https://push.nodescope.app")
+	second := relayPendingPath(dbPath, "https://relay.example.org")
+	if first == second || !strings.HasPrefix(first, dbPath+".push-relay-pending-") || !strings.HasSuffix(first, ".json") {
+		t.Fatalf("pending paths do not isolate relays: %s, %s", first, second)
 	}
-	const legacy = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	if err := writePrivateRelayJSON(staging, relayPendingEnrollment{PublicOrigin: testBase, SenderCredential: legacy}); err != nil {
-		t.Fatal(err)
+	if first != relayPendingPath(dbPath, "https://push.nodescope.app") {
+		t.Fatal("pending path is not stable for one relay")
 	}
-	credential, err := relayPendingCredential(production, testBase)
-	if err != nil || credential == "" || credential == legacy {
-		t.Fatalf("production attempted to reuse a legacy staging credential: %v", err)
+	credential, err := relayPendingCredential(first, testBase)
+	if err != nil || credential == "" {
+		t.Fatalf("first relay credential: %v", err)
 	}
-	if got, err := relayPendingCredential(production, testBase); err != nil || got != credential {
-		t.Fatalf("production retry did not reuse its own credential: %v", err)
+	other, err := relayPendingCredential(second, testBase)
+	if err != nil || other == "" || other == credential {
+		t.Fatalf("second relay reused the first relay's credential: %v", err)
 	}
-	if got, err := relayPendingCredential(staging, testBase); err != nil || got != legacy {
-		t.Fatalf("staging retry did not reuse the legacy credential: %v", err)
+	if got, err := relayPendingCredential(first, testBase); err != nil || got != credential {
+		t.Fatalf("retry did not reuse the relay's own credential: %v", err)
 	}
 }
 
-func TestNodeScopeSelfEnrollOriginAllowsOnlyOfficialRelays(t *testing.T) {
-	for raw, want := range map[string]string{
-		"":                                       "https://push.nodescope.app",
-		"https://push.nodescope.app/":            "https://push.nodescope.app",
-		" https://push-staging.nodescope.app/ ":  "https://push-staging.nodescope.app",
-		"https://push.nodescope.app.example.org": "",
-		"http://push.nodescope.app":              "",
-		"https://push.nodescope.app/v1":          "",
-		"/":                                      "",
-	} {
-		if got := nodeScopeSelfEnrollOrigin(raw); got != want {
-			t.Errorf("relay origin for %q = %q, want %q", raw, got, want)
-		}
-	}
+func TestPushRelaySelfEnrollChoice(t *testing.T) {
 	f := newAuthFixture(t)
 	a := f.srv.auth
-	a.set.nodeScopeSelfEnrollOrigin = "https://relay.example.org"
 	if got := a.relayEnrollmentStatus(); got.State != "notifications_disabled" {
-		t.Fatalf("disabled notifications with bad override: %+v", got)
+		t.Fatalf("disabled notifications: %+v", got)
 	}
 	a.set.notify.enabled = true
-	if got := a.relayEnrollmentStatus(); got.State != "unavailable" || got.RelayOrigin != "" {
-		t.Fatalf("new enrollment with bad override: %+v", got)
+	got := a.relayEnrollmentStatus()
+	if got.State != "available" || got.RelayOrigin != "" || got.OriginLocked || len(got.Presets) != 1 || got.Presets[0].Name != "NodeScope" {
+		t.Fatalf("available without a lock: %+v", got)
 	}
-	if err := a.activateRelayEnrollment(nodeScopeStagingRelay, "an_existing", strings.Repeat("a", 43)); err != nil {
+	for _, tc := range []struct{ requested, origin, platforms string }{
+		{"https://push.nodescope.app", "https://push.nodescope.app", "ios,android"},
+		{"https://Push.NodeScope.app/", "https://push.nodescope.app", "ios,android"},
+		{"https://relay.example.org:8443", "https://relay.example.org:8443", "ios,android"},
+		{"", "", ""},
+		{"http://relay.example.org", "", ""},
+		{"https://relay.example.org/v1", "", ""},
+		{"relay.example.org", "", ""},
+	} {
+		origin, platforms, problem := a.selfEnrollRelay(tc.requested)
+		if origin != tc.origin || strings.Join(platforms, ",") != tc.platforms || (problem == "") != (tc.origin != "") {
+			t.Errorf("selfEnrollRelay(%q) = %q, %v, %q", tc.requested, origin, platforms, problem)
+		}
+	}
+
+	a.set.selfEnrollOrigin, a.set.selfEnrollPlatforms = "https://relay.example.org", []string{"android"}
+	if got := a.relayEnrollmentStatus(); got.State != "available" || got.RelayOrigin != "https://relay.example.org" || !got.OriginLocked || got.Presets != nil {
+		t.Fatalf("locked origin status: %+v", got)
+	}
+	if origin, platforms, problem := a.selfEnrollRelay(""); origin != "https://relay.example.org" || strings.Join(platforms, ",") != "android" || problem != "" {
+		t.Fatalf("locked origin with no choice: %q %v %q", origin, platforms, problem)
+	}
+	if _, _, problem := a.selfEnrollRelay("https://push.nodescope.app"); problem == "" {
+		t.Fatal("locked origin accepted another relay")
+	}
+
+	if err := a.activateRelayEnrollment("https://push.nodescope.app", nil, "an_existing", strings.Repeat("a", 43)); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.relayEnrollmentStatus(); got.State != "connected" || got.RelayOrigin != nodeScopeStagingRelay {
-		t.Fatalf("existing enrollment with bad override: %+v", got)
+	if got := a.relayEnrollmentStatus(); got.State != "connected" || got.RelayOrigin != "https://push.nodescope.app" ||
+		got.RelayName != "NodeScope" || got.OriginLocked || got.Presets != nil {
+		t.Fatalf("existing enrollment: %+v", got)
+	}
+	if got := a.relaySettings().relayPlatforms; strings.Join(got, ",") != "ios,android" {
+		t.Fatalf("enrollment without platforms = %v, want the iOS and Android default", got)
+	}
+}
+
+func TestResolveSelfEnrollRelay(t *testing.T) {
+	for _, tc := range []struct {
+		cfg       NotifyRelayConfig
+		origin    string
+		platforms string
+	}{
+		{NotifyRelayConfig{Origin: "https://push.nodescope.app/"}, "https://push.nodescope.app", "ios,android"},
+		{NotifyRelayConfig{Origin: "https://relay.example.org"}, "https://relay.example.org", "ios,android"},
+		{NotifyRelayConfig{Origin: "https://relay.example.org", Platforms: []string{"android"}}, "https://relay.example.org", "android"},
+		{NotifyRelayConfig{Origin: "http://relay.example.org"}, "", ""},
+		{NotifyRelayConfig{Origin: "https://relay.example.org", Platforms: []string{"web"}}, "", ""},
+	} {
+		origin, platforms, err := resolveSelfEnrollRelay(&tc.cfg)
+		if origin != tc.origin || strings.Join(platforms, ",") != tc.platforms || (err == nil) != (tc.origin != "") {
+			t.Errorf("resolveSelfEnrollRelay(%+v) = %q, %v, %v", tc.cfg, origin, platforms, err)
+		}
 	}
 }

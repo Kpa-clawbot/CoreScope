@@ -3,7 +3,9 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,30 +21,50 @@ import (
 	"github.com/meshcore-analyzer/users"
 )
 
-const (
-	nodeScopeSelfEnrollRelay     = "https://push.nodescope.app"
-	nodeScopeStagingRelay        = "https://push-staging.nodescope.app"
-	nodeScopeSelfEnrollOriginEnv = "CORESCOPE_NODESCOPE_SELF_ENROLL_RELAY_ORIGIN"
-)
-
-func nodeScopeSelfEnrollOrigin(raw string) string {
-	switch origin := strings.TrimSuffix(strings.TrimSpace(raw), "/"); origin {
-	case "":
-		if strings.TrimSpace(raw) == "" {
-			return nodeScopeSelfEnrollRelay
-		}
-	case nodeScopeSelfEnrollRelay, nodeScopeStagingRelay:
-		return origin
-	}
-	return ""
+// relayPreset is a push relay an admin can pick by name. Any other HTTPS
+// relay that implements the push relay contract can be entered as a custom
+// origin; it reaches only the users of the app whose push credentials it
+// holds.
+type relayPreset struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Origin    string   `json:"origin"`
+	Platforms []string `json:"platforms"`
+	AppURL    string   `json:"appUrl"`
 }
 
-func relayPendingPath(dbPath, relayOrigin string) string {
-	if relayOrigin == nodeScopeStagingRelay {
-		// This filename was already used by staging before production support.
-		return dbPath + ".nodescope-pending.json"
+var relayPresets = []relayPreset{
+	{ID: "nodescope", Name: "NodeScope", Origin: "https://push.nodescope.app", Platforms: []string{"ios", "android"}, AppURL: "https://nodescope.app"},
+}
+
+// defaultRelayPlatforms applies to a custom relay unless the server
+// configuration names its platforms.
+var defaultRelayPlatforms = []string{"ios", "android"}
+
+func relayPresetFor(origin string) (relayPreset, bool) {
+	for _, preset := range relayPresets {
+		if preset.Origin == origin {
+			return preset, true
+		}
 	}
-	return dbPath + ".nodescope-pending-production.json"
+	return relayPreset{}, false
+}
+
+// canonicalRelayOrigin returns the origin as the relay client uses it, with
+// a lowercase host, so presets and saved enrollments compare equal.
+func canonicalRelayOrigin(raw string) (string, error) {
+	client, err := newNotifyRelayClient(strings.TrimSuffix(strings.TrimSpace(raw), "/"), nil)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(client.origin), nil
+}
+
+// relayPendingPath names the pending enrollment file after the relay, so a
+// credential prepared for one relay is never offered to another.
+func relayPendingPath(dbPath, relayOrigin string) string {
+	sum := sha256.Sum256([]byte(relayOrigin))
+	return dbPath + ".push-relay-pending-" + hex.EncodeToString(sum[:8]) + ".json"
 }
 
 type relayEnrollmentFlow struct {
@@ -52,12 +74,15 @@ type relayEnrollmentFlow struct {
 }
 
 type relayEnrollmentStatus struct {
-	State             string `json:"state"`
-	PublicOrigin      string `json:"publicOrigin"`
-	RelayOrigin       string `json:"relayOrigin"`
-	AnalyzerID        string `json:"analyzerId,omitempty"`
-	Paused            bool   `json:"paused,omitempty"`
-	DisconnectPending bool   `json:"disconnectPending,omitempty"`
+	State             string        `json:"state"`
+	PublicOrigin      string        `json:"publicOrigin"`
+	RelayOrigin       string        `json:"relayOrigin,omitempty"`
+	RelayName         string        `json:"relayName,omitempty"`
+	OriginLocked      bool          `json:"originLocked,omitempty"`
+	Presets           []relayPreset `json:"presets,omitempty"`
+	AnalyzerID        string        `json:"analyzerId,omitempty"`
+	Paused            bool          `json:"paused,omitempty"`
+	DisconnectPending bool          `json:"disconnectPending,omitempty"`
 }
 
 func relayPublicOrigin(base *url.URL) string {
@@ -74,7 +99,8 @@ func relayPublicOrigin(base *url.URL) string {
 
 func (a *authService) relayEnrollmentStatus() relayEnrollmentStatus {
 	status := relayEnrollmentStatus{
-		State: "available", RelayOrigin: nodeScopeSelfEnrollOrigin(a.set.nodeScopeSelfEnrollOrigin), PublicOrigin: relayPublicOrigin(a.set.baseURL),
+		State: "available", RelayOrigin: a.set.selfEnrollOrigin, OriginLocked: a.set.selfEnrollOrigin != "",
+		PublicOrigin: relayPublicOrigin(a.set.baseURL),
 	}
 	settings := a.relaySettings()
 	switch {
@@ -86,12 +112,45 @@ func (a *authService) relayEnrollmentStatus() relayEnrollmentStatus {
 			status.State = "manual"
 		}
 		status.AnalyzerID, status.RelayOrigin = settings.relayAnalyzerID, settings.relayOrigin
+		status.OriginLocked = false
 		status.Paused = a.relayDeliveryPaused()
 		status.DisconnectPending = a.relayDisconnectPending()
-	case status.PublicOrigin == "" || status.RelayOrigin == "":
+	case status.PublicOrigin == "":
 		status.State = "unavailable"
+	default:
+		if !status.OriginLocked {
+			status.Presets = relayPresets
+		}
+	}
+	if preset, ok := relayPresetFor(status.RelayOrigin); ok {
+		status.RelayName = preset.Name
 	}
 	return status
+}
+
+// selfEnrollRelay picks the relay for an Enable request: the origin locked
+// in the server configuration, or the preset or custom origin in the body.
+// A non-empty problem is the message for the admin.
+func (a *authService) selfEnrollRelay(requested string) (origin string, platforms []string, problem string) {
+	if strings.TrimSpace(requested) != "" {
+		var err error
+		if origin, err = canonicalRelayOrigin(requested); err != nil {
+			return "", nil, "Enter the relay as an HTTPS origin, such as https://push.example.org."
+		}
+	}
+	if locked := a.set.selfEnrollOrigin; locked != "" {
+		if origin != "" && origin != locked {
+			return "", nil, "This server only enrolls with " + locked + "."
+		}
+		return locked, a.set.selfEnrollPlatforms, ""
+	}
+	if origin == "" {
+		return "", nil, "Choose a relay before enabling push."
+	}
+	if preset, ok := relayPresetFor(origin); ok {
+		return origin, preset.Platforms, ""
+	}
+	return origin, defaultRelayPlatforms, ""
 }
 
 func (s *Server) handlePushRelayEnrollmentStatus(w http.ResponseWriter, _ *http.Request, _ *users.User, _ *users.Session) {
@@ -176,23 +235,30 @@ func (s *Server) handlePushRelayEnable(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	defer flow.mu.Unlock()
+	var body struct {
+		RelayOrigin string `json:"relayOrigin"`
+	}
+	if !decodeJSONMax(w, r, &body, 2048, http.StatusRequestEntityTooLarge) {
+		return
+	}
 	status := a.relayEnrollmentStatus()
 	switch status.State {
 	case "connected", "manual":
 		writeJSON(w, status)
 		return
 	case "notifications_disabled":
-		writeError(w, http.StatusConflict, "Enable CoreScope notifications before connecting the push relay.")
+		writeError(w, http.StatusConflict, "Enable CoreScope notifications before connecting a push relay.")
 		return
 	case "unavailable":
-		if status.RelayOrigin == "" {
-			writeError(w, http.StatusConflict, "Set CORESCOPE_NODESCOPE_SELF_ENROLL_RELAY_ORIGIN to an official NodeScope HTTPS relay.")
-			return
-		}
 		writeError(w, http.StatusConflict, "Set publicBaseUrl to a public HTTPS origin on port 443 before enabling push.")
 		return
 	}
-	path := relayPendingPath(a.set.dbPath, status.RelayOrigin)
+	relayOrigin, platforms, problem := a.selfEnrollRelay(body.RelayOrigin)
+	if problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
+	path := relayPendingPath(a.set.dbPath, relayOrigin)
 	credential, err := relayPendingCredential(path, status.PublicOrigin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Could not prepare the server-side enrollment credential. Check the users database directory and public URL.")
@@ -203,7 +269,7 @@ func (s *Server) handlePushRelayEnable(w http.ResponseWriter, r *http.Request, a
 		writeError(w, http.StatusInternalServerError, "Could not prepare analyzer verification.")
 		return
 	}
-	relay, err := newNotifyRelayClient(status.RelayOrigin, flow.transport)
+	relay, err := newNotifyRelayClient(relayOrigin, flow.transport)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Could not configure the push relay client.")
 		return
@@ -223,7 +289,7 @@ func (s *Server) handlePushRelayEnable(w http.ResponseWriter, r *http.Request, a
 		writeError(w, http.StatusBadGateway, "Could not verify the relay enrollment. Try Enable again.")
 		return
 	}
-	if err := a.activateRelayEnrollment(status.RelayOrigin, enrollment.AnalyzerID, credential); err != nil {
+	if err := a.activateRelayEnrollment(relayOrigin, platforms, enrollment.AnalyzerID, credential); err != nil {
 		writeError(w, http.StatusInternalServerError, "Could not save the enrollment. Check the users database directory and try Enable again.")
 		return
 	}
@@ -232,7 +298,7 @@ func (s *Server) handlePushRelayEnable(w http.ResponseWriter, r *http.Request, a
 		// Enrollment is already durable and usable.
 		log.Printf("[notify] could not remove the pending push relay enrollment file: %v", err)
 	}
-	a.audit(&actor.ID, "notify.push.enroll", nil, nil)
+	a.audit(&actor.ID, "notify.push.enroll", nil, map[string]string{"relayOrigin": relayOrigin})
 	writeJSON(w, a.relayEnrollmentStatus())
 }
 
