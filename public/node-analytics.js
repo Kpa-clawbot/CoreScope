@@ -167,16 +167,15 @@
         'Only a zero-hop advert or a flood packet whose last hop names this node with 2 or more bytes, shared with no other node, proves who was heard. ' +
         'An empty list is missing evidence, not proof of missing coverage.</div>';
     } else {
-      const shown = opts.showAll ? rows : rows.slice(0, HEARD_ROWS);
       const withChange = rows.some(r => r.recentMedianSnr != null);
       body = '<div class="analytics-table-scroll"><table class="na-heard-table">' +
         '<thead><tr><th scope="col">Observer</th><th scope="col" class="num">Receptions</th>' +
         '<th scope="col">SNR, -20 to +20 dB (bar p10 to p90, dot median)</th><th scope="col" class="num">Median</th>' +
         (withChange ? '<th scope="col" class="num" title="Median of the last 24 h minus the median of the rest of the window">24 h change</th>' : '') +
         '</tr></thead><tbody>' +
-        shown.map(r => {
+        rows.map((r, i) => {
           const c = changeCell(r.recentMedianSnr, r.earlierMedianSnr);
-          return '<tr data-testid="heard-by-row">' +
+          return '<tr data-testid="heard-by-row"' + (i >= HEARD_ROWS ? ' hidden' : '') + '>' +
             '<td><a href="#/observers/' + encodeURIComponent(r.observer_id) + '">' + escapeHtml(r.observer_name || r.observer_id) + '</a></td>' +
             '<td class="num">' + r.count + '</td>' +
             '<td class="na-heard-strip-cell">' + heardStrip(r) + '</td>' +
@@ -185,7 +184,7 @@
             '</tr>';
         }).join('') +
         '</tbody></table></div>' +
-        (rows.length > shown.length ? '<button type="button" class="na-heard-showall" data-action="heard-show-all">Show all ' + rows.length + '</button>' : '');
+        (rows.length > HEARD_ROWS ? '<button type="button" class="na-heard-showall" data-action="heard-show-all">Show all ' + rows.length + '</button>' : '');
     }
     return body +
       '<div class="analytics-chart-desc">Same evidence as the node page’s ' + nodeLink + ' table.</div>' +
@@ -343,7 +342,8 @@
     const heardBody = document.getElementById('heardByBody');
     if (heardBody) heardBody.addEventListener('click', e => {
       if (!e.target.closest('[data-action="heard-show-all"]')) return;
-      heardBody.innerHTML = heardByHtml(data, { pubkey: n.public_key, showAll: true });
+      heardBody.querySelectorAll('tr[hidden]').forEach(tr => tr.removeAttribute('hidden'));
+      e.target.closest('[data-action="heard-show-all"]').remove();
     });
     buildHopChart(data);
     buildHeatmap(data);

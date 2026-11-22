@@ -62,11 +62,11 @@ async function run() {
     await page.route('**/api/nodes/*/analytics?days=30', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(stub) }));
     await page.click('#timeRangeBtns button[data-days="30"]');
     await page.waitForSelector('[data-action="heard-show-all"]');
-    assert((await page.$$('[data-testid="heard-by-row"]')).length === 10, 'expected 10 rows before Show all');
+    assert((await page.$$('[data-testid="heard-by-row"]:not([hidden])')).length === 10, 'expected 10 visible rows before Show all');
     const label = await page.$eval('[data-action="heard-show-all"]', (el) => el.textContent.trim());
     assert(label === 'Show all 12', `button label: ${label}`);
     await page.click('[data-action="heard-show-all"]');
-    await page.waitForFunction(() => document.querySelectorAll('[data-testid="heard-by-row"]').length === 12);
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="heard-by-row"]:not([hidden])').length === 12);
     assert(!(await page.$('[data-action="heard-show-all"]')), 'Show all still present after expanding');
     const first = await page.$eval('[data-testid="heard-by-row"] a', (a) => a.getAttribute('href'));
     assert(first === '#/observers/e2eobs0', `first row link: ${first}`);

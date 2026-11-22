@@ -27,6 +27,7 @@ function row(i, median) {
   return { observer_id: 'obs' + i, observer_name: 'Obs ' + i, count: 10 + i, medianSnr: median, p10Snr: median == null ? null : median - 3, p90Snr: median == null ? null : median + 2, recentMedianSnr: null, earlierMedianSnr: null };
 }
 const countRows = html => (html.match(/data-testid="heard-by-row"/g) || []).length;
+const countHidden = html => (html.match(/data-testid="heard-by-row" hidden/g) || []).length;
 
 console.log('node-analytics.js heard by observers');
 
@@ -58,16 +59,24 @@ t('dotClass bands: >= 0 good, >= -10 fair, below weak', () => {
 
 const twelve = { heardBy: Array.from({ length: 12 }, (_, i) => row(i, 10 - i)) };
 
-t('shows 10 rows and a "Show all 12" control', () => {
+t('shows 10 rows and a "Show all 12" control; the other 2 are rendered hidden', () => {
   const html = HB.html(twelve, { pubkey: PK });
-  assert.strictEqual(countRows(html), 10);
+  assert.strictEqual(countRows(html), 12);
+  assert.strictEqual(countHidden(html), 2);
   assert.ok(html.includes('Show all 12'));
 });
 
-t('showAll renders every row and no control', () => {
-  const html = HB.html(twelve, { pubkey: PK, showAll: true });
-  assert.strictEqual(countRows(html), 12);
+t('10 rows or fewer: nothing hidden, no control', () => {
+  const html = HB.html({ heardBy: twelve.heardBy.slice(0, 10) }, { pubkey: PK });
+  assert.strictEqual(countRows(html), 10);
+  assert.strictEqual(countHidden(html), 0);
   assert.ok(!html.includes('Show all'));
+});
+
+t('an observer name renders inert', () => {
+  const html = HB.html({ heardBy: [Object.assign(row(1, 4), { observer_name: '<img src=x onerror=alert(1)>' })] }, { pubkey: PK });
+  assert.ok(!html.includes('<img'));
+  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
 });
 
 t('observer names link to the observer page', () => {
