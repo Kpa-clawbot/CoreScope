@@ -26,6 +26,15 @@
     return _escHtml(s); // EMOJI-OK-LEGACY-RENDER
   }
   function _escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  // stats.avgSnr comes from direct receptions only; null means no observer
+  // heard the node's own transmission, so there is no SNR to grade.
+  function snrQuality(v) {
+    if (v == null) return { label: 'n/a', color: 'var(--text-muted)' };
+    if (v > 10) return { label: 'Excellent', color: 'var(--status-green)' };
+    if (v > 0) return { label: 'Good', color: 'var(--accent)' };
+    if (v > -5) return { label: 'Marginal', color: 'var(--status-yellow)' };
+    return { label: 'Poor', color: 'var(--status-red)' };
+  }
 
   const PREF_KEY = 'meshcore-user-level';
   const MY_NODES_KEY = 'meshcore-my-nodes'; // [{pubkey, name, addedAt}]
@@ -305,8 +314,7 @@
 
         // SNR quality label
         const snrVal = stats.avgSnr;
-        const snrLabel = snrVal != null ? (snrVal > 10 ? 'Excellent' : snrVal > 0 ? 'Good' : snrVal > -5 ? 'Marginal' : 'Poor') : null;
-        const snrColor = snrVal != null ? (snrVal > 10 ? 'var(--status-green)' : snrVal > 0 ? 'var(--accent)' : snrVal > -5 ? 'var(--status-yellow)' : 'var(--status-red)') : '#6b7280';
+        const { label: snrLabel, color: snrColor } = snrQuality(snrVal);
 
         // Build sparkline from recent packets (packet timestamps → hourly buckets)
         const sparkHtml = buildSparkline(h.recentPackets || []);
@@ -330,7 +338,7 @@
             </div>
             <div class="mnc-metric">
               <div class="mnc-val" style="color:${snrColor}">${snrVal != null ? Number(snrVal).toFixed(1) + ' dB' : '—'}</div>
-              <div class="mnc-lbl">SNR${snrLabel ? ' · ' + snrLabel : ''}</div>
+              <div class="mnc-lbl">Direct SNR · ${snrLabel}</div>
             </div>
             <div class="mnc-metric">
               <div class="mnc-val">${stats.avgHops != null ? stats.avgHops.toFixed(1) : '—'}</div>
@@ -461,7 +469,7 @@
       const statusMsg = heard ? `Last heard ${timeAgo(heard)}` : 'No packets in the current window';
 
       const snrVal = stats.avgSnr;
-      const snrLabel = snrVal != null ? (snrVal > 10 ? 'Excellent' : snrVal > 0 ? 'Good' : snrVal > -5 ? 'Marginal' : 'Poor') : '';
+      const snrLabel = snrQuality(snrVal).label;
 
       card.innerHTML = `
         <div class="health-banner ${color}">
@@ -474,7 +482,7 @@
             <div class="health-metric"><div class="val">${stats.packetsToday ?? '—'}</div><div class="lbl">Packets Today</div></div>
             <div class="health-metric"><div class="val">${observers.length}</div><div class="lbl">Observers</div></div>
             <div class="health-metric"><div class="val">${heard ? timeAgo(heard) : '—'}</div><div class="lbl">Last seen</div></div>
-            <div class="health-metric"><div class="val">${snrVal != null ? Number(snrVal).toFixed(1) + ' dB' : '—'}</div><div class="lbl">Avg SNR${snrLabel ? ' · ' + snrLabel : ''}</div></div>
+            <div class="health-metric"><div class="val">${snrVal != null ? Number(snrVal).toFixed(1) + ' dB' : '—'}</div><div class="lbl">Direct SNR · ${snrLabel}</div></div>
             <div class="health-metric"><div class="val">${stats.avgHops != null ? stats.avgHops.toFixed(1) : '—'}</div><div class="lbl">Avg Hops</div></div>
           </div>
           ${observers.length ? `<div class="health-observers"><strong>Heard by:</strong> ${observers.map(o => escapeHtml(o.observer_name || o.observer_id)).join(', ')}</div>` : ''}
@@ -598,6 +606,8 @@
     }
     return html;
   }
+
+  if (typeof window !== 'undefined') window._homeSnrQuality = snrQuality;
 
   registerPage('home', { init, destroy });
 })();

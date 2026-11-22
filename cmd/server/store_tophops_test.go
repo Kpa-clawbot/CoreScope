@@ -4,16 +4,14 @@ import (
 	"testing"
 )
 
-func f64(v float64) *float64 { return &v }
-
 func TestDedupeTopHopsByPair(t *testing.T) {
 	hops := []distHopRecord{
-		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 100, Type: "R↔R", SNR: f64(5.0), Hash: "h1", Timestamp: "t1"},
-		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 90, Type: "R↔R", SNR: f64(8.0), Hash: "h2", Timestamp: "t2"},
-		{FromPk: "BBB", ToPk: "AAA", FromName: "B", ToName: "A", Dist: 80, Type: "R↔R", SNR: f64(3.0), Hash: "h3", Timestamp: "t3"},
-		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 70, Type: "R↔R", SNR: f64(6.0), Hash: "h4", Timestamp: "t4"},
-		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 60, Type: "R↔R", SNR: f64(4.0), Hash: "h5", Timestamp: "t5"},
-		{FromPk: "CCC", ToPk: "DDD", FromName: "C", ToName: "D", Dist: 50, Type: "C↔R", SNR: f64(7.0), Hash: "h6", Timestamp: "t6"},
+		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 100, Type: "R↔R", Hash: "h1", Timestamp: "t1"},
+		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 90, Type: "R↔R", Hash: "h2", Timestamp: "t2"},
+		{FromPk: "BBB", ToPk: "AAA", FromName: "B", ToName: "A", Dist: 80, Type: "R↔R", Hash: "h3", Timestamp: "t3"},
+		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 70, Type: "R↔R", Hash: "h4", Timestamp: "t4"},
+		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 60, Type: "R↔R", Hash: "h5", Timestamp: "t5"},
+		{FromPk: "CCC", ToPk: "DDD", FromName: "C", ToName: "D", Dist: 50, Type: "C↔R", Hash: "h6", Timestamp: "t6"},
 	}
 
 	result := dedupeHopsByPair(hops, 20)
@@ -32,13 +30,6 @@ func TestDedupeTopHopsByPair(t *testing.T) {
 	}
 	if ab["hash"].(string) != "h1" {
 		t.Errorf("expected hash h1 (from max-dist record), got %v", ab["hash"])
-	}
-	if ab["bestSnr"].(float64) != 8.0 {
-		t.Errorf("expected bestSnr 8.0, got %v", ab["bestSnr"])
-	}
-	// medianSnr of [3,4,5,6,8] = 5.0
-	if ab["medianSnr"].(float64) != 5.0 {
-		t.Errorf("expected medianSnr 5.0, got %v", ab["medianSnr"])
 	}
 
 	// Second entry: C↔D pair
@@ -68,20 +59,21 @@ func TestDedupeTopHopsReversePairMerges(t *testing.T) {
 	}
 }
 
-func TestDedupeTopHopsNilSNR(t *testing.T) {
+// A hop between two nodes has no measured SNR: the SNR on an observation is
+// the observer's reception of the last transmitter, which is not a hop in the
+// resolved chain. The entry must not carry one.
+func TestDedupeTopHopsCarryNoSNR(t *testing.T) {
 	hops := []distHopRecord{
-		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 100, Type: "R↔R", SNR: nil, Hash: "h1"},
-		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 90, Type: "R↔R", SNR: nil, Hash: "h2"},
+		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 100, Type: "R↔R", Hash: "h1"},
 	}
 	result := dedupeHopsByPair(hops, 20)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(result))
 	}
-	if result[0]["bestSnr"] != nil {
-		t.Errorf("expected bestSnr nil, got %v", result[0]["bestSnr"])
-	}
-	if result[0]["medianSnr"] != nil {
-		t.Errorf("expected medianSnr nil, got %v", result[0]["medianSnr"])
+	for _, k := range []string{"bestSnr", "medianSnr"} {
+		if _, ok := result[0][k]; ok {
+			t.Errorf("top hop entry carries %q, a hop has no measured SNR", k)
+		}
 	}
 }
 
@@ -97,20 +89,5 @@ func TestDedupeTopHopsLimit(t *testing.T) {
 	result := dedupeHopsByPair(hops, 20)
 	if len(result) != 20 {
 		t.Errorf("expected 20 entries, got %d", len(result))
-	}
-}
-
-func TestDedupeTopHopsEvenMedian(t *testing.T) {
-	// Even count: median = avg of two middle values
-	hops := []distHopRecord{
-		{FromPk: "A", ToPk: "B", Dist: 10, Type: "R↔R", SNR: f64(2.0), Hash: "h1"},
-		{FromPk: "A", ToPk: "B", Dist: 20, Type: "R↔R", SNR: f64(4.0), Hash: "h2"},
-		{FromPk: "A", ToPk: "B", Dist: 30, Type: "R↔R", SNR: f64(6.0), Hash: "h3"},
-		{FromPk: "A", ToPk: "B", Dist: 40, Type: "R↔R", SNR: f64(8.0), Hash: "h4"},
-	}
-	result := dedupeHopsByPair(hops, 20)
-	// sorted SNR: [2,4,6,8], median = (4+6)/2 = 5.0
-	if result[0]["medianSnr"].(float64) != 5.0 {
-		t.Errorf("expected medianSnr 5.0, got %v", result[0]["medianSnr"])
 	}
 }

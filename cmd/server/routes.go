@@ -2551,7 +2551,6 @@ func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request)
 		HopDistribution:  []TopologyHopDist{},
 		TopRepeaters:     []TopRepeater{},
 		TopPairs:         []TopPair{},
-		HopsVsSnr:        []HopsVsSnr{},
 		Observers:        []ObserverRef{},
 		PerObserverReach: map[string]*ObserverReach{},
 		MultiObsNodes:    []MultiObsNode{},
