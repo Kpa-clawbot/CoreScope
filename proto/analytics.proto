@@ -322,12 +322,16 @@ message DistanceHop {
   double dist = 5;
   // Hop category: "R↔R", "C↔R", "C↔C".
   string type = 6;
-  // SNR at this hop (null if unavailable).
-  optional double snr = 7;
+  // Was snr: the transmission SNR, measured by the observer on the last
+  // hop, not on this hop between two nodes.
+  reserved 7;
+  reserved "snr";
   // Packet hash.
   string hash = 8;
   // Observation timestamp (ISO 8601).
   string timestamp = 9;
+  // Observations of this node pair.
+  int32 obs_count = 10 [json_name = "obsCount"];
 }
 
 // Longest path record.

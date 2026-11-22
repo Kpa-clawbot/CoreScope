@@ -682,8 +682,8 @@ type distHopRecord struct {
 }
 
 // dedupeHopsByPair groups hops by unordered node-pair, keeps the max-distance
-// record per pair, and computes obsCount.  limit caps the
-// number of returned entries (sorted by distance descending).
+// record per pair, and computes obsCount. limit caps the number of returned
+// entries (sorted by distance descending).
 func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} {
 	type pairAgg struct {
 		best     *distHopRecord

@@ -8386,17 +8386,18 @@ console.log('\n=== node SNR: direct reception only ===');
   const hctx = makeSandbox();
   hctx.registerPage = () => {};
   loadInCtx(hctx, 'public/home.js');
-  const label = hctx.window._homeSnrQualityLabel;
+  const quality = hctx.window._homeSnrQuality;
 
-  test('home: no direct reception grades n/a, not Poor', () => {
-    assert.strictEqual(label(null), 'n/a');
-    assert.strictEqual(label(undefined), 'n/a');
+  test('home: no direct reception grades n/a in the muted colour, not Poor', () => {
+    for (const v of [null, undefined]) {
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(quality(v))), { label: 'n/a', color: 'var(--text-muted)' });
+    }
   });
-  test('home: a direct SNR is graded on the existing scale', () => {
-    assert.strictEqual(label(11), 'Excellent');
-    assert.strictEqual(label(0.5), 'Good');
-    assert.strictEqual(label(-2), 'Marginal');
-    assert.strictEqual(label(-6), 'Poor');
-    assert.strictEqual(label(0), 'Marginal');
+  test('home: a direct SNR is graded on the existing scale, label and colour together', () => {
+    const got = [11, 0.5, -2, -6, 0].map(v => { const q = quality(v); return q.label + '|' + q.color; });
+    assert.deepStrictEqual(got, [
+      'Excellent|var(--status-green)', 'Good|var(--accent)', 'Marginal|var(--status-yellow)',
+      'Poor|var(--status-red)', 'Marginal|var(--status-yellow)',
+    ]);
   });
 }

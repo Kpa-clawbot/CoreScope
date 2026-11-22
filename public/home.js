@@ -28,9 +28,12 @@
   function _escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   // stats.avgSnr comes from direct receptions only; null means no observer
   // heard the node's own transmission, so there is no SNR to grade.
-  function snrQualityLabel(v) {
-    if (v == null) return 'n/a';
-    return v > 10 ? 'Excellent' : v > 0 ? 'Good' : v > -5 ? 'Marginal' : 'Poor';
+  function snrQuality(v) {
+    if (v == null) return { label: 'n/a', color: 'var(--text-muted)' };
+    if (v > 10) return { label: 'Excellent', color: 'var(--status-green)' };
+    if (v > 0) return { label: 'Good', color: 'var(--accent)' };
+    if (v > -5) return { label: 'Marginal', color: 'var(--status-yellow)' };
+    return { label: 'Poor', color: 'var(--status-red)' };
   }
 
   const PREF_KEY = 'meshcore-user-level';
@@ -311,8 +314,7 @@
 
         // SNR quality label
         const snrVal = stats.avgSnr;
-        const snrLabel = snrQualityLabel(snrVal);
-        const snrColor = snrVal != null ? (snrVal > 10 ? 'var(--status-green)' : snrVal > 0 ? 'var(--accent)' : snrVal > -5 ? 'var(--status-yellow)' : 'var(--status-red)') : 'var(--text-muted)';
+        const { label: snrLabel, color: snrColor } = snrQuality(snrVal);
 
         // Build sparkline from recent packets (packet timestamps → hourly buckets)
         const sparkHtml = buildSparkline(h.recentPackets || []);
@@ -467,7 +469,7 @@
       const statusMsg = heard ? `Last heard ${timeAgo(heard)}` : 'No packets in the current window';
 
       const snrVal = stats.avgSnr;
-      const snrLabel = snrQualityLabel(snrVal);
+      const snrLabel = snrQuality(snrVal).label;
 
       card.innerHTML = `
         <div class="health-banner ${color}">
@@ -605,7 +607,7 @@
     return html;
   }
 
-  if (typeof window !== 'undefined') window._homeSnrQualityLabel = snrQualityLabel;
+  if (typeof window !== 'undefined') window._homeSnrQuality = snrQuality;
 
   registerPage('home', { init, destroy });
 })();

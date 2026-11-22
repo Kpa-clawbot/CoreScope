@@ -472,7 +472,7 @@ Returns a JSON array (not wrapped in an object):
       "totalObservations":  number,
       "totalPackets":       number,   // same as totalTransmissions (backward compat)
       "packetsToday":       number,
-      "avgSnr":             number | null,
+      "avgSnr":             number | null,  // direct receptions only, see /health
       "lastHeard":          string (ISO) | null
     },
     // Direct-RF only, same shape and rule as GET /api/nodes/:pubkey/health.
@@ -587,7 +587,8 @@ Detailed health information for a single node.
   // Observers that received this node's OWN transmission off the air:
   // a flood packet whose last path hop resolves unambiguously to this
   // node, or a flood ADVERT it originated that arrived with an empty
-  // path. Only here do avgSnr/avgRssi describe this node's signal.
+  // path. These rows and stats.avgSnr below are the only signal numbers
+  // that describe this node.
   // Direct routes never qualify: their path is the remaining route,
   // not the travelled one.
   "observers": [
@@ -609,6 +610,10 @@ Detailed health information for a single node.
     "totalObservations":  number,
     "totalPackets":       number,    // same as totalTransmissions (backward compat)
     "packetsToday":       number,
+    // Mean SNR over every direct reception in "observers" (all samples, all
+    // observers). null when no observer heard the node directly. Before
+    // #2451 this averaged every transmission involving the node, relayed
+    // copies included.
     "avgSnr":             number | null,
     "avgHops":            number,    // rounded integer
     "lastHeard":          string (ISO) | null
@@ -2259,7 +2264,7 @@ Hop distance analytics.
       "toPk":     string,
       "dist":     number,      // km
       "type":     string,      // "R↔R" | "C↔R" | "C↔C"
-      "snr":      number | null,
+      "obsCount": number,      // observations of this node pair
       "hash":     string,
       "timestamp": string (ISO)
     }
