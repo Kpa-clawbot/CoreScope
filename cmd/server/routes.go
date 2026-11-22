@@ -2416,6 +2416,12 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "Not found")
 			return
 		}
+		if s.cfg.ClientRxCoverageEnabled() {
+			// SQL, after GetNodeAnalytics has released s.mu (#2146).
+			_, pm := s.store.getCachedNodesAndPM()
+			lat, lon := nodePosition(result.Node)
+			result.MobileReceptions = s.mobileReceptionsSummary(pubkey, result.TimeRange.From, lat, lon, pm)
+		}
 		writeJSON(w, result)
 		return
 	}
@@ -2555,7 +2561,6 @@ func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request)
 		HopDistribution:  []TopologyHopDist{},
 		TopRepeaters:     []TopRepeater{},
 		TopPairs:         []TopPair{},
-		HopsVsSnr:        []HopsVsSnr{},
 		Observers:        []ObserverRef{},
 		PerObserverReach: map[string]*ObserverReach{},
 		MultiObsNodes:    []MultiObsNode{},

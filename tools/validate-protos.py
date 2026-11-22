@@ -337,7 +337,6 @@ FIELD_TYPE_TO_MESSAGE = {
     'TopologyHopDist': 'TopologyHopDist',
     'TopRepeater': 'TopRepeater',
     'TopPair': 'TopPair',
-    'HopsVsSnr': 'HopsVsSnr',
     'ObserverRef': 'ObserverRef',
     'ObserverReach': 'ObserverReach',
     'ReachRing': 'ReachRing',

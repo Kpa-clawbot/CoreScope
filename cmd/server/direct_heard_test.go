@@ -1,7 +1,9 @@
 package main
 
 import (
+	"strconv"
 	"testing"
+	"time"
 )
 
 // Coverage for the direct-RF attribution rule behind the node detail
@@ -177,6 +179,36 @@ func TestDirectHeardNode(t *testing.T) {
 			pathJSON: `["BB11"]`,
 			want:     "",
 		},
+		{
+			name:     "unique one-byte last hop credits nobody",
+			tx:       dhTx(RouteFlood, PayloadTXT_MSG, ""),
+			pathJSON: `["66","BB"]`,
+			want:     "",
+		},
+		{
+			name:     "TRACE flood with a unique two-byte last hop credits nobody",
+			tx:       dhTx(RouteFlood, PayloadTRACE, ""),
+			pathJSON: `["BB11"]`,
+			want:     "",
+		},
+		{
+			name:     "zero-hop advert with a failed signature credits nobody",
+			tx:       dhTx(RouteFlood, PayloadADVERT, `{"type":"ADVERT","pubKey":"`+dhUnique+`","signatureValid":false}`),
+			pathJSON: `[]`,
+			want:     "",
+		},
+		{
+			name:     "zero-hop advert with a valid signature credits the advertiser",
+			tx:       dhTx(RouteFlood, PayloadADVERT, `{"type":"ADVERT","pubKey":"`+dhUnique+`","signatureValid":true}`),
+			pathJSON: `[]`,
+			want:     dhUnique,
+		},
+		{
+			name:     "missing payload type credits nobody",
+			tx:       &StoreTx{RouteType: dhRoute(RouteFlood)},
+			pathJSON: `["BB11"]`,
+			want:     "",
+		},
 	}
 
 	for _, tc := range cases {
@@ -332,5 +364,133 @@ func TestBuildDirectHeardIndex_SkipsOwnTransmissions(t *testing.T) {
 	}
 	if a := idx[dhCollideA][dhUnique]; a == nil || a.Count != 1 {
 		t.Fatalf("rx copy of the forwarded packet = %#v, want Count 1", a)
+	}
+}
+
+// BenchmarkBuildDirectHeardIndex_MixedHops runs the compute pass over 50,000
+// transmissions with 10 observations each: mixed 1-, 2- and 3-byte last
+// hops, 5% zero-hop adverts.
+func BenchmarkBuildDirectHeardIndex_MixedHops(b *testing.B) {
+	pm := buildPrefixMap(directHeardNodes)
+	advert := `{"type":"ADVERT","pubKey":"` + dhUnique + `","signatureValid":true}`
+	paths := []string{`["66","BB"]`, `["66","A4"]`, `["66","BB11"]`, `["66","A433"]`, `["66","BB1122"]`, `["9999"]`}
+	packets := make([]*StoreTx, 0, 50000)
+	for i := 0; i < 50000; i++ {
+		var tx *StoreTx
+		path := paths[i%len(paths)]
+		if i%20 == 0 {
+			tx = dhTx(RouteFlood, PayloadADVERT, advert)
+			path = `[]`
+		} else {
+			tx = dhTx(RouteFlood, PayloadTXT_MSG, "")
+		}
+		for j := 0; j < 10; j++ {
+			snr := float64((i+j)%40) - 20
+			tx.Observations = append(tx.Observations, &StoreObs{ObserverID: "obs" + strconv.Itoa(j), PathJSON: path, SNR: &snr, Timestamp: benchObsTime(i*10 + j)})
+		}
+		packets = append(packets, tx)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buildDirectHeardIndex(packets, pm)
+	}
+}
+
+// TestDirectHeardNode_ZeroHopNonAdvertLeavesDecodedCacheCold pins that the
+// signature check runs for ADVERTs only: the compute pass walks every
+// observation, and a zero-hop message must not parse and cache its decoded
+// JSON (signatureFailed parses when the text holds a \u escape).
+func TestDirectHeardNode_ZeroHopNonAdvertLeavesDecodedCacheCold(t *testing.T) {
+	pm := buildPrefixMap(directHeardNodes)
+	tx := dhTx(RouteFlood, PayloadTXT_MSG, `{"type":"TXT_MSG","text":"caf\u00e9"}`)
+	obs := &StoreObs{ObserverID: "obs1", PathJSON: `[]`}
+	if got := directHeardNode(tx, obs, pm); got != "" {
+		t.Fatalf("directHeardNode = %q, want \"\"", got)
+	}
+	if tx.parsedDecoded != nil {
+		t.Fatalf("decoded JSON was parsed for a zero-hop non-advert")
+	}
+}
+
+// TestDirectHeardNode_RetiredPrefixCreditsNobody: a hop whose prefix a
+// retired repeater (moved to inactive_nodes, still able to relay) shares is
+// no proof the one active candidate transmitted, as in uniqueHopPrefix.
+func TestDirectHeardNode_RetiredPrefixCreditsNobody(t *testing.T) {
+	pm := buildPrefixMap(directHeardNodes)
+	pm.retired = map[string]struct{}{"bb11": {}}
+	tx := dhTx(RouteFlood, PayloadTXT_MSG, "")
+	if got := directHeardNode(tx, &StoreObs{ObserverID: "obs1", PathJSON: `["66","BB11"]`}, pm); got != "" {
+		t.Fatalf("directHeardNode = %q, want \"\" for a hop shared with a retired node", got)
+	}
+	if got := directHeardNode(tx, &StoreObs{ObserverID: "obs1", PathJSON: `["66","BB1122"]`}, pm); got != dhUnique {
+		t.Fatalf("directHeardNode = %q, want %q: the 3-byte hop is not retired", got, dhUnique)
+	}
+}
+
+// TestBuildDirectHeardIndex_HoursAndRecent: the pass keeps hourly SNR
+// histograms and a ring of the newest receptions per (node, observer).
+func TestBuildDirectHeardIndex_HoursAndRecent(t *testing.T) {
+	pm := buildPrefixMap(directHeardNodes)
+	h := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	snr := func(v float64) *float64 { return &v }
+	mk := func(at time.Time, s *float64) *StoreTx {
+		tx := dhTx(RouteFlood, PayloadTXT_MSG, "")
+		tx.Observations = []*StoreObs{{ObserverID: "obs1", PathJSON: `["BB11"]`, SNR: s, Timestamp: at.Format(time.RFC3339)}}
+		return tx
+	}
+	packets := []*StoreTx{
+		mk(h.Add(5*time.Minute), snr(-4.5)),
+		mk(h.Add(10*time.Minute), snr(-4.5)),
+		mk(h.Add(70*time.Minute), snr(2)),
+		mk(h.Add(80*time.Minute), nil),
+	}
+	agg := buildDirectHeardIndex(packets, pm)[dhUnique]["obs1"]
+	if agg == nil {
+		t.Fatal("no aggregate for obs1")
+	}
+	if len(agg.Hours) != 2 {
+		t.Fatalf("hours = %d, want 2", len(agg.Hours))
+	}
+	var n uint32
+	var hist snrHist
+	for _, x := range agg.Hours {
+		n += x.N
+		hist.addHour(x)
+	}
+	if n != 4 || hist.total != 3 {
+		t.Fatalf("receptions %d (want 4), SNR samples %d (want 3)", n, hist.total)
+	}
+	if len(agg.Recent) != 4 || agg.Recent[3].T != uint32(h.Add(80*time.Minute).Unix()) {
+		t.Fatalf("recent = %+v, want 4 entries, newest last", agg.Recent)
+	}
+
+	packets = packets[:0]
+	for i := 0; i < 600; i++ {
+		packets = append(packets, mk(h.Add(time.Duration(i)*time.Second), snr(1)))
+	}
+	agg = buildDirectHeardIndex(packets, pm)[dhUnique]["obs1"]
+	if len(agg.Recent) != heardRecentMax || agg.Recent[0].T != uint32(h.Add(100*time.Second).Unix()) || agg.Recent[len(agg.Recent)-1].T != uint32(h.Add(599*time.Second).Unix()) {
+		t.Fatalf("ring holds %d entries from %d to %d, want the newest 500", len(agg.Recent), agg.Recent[0].T, agg.Recent[len(agg.Recent)-1].T)
+	}
+}
+
+// directAvgSNR is the node-level SNR the health endpoints report: the mean
+// over every direct reception that carried an SNR, across all observers.
+func TestDirectAvgSNR(t *testing.T) {
+	if got := directAvgSNR(nil); got != nil {
+		t.Fatalf("no direct observers: avgSnr = %v, want nil", *got)
+	}
+	noSignal := map[string]*directHeardAgg{"a": {Count: 4}}
+	if got := directAvgSNR(noSignal); got != nil {
+		t.Fatalf("direct observers without SNR samples: avgSnr = %v, want nil", *got)
+	}
+	byObs := map[string]*directHeardAgg{
+		"a": {Count: 3, SNRSum: 30, SNRCount: 3}, // 10 dB x3
+		"b": {Count: 1, SNRSum: -2, SNRCount: 1}, // -2 dB x1
+		"c": {Count: 5},                          // no samples, no weight
+	}
+	got := directAvgSNR(byObs)
+	if got == nil || *got != 7 {
+		t.Fatalf("avgSnr = %v, want 7 (28 over 4 samples)", got)
 	}
 }

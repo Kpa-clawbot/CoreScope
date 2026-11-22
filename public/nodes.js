@@ -1076,8 +1076,8 @@
         </div>
 
         ${observers.length || relayObserverCount ? `<div class="node-full-card" id="node-observers">
-          <h4 title="Observers that received this node's own transmission off the air. An observer that only saw traffic relayed through this node is counted separately below.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
-          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
+          <h4 title="Observers that received this node's own transmission off the air. An observer that only saw traffic relayed through this node is counted separately below. A 1-byte path hop is never taken as proof of who transmitted, because an unknown node can share that byte.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
+          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop, or any 1-byte hop, is left unattributed rather than guessed: an unknown node can share that byte. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
           ${observers.length ? `<table class="data-table observer-sort-table" style="font-size:12px">
             <thead><tr>
               <th scope="col" data-sort-key="observer">Observer</th>
@@ -2184,8 +2184,8 @@
         </div>
 
         ${observers.length || relayObserverCount ? `<div class="node-detail-section">
-          <h4 title="Observers that received this node's own transmission off the air.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
-          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
+          <h4 title="Observers that received this node's own transmission off the air. A 1-byte path hop is never taken as proof of who transmitted, because an unknown node can share that byte.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
+          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop, or any 1-byte hop, is left unattributed rather than guessed: an unknown node can share that byte. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
           <div class="observer-list">
             ${observers.map(o => {
               const stats = [`${formatNodeCount(o.packetCount)} pkts`];

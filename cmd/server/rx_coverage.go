@@ -1,7 +1,9 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -379,4 +381,104 @@ func (s *Server) handleNodeRxCoverage(w http.ResponseWriter, r *http.Request) {
 	fc.MobileReceptions, fc.MobileClients = s.mobileRxStats(pubkey)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fc)
+}
+
+// MobileReceptionsSummary sums up the mobile client receptions of one node
+// for the node analytics page. MedianSNR is nil when no row carried an SNR,
+// MaxDistanceKm when the node has no position.
+type MobileReceptionsSummary struct {
+	Receptions    int      `json:"receptions"`
+	Receivers     int      `json:"receivers"`
+	MedianSNR     *float64 `json:"medianSnr"`
+	MaxDistanceKm *float64 `json:"maxDistanceKm"`
+}
+
+// uniqueHeardKeyCandidates is coverageHeardKeyCandidates for the analytics
+// summary: the 2- and 3-byte prefixes count only when this node is the one
+// known node holding them and no retired repeater shares them, the same
+// rule the direct-heard pass applies to path hops. The full key and the
+// 8-byte discover prefix always count.
+func uniqueHeardKeyCandidates(pubkey string, pm *prefixMap) []string {
+	pk := strings.ToLower(pubkey)
+	out := make([]string, 0, 4)
+	for _, c := range coverageHeardKeyCandidates(pk) {
+		if len(c) == 4 || len(c) == 6 {
+			if pm == nil {
+				continue
+			}
+			if _, retired := pm.retired[c]; retired {
+				continue
+			}
+			if cands := pm.m[c]; len(cands) != 1 || !strings.EqualFold(cands[0].PublicKey, pk) {
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// mobileReceptionsSummary reads this node's mobile receptions since fromISO.
+// SQL on the read-only connection, so callers run it outside s.mu (#2146).
+// nil when there are none or the query fails.
+func (s *Server) mobileReceptionsSummary(pubkey, fromISO string, nodeLat, nodeLon *float64, pm *prefixMap) *MobileReceptionsSummary {
+	if s.db == nil || s.db.conn == nil {
+		return nil
+	}
+	cands := uniqueHeardKeyCandidates(pubkey, pm)
+	args := make([]interface{}, 0, len(cands)+1)
+	for _, c := range cands {
+		args = append(args, c)
+	}
+	args = append(args, fromISO)
+	rows, err := s.db.conn.Query(`
+		SELECT snr, lat, lon, rx_pubkey FROM client_receptions
+		WHERE heard_key IN (`+sqlPlaceholders(len(cands))+`) AND rx_at >= ?`, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var sum MobileReceptionsSummary
+	var snrs []float64
+	receivers := map[string]struct{}{}
+	maxKm := -1.0
+	for rows.Next() {
+		var snr, lat, lon sql.NullFloat64
+		var rx sql.NullString
+		if rows.Scan(&snr, &lat, &lon, &rx) != nil {
+			return nil
+		}
+		sum.Receptions++
+		receivers[rx.String] = struct{}{}
+		if snr.Valid {
+			snrs = append(snrs, snr.Float64)
+		}
+		if nodeLat != nil && nodeLon != nil && lat.Valid && lon.Valid {
+			maxKm = math.Max(maxKm, haversineKm(*nodeLat, *nodeLon, lat.Float64, lon.Float64))
+		}
+	}
+	if rows.Err() != nil || sum.Receptions == 0 {
+		return nil
+	}
+	sum.Receivers = len(receivers)
+	if len(snrs) > 0 {
+		sort.Float64s(snrs)
+		m := snrs[(len(snrs)-1)/2]
+		sum.MedianSNR = &m
+	}
+	if maxKm >= 0 {
+		sum.MaxDistanceKm = &maxKm
+	}
+	return &sum
+}
+
+// nodePosition reads lat/lon from a node row; nil when absent or 0,0
+// (a node that never sent a position).
+func nodePosition(node map[string]interface{}) (lat, lon *float64) {
+	la, okLa := node["lat"].(float64)
+	lo, okLo := node["lon"].(float64)
+	if !okLa || !okLo || (la == 0 && lo == 0) {
+		return nil, nil
+	}
+	return &la, &lo
 }

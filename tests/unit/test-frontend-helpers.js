@@ -8353,3 +8353,51 @@ console.log('\n=== scope-audit.js: transport view (#2142) ===');
     assert.deepStrictEqual(Array.from(sa.transportRegions([neverAsked, asked])), ['be', 'fr']);
   });
 }
+
+console.log('\n=== node SNR: direct reception only ===');
+{
+  // /api/nodes/*/health stats.avgSnr is null when no observer heard the
+  // node's own transmission (direct_heard.go). The UI must say so, never
+  // grade it or print a number.
+  const actx = makeSandbox();
+  actx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  actx.registerPage = () => {};
+  actx.api = () => Promise.resolve({});
+  actx.RegionFilter = { init: () => {}, onChange: () => {}, regionQueryString: () => '' };
+  actx.onWS = () => {}; actx.offWS = () => {}; actx.connectWS = () => {};
+  actx.invalidateApiCache = () => {}; actx.makeColumnsResizable = () => {}; actx.initTabBar = () => {};
+  actx.IATA_COORDS_GEO = {};
+  loadInCtx(actx, 'public/roles.js');
+  loadInCtx(actx, 'public/app.js');
+  try { loadInCtx(actx, 'public/analytics.js'); } catch (e) { /* page wiring only */ }
+  const cell = actx.window._analyticsDirectSnrCell;
+
+  test('analytics: a direct SNR prints in dB', () => {
+    assert.strictEqual(cell(7.25), '7.3 dB');
+    assert.strictEqual(cell(-3), '-3.0 dB');
+  });
+  test('analytics: no direct reception prints a dash that says why', () => {
+    for (const v of [null, undefined]) {
+      const h = cell(v);
+      assert.ok(h.includes('—') && h.includes('No direct reception'), h);
+    }
+  });
+
+  const hctx = makeSandbox();
+  hctx.registerPage = () => {};
+  loadInCtx(hctx, 'public/home.js');
+  const quality = hctx.window._homeSnrQuality;
+
+  test('home: no direct reception grades n/a in the muted colour, not Poor', () => {
+    for (const v of [null, undefined]) {
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(quality(v))), { label: 'n/a', color: 'var(--text-muted)' });
+    }
+  });
+  test('home: a direct SNR is graded on the existing scale, label and colour together', () => {
+    const got = [11, 0.5, -2, -6, 0].map(v => { const q = quality(v); return q.label + '|' + q.color; });
+    assert.deepStrictEqual(got, [
+      'Excellent|var(--status-green)', 'Good|var(--accent)', 'Marginal|var(--status-yellow)',
+      'Poor|var(--status-red)', 'Marginal|var(--status-yellow)',
+    ]);
+  });
+}
