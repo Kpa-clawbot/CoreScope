@@ -83,7 +83,7 @@ func TestNotifyPushDeviceRoutes(t *testing.T) {
 
 	w := f.do("GET", "/api/account/notifications", nil, as(pat))
 	expectStatus(t, w, http.StatusOK)
-	capability := decode[notifyAccountJSON](t, w).NodeScopePush
+	capability := decode[notifyAccountJSON](t, w).PushRelay
 	if capability == nil || capability.AnalyzerID != analyzer || capability.RelayOrigin != relay.origin ||
 		capability.ContractVersion != 1 || len(capability.Platforms) != 2 || strings.Contains(w.Body.String(), sender) {
 		t.Fatalf("invalid relay capability: %+v", capability)
@@ -155,7 +155,7 @@ func TestNotifyPushCapabilityOmittedWhenUnconfigured(t *testing.T) {
 	pat := f.registerAndActivate(t, "pat@example.org", "Pat", pw)
 	w := f.do("GET", "/api/account/notifications", nil, as(pat))
 	expectStatus(t, w, http.StatusOK)
-	if strings.Contains(w.Body.String(), "nodeScopePush") {
+	if strings.Contains(w.Body.String(), "pushRelay") {
 		t.Fatal("unconfigured analyzer advertised push")
 	}
 	path := "/api/account/notifications/devices/install_Ab13"

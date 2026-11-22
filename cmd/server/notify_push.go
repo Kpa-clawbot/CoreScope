@@ -13,7 +13,7 @@ import (
 	"github.com/meshcore-analyzer/users"
 )
 
-// NotifyRelayConfig enables a pre-enrolled NodeScope sender. The credential
+// NotifyRelayConfig enables a pre-enrolled push relay sender. The credential
 // comes from the environment so it never appears in the public configuration.
 type NotifyRelayConfig struct {
 	Origin     string   `json:"origin"`
@@ -25,24 +25,24 @@ func (ns *notifySettings) configureRelay(cfg *NotifyRelayConfig, getenv func(str
 	if cfg == nil {
 		return nil
 	}
-	credential := strings.TrimSpace(getenv("CORESCOPE_NODESCOPE_PUSH_CREDENTIAL"))
+	credential := strings.TrimSpace(getenv("CORESCOPE_PUSH_RELAY_CREDENTIAL"))
 	if credential == "" || strings.TrimSpace(cfg.AnalyzerID) == "" {
-		return errors.New("nodeScopePush requires analyzerId and CORESCOPE_NODESCOPE_PUSH_CREDENTIAL")
+		return errors.New("pushRelay requires analyzerId and CORESCOPE_PUSH_RELAY_CREDENTIAL")
 	}
 	if len(cfg.Platforms) < 1 || len(cfg.Platforms) > 2 {
-		return errors.New("nodeScopePush.platforms must contain ios or android")
+		return errors.New("pushRelay.platforms must contain ios or android")
 	}
 	seen := make(map[string]bool, len(cfg.Platforms))
 	for _, platform := range cfg.Platforms {
 		if (platform != "ios" && platform != "android") || seen[platform] {
-			return errors.New("nodeScopePush.platforms must contain distinct ios or android entries")
+			return errors.New("pushRelay.platforms must contain distinct ios or android entries")
 		}
 		seen[platform] = true
 	}
 	origin := strings.TrimSuffix(strings.TrimSpace(cfg.Origin), "/")
 	client, err := newNotifyRelayClient(origin, nil)
 	if err != nil {
-		return fmt.Errorf("nodeScopePush.origin: %w", err)
+		return fmt.Errorf("pushRelay.origin: %w", err)
 	}
 	ns.relay, ns.relayOrigin = client, origin
 	ns.relayAnalyzerID, ns.relayCredential = cfg.AnalyzerID, credential
@@ -144,18 +144,18 @@ func (n *notifier) pushLoop(stop <-chan struct{}) {
 			return
 		case <-ticker.C:
 			if err := n.dispatchPush(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("[notify] process NodeScope push queue: %v", err)
+				log.Printf("[notify] process push queue: %v", err)
 			}
 		}
 	}
 }
 
 func (n *notifier) dispatchPush(ctx context.Context) error {
-	state := &n.a.nodeScopeDelivery
+	state := &n.a.relayDelivery
 	state.mu.RLock()
-	settings := n.a.nodeScopeRelaySettings()
+	settings := n.a.relaySettings()
 	epoch := state.epoch.Load()
-	if settings.relay == nil || n.a.nodeScopeDeliveryPaused() {
+	if settings.relay == nil || n.a.relayDeliveryPaused() {
 		state.mu.RUnlock()
 		return nil
 	}
@@ -176,10 +176,10 @@ func (n *notifier) dispatchPush(ctx context.Context) error {
 }
 
 func (n *notifier) dispatchPushJob(ctx context.Context, settings notifySettings, job users.PushJob, epoch uint64) error {
-	state := &n.a.nodeScopeDelivery
+	state := &n.a.relayDelivery
 	state.mu.RLock()
 	defer state.mu.RUnlock()
-	if epoch != state.epoch.Load() || n.a.nodeScopeDeliveryPaused() {
+	if epoch != state.epoch.Load() || n.a.relayDeliveryPaused() {
 		return nil
 	}
 	st := n.a.st
@@ -207,7 +207,7 @@ func (n *notifier) dispatchPushJob(ctx context.Context, settings notifySettings,
 		return st.RetryPushJob(job.ID, now.Add(delay))
 	}
 	if err != nil {
-		log.Printf("[notify] drop NodeScope push %s job %d: %v", job.Operation, job.ID, err)
+		log.Printf("[notify] drop push %s job %d: %v", job.Operation, job.ID, err)
 	}
 	return st.CompletePushJob(job.ID)
 }

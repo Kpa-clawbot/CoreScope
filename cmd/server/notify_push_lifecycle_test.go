@@ -24,7 +24,7 @@ func linkLifecycleFixture(t *testing.T, f *notifyFixture, analyzer, installation
 	}
 }
 
-func TestNodeScopePauseSkipsPushAndPreservesEmailAndLinks(t *testing.T) {
+func TestPushRelayPauseSkipsPushAndPreservesEmailAndLinks(t *testing.T) {
 	const analyzer = "an_fixture"
 	var calls atomic.Int32
 	relay := newTestNotifyRelayClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -58,16 +58,16 @@ func TestNodeScopePauseSkipsPushAndPreservesEmailAndLinks(t *testing.T) {
 
 	f.setNode(evPkA, "Alpha", "companion", time.Hour, nil)
 	f.tick()
-	if err := a.setNodeScopeDeliveryPaused(true); err != nil {
+	if err := a.setRelayDeliveryPaused(true); err != nil {
 		t.Fatal(err)
 	}
 	restarted := &authService{st: f.st, set: a.set}
-	restarted.restoreNodeScopeLifecycle()
-	if !a.nodeScopeDeliveryPaused() || !restarted.nodeScopeDeliveryPaused() {
+	restarted.restoreRelayLifecycle()
+	if !a.relayDeliveryPaused() || !restarted.relayDeliveryPaused() {
 		t.Fatal("pause did not persist")
 	}
 	w := f.do(http.MethodGet, "/api/account/notifications", nil, as(pat))
-	if capability := decode[notifyAccountJSON](t, w).NodeScopePush; capability == nil || capability.AnalyzerID != analyzer {
+	if capability := decode[notifyAccountJSON](t, w).PushRelay; capability == nil || capability.AnalyzerID != analyzer {
 		t.Fatalf("pause removed the advertised capability: %+v", capability)
 	}
 
@@ -86,10 +86,10 @@ func TestNodeScopePauseSkipsPushAndPreservesEmailAndLinks(t *testing.T) {
 		t.Fatalf("pause did not drop alerts and preserve revocations: %v, %v", jobs, err)
 	}
 
-	if err := a.setNodeScopeDeliveryPaused(false); err != nil {
+	if err := a.setRelayDeliveryPaused(false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(a.nodeScopeLifecyclePath()); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(a.relayLifecyclePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("resume left a pause marker: %v", err)
 	}
 	f.tick()
@@ -109,7 +109,7 @@ func TestNodeScopePauseSkipsPushAndPreservesEmailAndLinks(t *testing.T) {
 	}
 }
 
-func TestNodeScopeDisconnectRetriesWithoutRestoringDelivery(t *testing.T) {
+func TestPushRelayDisconnectRetriesWithoutRestoringDelivery(t *testing.T) {
 	const analyzer = "an_disconnected"
 	sender := strings.Repeat("s", 43)
 	var calls atomic.Int32
@@ -129,52 +129,52 @@ func TestNodeScopeDisconnectRetriesWithoutRestoringDelivery(t *testing.T) {
 	a := f.srv.auth
 	pat := f.watcher(t, "pat@example.org", "Pat", evPkA)
 	linkLifecycleFixture(t, f, analyzer, "device", "sub_active", pat.me.ID)
-	if err := a.activateNodeScopeEnrollment(relay.origin, analyzer, sender); err != nil {
+	if err := a.activateRelayEnrollment(relay.origin, analyzer, sender); err != nil {
 		t.Fatal(err)
 	}
-	active := a.nodeScopeRelaySettings()
+	active := a.relaySettings()
 	active.relay = relay
-	a.nodeScopeRelay.Store(&active)
+	a.enrolledRelay.Store(&active)
 
-	if err := a.disconnectNodeScopeEnrollment(context.Background()); !errors.Is(err, errNodeScopeRelayRevoke) {
+	if err := a.disconnectRelayEnrollment(context.Background()); !errors.Is(err, errRelayRevoke) {
 		t.Fatalf("temporary relay failure returned %v", err)
 	}
-	if !a.nodeScopeDeliveryPaused() || !a.nodeScopeDisconnectPending() || a.nodeScopeRelayRevoked() {
+	if !a.relayDeliveryPaused() || !a.relayDisconnectPending() || a.relayRevoked() {
 		t.Fatal("unconfirmed disconnect must stay paused and retryable")
 	}
-	if err := a.setNodeScopeDeliveryPaused(false); !errors.Is(err, errNodeScopeDisconnectPending) {
+	if err := a.setRelayDeliveryPaused(false); !errors.Is(err, errRelayDisconnectPending) {
 		t.Fatalf("resume during pending disconnect returned %v", err)
 	}
 
 	f.execDB(t, `CREATE TRIGGER test_prune_fail BEFORE DELETE ON notification_push_bindings
 		BEGIN SELECT RAISE(ABORT, 'test prune failure'); END`)
-	if err := a.disconnectNodeScopeEnrollment(context.Background()); err == nil || !a.nodeScopeRelayRevoked() {
+	if err := a.disconnectRelayEnrollment(context.Background()); err == nil || !a.relayRevoked() {
 		t.Fatalf("cleanup failure should keep confirmed revocation: %v", err)
 	}
 	w := f.do(http.MethodGet, "/api/account/notifications", nil, as(pat))
-	if capability := decode[notifyAccountJSON](t, w).NodeScopePush; capability != nil {
+	if capability := decode[notifyAccountJSON](t, w).PushRelay; capability != nil {
 		t.Fatalf("revoked analyzer advertised its capability: %+v", capability)
 	}
 
 	restarted := &authService{st: f.st, set: a.set}
-	if id, err := restarted.restoreNodeScopeEnrollment(); err != nil || id != analyzer {
+	if id, err := restarted.restoreRelayEnrollment(); err != nil || id != analyzer {
 		t.Fatalf("could not restore pending disconnect enrollment: %q, %v", id, err)
 	}
-	restarted.restoreNodeScopeLifecycle()
-	if !restarted.nodeScopeRelayRevoked() {
+	restarted.restoreRelayLifecycle()
+	if !restarted.relayRevoked() {
 		t.Fatal("confirmed revocation did not survive restart")
 	}
 	f.execDB(t, `DROP TRIGGER test_prune_fail`)
-	if err := restarted.disconnectNodeScopeEnrollment(context.Background()); err != nil {
+	if err := restarted.disconnectRelayEnrollment(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("local cleanup retried the completed relay request: %d calls", calls.Load())
 	}
-	if restarted.nodeScopeRelaySettings().relay != nil || restarted.nodeScopeDisconnectPending() {
+	if restarted.relaySettings().relay != nil || restarted.relayDisconnectPending() {
 		t.Fatal("successful disconnect left an active enrollment")
 	}
-	if _, err := os.Stat(a.nodeScopeEnrollmentPath()); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(a.relayEnrollmentPath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("disconnect left a credential file: %v", err)
 	}
 	if counts, err := f.st.PrunePushState(""); err != nil || counts != (users.PushPruneCounts{}) {

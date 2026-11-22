@@ -36,10 +36,10 @@ type authService struct {
 
 	// notify evaluates node notifications; nil unless
 	// userManagement.notifications.enabled.
-	notify              *notifier
-	nodeScopeRelay      atomic.Pointer[notifySettings]
-	nodeScopeDelivery   nodeScopeDeliveryState
-	nodeScopeEnrollment nodeScopeEnrollmentFlow
+	notify          *notifier
+	enrolledRelay   atomic.Pointer[notifySettings]
+	relayDelivery   relayDeliveryState
+	relayEnrollment relayEnrollmentFlow
 
 	// obsIdx answers the broker hooks; nil unless observerLogins.enabled
 	// (or when its load failed, see newAuthService).
@@ -117,7 +117,7 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 	}
 	s.auth = newAuthService(set, st, m)
 	s.auth.restoreAndPrunePushState(s.cfg.UserManagement.Notifications)
-	s.auth.restoreNodeScopeLifecycle()
+	s.auth.restoreRelayLifecycle()
 	s.auth.logStartup()
 	s.auth.wg.Add(1)
 	go func() {

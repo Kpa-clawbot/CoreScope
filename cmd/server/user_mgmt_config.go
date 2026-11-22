@@ -86,7 +86,7 @@ func resolveProposals(c *ChannelProposalsConfig) proposalSettings {
 // NotificationsConfig is userManagement.notifications
 // (docs/specs/2026-10-07-node-notifications-design.md). Off by default.
 type NotificationsConfig struct {
-	NodeScopePush     *NotifyRelayConfig `json:"nodeScopePush,omitempty"`
+	PushRelay         *NotifyRelayConfig `json:"pushRelay,omitempty"`
 	Enabled           bool               `json:"enabled"`
 	IntervalMinutes   int                `json:"intervalMinutes,omitempty"`
 	PerUserPerDay     int                `json:"perUserPerDay,omitempty"`
@@ -458,10 +458,10 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 	set.proposals = resolveProposals(u.ChannelProposals)
 	set.notify = resolveNotifications(u.Notifications)
 	if set.notify.enabled {
-		if u.Notifications.NodeScopePush == nil {
+		if u.Notifications.PushRelay == nil {
 			set.nodeScopeSelfEnrollOrigin = getenv(nodeScopeSelfEnrollOriginEnv)
 		}
-		if err = set.notify.configureRelay(u.Notifications.NodeScopePush, getenv); err != nil {
+		if err = set.notify.configureRelay(u.Notifications.PushRelay, getenv); err != nil {
 			return nil, err
 		}
 		if set.notify.external, err = resolveExternalAlerts(u.Notifications.ExternalAlerts); err != nil {

@@ -326,7 +326,7 @@ separate relay enrollment, analyzer data directory and accounts.
 
 1. Set `userManagement.publicBaseUrl` to the analyzer's public HTTPS
    address. Self-service enrollment requires a public DNS hostname on port 443.
-   Route `GET /api/nodescope/enrollment-proof` to this analyzer without a login
+   Route `GET /api/push-relay/enrollment-proof` to this analyzer without a login
    wall, redirect, or response cache so the relay can verify the public origin.
 2. CoreScope uses the production NodeScope relay (`https://push.nodescope.app`)
    for self-service enrollment by default. For a staging deployment, set
@@ -341,7 +341,7 @@ separate relay enrollment, analyzer data directory and accounts.
    a NodeScope build that supports this relay and is signed in to this analyzer.
 
 CoreScope keeps the enrollment credential in the private
-`<users.db path>.nodescope-relay.json` file next to the account database.
+`<users.db path>.push-relay.json` file next to the account database.
 Keep it private and on persistent storage. If a connection attempt is
 interrupted, click **Enable** again. CoreScope stores the retry credential in
 `<users.db path>.nodescope-pending-production.json` for production and
@@ -369,16 +369,16 @@ relay cannot reach the proof endpoint.
 5. Add the block below inside `userManagement.notifications`, using the
    returned ID for `analyzerId` and the relay's HTTPS origin for `origin`.
    List the platforms available on the relay. Store the sender credential
-   in the service environment as `CORESCOPE_NODESCOPE_PUSH_CREDENTIAL`.
+   in the service environment as `CORESCOPE_PUSH_RELAY_CREDENTIAL`.
    Keep the credential out of the web customizer and logs.
 6. Restart CoreScope. Run one CoreScope notifier per analyzer account
    database.
 7. Sign in to CoreScope and confirm that `GET /api/account/notifications`
-   includes `nodeScopePush` with the expected relay origin, analyzer ID
+   includes `pushRelay` with the expected relay origin, analyzer ID
    and platforms.
 
 ```json
-"nodeScopePush": {
+"pushRelay": {
   "origin": "https://push.nodescope.app",
   "analyzerId": "analyzer_id_from_enrollment",
   "platforms": ["ios", "android"]
@@ -431,7 +431,7 @@ CoreScope keeps the enrollment and device links. It drops queued push
 deliveries in its own queue and skips new push alerts during the pause.
 Alerts already handed to the relay may still arrive. Click **Resume delivery**
 to send future alerts. Email notifications continue during the pause.
-Keep the `<users.db path>.nodescope-lifecycle.json` file on persistent
+Keep the `<users.db path>.push-relay-lifecycle.json` file on persistent
 storage so a pause or pending disconnect survives a restart.
 
 **Revoke an analyzer**
@@ -445,12 +445,15 @@ If the card shows **Disconnect pending**, delivery stays paused. Click
 
 For a manual enrollment, send `DELETE /v1/analyzer` to the relay with this
 analyzer's sender credential as a bearer token. HTTP 204 confirms revocation.
-Remove the `nodeScopePush` block and `CORESCOPE_NODESCOPE_PUSH_CREDENTIAL`, then
+Remove the `pushRelay` block and `CORESCOPE_PUSH_RELAY_CREDENTIAL`, then
 restart CoreScope.
 
-On every start with user management enabled, CoreScope
-removes stored device links for analyzers that are no longer configured.
-It keeps the configured analyzer's links even when notifications are disabled.
+On every start with user management enabled and a relay enrollment in
+place, CoreScope removes stored device links for any other analyzer. It
+keeps the enrolled analyzer's links even when notifications are disabled.
+With no enrollment at all, it removes nothing and push stays off, so a
+configuration mistake can't unlink every device. Disconnect relay removes
+the links.
 If cleanup fails, CoreScope logs the error, continues starting and retries
 on the next start.
 

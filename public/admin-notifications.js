@@ -1,7 +1,7 @@
-/* NodeScope relay enrollment in the admin Notifications tab. */
+/* Push relay enrollment in the admin Notifications tab. */
 (function () {
   'use strict';
-  var endpoint = '/api/admin/notifications/nodescope';
+  var endpoint = '/api/admin/notifications/push-relay';
   var sequence = 0;
 
   function mount(container) {
@@ -12,8 +12,8 @@
     function render(message) {
       var detail = enrollment || {};
       var descriptions = {
-        available: 'Enable watched-node alerts for users of the NodeScope app.',
-        connected: 'Users can enable watched-node alerts in the NodeScope app.',
+        available: 'Enable watched-node alerts on phones through a push relay.',
+        connected: 'Users can enable watched-node alerts in the mobile app that uses this relay.',
         manual: 'This enrollment is managed in the server configuration.',
         notifications_disabled: 'Node notifications are disabled in the server configuration.',
         unavailable: detail.relayOrigin
@@ -25,9 +25,9 @@
       var disconnectPending = detail.state === 'connected' && detail.disconnectPending === true;
       var description = descriptions[detail.state] || '';
       if (disconnectPending) {
-        description = 'NodeScope delivery is paused while disconnect is pending. Retry disconnect to finish removing the enrollment.';
+        description = 'Push delivery is paused while disconnect is pending. Retry disconnect to finish removing the enrollment.';
       } else if (paused) {
-        description = 'NodeScope delivery is paused. Device links are kept, and alerts during the pause are skipped.';
+        description = 'Push delivery is paused. Device links are kept, and alerts during the pause are skipped.';
       }
       var statuses = {
         available: 'Not connected',
@@ -38,8 +38,8 @@
       };
       var status = disconnectPending ? 'Disconnect pending' : (paused ? 'Paused' : statuses[detail.state]);
       var statusClass = paused || disconnectPending ? ' is-paused' : (connected ? ' is-connected' : '');
-      var html = '<section class="admin-card admin-notification-card" aria-labelledby="adminNodeScopeTitle" aria-busy="' + !!busy + '">' +
-        '<header class="admin-notification-heading"><h3 id="adminNodeScopeTitle">NodeScope Push</h3>' +
+      var html = '<section class="admin-card admin-notification-card" aria-labelledby="adminPushRelayTitle" aria-busy="' + !!busy + '">' +
+        '<header class="admin-notification-heading"><h3 id="adminPushRelayTitle">Mobile push</h3>' +
         (status ? '<span class="admin-notification-status' + statusClass + '">' + status + '</span>' : '') +
         '</header>' +
         (description ? '<p class="admin-notification-description">' + description + '</p>' : '');
@@ -61,16 +61,16 @@
       }
       if (message) html += '<p class="account-msg err" role="alert">' + escapeHtml(message) + '</p>';
       if (detail.state === 'available') {
-        html += '<p><button type="button" class="account-btn account-btn-primary" id="adminEnableNodeScope"' + (busy ? ' disabled' : '') + '>Enable</button></p>';
+        html += '<p><button type="button" class="account-btn account-btn-primary" id="adminEnablePushRelay"' + (busy ? ' disabled' : '') + '>Enable</button></p>';
       } else if (connected) {
         var disabled = busy ? ' disabled' : '';
         html += '<div class="admin-notification-actions">';
         if (!disconnectPending) {
           html += '<button type="button" class="account-btn ' + (paused ? 'account-btn-primary' : 'account-btn-secondary') +
-            '" id="adminPauseNodeScope"' + disabled + '>' + (paused ? 'Resume delivery' : 'Pause delivery') + '</button>';
+            '" id="adminPausePushRelay"' + disabled + '>' + (paused ? 'Resume delivery' : 'Pause delivery') + '</button>';
         }
         if (detail.state === 'connected') {
-          html += '<button type="button" class="account-btn account-btn-secondary admin-notification-disconnect" id="adminDisconnectNodeScope"' +
+          html += '<button type="button" class="account-btn account-btn-secondary admin-notification-disconnect" id="adminDisconnectPushRelay"' +
             disabled + '>' + (disconnectPending ? 'Retry disconnect' : 'Disconnect relay') + '</button>';
         }
         html += '</div>';
@@ -78,27 +78,27 @@
           html += '<p class="admin-notification-description">To disconnect this relay, revoke the enrollment and remove its server configuration.</p>';
         }
       } else if (!enrollment && !busy) {
-        html += '<button type="button" class="account-btn account-btn-secondary" id="adminRetryNodeScope">Retry</button>';
+        html += '<button type="button" class="account-btn account-btn-secondary" id="adminRetryPushRelay">Retry</button>';
       }
       container.innerHTML = html + '</section>';
       if (detail.state === 'available' && !busy) {
-        container.querySelector('#adminEnableNodeScope').addEventListener('click', function () { request('POST'); });
+        container.querySelector('#adminEnablePushRelay').addEventListener('click', function () { request('POST'); });
       } else if (connected && !busy) {
         if (!disconnectPending) {
-          container.querySelector('#adminPauseNodeScope').addEventListener('click', function () {
+          container.querySelector('#adminPausePushRelay').addEventListener('click', function () {
             request('PUT', { paused: !paused });
           });
         }
         if (detail.state === 'connected') {
-          container.querySelector('#adminDisconnectNodeScope').addEventListener('click', function () {
+          container.querySelector('#adminDisconnectPushRelay').addEventListener('click', function () {
             if (busy || mounted !== sequence) return;
-            if (disconnectPending || window.confirm('Disconnect the NodeScope relay? This removes device links for this analyzer. Users will need to enable alerts again after you reconnect.')) {
+            if (disconnectPending || window.confirm('Disconnect the push relay? This removes device links for this analyzer. Users will need to enable alerts again after you reconnect.')) {
               request('DELETE');
             }
           });
         }
       } else if (!enrollment && !busy) {
-        container.querySelector('#adminRetryNodeScope').addEventListener('click', function () { request('GET'); });
+        container.querySelector('#adminRetryPushRelay').addEventListener('click', function () { request('GET'); });
       }
     }
 

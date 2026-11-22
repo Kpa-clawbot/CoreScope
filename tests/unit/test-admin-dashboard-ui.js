@@ -274,7 +274,7 @@ test('unmount drops a response that arrives later', async () => {
 console.log('admin-notifications.js');
 
 test('enrollment uses the admin API and only permits one in-flight Enable request', async () => {
-  const endpoint = '/api/admin/notifications/nodescope';
+  const endpoint = '/api/admin/notifications/push-relay';
   const methods = [];
   let finish;
   const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
@@ -289,17 +289,17 @@ test('enrollment uses the admin API and only permits one in-flight Enable reques
   await tick();
   assert(!container.innerHTML.includes('<img'), container.innerHTML);
   assert(container.innerHTML.includes('>&lt;img '), container.innerHTML);
-  const click = container.querySelector('#adminEnableNodeScope').handlers.click;
+  const click = container.querySelector('#adminEnablePushRelay').handlers.click;
   click();
   click();
   await tick();
   assert.deepStrictEqual(methods, ['GET', 'POST']);
-  assert(container.innerHTML.includes('id="adminEnableNodeScope" disabled'), container.innerHTML);
+  assert(container.innerHTML.includes('id="adminEnablePushRelay" disabled'), container.innerHTML);
   finish(OK({ state: 'connected', analyzerId: 'an_test' }));
   await tick();
   assert(container.innerHTML.includes('is-connected">Connected</span>'), container.innerHTML);
   assert(container.innerHTML.includes('an_test'), container.innerHTML);
-  assert(!container.innerHTML.includes('adminEnableNodeScope'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminEnablePushRelay'), container.innerHTML);
 });
 
 test('an enrollment failure leaves Enable available and escapes the API error', async () => {
@@ -308,11 +308,11 @@ test('an enrollment failure leaves Enable available and escapes the API error', 
   const container = env.dom.mk('c');
   env.ctx.CSAdminNotifications.mount(container);
   await tick();
-  container.querySelector('#adminEnableNodeScope').handlers.click();
+  container.querySelector('#adminEnablePushRelay').handlers.click();
   await tick();
   assert(container.innerHTML.includes('role="alert">&lt;img '), container.innerHTML);
   assert(!container.innerHTML.includes('<img'), container.innerHTML);
-  assert(container.innerHTML.includes('id="adminEnableNodeScope">Enable'), container.innerHTML);
+  assert(container.innerHTML.includes('id="adminEnablePushRelay">Enable'), container.innerHTML);
 });
 
 test('a disabled notifier offers no Enable button', async () => {
@@ -321,14 +321,14 @@ test('a disabled notifier offers no Enable button', async () => {
   env.ctx.CSAdminNotifications.mount(container);
   await tick();
   assert(container.innerHTML.includes('Node notifications are disabled'), container.innerHTML);
-  assert(!container.innerHTML.includes('adminEnableNodeScope'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminEnablePushRelay'), container.innerHTML);
 });
 
 test('connected and manually configured destinations can pause and resume delivery', async () => {
   for (const state of ['connected', 'manual']) {
     const updates = [];
     const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
-      assert.strictEqual(p, '/api/admin/notifications/nodescope');
+      assert.strictEqual(p, '/api/admin/notifications/push-relay');
       if (method === 'GET') return OK({ state, analyzerId: 'an_test' });
       assert.strictEqual(method, 'PUT');
       assert.deepStrictEqual(Object.keys(body), ['paused']);
@@ -341,12 +341,12 @@ test('connected and manually configured destinations can pause and resume delive
     assert(container.innerHTML.includes('>Pause delivery</button>'), container.innerHTML);
     assert.strictEqual(container.innerHTML.includes('>Disconnect relay</button>'), state === 'connected');
     if (state === 'manual') assert(container.innerHTML.includes('remove its server configuration'));
-    container.querySelector('#adminPauseNodeScope').handlers.click();
+    container.querySelector('#adminPausePushRelay').handlers.click();
     await tick();
     assert(container.innerHTML.includes('is-paused">Paused</span>'), container.innerHTML);
     assert(container.innerHTML.includes('an_test'), container.innerHTML);
     assert(container.innerHTML.includes('>Resume delivery</button>'), container.innerHTML);
-    container.querySelector('#adminPauseNodeScope').handlers.click();
+    container.querySelector('#adminPausePushRelay').handlers.click();
     await tick();
     assert.deepStrictEqual(updates, [true, false]);
     assert(container.innerHTML.includes('is-connected">Connected</span>'), container.innerHTML);
@@ -358,7 +358,7 @@ test('disconnect requires confirmation and returns a disconnected card', async (
   let accept = false;
   let confirmation;
   const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
-    assert.strictEqual(p, '/api/admin/notifications/nodescope');
+    assert.strictEqual(p, '/api/admin/notifications/push-relay');
     assert.strictEqual(body, undefined);
     methods.push(method);
     return method === 'GET' ? OK({ state: 'connected', analyzerId: 'an_test' }) : OK({ state: 'available' });
@@ -366,7 +366,7 @@ test('disconnect requires confirmation and returns a disconnected card', async (
   const container = env.dom.mk('c');
   env.ctx.CSAdminNotifications.mount(container);
   await tick();
-  const disconnect = container.querySelector('#adminDisconnectNodeScope').handlers.click;
+  const disconnect = container.querySelector('#adminDisconnectPushRelay').handlers.click;
   disconnect();
   await tick();
   assert(confirmation.includes('enable alerts again'), confirmation);
@@ -394,14 +394,14 @@ test('failed disconnect reloads the pending state and offers retry without Resum
   const container = env.dom.mk('c');
   env.ctx.CSAdminNotifications.mount(container);
   await tick();
-  container.querySelector('#adminDisconnectNodeScope').handlers.click();
+  container.querySelector('#adminDisconnectPushRelay').handlers.click();
   await tick();
   assert.deepStrictEqual(methods, ['GET', 'DELETE', 'GET']);
   assert(container.innerHTML.includes('is-paused">Disconnect pending</span>'), container.innerHTML);
   assert(container.innerHTML.includes('>Retry disconnect</button>'), container.innerHTML);
-  assert(!container.innerHTML.includes('adminPauseNodeScope'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminPausePushRelay'), container.innerHTML);
   assert(container.innerHTML.includes('role="alert">&lt;img '), container.innerHTML);
-  container.querySelector('#adminDisconnectNodeScope').handlers.click();
+  container.querySelector('#adminDisconnectPushRelay').handlers.click();
   await tick();
   assert.deepStrictEqual(methods, ['GET', 'DELETE', 'GET', 'DELETE']);
   assert(container.innerHTML.includes('>Enable</button>'), container.innerHTML);

@@ -46,7 +46,7 @@ type notifyAccountJSON struct {
 	ExternalLabel   string                    `json:"externalLabel,omitempty"` // names node.external when offered
 	Watches         []notifyWatchJSON         `json:"watches"`
 	Limits          notifyLimitsJSON          `json:"limits"`
-	NodeScopePush   *notifyPushCapabilityJSON `json:"nodeScopePush,omitempty"`
+	PushRelay       *notifyPushCapabilityJSON `json:"pushRelay,omitempty"`
 }
 
 type watchMyNodesJSON struct {
@@ -131,14 +131,14 @@ func (s *Server) notifyAccount(u *users.User) (notifyAccountJSON, error) {
 	if ext {
 		out.ExternalLabel = ns.external.label
 	}
-	s.auth.nodeScopeDelivery.mu.RLock()
-	push := s.auth.nodeScopeRelaySettings()
-	if push.relay != nil && !s.auth.nodeScopeRelayRevoked() {
-		out.NodeScopePush = &notifyPushCapabilityJSON{
+	s.auth.relayDelivery.mu.RLock()
+	push := s.auth.relaySettings()
+	if push.relay != nil && !s.auth.relayRevoked() {
+		out.PushRelay = &notifyPushCapabilityJSON{
 			RelayOrigin: push.relayOrigin, AnalyzerID: push.relayAnalyzerID, ContractVersion: notifyRelayContractVersion, Platforms: push.relayPlatforms,
 		}
 	}
-	s.auth.nodeScopeDelivery.mu.RUnlock()
+	s.auth.relayDelivery.mu.RUnlock()
 	for _, e := range p.Events {
 		if (u.Role == users.RoleAdmin || !users.IsAdminNotifyEvent(e)) && (ext || e != users.NotifyNodeExternal) {
 			out.Events = append(out.Events, e)

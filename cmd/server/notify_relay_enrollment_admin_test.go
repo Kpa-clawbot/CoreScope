@@ -15,20 +15,20 @@ type enrollmentRelayTransport func(*http.Request) (*http.Response, error)
 
 func (f enrollmentRelayTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestNodeScopeAdminEnrollment(t *testing.T) {
+func TestPushRelayAdminEnrollment(t *testing.T) {
 	t.Run("production default", func(t *testing.T) {
-		testNodeScopeAdminEnrollment(t, "", "https://push.nodescope.app")
+		testRelayAdminEnrollment(t, "", "https://push.nodescope.app")
 	})
 	t.Run("staging override", func(t *testing.T) {
-		testNodeScopeAdminEnrollment(t, "https://push-staging.nodescope.app/", "https://push-staging.nodescope.app")
+		testRelayAdminEnrollment(t, "https://push-staging.nodescope.app/", "https://push-staging.nodescope.app")
 	})
 }
 
-func testNodeScopeAdminEnrollment(t *testing.T, override, relayOrigin string) {
+func testRelayAdminEnrollment(t *testing.T, override, relayOrigin string) {
 	t.Helper()
 	const adminEmail = "admin-enrollment@example.org"
-	const path = "/api/admin/notifications/nodescope"
-	const proofPath = "/api/nodescope/enrollment-proof"
+	const path = "/api/admin/notifications/push-relay"
+	const proofPath = "/api/push-relay/enrollment-proof"
 	f := newAuthFixture(t, adminEmail)
 	a := f.srv.auth
 	a.set.notify.enabled = true
@@ -39,7 +39,7 @@ func testNodeScopeAdminEnrollment(t *testing.T, override, relayOrigin string) {
 		t.Fatalf("anonymous status = %d", w.Code)
 	}
 	w := f.do(http.MethodGet, path, nil, as(admin))
-	var status nodeScopeEnrollmentStatus
+	var status relayEnrollmentStatus
 	if err := json.Unmarshal(w.Body.Bytes(), &status); w.Code != http.StatusOK || err != nil || status.State != "available" || status.RelayOrigin != relayOrigin {
 		t.Fatalf("available status: HTTP %d, %+v, %v", w.Code, status, err)
 	}
@@ -55,7 +55,7 @@ func testNodeScopeAdminEnrollment(t *testing.T, override, relayOrigin string) {
 
 	var savedCredential string
 	attempts := 0
-	a.nodeScopeEnrollment.transport = enrollmentRelayTransport(func(r *http.Request) (*http.Response, error) {
+	a.relayEnrollment.transport = enrollmentRelayTransport(func(r *http.Request) (*http.Response, error) {
 		w := httptest.NewRecorder()
 		if r.URL.Scheme+"://"+r.URL.Host != relayOrigin {
 			t.Errorf("unexpected relay origin: %s", r.URL.Host)
@@ -101,7 +101,7 @@ func testNodeScopeAdminEnrollment(t *testing.T, override, relayOrigin string) {
 	if w := f.do(http.MethodPost, path, nil, as(admin)); w.Code != http.StatusBadGateway {
 		t.Fatalf("failed relay request returned %d", w.Code)
 	}
-	pending := nodeScopePendingPath(a.set.dbPath, relayOrigin)
+	pending := relayPendingPath(a.set.dbPath, relayOrigin)
 	if info, err := os.Stat(pending); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("pending enrollment file missing or not private: %v", err)
 	}
@@ -121,25 +121,25 @@ func testNodeScopeAdminEnrollment(t *testing.T, override, relayOrigin string) {
 	}
 }
 
-func TestNodeScopeAdminLifecycle(t *testing.T) {
+func TestPushRelayAdminLifecycle(t *testing.T) {
 	const adminEmail = "admin-delivery@example.org"
-	const path = "/api/admin/notifications/nodescope"
+	const path = "/api/admin/notifications/push-relay"
 	f := newAuthFixture(t, adminEmail)
 	a := f.srv.auth
 	a.set.notify.enabled = true
 	admin := f.registerAndActivate(t, adminEmail, "Admin", pw)
 	member := f.registerAndActivate(t, "member-delivery@example.org", "Member", pw)
 	credential := strings.Repeat("a", 43)
-	if err := a.activateNodeScopeEnrollment(nodeScopeSelfEnrollRelay, "an_lifecycle", credential); err != nil {
+	if err := a.activateRelayEnrollment(nodeScopeSelfEnrollRelay, "an_lifecycle", credential); err != nil {
 		t.Fatal(err)
 	}
 	const otherCredential = "fixture-staging-pending"
-	legacyPending := nodeScopePendingPath(a.set.dbPath, nodeScopeStagingRelay)
+	legacyPending := relayPendingPath(a.set.dbPath, nodeScopeStagingRelay)
 	if err := os.WriteFile(legacyPending, []byte(otherCredential), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	revokeCalls := 0
-	a.nodeScopeRelaySettings().relay.http.Transport = enrollmentRelayTransport(func(r *http.Request) (*http.Response, error) {
+	a.relaySettings().relay.http.Transport = enrollmentRelayTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/v1/analyzer" || r.Header.Get("Authorization") != "Bearer "+credential {
 			t.Error("revocation request did not target the enrolled analyzer")
 		}
@@ -160,7 +160,7 @@ func TestNodeScopeAdminLifecycle(t *testing.T) {
 	}
 	checkStatus := func(w *httptest.ResponseRecorder, wantState string, wantPaused, wantPending bool) {
 		t.Helper()
-		var got nodeScopeEnrollmentStatus
+		var got relayEnrollmentStatus
 		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil ||
 			got.State != wantState || got.Paused != wantPaused || got.DisconnectPending != wantPending {
 			t.Fatalf("status HTTP %d (%+v), want %s paused=%v pending=%v", w.Code, got, wantState, wantPaused, wantPending)
@@ -188,7 +188,7 @@ func TestNodeScopeAdminLifecycle(t *testing.T) {
 		t.Fatalf("resume while disconnect pending returned %d", w.Code)
 	}
 	checkStatus(f.do(http.MethodDelete, path, nil, as(admin)), "available", false, false)
-	if _, err := os.Stat(a.nodeScopeEnrollmentPath()); !os.IsNotExist(err) {
+	if _, err := os.Stat(a.relayEnrollmentPath()); !os.IsNotExist(err) {
 		t.Fatalf("disconnected analyzer still has a saved credential: %v", err)
 	}
 	checkStatus(f.do(http.MethodDelete, path, nil, as(admin)), "available", false, false)
@@ -200,25 +200,25 @@ func TestNodeScopeAdminLifecycle(t *testing.T) {
 	}
 }
 
-func TestNodeScopePendingCredentialsAreScopedToTheRelay(t *testing.T) {
+func TestPushRelayPendingCredentialsAreScopedToTheRelay(t *testing.T) {
 	dbPath := t.TempDir() + "/users.db"
-	staging := nodeScopePendingPath(dbPath, nodeScopeStagingRelay)
-	production := nodeScopePendingPath(dbPath, nodeScopeSelfEnrollRelay)
+	staging := relayPendingPath(dbPath, nodeScopeStagingRelay)
+	production := relayPendingPath(dbPath, nodeScopeSelfEnrollRelay)
 	if staging != dbPath+".nodescope-pending.json" || staging == production {
 		t.Fatal("pending paths do not preserve and isolate the legacy staging file")
 	}
 	const legacy = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	if err := writePrivateNodeScopeJSON(staging, nodeScopePendingEnrollment{PublicOrigin: testBase, SenderCredential: legacy}); err != nil {
+	if err := writePrivateRelayJSON(staging, relayPendingEnrollment{PublicOrigin: testBase, SenderCredential: legacy}); err != nil {
 		t.Fatal(err)
 	}
-	credential, err := nodeScopePendingCredential(production, testBase)
+	credential, err := relayPendingCredential(production, testBase)
 	if err != nil || credential == "" || credential == legacy {
 		t.Fatalf("production attempted to reuse a legacy staging credential: %v", err)
 	}
-	if got, err := nodeScopePendingCredential(production, testBase); err != nil || got != credential {
+	if got, err := relayPendingCredential(production, testBase); err != nil || got != credential {
 		t.Fatalf("production retry did not reuse its own credential: %v", err)
 	}
-	if got, err := nodeScopePendingCredential(staging, testBase); err != nil || got != legacy {
+	if got, err := relayPendingCredential(staging, testBase); err != nil || got != legacy {
 		t.Fatalf("staging retry did not reuse the legacy credential: %v", err)
 	}
 }
@@ -240,17 +240,17 @@ func TestNodeScopeSelfEnrollOriginAllowsOnlyOfficialRelays(t *testing.T) {
 	f := newAuthFixture(t)
 	a := f.srv.auth
 	a.set.nodeScopeSelfEnrollOrigin = "https://relay.example.org"
-	if got := a.nodeScopeEnrollmentStatus(); got.State != "notifications_disabled" {
+	if got := a.relayEnrollmentStatus(); got.State != "notifications_disabled" {
 		t.Fatalf("disabled notifications with bad override: %+v", got)
 	}
 	a.set.notify.enabled = true
-	if got := a.nodeScopeEnrollmentStatus(); got.State != "unavailable" || got.RelayOrigin != "" {
+	if got := a.relayEnrollmentStatus(); got.State != "unavailable" || got.RelayOrigin != "" {
 		t.Fatalf("new enrollment with bad override: %+v", got)
 	}
-	if err := a.activateNodeScopeEnrollment(nodeScopeStagingRelay, "an_existing", strings.Repeat("a", 43)); err != nil {
+	if err := a.activateRelayEnrollment(nodeScopeStagingRelay, "an_existing", strings.Repeat("a", 43)); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.nodeScopeEnrollmentStatus(); got.State != "connected" || got.RelayOrigin != nodeScopeStagingRelay {
+	if got := a.relayEnrollmentStatus(); got.State != "connected" || got.RelayOrigin != nodeScopeStagingRelay {
 		t.Fatalf("existing enrollment with bad override: %+v", got)
 	}
 }

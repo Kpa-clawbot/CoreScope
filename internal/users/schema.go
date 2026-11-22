@@ -197,7 +197,7 @@ var migrations = [][]string{
 		`ALTER TABLE repeater_info ADD COLUMN revision INTEGER NOT NULL DEFAULT 0`,
 		`UPDATE repeater_info SET revision = 1`,
 	},
-	// v11: NodeScope push bindings, pending link intents, and durable outbox.
+	// v11: push relay bindings, pending link intents, and durable outbox.
 	{
 		`CREATE TABLE notification_push_bindings (
 			analyzer_id TEXT NOT NULL,

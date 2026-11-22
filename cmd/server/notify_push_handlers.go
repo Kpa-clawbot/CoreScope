@@ -50,8 +50,8 @@ func (s *Server) registerNotifyPushRoutes(r *mux.Router) {
 // analyzer. Skipping concurrent work prevents a slow relay response from
 // overwriting a later device change. The entries live for one request.
 func (s *Server) beginNotifyPushDevice(w http.ResponseWriter, r *http.Request, ns notifySettings) (notifyPushDeviceKey, bool) {
-	if ns.relay == nil || s.auth.nodeScopeDisconnectPending() {
-		writeError(w, http.StatusNotFound, "NodeScope push is not enabled")
+	if ns.relay == nil || s.auth.relayDisconnectPending() {
+		writeError(w, http.StatusNotFound, "Push is not enabled")
 		return notifyPushDeviceKey{}, false
 	}
 	key := notifyPushDeviceKey{ns.relayAnalyzerID, mux.Vars(r)["installationID"]}
@@ -68,8 +68,8 @@ func (s *Server) beginNotifyPushDevice(w http.ResponseWriter, r *http.Request, n
 }
 
 func (s *Server) handleNotifyPushLink(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
-	if s.auth.nodeScopeRelaySettings().relay == nil || s.auth.nodeScopeDisconnectPending() {
-		writeError(w, http.StatusNotFound, "NodeScope push is not enabled")
+	if s.auth.relaySettings().relay == nil || s.auth.relayDisconnectPending() {
+		writeError(w, http.StatusNotFound, "Push is not enabled")
 		return
 	}
 	var request notifyPushLinkJSON
@@ -81,9 +81,9 @@ func (s *Server) handleNotifyPushLink(w http.ResponseWriter, r *http.Request, u 
 		return
 	}
 
-	s.auth.nodeScopeDelivery.mu.RLock()
-	defer s.auth.nodeScopeDelivery.mu.RUnlock()
-	ns := s.auth.nodeScopeRelaySettings()
+	s.auth.relayDelivery.mu.RLock()
+	defer s.auth.relayDelivery.mu.RUnlock()
+	ns := s.auth.relaySettings()
 	key, ok := s.beginNotifyPushDevice(w, r, ns)
 	if !ok {
 		return
@@ -166,9 +166,9 @@ func (s *Server) writeNotifyPushLinkError(w http.ResponseWriter, binding users.P
 }
 
 func (s *Server) handleNotifyPushUnlink(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
-	s.auth.nodeScopeDelivery.mu.RLock()
-	defer s.auth.nodeScopeDelivery.mu.RUnlock()
-	key, ok := s.beginNotifyPushDevice(w, r, s.auth.nodeScopeRelaySettings())
+	s.auth.relayDelivery.mu.RLock()
+	defer s.auth.relayDelivery.mu.RUnlock()
+	key, ok := s.beginNotifyPushDevice(w, r, s.auth.relaySettings())
 	if !ok {
 		return
 	}

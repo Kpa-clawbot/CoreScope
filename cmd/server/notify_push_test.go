@@ -79,7 +79,7 @@ func TestResolveNotifyRelayRequiresExplicitConfiguration(t *testing.T) {
 		t.Fatal("accepted configuration without sender credential")
 	}
 	secret := func(key string) string {
-		if key == "CORESCOPE_NODESCOPE_PUSH_CREDENTIAL" {
+		if key == "CORESCOPE_PUSH_RELAY_CREDENTIAL" {
 			return strings.Repeat("a", 43)
 		}
 		return ""
@@ -133,11 +133,11 @@ func TestStartupPrunesPushStateWithNotificationsDisabled(t *testing.T) {
 		wantB int
 	}{
 		{name: "keep configured analyzer", relay: &NotifyRelayConfig{AnalyzerID: "analyzer-a", Origin: "invalid with push off"}, wantA: 1},
-		{name: "remove all without a relay"},
-		{name: "prune error rolls back and startup continues", fail: true, wantA: 1, wantB: 1},
+		{name: "keep all without a relay", wantA: 1, wantB: 1},
+		{name: "prune error rolls back and startup continues", relay: &NotifyRelayConfig{AnalyzerID: "analyzer-a", Origin: "invalid with push off"}, fail: true, wantA: 1, wantB: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("CORESCOPE_NODESCOPE_PUSH_CREDENTIAL", "")
+			t.Setenv("CORESCOPE_PUSH_RELAY_CREDENTIAL", "")
 			f := newNotifyFixture(t, defaultNotifySettings())
 			pat := f.watcher(t, "pat@example.org", "Pat", evPkA)
 			for _, analyzer := range []string{"analyzer-a", "analyzer-b"} {
@@ -166,7 +166,7 @@ func TestStartupPrunesPushStateWithNotificationsDisabled(t *testing.T) {
 			srv := &Server{cfg: &Config{UserManagement: &UserManagementConfig{
 				Enabled: true, PublicBaseURL: testBase, DBPath: dbPath,
 				Mail:          UserMailConfig{Provider: "brevo", BrevoAPIKey: "k", FromEmail: "noreply@example.org"},
-				Notifications: &NotificationsConfig{NodeScopePush: tc.relay},
+				Notifications: &NotificationsConfig{PushRelay: tc.relay},
 			}}}
 			var output bytes.Buffer
 			previous := log.Writer()

@@ -96,7 +96,7 @@ type exportNotifications struct {
 	PushDevices []exportPushDevice `json:"pushDevices"`
 }
 
-// exportPushDevice is a NodeScope push device link: the relay's analyzer
+// exportPushDevice is a push relay device link: the relay's analyzer
 // and installation IDs and when the link expires unless the app renews it.
 type exportPushDevice struct {
 	AnalyzerID     string `json:"analyzerId"`

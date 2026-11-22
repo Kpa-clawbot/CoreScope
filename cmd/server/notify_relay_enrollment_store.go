@@ -10,27 +10,27 @@ import (
 	"path/filepath"
 )
 
-type nodeScopeEnrollment struct {
+type relayEnrollment struct {
 	PublicOrigin     string `json:"public_origin"`
 	RelayOrigin      string `json:"relay_origin"`
 	AnalyzerID       string `json:"analyzer_id"`
 	SenderCredential string `json:"sender_credential"`
 }
 
-func (a *authService) nodeScopeRelaySettings() notifySettings {
-	if active := a.nodeScopeRelay.Load(); active != nil {
+func (a *authService) relaySettings() notifySettings {
+	if active := a.enrolledRelay.Load(); active != nil {
 		return *active
 	}
 	return a.set.notify
 }
 
-func (a *authService) nodeScopeEnrollmentPath() string {
-	return a.set.dbPath + ".nodescope-relay.json"
+func (a *authService) relayEnrollmentPath() string {
+	return a.set.dbPath + ".push-relay.json"
 }
 
-func (a *authService) configuredNodeScopeEnrollment(record nodeScopeEnrollment) (*notifySettings, error) {
+func (a *authService) configuredRelayEnrollment(record relayEnrollment) (*notifySettings, error) {
 	if !notifyPushIDPattern.MatchString(record.AnalyzerID) || !notifyLinkProofPattern.MatchString(record.SenderCredential) {
-		return nil, errors.New("invalid NodeScope relay enrollment")
+		return nil, errors.New("invalid push relay enrollment")
 	}
 	settings := a.set.notify
 	cfg := &NotifyRelayConfig{
@@ -42,55 +42,62 @@ func (a *authService) configuredNodeScopeEnrollment(record nodeScopeEnrollment) 
 	return &settings, nil
 }
 
-// activateNodeScopeEnrollment is called only by the serialized admin enrollment handler.
-func (a *authService) activateNodeScopeEnrollment(origin, analyzerID, senderCredential string) error {
-	if !a.set.notify.enabled || a.nodeScopeRelaySettings().relay != nil {
-		return errors.New("NodeScope push cannot be enrolled in this configuration")
+// activateRelayEnrollment is called only by the serialized admin enrollment handler.
+func (a *authService) activateRelayEnrollment(origin, analyzerID, senderCredential string) error {
+	if !a.set.notify.enabled || a.relaySettings().relay != nil {
+		return errors.New("push relay enrollment is not possible in this configuration")
 	}
-	publicOrigin := nodeScopePublicOrigin(a.set.baseURL)
+	publicOrigin := relayPublicOrigin(a.set.baseURL)
 	if publicOrigin == "" {
-		return errors.New("NodeScope push requires a public HTTPS analyzer origin")
+		return errors.New("push relay enrollment requires a public HTTPS analyzer origin")
 	}
-	record := nodeScopeEnrollment{
+	record := relayEnrollment{
 		PublicOrigin: publicOrigin, RelayOrigin: origin,
 		AnalyzerID: analyzerID, SenderCredential: senderCredential,
 	}
-	settings, err := a.configuredNodeScopeEnrollment(record)
+	settings, err := a.configuredRelayEnrollment(record)
 	if err != nil {
 		return err
 	}
-	if err := writePrivateNodeScopeJSON(a.nodeScopeEnrollmentPath(), record); err != nil {
-		return fmt.Errorf("save NodeScope relay enrollment: %w", err)
+	if err := writePrivateRelayJSON(a.relayEnrollmentPath(), record); err != nil {
+		return fmt.Errorf("save push relay enrollment: %w", err)
 	}
-	a.nodeScopeDelivery.mu.Lock()
-	a.nodeScopeRelay.Store(settings)
-	a.nodeScopeDelivery.epoch.Add(1)
-	a.nodeScopeDelivery.mu.Unlock()
+	a.relayDelivery.mu.Lock()
+	a.enrolledRelay.Store(settings)
+	a.relayDelivery.epoch.Add(1)
+	a.relayDelivery.mu.Unlock()
 	return nil
 }
 
-// Restore the configured enrollment even when notification delivery is paused.
+// Restore the configured enrollment even when notification delivery is
+// paused, and remove push state left by other analyzers.
 func (a *authService) restoreAndPrunePushState(notifications *NotificationsConfig) {
 	var keepAnalyzerID string
-	if notifications != nil && notifications.NodeScopePush != nil {
-		keepAnalyzerID = notifications.NodeScopePush.AnalyzerID
+	if notifications != nil && notifications.PushRelay != nil {
+		keepAnalyzerID = notifications.PushRelay.AnalyzerID
 	} else {
 		var err error
-		keepAnalyzerID, err = a.restoreNodeScopeEnrollment()
+		keepAnalyzerID, err = a.restoreRelayEnrollment()
 		if err != nil {
 			// A temporary sidecar read failure is not evidence that the enrollment went away.
-			log.Printf("[notify] load NodeScope enrollment: %v; will retry on next start", err)
+			log.Printf("[notify] load push relay enrollment: %v; will retry on next start", err)
 			return
 		}
+	}
+	if keepAnalyzerID == "" {
+		// No enrollment is not evidence that the links are stale: a config
+		// slip or a moved enrollment file would otherwise unlink every
+		// device. Delivery stays off; Disconnect is the way to remove them.
+		return
 	}
 	if err := pruneUnconfiguredPushState(a.st, keepAnalyzerID); err != nil {
 		log.Printf("[notify] push state cleanup failed: %v; will retry on next start", err)
 	}
 }
 
-// restoreNodeScopeEnrollment runs before the workers and only if no manual config exists.
-func (a *authService) restoreNodeScopeEnrollment() (string, error) {
-	path := a.nodeScopeEnrollmentPath()
+// restoreRelayEnrollment runs before the workers and only if no manual config exists.
+func (a *authService) restoreRelayEnrollment() (string, error) {
+	path := a.relayEnrollmentPath()
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
@@ -104,33 +111,33 @@ func (a *authService) restoreNodeScopeEnrollment() (string, error) {
 		return "", err
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return "", errors.New("NodeScope relay enrollment file must be a private regular file")
+		return "", errors.New("push relay enrollment file must be a private regular file")
 	}
 	const maxEnrollmentBytes = 8192
 	raw, err := io.ReadAll(io.LimitReader(file, maxEnrollmentBytes+1))
 	if err != nil {
 		return "", err
 	}
-	var record nodeScopeEnrollment
+	var record relayEnrollment
 	if len(raw) > maxEnrollmentBytes || json.Unmarshal(raw, &record) != nil {
-		return "", errors.New("invalid NodeScope relay enrollment file")
+		return "", errors.New("invalid push relay enrollment file")
 	}
-	if record.PublicOrigin == "" || record.PublicOrigin != nodeScopePublicOrigin(a.set.baseURL) {
+	if record.PublicOrigin == "" || record.PublicOrigin != relayPublicOrigin(a.set.baseURL) {
 		return "", nil
 	}
-	settings, err := a.configuredNodeScopeEnrollment(record)
+	settings, err := a.configuredRelayEnrollment(record)
 	if err != nil {
 		return "", err
 	}
 	if a.set.notify.enabled {
-		a.nodeScopeRelay.Store(settings)
+		a.enrolledRelay.Store(settings)
 	}
 	return record.AnalyzerID, nil
 }
 
-func writePrivateNodeScopeJSON(path string, record any) error {
+func writePrivateRelayJSON(path string, record any) error {
 	dir := filepath.Dir(path)
-	file, err := os.CreateTemp(dir, ".nodescope-relay-*")
+	file, err := os.CreateTemp(dir, ".push-relay-*")
 	if err != nil {
 		return err
 	}

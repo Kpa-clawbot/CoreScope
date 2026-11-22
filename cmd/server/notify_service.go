@@ -114,7 +114,7 @@ func (n *notifier) tick(ctx context.Context) {
 	if !n.src.ready() {
 		return
 	}
-	pushEpoch := n.a.nodeScopeDelivery.epoch.Load()
+	pushEpoch := n.a.relayDelivery.epoch.Load()
 	started := time.Now()
 	now := n.now()
 	stale := n.checkIngest(now)
@@ -238,13 +238,13 @@ func (n *notifier) tick(ctx context.Context) {
 }
 
 func (n *notifier) saveNotificationChanges(res notifyResult, accounts map[int64]users.User, nodes map[string]notifyNode, pushEpoch uint64) error {
-	state := &n.a.nodeScopeDelivery
+	state := &n.a.relayDelivery
 	state.mu.RLock()
-	settings := n.a.nodeScopeRelaySettings()
+	settings := n.a.relaySettings()
 	if settings.relay != nil {
 		defer state.mu.RUnlock()
 		var events []users.PushEvent
-		if !n.a.nodeScopeDeliveryPaused() && pushEpoch == state.epoch.Load() {
+		if !n.a.relayDeliveryPaused() && pushEpoch == state.epoch.Load() {
 			events = notifyPushEvents(res.Changes, accounts, nodes)
 		}
 		return n.a.st.ApplyNotifyChanges(res.Drop, res.States, settings.relayAnalyzerID, events)

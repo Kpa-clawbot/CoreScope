@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestNodeScopeEnrollmentPersistsAndRestoresOnlyForItsPublicOrigin(t *testing.T) {
+func TestPushRelayEnrollmentPersistsAndRestoresOnlyForItsPublicOrigin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.db")
 	serverOrigin, err := url.Parse("https://analyzer.example.org")
 	if err != nil {
@@ -20,13 +20,13 @@ func TestNodeScopeEnrollmentPersistsAndRestoresOnlyForItsPublicOrigin(t *testing
 		return &authService{set: &userMgmtSettings{dbPath: path, baseURL: base, notify: notifySettings{enabled: enabled}}}
 	}
 	first := newService(serverOrigin, true)
-	if err := first.activateNodeScopeEnrollment(relay, "an_123", sender); err != nil {
+	if err := first.activateRelayEnrollment(relay, "an_123", sender); err != nil {
 		t.Fatal(err)
 	}
-	if active := first.nodeScopeRelaySettings(); active.relay == nil || active.relayAnalyzerID != "an_123" || active.relayCredential != sender {
+	if active := first.relaySettings(); active.relay == nil || active.relayAnalyzerID != "an_123" || active.relayCredential != sender {
 		t.Fatal("enrollment did not immediately activate")
 	}
-	info, err := os.Stat(first.nodeScopeEnrollmentPath())
+	info, err := os.Stat(first.relayEnrollmentPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,11 +51,11 @@ func TestNodeScopeEnrollmentPersistsAndRestoresOnlyForItsPublicOrigin(t *testing
 				t.Fatal(err)
 			}
 			restarted := newService(base, tc.enabled)
-			id, err := restarted.restoreNodeScopeEnrollment()
+			id, err := restarted.restoreRelayEnrollment()
 			if err != nil || id != tc.wantID {
 				t.Fatalf("restored enrollment ID = %q, error = %v", id, err)
 			}
-			if active := restarted.nodeScopeRelaySettings(); (active.relay != nil) != tc.wantActive {
+			if active := restarted.relaySettings(); (active.relay != nil) != tc.wantActive {
 				t.Fatalf("restored active state = %t", active.relay != nil)
 			}
 		})
