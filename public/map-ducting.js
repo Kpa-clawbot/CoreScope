@@ -1569,7 +1569,15 @@
         cancelLater(this._tlIdleTimer);
         this._tlIdleTimer = null;
         if (this._tlDrag || this._tlTouch) return;
-        if (this._tlTarget != null) { this._tlTarget = null; return; }
+        if (this._tlTarget != null) {
+          // Code's scroll stopped short (a smooth scroll superseded or cut
+          // off): finish it at once. The target stays until the strip is
+          // there, so the jump's own scroll event is not a user pick.
+          var vp = this._tl;
+          if (vp && Math.abs((vp.scrollLeft || 0) - this._tlTarget) >= 1) vp.scrollLeft = this._tlTarget;
+          else this._tlTarget = null;
+          return;
+        }
         cancelFrame(this._tlFrame);
         this._tlFrame = null;
         this._tlOnScroll();
@@ -1584,9 +1592,14 @@
         var max = (vp.scrollWidth || 0) - (vp.clientWidth || 0);
         if (max > 0) x = Math.min(Math.max(x, 0), max);
         else if (vp.scrollWidth) x = 0;          // laid out, nothing to scroll
-        if (Math.abs((vp.scrollLeft || 0) - x) < 1) { this._tlTarget = null; return; }
+        // A code scroll still in flight (rapid keys or buttons): jump, never
+        // start a second smooth scroll, and never drop the target while the
+        // first one may still be moving the strip. Otherwise its remaining
+        // scroll events would read as a user pick of an in-between time.
+        var inFlight = this._tlTarget != null;
+        if (!inFlight && Math.abs((vp.scrollLeft || 0) - x) < 1) return;
         this._tlTarget = x;
-        if (smooth && !reducedMotion() && typeof vp.scrollTo === 'function') {
+        if (smooth && !inFlight && !reducedMotion() && typeof vp.scrollTo === 'function') {
           try { vp.scrollTo({ left: x, behavior: 'smooth' }); return; } catch (_) {}
         }
         vp.scrollLeft = x;

@@ -1909,6 +1909,43 @@ test('timeline: keys and buttons pick a time: label, aria, field, strip position
   assert.ok(!L0._userPicked && L0._idx === 1);
 });
 
+// Regression (CI flake on e10f03e1, instrumented build): rapid keys under a
+// slow browser restart smooth scrolls that have not moved yet; stepping back
+// to the strip's current position used to drop the target while the earlier
+// smooth scroll was still in flight, so its scroll events picked an
+// in-between time as if the user had scrolled.
+test('timeline: rapid keys during a smooth scroll never let its late scroll events pick a time', async () => {
+  const s = await mount(longBody(49), T0 + 60);
+  const L0 = s.layer, vp = L0._tl, xs = xsOf(s);
+  s.settleScroll();
+  assert.strictEqual(vp.scrollLeft, xs[0]);
+  // A browser too slow to move a smooth scroll before the next key.
+  const smooth = [];
+  vp.scrollTo = (o) => { smooth.push(o.left); };
+  const key = (k) => vp.fire('keydown', { key: k });
+  key('ArrowRight');
+  assert.strictEqual(L0._idx, 1);
+  assert.deepStrictEqual(smooth, [xs[1]], 'the first step scrolls smoothly');
+  assert.strictEqual(vp.scrollLeft, xs[0], 'not moved yet');
+  key('ArrowRight');
+  key('ArrowLeft');
+  key('ArrowLeft');
+  assert.strictEqual(L0._idx, 0);
+  assert.strictEqual(smooth.length, 1, 'no second smooth scroll while one is in flight');
+  assert.strictEqual(L0._tlTarget, xs[0], 'the target is kept while a scroll may still move the strip');
+  // The first smooth scroll now moves the strip part way: not a user pick.
+  vp.scrollLeft = Math.round(xs[1] * 0.6) || 1;
+  s.settleScroll();
+  assert.strictEqual(L0._idx, 0, 'late scroll events of code\'s own scroll pick nothing');
+  // It stops short: the idle settle finishes on the target at once.
+  s.runTimeouts();
+  assert.strictEqual(vp.scrollLeft, xs[0]);
+  s.settleScroll();
+  assert.strictEqual(L0._tlTarget, null, 'arrived');
+  assert.strictEqual(L0._idx, 0);
+  assert.strictEqual(vp.attrs['aria-valuenow'], '0');
+});
+
 test('timeline: Now returns to the current hour and follows it again', async () => {
   const s = await mount(longBody(49), T0 + 10 * 3600 + 60);
   const L0 = s.layer;
