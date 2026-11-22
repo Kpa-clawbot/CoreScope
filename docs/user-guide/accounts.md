@@ -383,15 +383,29 @@ involved.
 ```json
 "notifications": {
   "enabled": true,
-  "pushover": { "maxPerMonth": 7500 }
+  "pushover": { "maxPerMonth": 7500, "subscriptionCode": "YourApp-1oiwozgx5tg38a1" }
 }
 ```
 
 CoreScope refuses to start with the block but without a valid token.
 
-Users then open **My account → Notifications → Pushover**, enter the user key from their
-pushover.net dashboard, and use **Send test** to check it. CoreScope checks every key
-with Pushover before saving it.
+4. Optional, recommended: in the application's settings on pushover.net, create a
+   web-based subscription with the analyzer's `publicBaseUrl` (for example
+   `https://analyzer.example.org/`) as its base URL, and copy the subscription code into
+   `subscriptionCode`. Users then get a **Connect Pushover** button instead of copying
+   their user key by hand. Pushover only returns users to addresses under that base URL,
+   so it must match `publicBaseUrl`.
+
+Users then open **My account → Notifications → Pushover** and either click **Connect
+Pushover** (with a subscription code), confirm on pushover.net and come back connected,
+or paste the user key from their pushover.net dashboard. **Send test** checks it.
+CoreScope checks every key with Pushover before saving it.
+
+- **Connect Pushover** gives CoreScope a key made for this application only. A user who
+  is already subscribed and goes through **Connect Pushover** again can unsubscribe on
+  pushover.net; CoreScope then removes the key. The return from pushover.net only counts for the
+  signed-in user who clicked the button, within 15 minutes and once, so a link from
+  someone else can't put their key on your account.
 
 - Pushover uses the events a user chose for notifications, and has its own on and off:
   turning notification mails off, or the unsubscribe link in a mail, doesn't stop

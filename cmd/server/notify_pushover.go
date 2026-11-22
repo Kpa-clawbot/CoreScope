@@ -29,6 +29,11 @@ type PushoverConfig struct {
 	// MaxPerMonth caps messages per 30 days for the instance; Pushover's
 	// free tier allows 10,000 per application per month.
 	MaxPerMonth int `json:"maxPerMonth,omitempty"`
+	// SubscriptionCode turns on "Connect Pushover": users subscribe on
+	// pushover.net and come back with a key made for this application,
+	// instead of pasting their user key. From the application's
+	// subscription settings on pushover.net.
+	SubscriptionCode string `json:"subscriptionCode,omitempty"`
 }
 
 const (
@@ -47,9 +52,14 @@ const (
 // Application tokens and user keys are 30 letters and digits.
 var pushoverKeyPattern = regexp.MustCompile(`^[A-Za-z0-9]{30}$`)
 
+// Subscription codes look like "Name-1oiwozgx5tg38a1".
+var pushoverSubscriptionPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
+
 type pushoverSettings struct {
-	client      *pushoverClient
-	maxPerMonth int
+	client           *pushoverClient
+	maxPerMonth      int
+	subscriptionCode string // "" when only pasted keys are offered
+	subscribeBase    string // pushover.net, overridden in tests
 }
 
 func resolvePushover(c *PushoverConfig, getenv func(string) string) (*pushoverSettings, error) {
@@ -63,9 +73,15 @@ func resolvePushover(c *PushoverConfig, getenv func(string) string) (*pushoverSe
 	if c.MaxPerMonth < 0 {
 		return nil, errors.New("userManagement.notifications.pushover.maxPerMonth must not be negative")
 	}
+	code := strings.TrimSpace(c.SubscriptionCode)
+	if code != "" && !pushoverSubscriptionPattern.MatchString(code) {
+		return nil, errors.New("userManagement.notifications.pushover.subscriptionCode must be the code from the application's subscription settings")
+	}
 	return &pushoverSettings{
-		client:      newPushoverClient(pushoverAPI, token, nil),
-		maxPerMonth: positiveOr(c.MaxPerMonth, defaultPushoverMaxMonthly),
+		client:           newPushoverClient(pushoverAPI, token, nil),
+		maxPerMonth:      positiveOr(c.MaxPerMonth, defaultPushoverMaxMonthly),
+		subscriptionCode: code,
+		subscribeBase:    "https://pushover.net/subscribe/",
 	}, nil
 }
 

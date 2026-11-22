@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/users"
@@ -15,7 +20,8 @@ import (
 // notifyPushoverJSON is the caller's Pushover state, in GET
 // /api/account/notifications while the instance offers Pushover.
 type notifyPushoverJSON struct {
-	Configured  bool   `json:"configured"` // a key is saved
+	Subscribe   bool   `json:"subscribe,omitempty"` // "Connect Pushover" is offered
+	Configured  bool   `json:"configured"`          // a key is saved
 	Enabled     bool   `json:"enabled"`
 	KeyHint     string `json:"keyHint,omitempty"` // the last 4 characters of the saved key
 	ValidatedAt string `json:"validatedAt,omitempty"`
@@ -33,17 +39,157 @@ func (s *Server) registerPushoverRoutes(r *mux.Router) {
 	r.HandleFunc("/api/account/notifications/pushover", s.withUser(s.handlePushoverPut)).Methods(http.MethodPut)
 	r.HandleFunc("/api/account/notifications/pushover", s.withUser(s.handlePushoverDelete)).Methods(http.MethodDelete)
 	r.HandleFunc("/api/account/notifications/pushover/test", s.withUser(s.handlePushoverTest)).Methods(http.MethodPost)
+	if s.auth.set.notify.pushover.subscriptionCode != "" {
+		r.HandleFunc("/api/account/notifications/pushover/subscribe", s.withUser(s.handlePushoverSubscribe)).Methods(http.MethodPost)
+		// Plain GETs: pushover.net sends the browser back here.
+		r.HandleFunc("/api/account/notifications/pushover/subscribed/{token}", s.handlePushoverSubscribed).Methods(http.MethodGet)
+		r.HandleFunc("/api/account/notifications/pushover/subscribe-failed", s.handlePushoverSubscribeFailed).Methods(http.MethodGet)
+	}
+}
+
+// pushoverSubscriptions holds the one-time tokens of "Connect Pushover"
+// round trips: the token in the return URL ties the key Pushover hands
+// back to the user who started, so a crafted link can't plant another
+// key in someone's account. In memory: a restart only means trying again.
+type pushoverSubscriptions struct {
+	mu      sync.Mutex
+	pending map[string]pushoverSubscription
+}
+
+type pushoverSubscription struct {
+	userID  int64
+	expires time.Time
+}
+
+const pushoverSubscriptionLifetime = 15 * time.Minute
+
+func (p *pushoverSubscriptions) start(userID int64, now time.Time) (string, error) {
+	var b [24]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	token := base64.RawURLEncoding.EncodeToString(b[:])
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pending == nil {
+		p.pending = map[string]pushoverSubscription{}
+	}
+	for t, sub := range p.pending {
+		if !sub.expires.After(now) || sub.userID == userID {
+			delete(p.pending, t) // one round trip per user at a time
+		}
+	}
+	p.pending[token] = pushoverSubscription{userID: userID, expires: now.Add(pushoverSubscriptionLifetime)}
+	return token, nil
+}
+
+// finish consumes token; it reports whether token was started by userID
+// and is still valid.
+func (p *pushoverSubscriptions) finish(token string, userID int64, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	sub, ok := p.pending[token]
+	if !ok {
+		return false
+	}
+	delete(p.pending, token)
+	return sub.userID == userID && sub.expires.After(now)
+}
+
+// handlePushoverSubscribe starts "Connect Pushover": it answers the
+// pushover.net subscription URL to send the browser to.
+func (s *Server) handlePushoverSubscribe(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
+	a := s.auth
+	token, err := a.pushoverSubs.start(u.ID, a.notify.now())
+	if err != nil {
+		notifyInternal(w, "start Pushover subscription", u.ID, err)
+		return
+	}
+	ps, base := a.set.notify.pushover, a.set.baseURL.String()
+	q := url.Values{
+		"success": {base + "/api/account/notifications/pushover/subscribed/" + token},
+		"failure": {base + "/api/account/notifications/pushover/subscribe-failed"},
+	}
+	writeJSON(w, map[string]string{"url": ps.subscribeBase + url.PathEscape(ps.subscriptionCode) + "?" + q.Encode()})
+}
+
+// pushoverAccountRedirect sends the browser back to the notification
+// settings with an outcome the account page reports.
+func (s *Server) pushoverAccountRedirect(w http.ResponseWriter, r *http.Request, outcome string) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer") // the URL carried a key
+	http.Redirect(w, r, s.auth.set.baseURL.String()+"/#/account?section=notifications&pushover="+outcome, http.StatusSeeOther)
+}
+
+// handlePushoverSubscribed is where pushover.net returns the browser with
+// the subscribed user key. It needs the session of the user who started,
+// and that user's one-time token.
+func (s *Server) handlePushoverSubscribed(w http.ResponseWriter, r *http.Request) {
+	a := s.auth
+	u, _ := a.currentUser(w, r)
+	if u == nil {
+		s.pushoverAccountRedirect(w, r, "signin")
+		return
+	}
+	if !a.pushoverSubs.finish(mux.Vars(r)["token"], u.ID, a.notify.now()) {
+		s.pushoverAccountRedirect(w, r, "expired")
+		return
+	}
+	q := r.URL.Query()
+	key := strings.TrimSpace(q.Get("pushover_user_key"))
+	if key == "" && q.Get("pushover_unsubscribed") == "1" {
+		// The user unsubscribed on pushover.net: forget that key, unless
+		// another one has been saved since.
+		if p, ok, err := a.st.PushoverFor(u.ID); err == nil && ok && p.UserKey == strings.TrimSpace(q.Get("pushover_unsubscribed_user_key")) {
+			if err := a.st.DeletePushover(u.ID); err != nil {
+				log.Printf("[notify] remove unsubscribed Pushover key for user #%d: %v", u.ID, err)
+				s.pushoverAccountRedirect(w, r, "failed")
+				return
+			}
+			a.audit(&u.ID, "notify.pushover.remove", nil, nil)
+		}
+		s.pushoverAccountRedirect(w, r, "disconnected")
+		return
+	}
+	if !pushoverKeyPattern.MatchString(key) {
+		s.pushoverAccountRedirect(w, r, "failed")
+		return
+	}
+	if ok, _ := a.pushover.take("user:" + strconv.FormatInt(u.ID, 10)); !ok {
+		s.pushoverAccountRedirect(w, r, "busy")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), pushoverClientTimeout)
+	err := a.set.notify.pushover.client.Validate(ctx, key)
+	cancel()
+	if err != nil {
+		log.Printf("[notify] Pushover subscription for user #%d not saved: %v", u.ID, err)
+		s.pushoverAccountRedirect(w, r, "failed")
+		return
+	}
+	if _, err := a.st.SetPushoverKey(u.ID, key); err != nil {
+		log.Printf("[notify] save Pushover subscription for user #%d: %v", u.ID, err)
+		s.pushoverAccountRedirect(w, r, "failed")
+		return
+	}
+	a.audit(&u.ID, "notify.pushover.subscribe", nil, nil)
+	s.pushoverAccountRedirect(w, r, "connected")
+}
+
+func (s *Server) handlePushoverSubscribeFailed(w http.ResponseWriter, r *http.Request) {
+	s.pushoverAccountRedirect(w, r, "cancelled")
 }
 
 func (s *Server) pushoverState(uid int64) (*notifyPushoverJSON, error) {
 	if s.auth.set.notify.pushover == nil {
 		return nil, nil
 	}
+	subscribe := s.auth.set.notify.pushover.subscriptionCode != ""
 	p, ok, err := s.auth.st.PushoverFor(uid)
 	if err != nil || !ok {
-		return &notifyPushoverJSON{}, err
+		return &notifyPushoverJSON{Subscribe: subscribe}, err
 	}
-	out := &notifyPushoverJSON{Configured: true, Enabled: p.Enabled, ValidatedAt: rfc3339(p.ValidatedAt)}
+	out := &notifyPushoverJSON{Subscribe: subscribe, Configured: true, Enabled: p.Enabled, ValidatedAt: rfc3339(p.ValidatedAt)}
 	if len(p.UserKey) >= 4 {
 		out.KeyHint = p.UserKey[len(p.UserKey)-4:]
 	}

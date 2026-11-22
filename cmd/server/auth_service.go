@@ -30,6 +30,10 @@ type authService struct {
 	mailTest    *rateLimiter // admin test mail, per admin
 	pushover    *rateLimiter // Pushover key checks and test messages, per user
 
+	// pushoverSubs holds the one-time tokens of "Connect Pushover" round
+	// trips in progress (notify_pushover_handlers.go).
+	pushoverSubs pushoverSubscriptions
+
 	// approved is the snapshot of approved hashtag channel names, filled at
 	// construction and reloaded from users.db after every proposal decision.
 	// approvedMu serialises the reloads so an older read never replaces a

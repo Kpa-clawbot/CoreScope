@@ -335,3 +335,111 @@ func TestPushoverAccountRoutes(t *testing.T) {
 		t.Fatal("Pushover route answered without configuration")
 	}
 }
+
+func TestPushoverSubscriptionCodeConfig(t *testing.T) {
+	env := func(k string) string {
+		if k == pushoverTokenEnv {
+			return testPushoverToken
+		}
+		return ""
+	}
+	if _, err := resolvePushover(&PushoverConfig{SubscriptionCode: "bad code!"}, env); err == nil {
+		t.Fatal("accepted a malformed subscription code")
+	}
+	ps, err := resolvePushover(&PushoverConfig{SubscriptionCode: " Mesh-1oiwozgx5tg38a1 "}, env)
+	if err != nil || ps.subscriptionCode != "Mesh-1oiwozgx5tg38a1" || ps.subscribeBase != "https://pushover.net/subscribe/" {
+		t.Fatalf("subscription code: %+v, %v", ps, err)
+	}
+}
+
+func TestPushoverConnectRoundTrip(t *testing.T) {
+	fake := newFakePushover(t)
+	ns := pushoverNotifySettings(fake, 100)
+	ns.pushover.subscriptionCode, ns.pushover.subscribeBase = "Mesh-abc", "https://pushover.test/subscribe/"
+	f := newNotifyFixture(t, ns)
+	pat := f.registerAndActivate(t, "pat@example.org", "Pat", pw)
+	quinn := f.registerAndActivate(t, "quinn@example.org", "Quinn", pw)
+
+	if got := f.do(http.MethodGet, "/api/account/notifications", nil, as(pat)).Body.String(); !strings.Contains(got, `"subscribe":true`) {
+		t.Fatalf("Connect Pushover not offered: %s", got)
+	}
+	start := func(c *client) (token string) {
+		t.Helper()
+		w := f.do(http.MethodPost, "/api/account/notifications/pushover/subscribe", nil, as(c))
+		var out struct{ URL string }
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("start: %d %s", w.Code, w.Body.String())
+		}
+		u, err := url.Parse(out.URL)
+		if err != nil || !strings.HasPrefix(out.URL, "https://pushover.test/subscribe/Mesh-abc?") ||
+			u.Query().Get("failure") != testBase+"/api/account/notifications/pushover/subscribe-failed" {
+			t.Fatalf("subscription URL = %s", out.URL)
+		}
+		success := u.Query().Get("success")
+		prefix := testBase + "/api/account/notifications/pushover/subscribed/"
+		if !strings.HasPrefix(success, prefix) || len(success) <= len(prefix) {
+			t.Fatalf("success URL = %s", success)
+		}
+		return strings.TrimPrefix(success, prefix)
+	}
+	back := func(token, key string, mods ...reqMod) string {
+		t.Helper()
+		w := f.do(http.MethodGet, "/api/account/notifications/pushover/subscribed/"+token+"?pushover_user_key="+key, nil, mods...)
+		loc := w.Header().Get("Location")
+		if w.Code != http.StatusSeeOther || !strings.HasPrefix(loc, testBase+"/#/account?section=notifications&pushover=") {
+			t.Fatalf("return: %d %q", w.Code, loc)
+		}
+		return strings.TrimPrefix(loc, testBase+"/#/account?section=notifications&pushover=")
+	}
+
+	token := start(pat)
+	if got := back(token, testPushoverKey, as(quinn)); got != "expired" {
+		t.Fatalf("another user's return = %s", got)
+	}
+	if _, ok, _ := f.st.PushoverFor(quinn.me.ID); ok {
+		t.Fatal("a key was saved for the wrong user")
+	}
+	token = start(pat)
+	if got := back(token, testPushoverKey); got != "signin" {
+		t.Fatalf("return without a session = %s", got)
+	}
+	if got := back(token, testPushoverOther, as(pat)); got != "failed" {
+		t.Fatalf("an unknown key = %s", got)
+	}
+	if got := back(token, testPushoverKey, as(pat)); got != "expired" {
+		t.Fatalf("a used token = %s", got)
+	}
+	first := start(pat)
+	token = start(pat)
+	if got := back(first, testPushoverKey, as(pat)); got != "expired" {
+		t.Fatalf("a superseded token = %s", got)
+	}
+	if got := back(token, testPushoverKey, as(pat)); got != "connected" {
+		t.Fatalf("return = %s", got)
+	}
+	if p, ok, _ := f.st.PushoverFor(pat.me.ID); !ok || p.UserKey != testPushoverKey || !p.Enabled {
+		t.Fatalf("saved: %+v", p)
+	}
+	token = start(pat)
+	w := f.do(http.MethodGet, "/api/account/notifications/pushover/subscribed/"+token+
+		"?pushover_user_key=&pushover_unsubscribed=1&pushover_unsubscribed_user_key="+testPushoverKey, nil, as(pat))
+	if !strings.HasSuffix(w.Header().Get("Location"), "pushover=disconnected") {
+		t.Fatalf("unsubscribe: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if _, ok, _ := f.st.PushoverFor(pat.me.ID); ok {
+		t.Fatal("an unsubscribe kept the key")
+	}
+	w = f.do(http.MethodGet, "/api/account/notifications/pushover/subscribe-failed", nil)
+	if w.Code != http.StatusSeeOther || !strings.HasSuffix(w.Header().Get("Location"), "pushover=cancelled") {
+		t.Fatalf("cancelled: %d %s", w.Code, w.Header().Get("Location"))
+	}
+
+	plain := newNotifyFixture(t, pushoverNotifySettings(fake, 100))
+	uma := plain.registerAndActivate(t, "uma@example.org", "Uma", pw)
+	if strings.Contains(plain.do(http.MethodGet, "/api/account/notifications", nil, as(uma)).Body.String(), `"subscribe"`) {
+		t.Fatal("Connect Pushover offered without a subscription code")
+	}
+	if w := plain.do(http.MethodPost, "/api/account/notifications/pushover/subscribe", nil, as(uma)); w.Code == http.StatusOK {
+		t.Fatal("subscribe route answered without a subscription code")
+	}
+}
