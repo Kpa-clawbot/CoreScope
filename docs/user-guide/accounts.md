@@ -299,23 +299,36 @@ The feed is JSON, at most 1 MB, fetched once per check while someone has the eve
   The server log says when the feed stops and starts being usable.
 - The server only reads the feed; the states live in `users.db` like the other events.
 
-#### NodeScope push (optional)
+#### Mobile push (optional)
 
-[NodeScope](https://nodescope.app) is a mobile app for CoreScope. With push
-enabled, a signed-in NodeScope user's watched-node alerts also arrive as push
-notifications on their phone. CoreScope decides when an alert fires, with the
-same rules as email; it sends each alert to the NodeScope push relay, which
-forwards it to Apple or Google for delivery.
+With push enabled, a signed-in user's watched-node alerts also arrive as push
+notifications on their phone, through a mobile app for CoreScope. CoreScope
+decides when an alert fires, with the same rules as email, and sends each
+alert to a **push relay**, which forwards it to Apple or Google for delivery.
+A relay is needed because Apple and Google only accept pushes signed with the
+receiving app's own credentials, which a self-hosted analyzer does not have.
+Each relay serves one app: it reaches only the users of the app whose push
+credentials it holds.
+
+[NodeScope](https://nodescope.app) runs a relay at `https://push.nodescope.app`
+for its iOS and Android app, and it is the built-in choice on the admin page.
+Its source is public at
+[github.com/anieto/nodescope-push-relay](https://github.com/anieto/nodescope-push-relay),
+so you can check what it receives and keeps, and another app can run its own
+copy. Any relay that implements the
+[push relay contract](../specs/2026-11-22-push-relay-contract.md) works.
 
 For each alert, CoreScope sends the relay the alert type, the node's public key
 and name, when it happened, and the opaque subscription ID of the device link.
 Linking a device passes the relay the device's installation ID and a one-time
 proof from the app. CoreScope sends no email addresses, account names,
 locations or messages. Phones register their push tokens with the relay
-themselves, so CoreScope never sees them. The relay's source code and API are
-public at
-[github.com/anieto/nodescope-push-relay](https://github.com/anieto/nodescope-push-relay),
-so you can check what it receives and keeps.
+themselves, so CoreScope never sees them.
+
+Push covers the watched-node offline and battery alerts. Observer, external
+alert and new-node alerts stay email-only. The email toggle and the unsubscribe
+link in alert mails only affect email: to stop push alerts, a user turns them
+off in the app, which unlinks the device.
 
 Push needs user management with `userManagement.notifications.enabled` set to
 `true`, and a public HTTPS address in `userManagement.publicBaseUrl`. Nothing is
@@ -340,8 +353,8 @@ separate relay enrollment, analyzer data directory and accounts.
    block with only an `origin` (and optionally `platforms`) inside
    `userManagement.notifications`. The card then enrolls only with that relay.
    A connected analyzer keeps using the relay it enrolled with.
-3. When the card shows **Connected**, users can enable watched-node alerts from
-   a NodeScope build that supports this relay and is signed in to this analyzer.
+3. When the card shows **Connected**, users can enable watched-node alerts in
+   the relay's app, signed in to this analyzer.
 
 CoreScope keeps the enrollment credential in the private
 `<users.db path>.push-relay.json` file next to the account database.
@@ -353,7 +366,8 @@ named after the relay, so each relay has its own.
 **Enroll manually**
 
 Use a one-time code if the relay operator has disabled self-service or the
-relay cannot reach the proof endpoint.
+relay cannot reach the proof endpoint. The requests below go to the relay; the
+[contract](../specs/2026-11-22-push-relay-contract.md#manual) describes them.
 
 1. Set `userManagement.publicBaseUrl` to the analyzer's public HTTPS address.
 2. Ask the relay operator for a one-time enrollment code for that address's
@@ -362,8 +376,6 @@ relay cannot reach the proof endpoint.
    `{"code":"<enrollment-code>","request_id":"enrollment-1"}`.
    HTTP 201 returns
    `{"analyzer_id":"<analyzer-id>","sender_credential":"<sender-credential>"}`.
-   See the [relay's README](https://github.com/anieto/nodescope-push-relay)
-   for enrollment details.
 4. Call `GET /v1/analyzer` with the sender credential as a bearer token.
    HTTP 200 returns
    `{"analyzer_id":"<analyzer-id>","origin":"https://analyzer.example.org","contract_version":1}`.
@@ -381,7 +393,7 @@ relay cannot reach the proof endpoint.
 
 ```json
 "pushRelay": {
-  "origin": "https://push.nodescope.app",
+  "origin": "https://push.example.org",
   "analyzerId": "analyzer_id_from_enrollment",
   "platforms": ["ios", "android"]
 }
@@ -389,13 +401,11 @@ relay cannot reach the proof endpoint.
 
 **Test watched-node alerts**
 
-When CoreScope knows the node’s name, it sends it to the NodeScope relay
-for the notification text. Unnamed nodes use generic wording. Update the
-relay before updating CoreScope to send names.
+When CoreScope knows the node’s name, it sends it to the relay for the
+notification text. Unnamed nodes use generic wording.
 
-Users enable push from NodeScope on each device. CoreScope uses the same
-watched-node offline and battery rules for push and email. The email toggle
-and unsubscribe link control email delivery.
+Users enable push in the app on each device. CoreScope uses the same
+watched-node offline and battery rules for push and email.
 
 A new analyzer database starts empty. Send a flood advert from the companion
 or repeater you want to watch so the analyzer learns its public key. The
@@ -428,7 +438,7 @@ notifier check. Remove the override and restart when testing is finished.
 
 **Pause or resume delivery**
 
-Open **Admin → Notifications → NodeScope Push** and click **Pause delivery**.
+Open **Admin → Notifications → Mobile push** and click **Pause delivery**.
 CoreScope keeps the enrollment and device links. It drops queued push
 deliveries in its own queue and skips new push alerts during the pause.
 Alerts already handed to the relay may still arrive. Click **Resume delivery**
@@ -438,8 +448,8 @@ storage so a pause or pending disconnect survives a restart.
 
 **Revoke an analyzer**
 
-For a self-service enrollment, click **Disconnect relay** in the NodeScope
-Push card and confirm. CoreScope revokes the analyzer at the relay and removes
+For a self-service enrollment, click **Disconnect relay** in the Mobile push
+card and confirm. CoreScope revokes the analyzer at the relay and removes
 its local enrollment and device links. After reconnecting, users need to
 enable watched-node alerts on their devices again. Email notifications continue.
 If the card shows **Disconnect pending**, delivery stays paused. Click
