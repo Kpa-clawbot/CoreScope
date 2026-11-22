@@ -131,7 +131,7 @@ const DESC = { url: 'https://sat.example/{z}/{x}/{y}', maxZoom: 19, invertFilter
       L, _log: log, Promise, Date, Math, Object, Array, String, JSON, encodeURIComponent,
       setTimeout: () => 0, CLIENT_TTL: {},
       api: async () => ({ node: { lat: 10, lon: 20, name: 'n', role: 'repeater' }, stats: {}, recentPackets: [], observers: [] }),
-      isMyNode: () => true, getHealthStatus: () => 'healthy', timeAgo: () => 'now', truncate: String,
+      isMyNode: () => true, getHealthStatus: () => 'healthy', timeAgo: () => 'now', truncate: String, snrQualityLabel: () => 'n/a',
       escapeHtml: String, escapeAttr: String, miniMap: null, addMyNode() {}, loadMyNodes() {}, showJourney() {},
       document: { getElementById: (id) => id === 'homeHealth' ? card : id === 'healthMap' ? {} : null, querySelector: () => null },
     };

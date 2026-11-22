@@ -579,23 +579,6 @@
           }
         }
       },
-      "hopsVsSnr": {
-        "type": "array",
-        "elementShape": {
-          "type": "object",
-          "keys": {
-            "hops": {
-              "type": "number"
-            },
-            "count": {
-              "type": "number"
-            },
-            "avgSnr": {
-              "type": "number"
-            }
-          }
-        }
-      },
       "observers": {
         "type": "array",
         "elementShape": {

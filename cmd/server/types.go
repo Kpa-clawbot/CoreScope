@@ -701,12 +701,6 @@ type TopPair struct {
 	PubkeyB interface{} `json:"pubkeyB"`
 }
 
-type HopsVsSnr struct {
-	Hops   int     `json:"hops"`
-	Count  int     `json:"count"`
-	AvgSnr float64 `json:"avgSnr"`
-}
-
 type ObserverRef struct {
 	ID   string      `json:"id"`
 	Name interface{} `json:"name"`
@@ -761,7 +755,6 @@ type TopologyResponse struct {
 	HopDistribution  []TopologyHopDist         `json:"hopDistribution"`
 	TopRepeaters     []TopRepeater             `json:"topRepeaters"`
 	TopPairs         []TopPair                 `json:"topPairs"`
-	HopsVsSnr        []HopsVsSnr               `json:"hopsVsSnr"`
 	Observers        []ObserverRef             `json:"observers"`
 	PerObserverReach map[string]*ObserverReach `json:"perObserverReach"`
 	MultiObsNodes    []MultiObsNode            `json:"multiObsNodes"`

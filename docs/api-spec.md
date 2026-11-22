@@ -2052,9 +2052,6 @@ Network topology analytics.
       "pubkeyB": string | null
     }
   ],
-  "hopsVsSnr": [
-    { "hops": number, "count": number, "avgSnr": number }
-  ],
   "observers": [
     { "id": string, "name": string }
   ],

@@ -7853,7 +7853,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 
 	hopCounts := map[int]int{}
 	var allHopsList []int
-	hopSnr := map[int][]float64{}
 	hopFreq := map[string]int{}
 	pairFreq := map[string]int{}
 	observerMap := map[string]string{} // observer_id → observer_name
@@ -7885,9 +7884,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		n := len(hops)
 		hopCounts[n]++
 		allHopsList = append(allHopsList, n)
-		if tx.SNR != nil {
-			hopSnr[n] = append(hopSnr[n], *tx.SNR)
-		}
 		for _, h := range hops {
 			// Area filter: only count hops belonging to nodes in the area.
 			if areaNodes != nil {
@@ -8127,24 +8123,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		topPairs = append(topPairs, entry)
 	}
 
-	// Hops vs SNR
-	hopsVsSnr := make([]map[string]interface{}, 0)
-	for h, snrs := range hopSnr {
-		if h > 20 {
-			continue
-		}
-		sum := 0.0
-		for _, v := range snrs {
-			sum += v
-		}
-		hopsVsSnr = append(hopsVsSnr, map[string]interface{}{
-			"hops": h, "count": len(snrs), "avgSnr": sum / float64(len(snrs)),
-		})
-	}
-	sort.Slice(hopsVsSnr, func(i, j int) bool {
-		return hopsVsSnr[i]["hops"].(int) < hopsVsSnr[j]["hops"].(int)
-	})
-
 	// Observers list
 	observers := make([]map[string]interface{}, 0)
 	for id, name := range observerMap {
@@ -8276,7 +8254,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		"hopDistribution":  hopDist,
 		"topRepeaters":     topRepeaters,
 		"topPairs":         topPairs,
-		"hopsVsSnr":        hopsVsSnr,
 		"observers":        observers,
 		"perObserverReach": perObserverReach,
 		"multiObsNodes":    multiObsNodes,

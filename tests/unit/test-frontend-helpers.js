@@ -8353,3 +8353,50 @@ console.log('\n=== scope-audit.js: transport view (#2142) ===');
     assert.deepStrictEqual(Array.from(sa.transportRegions([neverAsked, asked])), ['be', 'fr']);
   });
 }
+
+console.log('\n=== node SNR: direct reception only ===');
+{
+  // /api/nodes/*/health stats.avgSnr is null when no observer heard the
+  // node's own transmission (direct_heard.go). The UI must say so, never
+  // grade it or print a number.
+  const actx = makeSandbox();
+  actx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  actx.registerPage = () => {};
+  actx.api = () => Promise.resolve({});
+  actx.RegionFilter = { init: () => {}, onChange: () => {}, regionQueryString: () => '' };
+  actx.onWS = () => {}; actx.offWS = () => {}; actx.connectWS = () => {};
+  actx.invalidateApiCache = () => {}; actx.makeColumnsResizable = () => {}; actx.initTabBar = () => {};
+  actx.IATA_COORDS_GEO = {};
+  loadInCtx(actx, 'public/roles.js');
+  loadInCtx(actx, 'public/app.js');
+  try { loadInCtx(actx, 'public/analytics.js'); } catch (e) { /* page wiring only */ }
+  const cell = actx.window._analyticsDirectSnrCell;
+
+  test('analytics: a direct SNR prints in dB', () => {
+    assert.strictEqual(cell(7.25), '7.3 dB');
+    assert.strictEqual(cell(-3), '-3.0 dB');
+  });
+  test('analytics: no direct reception prints a dash that says why', () => {
+    for (const v of [null, undefined]) {
+      const h = cell(v);
+      assert.ok(h.includes('—') && h.includes('No direct reception'), h);
+    }
+  });
+
+  const hctx = makeSandbox();
+  hctx.registerPage = () => {};
+  loadInCtx(hctx, 'public/home.js');
+  const label = hctx.window._homeSnrQualityLabel;
+
+  test('home: no direct reception grades n/a, not Poor', () => {
+    assert.strictEqual(label(null), 'n/a');
+    assert.strictEqual(label(undefined), 'n/a');
+  });
+  test('home: a direct SNR is graded on the existing scale', () => {
+    assert.strictEqual(label(11), 'Excellent');
+    assert.strictEqual(label(0.5), 'Good');
+    assert.strictEqual(label(-2), 'Marginal');
+    assert.strictEqual(label(-6), 'Poor');
+    assert.strictEqual(label(0), 'Marginal');
+  });
+}
