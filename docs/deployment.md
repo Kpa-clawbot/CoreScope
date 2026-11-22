@@ -343,22 +343,35 @@ CoreScope uses a layered configuration system (highest priority wins):
 
 ### Link previews (og tags)
 
-Discord, Slack, Facebook and other link previews read `og:url`, `og:image`
-and `twitter:image` from `index.html`, and need them absolute. The page holds
-a `__CORESCOPE_URL__` placeholder, which the server fills in the same way it
+Discord, Slack, Facebook and other link previews read `og:image` and
+`twitter:image` from `index.html`, and need them absolute. The page holds a
+`__CORESCOPE_URL__` placeholder, which the server fills in the same way it
 fills in the `__BUST__` cache buster:
 
 - **`CORESCOPE_URL` set** (`http(s)://host[:port]`, optionally with a path,
-  e.g. `https://analyzer.example.org`): that URL, on every page. A trailing
-  slash is dropped. An invalid value is logged at startup and ignored.
-- **Unset:** the origin each request reached: the `Host` header, with the
-  scheme and host from `X-Forwarded-Proto` / `X-Forwarded-Host` when a proxy
-  sets them (the built-in Caddy does).
+  e.g. `https://analyzer.example.org`): that URL, on every page, and no request
+  header is consulted. Trailing slashes are dropped. `og:url` is sent too.
+- **Unset, or invalid** (logged at startup): the origin each request reached:
+  the `Host` header, with the scheme from TLS or `X-Forwarded-Proto`.
+  `og:url` is left out. `X-Forwarded-Host` is never used.
 
-Set it when a proxy in front rewrites the host or terminates TLS without
-passing `X-Forwarded-Proto` through (the built-in Caddy behind nginx sees
-plain HTTP, so the previews would link `http://`). With compose, put it in
-the `.env` next to the compose file: `CORESCOPE_URL=https://analyzer.example.org`.
+`og:url` can only be the site root, because the part of a link after `#` never
+reaches the server. Platforms that follow it, such as Facebook and Messenger,
+may then open the home page when someone clicks the preview of a shared deep
+link. Leave `CORESCOPE_URL` unset if that matters more to you than the tag.
+
+Set `CORESCOPE_URL` when:
+
+- a proxy in front rewrites the `Host` header;
+- TLS ends before the last proxy (the built-in Caddy behind nginx sees plain
+  HTTP and says so in `X-Forwarded-Proto`, so previews would link `http://`);
+- a proxy serves CoreScope under a path: include the path, or the image link
+  misses the prefix;
+- a CDN caches pages despite their `no-store` header, so that no visitor's
+  request ends up in another's preview.
+
+With compose, put it in the `.env` next to the compose file:
+`CORESCOPE_URL=https://analyzer.example.org`.
 
 The static build (`scripts/static/build.sh`, the web container) has no
 request to take an origin from: it takes `CORESCOPE_URL` when the UI is

@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-const siteURLTestPage = `<html><head>` +
-	`<meta property="og:url" content="__CORESCOPE_URL__/">` +
+const siteURLTestPage = `<html><head>` + "\n" +
+	`  <meta property="og:url" content="__CORESCOPE_URL__/">` + "\n" +
 	`<meta property="og:image" content="__CORESCOPE_URL__/og-image.png">` +
 	`<script src="app.js?v=__BUST__"></script></head></html>`
 
@@ -56,6 +56,9 @@ func TestSiteURLConfigured(t *testing.T) {
 		}
 	}
 	body := serveSiteURL(h, "/", nil)
+	if !strings.Contains(body, `<meta property="og:url" content="https://analyzer.example.org/">`) {
+		t.Errorf("og:url missing with CORESCOPE_URL set: %s", body)
+	}
 	if !strings.Contains(body, `content="https://analyzer.example.org/og-image.png"`) {
 		t.Errorf("og:image not absolute on the configured URL: %s", body)
 	}
@@ -74,16 +77,19 @@ func TestSiteURLFromRequest(t *testing.T) {
 		{"plain host", func(r *http.Request) { r.Host = "mesh.example.org:8080" }, "http://mesh.example.org:8080"},
 		{"host lowercased", func(r *http.Request) { r.Host = "Mesh.Example.ORG" }, "http://mesh.example.org"},
 		{"direct TLS", func(r *http.Request) { r.Host = "mesh.example.org"; r.TLS = &tls.ConnectionState{} }, "https://mesh.example.org"},
-		{"proxy headers", func(r *http.Request) {
-			r.Host = "localhost:3000"
+		{"proxy scheme", func(r *http.Request) {
+			r.Host = "mesh.example.org"
 			r.Header.Set("X-Forwarded-Proto", "https")
-			r.Header.Set("X-Forwarded-Host", "mesh.example.org")
 		}, "https://mesh.example.org"},
-		{"proxy chain: first value", func(r *http.Request) {
-			r.Host = "localhost:3000"
+		{"proxy chain: first scheme", func(r *http.Request) {
+			r.Host = "mesh.example.org"
 			r.Header.Set("X-Forwarded-Proto", "HTTPS, http")
-			r.Header.Set("X-Forwarded-Host", "mesh.example.org, inner:3000")
 		}, "https://mesh.example.org"},
+		// Not part of a cache key, so one request could set it for the next.
+		{"X-Forwarded-Host ignored", func(r *http.Request) {
+			r.Host = "mesh.example.org"
+			r.Header.Set("X-Forwarded-Host", "evil.example.com")
+		}, "http://mesh.example.org"},
 		{"unknown proto ignored", func(r *http.Request) {
 			r.Host = "mesh.example.org"
 			r.Header.Set("X-Forwarded-Proto", "javascript")
@@ -93,7 +99,7 @@ func TestSiteURLFromRequest(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			body := serveSiteURL(h, "/", c.mod)
-			if !strings.Contains(body, `content="`+c.want+`/"`) || !strings.Contains(body, `content="`+c.want+`/og-image.png"`) {
+			if !strings.Contains(body, `content="`+c.want+`/og-image.png"`) {
 				t.Errorf("want %s, got %s", c.want, body)
 			}
 		})
@@ -103,7 +109,7 @@ func TestSiteURLFromRequest(t *testing.T) {
 	if body := serveSiteURL(h, "/area-map.html", func(r *http.Request) { r.Host = "a.example.org" }); !strings.Contains(body, `href="http://a.example.org/"`) {
 		t.Errorf("area-map.html: %s", body)
 	}
-	if body := serveSiteURL(h, "/", func(r *http.Request) { r.Host = "b.example.org" }); !strings.Contains(body, "http://b.example.org/") || strings.Contains(body, "a.example.org") {
+	if body := serveSiteURL(h, "/", func(r *http.Request) { r.Host = "b.example.org" }); !strings.Contains(body, "http://b.example.org/og-image.png") || strings.Contains(body, "a.example.org") {
 		t.Errorf("origin leaked between requests: %s", body)
 	}
 }
@@ -117,8 +123,8 @@ func TestSiteURLForgedHostCannotInjectMarkup(t *testing.T) {
 	if strings.Contains(body, "<script>alert") || strings.Contains(body, `x">`) {
 		t.Fatalf("forged X-Forwarded-Host reached the page: %s", body)
 	}
-	if !strings.Contains(body, `content="http://mesh.example.org/"`) {
-		t.Errorf("forged X-Forwarded-Host should fall back to Host: %s", body)
+	if !strings.Contains(body, `content="http://mesh.example.org/og-image.png"`) {
+		t.Errorf("want the Host's origin: %s", body)
 	}
 	// Neither header usable: root-relative URLs, never the raw value.
 	body = serveSiteURL(h, "/", func(r *http.Request) { r.Host = `bad"host` })
@@ -136,6 +142,7 @@ func TestResolveConfiguredSiteURL(t *testing.T) {
 		"   ":                            "",
 		"https://analyzer.example.org":   "https://analyzer.example.org",
 		"https://analyzer.example.org/":  "https://analyzer.example.org",
+		"https://analyzer.example.org//": "https://analyzer.example.org",
 		" http://localhost:3000 ":        "http://localhost:3000",
 		"https://example.org/corescope/": "https://example.org/corescope",
 		"analyzer.example.org":           "",
@@ -151,8 +158,47 @@ func TestResolveConfiguredSiteURL(t *testing.T) {
 	}
 	// An invalid CORESCOPE_URL falls back to the request's origin.
 	h := newSiteURLHandler(t, "not a url")
-	if body := serveSiteURL(h, "/", func(r *http.Request) { r.Host = "mesh.example.org" }); !strings.Contains(body, `content="http://mesh.example.org/"`) {
+	if body := serveSiteURL(h, "/", func(r *http.Request) { r.Host = "mesh.example.org" }); !strings.Contains(body, `content="http://mesh.example.org/og-image.png"`) {
 		t.Errorf("invalid CORESCOPE_URL: want request origin, got %s", body)
+	}
+}
+
+// The fragment of a shared deep link never reaches the server, so og:url can
+// only name the site root: it appears only when the operator configured a URL.
+func TestOGURLOnlyWhenConfigured(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "public", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A checkout with CRLF endings must lose the tag just the same.
+	pages := map[string]string{"LF": string(raw), "CRLF": strings.ReplaceAll(string(raw), "\n", "\r\n")}
+	for eol, page := range pages {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(page), 0644); err != nil {
+			t.Fatal(err)
+		}
+		for _, env := range []string{"", "   ", "not a url"} {
+			h := spaHandler(dir, http.FileServer(http.Dir(dir)), env)
+			for _, path := range []string{"/", "/index.html", "/some/spa/route"} {
+				body := serveSiteURL(h, path, nil)
+				if strings.Contains(body, `property="og:url"`) {
+					t.Errorf("%s, CORESCOPE_URL=%q, %s: og:url sent without a configured URL", eol, env, path)
+				}
+				for _, keep := range []string{
+					`<meta property="og:image" content="http://example.com/og-image.png">`,
+					`<meta property="og:type" content="website">`,
+					`<meta name="twitter:image" content="http://example.com/og-image.png">`,
+				} {
+					if !strings.Contains(body, keep) {
+						t.Errorf("%s, CORESCOPE_URL=%q, %s: missing %s", eol, env, path, keep)
+					}
+				}
+			}
+		}
+		h := spaHandler(dir, http.FileServer(http.Dir(dir)), "https://analyzer.example.org")
+		if body := serveSiteURL(h, "/", nil); !strings.Contains(body, `<meta property="og:url" content="https://analyzer.example.org/">`) {
+			t.Errorf("%s: og:url missing with CORESCOPE_URL set", eol)
+		}
 	}
 }
 

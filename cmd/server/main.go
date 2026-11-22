@@ -615,8 +615,8 @@ func main() {
 // It reads index.html once at creation time and replaces the __BUST__ placeholder
 // with a Unix timestamp so browsers fetch fresh JS/CSS after each server restart.
 // siteURL is CORESCOPE_URL (see site_url.go): when valid, __CORESCOPE_URL__ is
-// replaced with it at the same time; otherwise each response fills it in with
-// the origin the request reached.
+// replaced with it at the same time; otherwise og:url is dropped then and each
+// response fills in the rest with the origin the request reached.
 func spaHandler(root string, fs http.Handler, siteURL string) http.Handler {
 	// Pre-process every top-level page, index.html and the tool pages
 	// (area-map.html, geofilter-builder.html): replace __BUST__ with a
@@ -629,7 +629,10 @@ func spaHandler(root string, fs http.Handler, siteURL string) http.Handler {
 		}
 		log.Printf("[static] site URL: %s", siteURL)
 	} else {
-		log.Printf("[static] site URL: %s unset, using each request's origin", siteURLEnv)
+		for p, body := range pages {
+			pages[p] = withoutOGURL(body)
+		}
+		log.Printf("[static] site URL: %s unset or invalid, no og:url and using each request's origin", siteURLEnv)
 	}
 	indexHTML, ok := pages["/index.html"]
 	if !ok {
@@ -642,7 +645,10 @@ func spaHandler(root string, fs http.Handler, siteURL string) http.Handler {
 	servePage := func(w http.ResponseWriter, r *http.Request, body []byte) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		w.Write(withSiteURL(body, r))
+		if siteURL == "" {
+			body = withSiteURL(body, r)
+		}
+		w.Write(body)
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

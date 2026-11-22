@@ -9,9 +9,10 @@
  * from.
  *
  * og:url, og:image and twitter:image now carry the __CORESCOPE_URL__
- * placeholder, which the server fills in with CORESCOPE_URL or the request's
- * own origin (cmd/server/site_url.go, tested in site_url_test.go), and
- * scripts/static/build.sh fills in at packaging time. No host is hardcoded.
+ * placeholder. og:url is sent only with CORESCOPE_URL set; without it the
+ * server drops the tag and fills the images with the request's own origin
+ * (cmd/server/site_url.go, tested in site_url_test.go). build.sh does the
+ * same at packaging time, with the GitHub image. No host is hardcoded.
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
