@@ -334,3 +334,24 @@ func TestBuildDirectHeardIndex_SkipsOwnTransmissions(t *testing.T) {
 		t.Fatalf("rx copy of the forwarded packet = %#v, want Count 1", a)
 	}
 }
+
+// directAvgSNR is the node-level SNR the health endpoints report: the mean
+// over every direct reception that carried an SNR, across all observers.
+func TestDirectAvgSNR(t *testing.T) {
+	if got := directAvgSNR(nil); got != nil {
+		t.Fatalf("no direct observers: avgSnr = %v, want nil", *got)
+	}
+	noSignal := map[string]*directHeardAgg{"a": {Count: 4}}
+	if got := directAvgSNR(noSignal); got != nil {
+		t.Fatalf("direct observers without SNR samples: avgSnr = %v, want nil", *got)
+	}
+	byObs := map[string]*directHeardAgg{
+		"a": {Count: 3, SNRSum: 30, SNRCount: 3}, // 10 dB x3
+		"b": {Count: 1, SNRSum: -2, SNRCount: 1}, // -2 dB x1
+		"c": {Count: 5},                          // no samples, no weight
+	}
+	got := directAvgSNR(byObs)
+	if got == nil || *got != 7 {
+		t.Fatalf("avgSnr = %v, want 7 (28 over 4 samples)", got)
+	}
+}

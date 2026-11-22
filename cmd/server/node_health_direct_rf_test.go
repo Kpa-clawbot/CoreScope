@@ -86,6 +86,83 @@ func TestNodeHealth_RelayedObserverIsNotHeardBy(t *testing.T) {
 	}
 }
 
+// The node-level stats.avgSnr on /health and /bulk-health must come from
+// direct receptions only. A relayed copy carries the SNR of whichever node
+// last transmitted it, so adding one with an extreme SNR must not move the
+// number.
+func TestNodeHealth_AvgSnrIgnoresRelayedCopies(t *testing.T) {
+	srv, router := setupTestServer(t)
+	const nodePubkey = "aabbccdd11223344" // seeded by seedTestData
+	srv.store.publishDirectHeard(srv.store.computeDirectHeard())
+
+	avgSnr := func(url string, pick func(map[string]interface{}) map[string]interface{}) interface{} {
+		t.Helper()
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, url, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d (body: %s)", url, w.Code, w.Body.String())
+		}
+		var body interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: json: %v", url, err)
+		}
+		var node map[string]interface{}
+		switch b := body.(type) {
+		case map[string]interface{}:
+			node = b
+		case []interface{}:
+			for _, raw := range b {
+				if m, ok := raw.(map[string]interface{}); ok && m["public_key"] == nodePubkey {
+					node = m
+				}
+			}
+		}
+		if node == nil {
+			t.Fatalf("%s: node %s missing from response", url, nodePubkey)
+		}
+		stats, _ := pick(node)["stats"].(map[string]interface{})
+		if stats == nil {
+			t.Fatalf("%s: stats missing", url)
+		}
+		return stats["avgSnr"]
+	}
+	self := func(m map[string]interface{}) map[string]interface{} { return m }
+	healthURL := "/api/nodes/" + nodePubkey + "/health"
+	bulkURL := "/api/nodes/bulk-health?limit=500"
+
+	beforeHealth := avgSnr(healthURL, self)
+	beforeBulk := avgSnr(bulkURL, self)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	routeFlood := RouteFlood
+	payload := PayloadTXT_MSG
+	snr := -99.0
+	relayed := &StoreTx{
+		Hash: "directrf-avgsnr-relayed", FirstSeen: now,
+		RouteType: &routeFlood, PayloadType: &payload, SNR: &snr,
+		ObservationCount: 1, ObserverID: "farawayobserver", ObserverName: "FarAway",
+		Observations: []*StoreObs{{
+			ObserverID: "farawayobserver", ObserverName: "FarAway",
+			PathJSON: `["AABB","1234","5678"]`, SNR: &snr,
+		}},
+	}
+	srv.store.mu.Lock()
+	if srv.store.byNode == nil {
+		srv.store.byNode = make(map[string][]*StoreTx)
+	}
+	srv.store.byNode[nodePubkey] = append(srv.store.byNode[nodePubkey], relayed)
+	srv.store.packets = append(srv.store.packets, relayed)
+	srv.store.mu.Unlock()
+	srv.store.publishDirectHeard(srv.store.computeDirectHeard())
+
+	if got := avgSnr(healthURL, self); got != beforeHealth {
+		t.Fatalf("/health avgSnr moved from %v to %v after a relayed copy", beforeHealth, got)
+	}
+	if got := avgSnr(bulkURL, self); got != beforeBulk {
+		t.Fatalf("/bulk-health avgSnr moved from %v to %v after a relayed copy", beforeBulk, got)
+	}
+}
+
 // The walk runs over every observation in the store on each recompute pass.
 // The reference deployment holds 2.9M of them; this pins that a full pass
 // stays well inside one recompute interval.

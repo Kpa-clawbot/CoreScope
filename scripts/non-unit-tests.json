@@ -4,6 +4,7 @@
     "files": [
       "tests/e2e/test-1110-live-filter.js",
       "tests/e2e/test-a11y-axe-1668.js",
+      "tests/e2e/test-analytics-direct-snr-e2e.js",
       "tests/e2e/test-analytics-fluid-charts.js",
       "tests/e2e/test-audio-lab-1297-e2e.js",
       "tests/e2e/test-audio-live-1297-e2e.js",
