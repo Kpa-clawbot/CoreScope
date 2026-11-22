@@ -95,6 +95,7 @@ func resolveProposals(c *ChannelProposalsConfig) proposalSettings {
 // (docs/specs/2026-10-07-node-notifications-design.md). Off by default.
 type NotificationsConfig struct {
 	PushRelay         *NotifyRelayConfig `json:"pushRelay,omitempty"`
+	Pushover          *PushoverConfig    `json:"pushover,omitempty"`
 	Enabled           bool               `json:"enabled"`
 	IntervalMinutes   int                `json:"intervalMinutes,omitempty"`
 	PerUserPerDay     int                `json:"perUserPerDay,omitempty"`
@@ -138,6 +139,7 @@ type notifySettings struct {
 	maxWatchesPerUser int
 	external          externalAlertSettings
 	adaptive          adaptiveSettings
+	pushover          *pushoverSettings // nil unless notifications.pushover
 }
 
 // adaptiveSettings is the resolved adaptiveOffline block; the zero value is
@@ -486,6 +488,9 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 				return nil, err
 			}
 		} else if err = set.notify.configureRelay(relay, getenv); err != nil {
+			return nil, err
+		}
+		if set.notify.pushover, err = resolvePushover(u.Notifications.Pushover, getenv); err != nil {
 			return nil, err
 		}
 		if set.notify.external, err = resolveExternalAlerts(u.Notifications.ExternalAlerts); err != nil {

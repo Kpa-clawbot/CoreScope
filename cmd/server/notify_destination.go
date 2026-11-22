@@ -46,11 +46,12 @@ type notifyChanges struct {
 
 // notifyDestinations lists the destinations in the order they are logged.
 // Email is always present; the push relay stages and sends nothing until
-// the analyzer is enrolled with one.
+// the analyzer is enrolled with one, and Pushover nothing unless configured.
 func notifyDestinations(a *authService, now func() time.Time) []notifyDestination {
 	return []notifyDestination{
 		emailDestination{a: a},
 		&relayDestination{a: a, now: now},
+		&pushoverDestination{a: a, now: now},
 	}
 }
 

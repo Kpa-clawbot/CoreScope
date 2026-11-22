@@ -237,12 +237,15 @@ type NotifyOutbox struct {
 	// is enrolled with, fanned out to the users' device links.
 	PushAnalyzerID string
 	PushEvents     []PushEvent
+	// PushoverMessages: one rendered message per user, queued only for
+	// active users with Pushover on.
+	PushoverMessages []PushoverMessage
 }
 
 // ApplyNotifyChanges deletes drop, upserts states and queues out in one
 // transaction.
 func (s *Store) ApplyNotifyChanges(drop []NotifyKey, states []NotifyState, out NotifyOutbox) error {
-	if len(drop) == 0 && len(states) == 0 && len(out.PushEvents) == 0 {
+	if len(drop) == 0 && len(states) == 0 && len(out.PushEvents) == 0 && len(out.PushoverMessages) == 0 {
 		return nil
 	}
 	tx, err := s.db.Begin()
@@ -258,6 +261,11 @@ func (s *Store) ApplyNotifyChanges(drop []NotifyKey, states []NotifyState, out N
 	}
 	if len(out.PushEvents) > 0 {
 		if err := queuePushEvents(tx, out.PushAnalyzerID, s.now(), out.PushEvents); err != nil {
+			return err
+		}
+	}
+	if len(out.PushoverMessages) > 0 {
+		if err := queuePushoverMessages(tx, s.now(), out.PushoverMessages); err != nil {
 			return err
 		}
 	}
