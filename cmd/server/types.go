@@ -809,17 +809,15 @@ type DistanceSummary struct {
 }
 
 type DistanceHop struct {
-	FromName  string      `json:"fromName"`
-	FromPk    string      `json:"fromPk"`
-	ToName    string      `json:"toName"`
-	ToPk      string      `json:"toPk"`
-	Dist      float64     `json:"dist"`
-	Type      string      `json:"type"`
-	BestSnr   interface{} `json:"bestSnr"`
-	MedianSnr interface{} `json:"medianSnr"`
-	ObsCount  int         `json:"obsCount"`
-	Hash      string      `json:"hash"`
-	Timestamp string      `json:"timestamp"`
+	FromName  string  `json:"fromName"`
+	FromPk    string  `json:"fromPk"`
+	ToName    string  `json:"toName"`
+	ToPk      string  `json:"toPk"`
+	Dist      float64 `json:"dist"`
+	Type      string  `json:"type"`
+	ObsCount  int     `json:"obsCount"`
+	Hash      string  `json:"hash"`
+	Timestamp string  `json:"timestamp"`
 }
 
 type DistancePathHop struct {

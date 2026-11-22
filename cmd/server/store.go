@@ -675,7 +675,6 @@ type distHopRecord struct {
 	ToPk       string
 	Dist       float64
 	Type       string // "R↔R", "C↔R", "C↔C"
-	SNR        *float64
 	Hash       string
 	Timestamp  string
 	HourBucket string
@@ -683,14 +682,12 @@ type distHopRecord struct {
 }
 
 // dedupeHopsByPair groups hops by unordered node-pair, keeps the max-distance
-// record per pair, and computes obsCount / bestSnr / medianSnr.  limit caps the
+// record per pair, and computes obsCount.  limit caps the
 // number of returned entries (sorted by distance descending).
 func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} {
 	type pairAgg struct {
 		best     *distHopRecord
 		obsCount int
-		maxSNR   *float64
-		snrs     []float64
 	}
 	pairMap := make(map[string]*pairAgg)
 	for i := range hops {
@@ -706,13 +703,6 @@ func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} 
 			pairMap[key] = agg
 		}
 		agg.obsCount++
-		if h.SNR != nil {
-			agg.snrs = append(agg.snrs, *h.SNR)
-			if agg.maxSNR == nil || *h.SNR > *agg.maxSNR {
-				v := *h.SNR
-				agg.maxSNR = &v
-			}
-		}
 		if agg.best == nil || h.Dist > agg.best.Dist {
 			agg.best = h
 		}
@@ -732,25 +722,10 @@ func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} 
 			break
 		}
 		h := pe.agg.best
-		var medianSNR *float64
-		if len(pe.agg.snrs) > 0 {
-			sorted := make([]float64, len(pe.agg.snrs))
-			copy(sorted, pe.agg.snrs)
-			sort.Float64s(sorted)
-			mid := len(sorted) / 2
-			if len(sorted)%2 == 0 {
-				v := (sorted[mid-1] + sorted[mid]) / 2
-				medianSNR = &v
-			} else {
-				v := sorted[mid]
-				medianSNR = &v
-			}
-		}
 		result = append(result, map[string]interface{}{
 			"fromName": h.FromName, "fromPk": h.FromPk,
 			"toName": h.ToName, "toPk": h.ToPk,
 			"dist": h.Dist, "type": h.Type,
-			"bestSnr": floatPtrOrNil(pe.agg.maxSNR), "medianSnr": floatPtrOrNil(medianSNR),
 			"obsCount": pe.agg.obsCount,
 			"hash":     h.Hash, "timestamp": h.Timestamp,
 		})
@@ -5804,7 +5779,7 @@ func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterS
 			FromName: a.Name, FromPk: a.PublicKey,
 			ToName: b.Name, ToPk: b.PublicKey,
 			Dist: roundedDist, Type: hopType,
-			SNR: tx.SNR, Hash: tx.Hash, Timestamp: tx.FirstSeen,
+			Hash: tx.Hash, Timestamp: tx.FirstSeen,
 			HourBucket: hourBucket, tx: tx,
 		})
 		hopDetails = append(hopDetails, distHopDetail{
