@@ -360,7 +360,11 @@ reaches the server. Platforms that follow it, such as Facebook and Messenger,
 may then open the home page when someone clicks the preview of a shared deep
 link. Leave `CORESCOPE_URL` unset if that matters more to you than the tag.
 
-Set `CORESCOPE_URL` when:
+On a public instance, setting `CORESCOPE_URL` is otherwise recommended. Unset,
+a forged `Host` header is echoed into that response's image links. Only the
+sender sees it as long as nothing in front caches the page (it is `no-store`).
+
+Also set `CORESCOPE_URL` when:
 
 - a proxy in front rewrites the `Host` header;
 - TLS ends before the last proxy (the built-in Caddy behind nginx sees plain
