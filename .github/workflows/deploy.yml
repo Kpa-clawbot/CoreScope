@@ -797,6 +797,7 @@ jobs:
           suite 2 test-issue-1274-legend-coverage-e2e.js BASE_URL=$B
           suite 3 test-issue-1648-m5-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-issue-1997-distance-building-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-analytics-direct-snr-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-channel-modal-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-issue-1522-trace-url-sync-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-marker-outline-weight.js CHROMIUM_REQUIRE=1 BASE_URL=$B

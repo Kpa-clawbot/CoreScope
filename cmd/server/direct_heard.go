@@ -359,3 +359,21 @@ func buildDirectObserverRows(byObs map[string]*directHeardAgg, nonRelay, seen ma
 	})
 	return rows
 }
+
+// directAvgSNR is a node's SNR over its direct receptions: the mean of every
+// sample across all observers that heard it on air. Nil when no observer
+// reported an SNR for a direct reception. Relayed copies never count, the
+// SNR on those belongs to whichever node transmitted the copy last.
+func directAvgSNR(byObs map[string]*directHeardAgg) *float64 {
+	var sum float64
+	var n int
+	for _, agg := range byObs {
+		sum += agg.SNRSum
+		n += agg.SNRCount
+	}
+	if n == 0 {
+		return nil
+	}
+	v := sum / float64(n)
+	return &v
+}

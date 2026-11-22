@@ -48,6 +48,7 @@ func ngFloatPtr(v float64) *float64 { return &v }
 func ngMakeTx(id int, payloadType int, decodedJSON string, obs []*StoreObs) *StoreTx {
 	tx := &StoreTx{
 		ID:           id,
+		RouteType:    ngIntPtr(RouteFlood),
 		PayloadType:  ngIntPtr(payloadType),
 		DecodedJSON:  decodedJSON,
 		Observations: obs,
@@ -1051,5 +1052,153 @@ func TestBuildNeighborGraph_SkipsOwnTransmissions(t *testing.T) {
 		if e.NodeA == "aaaa1111" && e.NodeB == "obs00001" || e.NodeA == "obs00001" && e.NodeB == "aaaa1111" {
 			t.Errorf("empty-path tx row produced a zero-hop edge X↔Observer")
 		}
+	}
+}
+
+// ─── Direct-reception rule (SNR belongs to the node the observer heard) ──────
+
+func ngMakeRoutedTx(id, routeType, payloadType int, decodedJSON string, obs []*StoreObs) *StoreTx {
+	tx := ngMakeTx(id, payloadType, decodedJSON, obs)
+	tx.RouteType = ngIntPtr(routeType)
+	return tx
+}
+
+func ngEdge(g *NeighborGraph, a, b string) *NeighborEdge {
+	for _, e := range g.AllEdges() {
+		if (e.NodeA == a && e.NodeB == b) || (e.NodeA == b && e.NodeB == a) {
+			return e
+		}
+	}
+	return nil
+}
+
+var ngDirectNodes = []nodeInfo{
+	{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+	{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+	{Role: "repeater", PublicKey: "r2bbccdd", Name: "R2"},
+	{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
+}
+
+// TRACE reuses the path bytes for per-hop SNR values (packetpath.PathBytesAreHops),
+// so they name no node and must build no edge.
+func TestBuildNeighborGraph_TraceBuildsNoEdges(t *testing.T) {
+	tx := ngMakeRoutedTx(1, RouteFlood, PayloadTRACE, "", []*StoreObs{
+		ngMakeObs("obs00001", `["r1aa"]`, nowStr, ngFloatPtr(-10)),
+	})
+	g := BuildFromStore(ngTestStore(ngDirectNodes, []*StoreTx{tx}))
+	if n := len(g.AllEdges()); n != 0 {
+		t.Fatalf("TRACE built %d edges, want 0", n)
+	}
+}
+
+// A direct route carries the REMAINING route: a forwarder removes itself
+// before retransmitting (firmware Mesh.cpp removeSelfFromPath), so the last
+// element is a node still to come, not the one the observer heard.
+func TestBuildNeighborGraph_DirectRouteNoObserverEdge(t *testing.T) {
+	for _, rt := range []int{RouteDirect, RouteTransportDirect} {
+		tx := ngMakeRoutedTx(1, rt, PayloadTXT_MSG, "", []*StoreObs{
+			ngMakeObs("obs00001", `["r1aa"]`, nowStr, ngFloatPtr(-10)),
+		})
+		g := BuildFromStore(ngTestStore(ngDirectNodes, []*StoreTx{tx}))
+		if e := ngEdge(g, "obs00001", "r1aabbcc"); e != nil {
+			t.Errorf("route %d: observer↔remaining-route hop edge built: %+v", rt, e)
+		}
+	}
+}
+
+// ANON_REQ may travel on a direct route; its path[0] is then the next node
+// to forward, not a neighbour of the originator.
+func TestBuildNeighborGraph_DirectRouteNoOriginatorEdge(t *testing.T) {
+	tx := ngMakeRoutedTx(1, RouteDirect, PayloadANON_REQ, ngEphemeralPubKeyJSON("aaaa1111"), []*StoreObs{
+		ngMakeObs("obs00001", `["r1aa"]`, nowStr, ngFloatPtr(-10)),
+	})
+	g := BuildFromStore(ngTestStore(ngDirectNodes, []*StoreTx{tx}))
+	if e := ngEdge(g, "aaaa1111", "r1aabbcc"); e != nil {
+		t.Errorf("direct-route ANON_REQ built originator↔path[0] edge: %+v", e)
+	}
+}
+
+// A zero-hop ADVERT on a direct route (Mesh::sendZeroHop) was heard straight
+// from the advertiser: that edge and its SNR stay.
+func TestBuildNeighborGraph_DirectZeroHopAdvertKeepsSNR(t *testing.T) {
+	tx := ngMakeRoutedTx(1, RouteDirect, PayloadADVERT, ngFromNodeJSON("aaaa1111"), []*StoreObs{
+		ngMakeObs("obs00001", `[]`, nowStr, ngFloatPtr(-7)),
+	})
+	g := BuildFromStore(ngTestStore(ngDirectNodes, []*StoreTx{tx}))
+	e := ngEdge(g, "aaaa1111", "obs00001")
+	if e == nil {
+		t.Fatal("zero-hop direct ADVERT: originator↔observer edge missing")
+	}
+	if e.SNRCount != 1 || e.AvgSNR() != -7 {
+		t.Errorf("zero-hop edge SNR = %v over %d, want -7 over 1", e.AvgSNR(), e.SNRCount)
+	}
+}
+
+// The SNR on an observation was measured by the observer on its reception of
+// the last hop. It belongs to observer↔path[last], never to
+// originator↔path[0], which the observer did not hear.
+func TestBuildNeighborGraph_OriginatorEdgeCarriesNoSNR(t *testing.T) {
+	tx := ngMakeRoutedTx(1, RouteFlood, PayloadADVERT, ngFromNodeJSON("aaaa1111"), []*StoreObs{
+		ngMakeObs("obs00001", `["r1aa","r2bb"]`, nowStr, ngFloatPtr(-4)),
+	})
+	g := BuildFromStore(ngTestStore(ngDirectNodes, []*StoreTx{tx}))
+	orig := ngEdge(g, "aaaa1111", "r1aabbcc")
+	if orig == nil {
+		t.Fatal("originator↔path[0] edge missing")
+	}
+	if orig.SNRCount != 0 {
+		t.Errorf("originator↔path[0] carries %d SNR samples (avg %v), want none", orig.SNRCount, orig.AvgSNR())
+	}
+	last := ngEdge(g, "obs00001", "r2bbccdd")
+	if last == nil {
+		t.Fatal("observer↔path[last] edge missing")
+	}
+	if last.SNRCount != 1 || last.AvgSNR() != -4 {
+		t.Errorf("observer↔path[last] SNR = %v over %d, want -4 over 1", last.AvgSNR(), last.SNRCount)
+	}
+}
+
+// Mesh::sendDirect leaves an empty path after the last forwarder's
+// removeSelfFromPath, so a direct-route ANON_REQ with an empty path was
+// transmitted by that forwarder, not by the originator.
+func TestBuildNeighborGraph_DirectAnonReqEmptyPathNoEdge(t *testing.T) {
+	tx := ngMakeRoutedTx(1, RouteDirect, PayloadANON_REQ, ngEphemeralPubKeyJSON("aaaa1111"), []*StoreObs{
+		ngMakeObs("obs00001", `[]`, nowStr, ngFloatPtr(-7)),
+	})
+	g := BuildFromStore(ngTestStore(ngDirectNodes, []*StoreTx{tx}))
+	if e := ngEdge(g, "aaaa1111", "obs00001"); e != nil {
+		t.Errorf("direct ANON_REQ with an empty path built originator↔observer: %+v", e)
+	}
+}
+
+func TestBuildNeighborGraph_DirectAdvertWithPathNoEdge(t *testing.T) {
+	tx := ngMakeRoutedTx(1, RouteDirect, PayloadADVERT, ngFromNodeJSON("aaaa1111"), []*StoreObs{
+		ngMakeObs("obs00001", `["r1aa"]`, nowStr, ngFloatPtr(-7)),
+	})
+	g := BuildFromStore(ngTestStore(ngDirectNodes, []*StoreTx{tx}))
+	if n := len(g.AllEdges()); n != 0 {
+		t.Errorf("direct ADVERT with a path built %d edges, want 0", n)
+	}
+}
+
+func TestBuildNeighborGraph_TransportFloodBuildsEdges(t *testing.T) {
+	tx := ngMakeRoutedTx(1, RouteTransportFlood, PayloadADVERT, ngFromNodeJSON("aaaa1111"), []*StoreObs{
+		ngMakeObs("obs00001", `["r1aa","r2bb"]`, nowStr, ngFloatPtr(-4)),
+	})
+	g := BuildFromStore(ngTestStore(ngDirectNodes, []*StoreTx{tx}))
+	if ngEdge(g, "aaaa1111", "r1aabbcc") == nil || ngEdge(g, "obs00001", "r2bbccdd") == nil {
+		t.Errorf("transport flood should build originator↔path[0] and observer↔path[last], got %d edges", len(g.AllEdges()))
+	}
+}
+
+// A transmission without a route type proves nothing about adjacency.
+func TestBuildNeighborGraph_UnknownRouteTypeBuildsNoEdges(t *testing.T) {
+	tx := ngMakeTx(1, PayloadADVERT, ngFromNodeJSON("aaaa1111"), []*StoreObs{
+		ngMakeObs("obs00001", `["r1aa"]`, nowStr, ngFloatPtr(-4)),
+	})
+	tx.RouteType = nil
+	g := BuildFromStore(ngTestStore(ngDirectNodes, []*StoreTx{tx}))
+	if n := len(g.AllEdges()); n != 0 {
+		t.Errorf("nil route type built %d edges, want 0", n)
 	}
 }
