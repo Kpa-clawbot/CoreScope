@@ -165,6 +165,18 @@ const active = s => s.rows.filter(r => r.active).map(r => r.key);
     union: document.querySelectorAll('path.mc-rt-edge-union').length,
     back: document.querySelector('.mc-rt-back-link').getAttribute('href'),
   }));
+  // The isolated hops outside the visible map, once its fits have settled.
+  async function hopsOffScreen(p) {
+    await p.waitForTimeout(1200); // two 250 ms zooms and the 200 ms resize refit
+    return p.evaluate(() => {
+      const map = document.querySelector('#leaflet-map').getBoundingClientRect();
+      return [...document.querySelectorAll('.mc-rt-iso-marker')].filter(m => {
+        const r = m.getBoundingClientRect();
+        const x = r.x + r.width / 2, y = r.y + r.height / 2;
+        return x < map.left || x > map.right || y < map.top || y > map.bottom;
+      }).length;
+    });
+  }
   const waitForAll = p => p.waitForFunction(
     want => document.querySelectorAll('path.mc-rt-edge-union').length === want, paths.length);
 
@@ -193,6 +205,9 @@ const active = s => s.rows.filter(r => r.active).map(r => r.key);
     ['from an obs link', '&obs=' + target.id, null],
     ['from a packet-only link', '', null],
     ['by keyboard', '&observer=' + pubkey, 'Enter'],
+    // This observer's path has a located hop, so the route's first fit zooms
+    // in on it and must not swallow the picked path's fit.
+    ['beside a located observer path', '&observer=' + observations[0].observer_id + '&paths=all', null],
   ]) {
     await step('a row picked ' + name + ' survives a reload', () => withRoute(query, async p => {
       const entries = await p.evaluate(() => history.length);
@@ -209,6 +224,8 @@ const active = s => s.rows.filter(r => r.active).map(r => r.key);
       await reload(p);
       const reloaded = await screen(p);
       assert(reloaded === picked, 'reload shows ' + reloaded + ', expected ' + picked);
+      const offScreen = await hopsOffScreen(p);
+      assert(offScreen === 0, offScreen + ' hop(s) of the reloaded path are off screen');
     }));
   }
 

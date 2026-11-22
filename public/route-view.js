@@ -1547,6 +1547,9 @@
     // Special case: a single point gives degenerate bounds → max zoom (street
     // level on empty water often). setView with reasonable zoom instead.
     var fitPts = positions.filter(function(p){return p.lat!=null});
+    // With a deep-linked view to follow, the first fit doesn't animate:
+    // Leaflet drops any fit asked for during a zoom animation.
+    var jumpFit = !!opts.initialPathView;
     function refit() {
       try {
         mapRef.invalidateSize();
@@ -1585,9 +1588,12 @@
         if (fitPts.length === 1 && !bounds) {
           mapRef.setView([fitPts[0].lat, fitPts[0].lon], 11, { animate: false });
         } else if (bounds && bounds.isValid()) {
-          mapRef.fitBounds(bounds, isMob
+          var fitOpts = isMob
             ? { paddingTopLeft: [30, 70], paddingBottomRight: [30, 190], maxZoom: 14 }
-            : { padding: [40, 40], maxZoom: 14 });
+            : { padding: [40, 40], maxZoom: 14 };
+          if (jumpFit) fitOpts.animate = false;
+          jumpFit = false;
+          mapRef.fitBounds(bounds, fitOpts);
         }
       } catch (e) { console.warn('[route-view]', e); }
     }
