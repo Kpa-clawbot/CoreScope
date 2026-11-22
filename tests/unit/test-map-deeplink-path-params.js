@@ -2,6 +2,7 @@
  * Map route deep-link path params — #/map?packet=<hash> plus
  *   &observer=<pubkey or 8+ char prefix>  isolate that observer's shortest path
  *   &paths=all                            open the path picker's "All" view
+ *   &paths=<hop>-<hop>-...                isolate that path (a picker row click)
  *
  * Covers the real helpers in public/route-view-utils.js
  * (resolveDeepLinkObservation, pathGroupKey) and the source wiring in
@@ -120,20 +121,41 @@ console.log('\n=== precedence ===');
   assert(U.resolveDeepLinkObservation([], { observer: 'a1b2c3d4' }).chosen === null, 'no observations: nothing chosen');
 }
 
-console.log('\n=== withPathsAllParam: the All button writes the deep link ===');
+console.log('\n=== paths=<hops>: the clicked row ===');
 {
-  const W = U.withPathsAllParam;
-  assert(W('#/map?packet=ABC', true) === '#/map?packet=ABC&paths=all', 'adds paths=all');
-  assert(W('#/map?packet=ABC&observer=a1b2c3d4', true) === '#/map?packet=ABC&observer=a1b2c3d4&paths=all',
+  const r = pick({ observer: 'a1b2c3d4', paths: 'aa-bb' });
+  assert(r.pathView.mode === 'path' && r.pathView.path.join(',') === 'aa,bb', 'a named path wins the view over observer');
+  assert(r.chosen.id === 12 && r.observationId === '12', 'observer still chooses the observation (route spine, back link)');
+  const byId = pick({ obsId: '11', paths: 'aa-bb' });
+  assert(byId.chosen.id === 11 && byId.pathView.path.join(',') === 'aa,bb', 'obs combines with a named path');
+  const alone = pick({ paths: 'ff' });
+  assert(alone.chosen.id === 10 && alone.observationId === null && alone.pathView.path.join(',') === 'ff',
+    'a named path alone sets only the view');
+  assert(pick({ paths: 'AA-BB' }).pathView.path.join(',') === 'aa,bb', 'case-insensitive, returns the observed spelling');
+  warnings.length = 0;
+  assert(pick({ observer: 'a1b2c3d4', paths: '77-88' }).pathView.path.join(',') === 'ff',
+    'a path nobody observed falls back to the observer view');
+  assert(warnings.some(w => /77-88/.test(w)), 'a path nobody observed logs a console warning');
+  assert(pick({ paths: 'aa' }).pathView === null, 'part of a path is not a match');
+  const odd = [{ id: 1, path_json: 'not json' }, { id: 2, path_json: '{}' }, { id: 3, path_json: '["aa"]' }];
+  assert(U.resolveDeepLinkObservation(odd, { paths: 'aa' }).pathView.path.join() === 'aa', 'unreadable paths are skipped');
+  assert(U.pathsParamValue(['aa', 'bb']) === 'aa-bb', 'pathsParamValue joins raw hops');
+}
+
+console.log('\n=== withPathsParam: the picker writes the deep link ===');
+{
+  const W = U.withPathsParam;
+  assert(W('#/map?packet=ABC', 'all') === '#/map?packet=ABC&paths=all', 'All adds paths=all');
+  assert(W('#/map?packet=ABC&observer=a1b2c3d4', 'all') === '#/map?packet=ABC&observer=a1b2c3d4&paths=all',
     'keeps observer and the other params');
-  assert(W('#/map?packet=ABC&paths=all', true) === '#/map?packet=ABC&paths=all', 'already there: unchanged');
-  assert(W('#/map?packet=ABC&paths=all&observer=a1b2c3d4', false) === '#/map?packet=ABC&observer=a1b2c3d4',
-    'removes paths=all, keeps the rest');
-  assert(W('#/map?packet=ABC', false) === '#/map?packet=ABC', 'nothing to remove: unchanged');
-  assert(W('#/map?route=1', true) === '#/map?route=1', 'no packet= (sessionStorage route): untouched, paths=all would not reload');
-  assert(W('#/map', true) === '#/map', 'plain map: untouched');
-  assert(W('', true) === '', 'empty hash: untouched');
-  assert(W('#/map?packet=A%2FB&obs=7', true) === '#/map?packet=A%2FB&obs=7&paths=all', 'encoded values survive');
+  assert(W('#/map?packet=ABC&paths=all', 'all') === '#/map?packet=ABC&paths=all', 'already there: unchanged');
+  assert(W('#/map?packet=ABC&paths=all&observer=a1b2c3d4', 'AA-BB') === '#/map?packet=ABC&paths=AA-BB&observer=a1b2c3d4',
+    'a row replaces paths=all, keeps the rest, needs no escaping');
+  assert(W('#/map?packet=ABC&paths=AA-BB', 'all') === '#/map?packet=ABC&paths=all', 'All replaces a named path');
+  assert(W('#/map?route=1', 'all') === '#/map?route=1', 'no packet= (sessionStorage route): untouched, would not reload');
+  assert(W('#/map', 'all') === '#/map', 'plain map: untouched');
+  assert(W('', 'all') === '', 'empty hash: untouched');
+  assert(W('#/map?packet=A%2FB&obs=7', 'all') === '#/map?packet=A%2FB&obs=7&paths=all', 'encoded values survive');
 }
 
 console.log('\n=== pathGroupKey matches the path picker grouping ===');
@@ -156,13 +178,12 @@ console.log('\n=== wiring ===');
   assert(/initialPathView: opts\.initialPathView \|\| null/.test(mapSrc), 'multi-path draw forwards it to the renderer');
   assert(/var k = pathGroupKey\(rawHops, filterHops\);/.test(rvSrc), 'picker rows are keyed by pathGroupKey');
   assert(/if \(clearBtn\) clearBtn\.click\(\);/.test(rvSrc), 'paths=all goes through the All button handler');
-  assert(/pathRows\[ri\]\.dataset\.pathKey === key\) \{ pathRows\[ri\]\.click\(\);/.test(rvSrc),
-    'observer view goes through the path row click handler');
+  assert(/pathRows\[ri\]\.dataset\.pathKey === key\) \{ selectRow\(pathRows\[ri\]\);/.test(rvSrc),
+    'a deep-linked path selects its row without rewriting the link');
   assert(/sidebar\._applyPathView\(opts\.initialPathView\)/.test(rvSrc), 'renderer applies the initial path view');
-  const syncCalls = rvSrc.match(/syncPathsAllParam\((true|false)\)/g) || [];
-  assert(syncCalls.filter(c => c === 'syncPathsAllParam(true)').length === 2,
-    'the All button and the map badge both write paths=all (' + syncCalls.join(', ') + ')');
-  assert(syncCalls.includes('syncPathsAllParam(false)'), 'isolating one path removes paths=all');
+  assert((rvSrc.match(/syncPathView\(\{ mode: 'all' \}\)/g) || []).length === 2,
+    'the All button and the map badge both write paths=all');
+  assert(/syncPathView\(\{ mode: 'path', path: /.test(rvSrc), 'a row click writes its path');
   assert(/history\.replaceState\(null, '', next\)/.test(rvSrc),
     'the hash is rewritten with replaceState, so the router does not re-run the deep link');
 }

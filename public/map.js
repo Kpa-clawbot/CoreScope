@@ -1503,6 +1503,8 @@
         packetHash: opts.packetHash || null,
         observationId: opts.observationId || null,
         initialPathView: opts.initialPathView || null,
+        // opts is what the hide-1-byte-hops redraw replays.
+        onPathViewChange: view => { opts.initialPathView = view; },
         allPaths: paths,
         packetContext: opts.packetContext || null
       });
@@ -1519,6 +1521,7 @@
   //   &observer=<pubkey or 8+ char prefix> — that observer's shortest-path
   //     observation, its path isolated in the path picker
   //   &paths=all — open the path picker's "All" (union) view
+  //   &paths=<hop>-<hop>-... — isolate that path (what a picker row writes)
   async function loadRouteFromDeepLink() {
     try {
       const hash = location.hash || '';
@@ -1543,7 +1546,7 @@
       const observations = data.observations || pkt.observations || [];
       if (!observations.length) return;
       // Pick the observation: ?obs=<id>, else ?observer=<pubkey|prefix>'s
-      // shortest path, else the first. ?observer / ?paths=all also set which
+      // shortest path, else the first. ?observer / ?paths also set which
       // path-picker view the route opens in.
       const pick = window.MC_ROUTE_UTILS.resolveDeepLinkObservation(observations, {
         obsId: obsId, observer: params.get('observer'), paths: params.get('paths')
