@@ -51,32 +51,32 @@ console.log('\n=== observer: pick that observer\'s shortest path ===');
 
 console.log('\n=== observer: shortest path wins over earliest ===');
 {
-  // The analyzer.comchan.net report: one observer heard the packet twice in
-  // the same second, the lower id over the longer path.
-  const OBS_C = '3aac26fc' + '2'.repeat(56);
+  // One observer heard the packet twice in the same second, the lower id
+  // over the longer path. All values are made up.
+  const OBS_C = 'c1c2c3d4' + '2'.repeat(56);
   const same = [
-    { id: 19837252, observer_id: OBS_C.toUpperCase(), timestamp: '2026-11-20T18:19:40.000Z', path_json: '["CD2806","93702B","AE5842","2E20A9"]' },
-    { id: 19837258, observer_id: OBS_C.toUpperCase(), timestamp: '2026-11-20T18:19:40.000Z', path_json: '["CD2806","93702B","AE5842"]' },
+    { id: 101, observer_id: OBS_C.toUpperCase(), timestamp: '2026-01-02T03:04:05.000Z', path_json: '["111111","222222","333333","444444"]' },
+    { id: 102, observer_id: OBS_C.toUpperCase(), timestamp: '2026-01-02T03:04:05.000Z', path_json: '["111111","222222","333333"]' },
   ];
   const r = U.resolveDeepLinkObservation(same, { observer: OBS_C });
-  assert(r.chosen.id === 19837258, 'same timestamp: the 3-hop path wins over the lower-id 4-hop one (got ' + r.chosen.id + ')');
+  assert(r.chosen.id === 102, 'same timestamp: the 3-hop path wins over the lower-id 4-hop one (got ' + r.chosen.id + ')');
   assert(r.pathView.path.length === 3, 'path view isolates the 3-hop path');
   const later = [
-    { id: 1, observer_id: OBS_C, timestamp: '2026-11-20T18:19:40Z', path_json: '["aa","bb","cc"]' },
-    { id: 2, observer_id: OBS_C, timestamp: '2026-11-20T18:19:45Z', path_json: '["aa"]' },
+    { id: 1, observer_id: OBS_C, timestamp: '2026-01-02T03:04:00Z', path_json: '["aa","bb","cc"]' },
+    { id: 2, observer_id: OBS_C, timestamp: '2026-01-02T03:04:05Z', path_json: '["aa"]' },
   ];
-  assert(U.resolveDeepLinkObservation(later, { observer: '3aac26fc' }).chosen.id === 2, 'a later but shorter path wins');
+  assert(U.resolveDeepLinkObservation(later, { observer: 'c1c2c3d4' }).chosen.id === 2, 'a later but shorter path wins');
   const empty = [
-    { id: 1, observer_id: OBS_C, timestamp: '2026-11-20T18:19:40Z', path_json: '[]' },
-    { id: 2, observer_id: OBS_C, timestamp: '2026-11-20T18:19:45Z', path_json: '["aa","bb"]' },
+    { id: 1, observer_id: OBS_C, timestamp: '2026-01-02T03:04:00Z', path_json: '[]' },
+    { id: 2, observer_id: OBS_C, timestamp: '2026-01-02T03:04:05Z', path_json: '["aa","bb"]' },
   ];
-  assert(U.resolveDeepLinkObservation(empty, { observer: '3aac26fc' }).chosen.id === 2,
+  assert(U.resolveDeepLinkObservation(empty, { observer: 'c1c2c3d4' }).chosen.id === 2,
     'an empty path (nothing to draw) loses to an observed one');
   const bad = [
-    { id: 1, observer_id: OBS_C, timestamp: '2026-11-20T18:19:40Z', path_json: 'not json' },
-    { id: 2, observer_id: OBS_C, timestamp: '2026-11-20T18:19:45Z', path_json: '["aa"]' },
+    { id: 1, observer_id: OBS_C, timestamp: '2026-01-02T03:04:00Z', path_json: 'not json' },
+    { id: 2, observer_id: OBS_C, timestamp: '2026-01-02T03:04:05Z', path_json: '["aa"]' },
   ];
-  assert(U.resolveDeepLinkObservation(bad, { observer: '3aac26fc' }).chosen.id === 2, 'unparseable path_json loses');
+  assert(U.resolveDeepLinkObservation(bad, { observer: 'c1c2c3d4' }).chosen.id === 2, 'unparseable path_json loses');
 }
 
 console.log('\n=== observer: invalid or unmatched keys fall back ===');
