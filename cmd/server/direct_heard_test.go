@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"testing"
 )
 
@@ -177,6 +178,36 @@ func TestDirectHeardNode(t *testing.T) {
 			pathJSON: `["BB11"]`,
 			want:     "",
 		},
+		{
+			name:     "unique one-byte last hop credits nobody",
+			tx:       dhTx(RouteFlood, PayloadTXT_MSG, ""),
+			pathJSON: `["66","BB"]`,
+			want:     "",
+		},
+		{
+			name:     "TRACE flood with a unique two-byte last hop credits nobody",
+			tx:       dhTx(RouteFlood, PayloadTRACE, ""),
+			pathJSON: `["BB11"]`,
+			want:     "",
+		},
+		{
+			name:     "zero-hop advert with a failed signature credits nobody",
+			tx:       dhTx(RouteFlood, PayloadADVERT, `{"type":"ADVERT","pubKey":"`+dhUnique+`","signatureValid":false}`),
+			pathJSON: `[]`,
+			want:     "",
+		},
+		{
+			name:     "zero-hop advert with a valid signature credits the advertiser",
+			tx:       dhTx(RouteFlood, PayloadADVERT, `{"type":"ADVERT","pubKey":"`+dhUnique+`","signatureValid":true}`),
+			pathJSON: `[]`,
+			want:     dhUnique,
+		},
+		{
+			name:     "missing payload type credits nobody",
+			tx:       &StoreTx{RouteType: dhRoute(RouteFlood)},
+			pathJSON: `["BB11"]`,
+			want:     "",
+		},
 	}
 
 	for _, tc := range cases {
@@ -332,6 +363,65 @@ func TestBuildDirectHeardIndex_SkipsOwnTransmissions(t *testing.T) {
 	}
 	if a := idx[dhCollideA][dhUnique]; a == nil || a.Count != 1 {
 		t.Fatalf("rx copy of the forwarded packet = %#v, want Count 1", a)
+	}
+}
+
+// BenchmarkBuildDirectHeardIndex_MixedHops runs the compute pass over 50,000
+// transmissions with 10 observations each: mixed 1-, 2- and 3-byte last
+// hops, 5% zero-hop adverts.
+func BenchmarkBuildDirectHeardIndex_MixedHops(b *testing.B) {
+	pm := buildPrefixMap(directHeardNodes)
+	advert := `{"type":"ADVERT","pubKey":"` + dhUnique + `","signatureValid":true}`
+	paths := []string{`["66","BB"]`, `["66","A4"]`, `["66","BB11"]`, `["66","A433"]`, `["66","BB1122"]`, `["9999"]`}
+	packets := make([]*StoreTx, 0, 50000)
+	for i := 0; i < 50000; i++ {
+		var tx *StoreTx
+		path := paths[i%len(paths)]
+		if i%20 == 0 {
+			tx = dhTx(RouteFlood, PayloadADVERT, advert)
+			path = `[]`
+		} else {
+			tx = dhTx(RouteFlood, PayloadTXT_MSG, "")
+		}
+		for j := 0; j < 10; j++ {
+			tx.Observations = append(tx.Observations, &StoreObs{ObserverID: "obs" + strconv.Itoa(j), PathJSON: path})
+		}
+		packets = append(packets, tx)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buildDirectHeardIndex(packets, pm)
+	}
+}
+
+// TestDirectHeardNode_ZeroHopNonAdvertLeavesDecodedCacheCold pins that the
+// signature check runs for ADVERTs only: the compute pass walks every
+// observation, and a zero-hop message must not parse and cache its decoded
+// JSON (signatureFailed parses when the text holds a \u escape).
+func TestDirectHeardNode_ZeroHopNonAdvertLeavesDecodedCacheCold(t *testing.T) {
+	pm := buildPrefixMap(directHeardNodes)
+	tx := dhTx(RouteFlood, PayloadTXT_MSG, `{"type":"TXT_MSG","text":"caf\u00e9"}`)
+	obs := &StoreObs{ObserverID: "obs1", PathJSON: `[]`}
+	if got := directHeardNode(tx, obs, pm); got != "" {
+		t.Fatalf("directHeardNode = %q, want \"\"", got)
+	}
+	if tx.parsedDecoded != nil {
+		t.Fatalf("decoded JSON was parsed for a zero-hop non-advert")
+	}
+}
+
+// TestDirectHeardNode_RetiredPrefixCreditsNobody: a hop whose prefix a
+// retired repeater (moved to inactive_nodes, still able to relay) shares is
+// no proof the one active candidate transmitted, as in uniqueHopPrefix.
+func TestDirectHeardNode_RetiredPrefixCreditsNobody(t *testing.T) {
+	pm := buildPrefixMap(directHeardNodes)
+	pm.retired = map[string]struct{}{"bb11": {}}
+	tx := dhTx(RouteFlood, PayloadTXT_MSG, "")
+	if got := directHeardNode(tx, &StoreObs{ObserverID: "obs1", PathJSON: `["66","BB11"]`}, pm); got != "" {
+		t.Fatalf("directHeardNode = %q, want \"\" for a hop shared with a retired node", got)
+	}
+	if got := directHeardNode(tx, &StoreObs{ObserverID: "obs1", PathJSON: `["66","BB1122"]`}, pm); got != dhUnique {
+		t.Fatalf("directHeardNode = %q, want %q: the 3-byte hop is not retired", got, dhUnique)
 	}
 }
 

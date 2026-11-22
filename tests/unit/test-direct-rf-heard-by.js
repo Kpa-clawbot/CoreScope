@@ -81,6 +81,11 @@ test('a node nobody hears directly still renders the card, with an empty state',
     'the empty state must not assert that nobody is in range');
   assert.ok(/not the same as being out of range/i.test(html),
     'the empty state must say what it cannot conclude, not only what it found');
+  // The most common reason for an empty list since the shared rule: a
+  // 1-byte hop, even with one known candidate, is not proof.
+  const emptyTitle = (html.match(/<div class="text-muted"[^>]*title="([^"]*)"[^>]*>[^<]*No observation proves/) || [])[1] || '';
+  assert.ok(/1-byte (path )?hop/.test(emptyTitle),
+    'the empty state title must say a 1-byte hop is not taken as proof');
   assert.ok(/Seen via relay by 35 observers/.test(html), 'expected the relay count');
   assert.ok(!/observer-sort-table/.test(html),
     'an empty direct list must not render a table header with no rows');
