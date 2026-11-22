@@ -188,6 +188,7 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 	}
 
 	rows, err := s.db.Query(`SELECT
+		t.route_type,
 		t.payload_type,
 		t.decoded_json,
 		COALESCE(t.from_pubkey, ''),
@@ -208,12 +209,20 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 
 	var edges []edgeRow
 	for rows.Next() {
-		var payloadType sql.NullInt64
+		var routeType, payloadType sql.NullInt64
 		var decodedJSON, fromPubkey, pathJSON, observerID string
 		var epochTs int64
-		if err := rows.Scan(&payloadType, &decodedJSON, &fromPubkey, &pathJSON, &observerID, &epochTs); err != nil {
+		if err := rows.Scan(&routeType, &payloadType, &decodedJSON, &fromPubkey, &pathJSON, &observerID, &epochTs); err != nil {
 			continue
 		}
+		// TRACE reuses the path bytes for per-hop SNR values: they name no node.
+		if payloadType.Valid && !packetpath.PathBytesAreHops(byte(payloadType.Int64)) {
+			continue
+		}
+		// A direct route carries the REMAINING route (firmware Mesh.cpp
+		// removeSelfFromPath), so a non-empty path names no neighbour. Only
+		// its zero hop (Mesh::sendZeroHop) says who the observer heard.
+		directRoute := routeType.Valid && (routeType.Int64 == RouteDirect || routeType.Int64 == RouteTransportDirect)
 		isAdvert := payloadType.Valid && payloadType.Int64 == int64(payloadADVERT)
 		isAnonReq := payloadType.Valid && payloadType.Int64 == int64(payloadAnonReq)
 		// #1777: ANON_REQ's ephemeralPubKey is as trustworthy an originator
@@ -236,6 +245,9 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 			if hasFullOriginator && fromNode != "" && fromNode != observerPK && observerPK != "" {
 				edges = append(edges, canonEdge(fromNode, observerPK, ts))
 			}
+			continue
+		}
+		if directRoute {
 			continue
 		}
 		if hasFullOriginator && fromNode != "" {
