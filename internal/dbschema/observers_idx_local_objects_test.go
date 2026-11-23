@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Objects an operator added to a legacy database that the observers rebuild
@@ -254,6 +255,131 @@ func TestObserversRebuildConcurrentApply(t *testing.T) {
 	assertPacketsViewReadable(t, db)
 }
 
+// The rebuild takes the write lock before it reads (BEGIN IMMEDIATE), and
+// leaves cleanly when another process migrated the table while it waited
+// (review of #2445; TestObserversRebuildConcurrentApply reaches both only by
+// chance). Handle 1 holds the write lock, handle 2 starts the rebuild and has
+// to wait on busy_timeout, handle 1 commits the migrated shape: handle 2
+// returns nil without rebuilding, with its foreign_keys setting back, and
+// both handles write. A deferred BEGIN would read the legacy table and then
+// fail its first write with "database is locked", without waiting.
+func TestObserversRebuildWaitsForWriterThenSeesMigrated(t *testing.T) {
+	seed := legacyApplyableDB(t)
+	var path string
+	if err := seed.QueryRow(`SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&path); err != nil {
+		t.Fatal(err)
+	}
+	wantRows := dumpRows(t, seed, `SELECT rowid, * FROM observers ORDER BY rowid`)
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h1, h2 := writerDB(t, path), writerDB(t, path)
+	ctx := context.Background()
+	// Open handle 2's connection now: opening one applies the writer DSN's
+	// pragmas, which wait on the write lock themselves, and the rebuild would
+	// then start only after handle 1 is done.
+	if err := h2.Ping(); err != nil || h2.Stats().OpenConnections != 1 {
+		t.Fatalf("handle 2: %d open connections before the rebuild, want 1 (%v)", h2.Stats().OpenConnections, err)
+	}
+
+	// Handle 1 migrates observers by hand inside BEGIN IMMEDIATE, so the test
+	// decides when the lock is released.
+	conn, err := h1.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connExec := func(stmts ...string) {
+		t.Helper()
+		for _, s := range stmts {
+			if _, err := conn.ExecContext(ctx, s); err != nil {
+				t.Fatalf("handle 1: %q: %v", s, err)
+			}
+		}
+	}
+	defs := make([]string, len(observersColumns))
+	for i, c := range observersColumns {
+		defs[i] = c.ddl
+	}
+	connExec(`BEGIN IMMEDIATE`)
+
+	done := make(chan error, 1)
+	go func() { done <- ensureObserversIdx(h2, nil) }()
+	// Handle 2 has to be waiting on the lock when handle 1 commits. Nothing
+	// outside SQLite shows a connection sitting in its busy handler, so give
+	// it time to get there: its one pooled connection taken, then a pause
+	// far longer than the three statements before its BEGIN take. Returning
+	// in that time, with or without an error, is the failure. If the pause
+	// is ever too short the test still passes (handle 2 just finds the table
+	// done at its first look); it cannot fail for that reason.
+	early := func(err error) {
+		t.Helper()
+		t.Fatalf("ensureObserversIdx returned while another connection held the write lock (err = %v); it must wait", err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); h2.Stats().InUse == 0 && time.Now().Before(deadline); {
+		select {
+		case err := <-done:
+			early(err)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	select {
+	case err := <-done:
+		early(err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	connExec(
+		`DROP VIEW packets_v`,
+		`CREATE TABLE observers_new (`+strings.Join(defs, ", ")+`)`,
+		`INSERT INTO observers_new (idx, id, name) SELECT rowid, id, name FROM observers`,
+		`DROP TABLE observers`,
+		`ALTER TABLE observers_new RENAME TO observers`,
+		`CREATE INDEX idx_observers_last_seen ON observers(last_seen)`,
+		packetsViewSQL(observersKey),
+	)
+	select {
+	case err := <-done:
+		early(err)
+	default:
+	}
+	connExec(`COMMIT`)
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ensureObserversIdx after the other handle migrated the table: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ensureObserversIdx still waiting 10 s after the write lock was released")
+	}
+	for i, h := range []*sql.DB{h1, h2} {
+		if !observersIdxIsPK(t, h) {
+			t.Errorf("handle %d: observers.idx is not the primary key", i+1)
+		}
+	}
+	if got := dumpRows(t, h2, `SELECT * FROM observers ORDER BY idx`); !reflect.DeepEqual(wantRows, got) {
+		t.Errorf("observer rows:\nwant=%v\ngot=%v", wantRows, got)
+	}
+	// One connection per pool, so this is the connection the rebuild used.
+	var fk, written int
+	if err := h2.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
+		t.Errorf("handle 2: foreign_keys = %d (%v), want the writer DSN's 1 restored", fk, err)
+	}
+	if got := h2.Stats().InUse; got != 0 {
+		t.Errorf("handle 2: %d connection(s) still in use", got)
+	}
+	// Neither connection was left inside a transaction, so both write.
+	mustExec(t, h2, `INSERT INTO observers (id, name) VALUES ('h2', 'H2')`)
+	mustExec(t, h1, `INSERT INTO observers (id, name) VALUES ('h1', 'H1')`)
+	if err := h1.QueryRow(`SELECT COUNT(*) FROM observers WHERE id IN ('h1', 'h2')`).Scan(&written); err != nil || written != 2 {
+		t.Errorf("writes after the rebuild: %d of 2 rows visible (%v)", written, err)
+	}
+	assertPacketsViewReadable(t, h2)
+}
+
 // A DELETE trigger on observers whose body references a table that has since
 // been dropped is carried across like any other trigger (review of #2445).
 // SQLite compiles a table's DELETE triggers for every DELETE on it, even one
@@ -366,17 +492,25 @@ func TestMentionsIdentifier(t *testing.T) {
 	}
 }
 
-// A captured view whose name holds a double quote is written `"odd""name"`
-// in the SQL of whatever uses it, which is not the name sqlite_master stores
-// (review of #2445). Its INSTEAD OF trigger went down with the view and was
-// never recreated, and a view selecting from it was left behind to fail the
-// RENAME. Both come back with their exact definition.
+// A captured view whose name holds a quote character is written with that
+// character doubled in the SQL of whatever uses it (`"odd""name"`, or
+// "`odd“tick`" in backtick quoting), which is not the name sqlite_master
+// stores (review of #2445). Its INSTEAD OF trigger went down with the view
+// and was never recreated, and a view selecting from it was left behind to
+// fail the RENAME. Both come back with their exact definition.
 func TestObserversRebuildKeepsDependentsOfViewWithQuoteInName(t *testing.T) {
 	const (
-		oddView = `CREATE VIEW "odd""name" AS SELECT id, name FROM observers`
-		trigger = `CREATE TRIGGER trg_odd INSTEAD OF UPDATE ON "odd""name" BEGIN INSERT INTO audit VALUES (NEW.id, 'update'); END`
-		view    = `CREATE VIEW v2 AS SELECT id FROM "odd""name"`
+		oddView  = `CREATE VIEW "odd""name" AS SELECT id, name FROM observers`
+		trigger  = `CREATE TRIGGER trg_odd INSTEAD OF UPDATE ON "odd""name" BEGIN INSERT INTO audit VALUES (NEW.id, 'update'); END`
+		view     = `CREATE VIEW v2 AS SELECT id FROM "odd""name"`
+		tickView = "CREATE VIEW `odd``tick` AS SELECT id, name FROM observers"
+		tickUser = "CREATE VIEW v2 AS SELECT id FROM `odd``tick`"
 	)
+	v2Reads := func(t *testing.T, db *sql.DB) {
+		if got, want := dumpRows(t, db, `SELECT id FROM v2 ORDER BY id`), []string{"[a]", "[b]"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("v2 = %v, want %v", got, want)
+		}
+	}
 	for _, tc := range []struct {
 		name    string
 		objects []string
@@ -388,11 +522,8 @@ func TestObserversRebuildKeepsDependentsOfViewWithQuoteInName(t *testing.T) {
 				t.Errorf("audit = %v, want %v from trg_odd", got, want)
 			}
 		}},
-		{"view on the view", []string{oddView, view}, func(t *testing.T, db *sql.DB) {
-			if got, want := dumpRows(t, db, `SELECT id FROM v2 ORDER BY id`), []string{"[a]", "[b]"}; !reflect.DeepEqual(got, want) {
-				t.Errorf("v2 = %v, want %v", got, want)
-			}
-		}},
+		{"view on the view", []string{oddView, view}, v2Reads},
+		{"view on the view, backtick quoting", []string{tickView, tickUser}, v2Reads},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := legacyApplyableDB(t)

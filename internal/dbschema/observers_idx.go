@@ -451,9 +451,10 @@ func recreateRefusal(o localObserver, cause error) error {
 //     takes them with it.
 //
 // The mention test is a case-insensitive whole-word match, on the name and
-// on the name as it is written inside double quotes (`odd"name` is
-// `"odd""name"` in SQL); a false positive only means an unrelated view or
-// trigger is dropped and recreated as is.
+// on the name as it is written inside double quotes or backticks, where the
+// quote character is doubled (`odd"name` is `"odd""name"` in SQL); a false
+// positive only means an unrelated view or trigger is dropped and recreated
+// as is.
 // Indexes on other tables cannot reference observers and are never touched.
 // SQL is NULL for SQLite's own auto-indexes, which follow their table.
 func captureLocalObservers(ctx context.Context, tx sqlRunner) ([]localObserver, error) {
@@ -500,7 +501,8 @@ func captureLocalObservers(ctx context.Context, tx sqlRunner) ([]localObserver, 
 				for _, name := range referenced {
 					if (o.kind == "trigger" && strings.EqualFold(o.table, name)) ||
 						mentionsIdentifier(o.sql, name) ||
-						mentionsIdentifier(o.sql, strings.ReplaceAll(name, `"`, `""`)) {
+						mentionsIdentifier(o.sql, strings.ReplaceAll(name, `"`, `""`)) ||
+						mentionsIdentifier(o.sql, strings.ReplaceAll(name, "`", "``")) {
 						hit = true
 						break
 					}
@@ -625,10 +627,13 @@ func checkObserversForeignKeys(ctx context.Context, tx sqlRunner) error {
 			return fmt.Errorf("foreign_key_check(%s): %w", table, err)
 		}
 		if violations > 0 {
+			// Two causes look the same here, so name both ways out.
 			return fmt.Errorf("observers rebuild left %d foreign key violation(s) in %s; rolled back. "+
-				"A child column declared `REFERENCES observers` with no column follows the primary key, so it now points at idx: "+
-				"to continue, declare it `REFERENCES observers(id)`, "+
-				"or run the previous CoreScope version", violations, table)
+				"Either a child column declared `REFERENCES observers` with no column, which follows the primary key and so now points at idx "+
+				"(to continue, declare it `REFERENCES observers(id)`), "+
+				"or rows that already reference a missing observer "+
+				"(to continue, list them with `PRAGMA foreign_key_check(%s)` and delete or fix them); "+
+				"or run the previous CoreScope version", violations, table, quoteIdent(table))
 		}
 	}
 	return nil

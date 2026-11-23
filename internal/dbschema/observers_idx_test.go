@@ -398,7 +398,8 @@ func TestObserversIdxRefusesNullID(t *testing.T) {
 // parent's primary key: id before the rebuild, idx after it. The rebuild
 // refuses (the child rows would all be orphans) and says what to change;
 // with the column named, the next start completes the rebuild (review of
-// #2445).
+// #2445). The refusal cannot tell that cause from rows that were orphans
+// already, so it gives the way out for both.
 func TestObserversIdxForeignKeyRefusalSaysHowToContinue(t *testing.T) {
 	db := legacyFullDB(t)
 	mustExec(t, db,
@@ -407,10 +408,15 @@ func TestObserversIdxForeignKeyRefusalSaysHowToContinue(t *testing.T) {
 	)
 	assertRefusedUntouched(t, db, "1 foreign key violation(s) in observer_notes")
 	err := ensureObserversIdx(db, nil)
-	for _, want := range []string{"`REFERENCES observers` with no column", "points at idx", "`REFERENCES observers(id)`", "previous CoreScope version"} {
+	for _, want := range []string{"`REFERENCES observers` with no column", "points at idx", "`REFERENCES observers(id)`",
+		"rows that already reference a missing observer", orphanCheckSQL, "delete or fix them", "previous CoreScope version"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal %v does not say %q", err, want)
 		}
+	}
+	// Not this cause: before the rebuild the column follows id, and 'a' exists.
+	if got := dumpRows(t, db, orphanCheckSQL); len(got) != 0 {
+		t.Errorf("%s = %v, want no rows on the untouched table", orphanCheckSQL, got)
 	}
 	mustExec(t, db,
 		`DROP TABLE observer_notes`,
@@ -422,6 +428,49 @@ func TestObserversIdxForeignKeyRefusalSaysHowToContinue(t *testing.T) {
 	}
 	if !observersIdxIsPK(t, db) {
 		t.Fatal("observers.idx is not the primary key after the retry")
+	}
+}
+
+// orphanCheckSQL is the statement the foreign key refusal gives for the
+// observer_notes table of these tests, the table name quoted.
+const orphanCheckSQL = `PRAGMA foreign_key_check("observer_notes")`
+
+// A child column that already names the column (`REFERENCES observers(id)`)
+// can still hold a row for an observer that does not exist: the sqlite3 CLI
+// writes with foreign_keys off. The rebuild refuses on it at every start, so
+// the refusal must not only say to redeclare the column (review of #2445):
+// the statement it gives lists the row, and with the row gone the next start
+// completes the rebuild.
+func TestObserversIdxForeignKeyRefusalCoversOrphanRows(t *testing.T) {
+	db := legacyFullDB(t)
+	mustExec(t, db,
+		`CREATE TABLE observer_notes (observer_id TEXT REFERENCES observers(id), note TEXT)`,
+		`INSERT INTO observer_notes VALUES ('a', 'roof')`,
+		`PRAGMA foreign_keys=OFF`,
+		`INSERT INTO observer_notes VALUES ('gone', 'orphan')`,
+		`PRAGMA foreign_keys=ON`,
+	)
+	assertRefusedUntouched(t, db, "1 foreign key violation(s) in observer_notes")
+	err := ensureObserversIdx(db, nil)
+	for _, want := range []string{"rows that already reference a missing observer", "list them with `" + orphanCheckSQL + "`",
+		"delete or fix them", "previous CoreScope version"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %v does not say %q", err, want)
+		}
+	}
+	// Columns: table, rowid, parent, fkid.
+	if got, want := dumpRows(t, db, orphanCheckSQL), []string{"[observer_notes 2 observers 0]"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s = %v, want %v", orphanCheckSQL, got, want)
+	}
+	mustExec(t, db, `DELETE FROM observer_notes WHERE rowid = 2`)
+	if err := ensureObserversIdx(db, nil); err != nil {
+		t.Fatalf("rebuild after the orphan row was deleted: %v", err)
+	}
+	if !observersIdxIsPK(t, db) {
+		t.Fatal("observers.idx is not the primary key after the retry")
+	}
+	if got, want := dumpRows(t, db, `SELECT observer_id, note FROM observer_notes`), []string{"[a roof]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("observer_notes = %v, want %v", got, want)
 	}
 }
 
