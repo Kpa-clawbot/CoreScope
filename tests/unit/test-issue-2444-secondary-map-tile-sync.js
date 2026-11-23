@@ -391,37 +391,41 @@ async function homeRaces() {
     assert.strictEqual(second.invalidated, 1, 'the new map is resized once, by its own timer');
   });
 
-  await test('two loads started before either lands: the first map is removed, only the second stays registered', async () => {
+  // Overlapping loads, the older answering first. Whether that stale answer
+  // draws at all is #2461's business (with it, it draws nothing); either way
+  // no map may be left behind: every removed map was unregistered first, and
+  // the registry ends holding exactly the maps still on the page.
+  await test('two loads started before either lands: only the newest map stays, and it alone is registered', async () => {
     const s = home();
     const calls = pendingApi(s);
     const p1 = load(s), p2 = load(s);
     assert.strictEqual(calls.length, 2, 'both loads are waiting');
     calls[0].land(); await p1;
-    const first = s.maps[s.maps.length - 1];
-    holds(s, [first]);
     calls[1].land(); await p2;
-    assert.strictEqual(s.maps.length, 2, 'the second load drew its own map');
-    const second = s.maps[1];
-    assert.strictEqual(first.removed, 1, 'first map removed');
-    assert.strictEqual(first.registeredAtRemove, false, 'still registered when Leaflet removed it');
-    assert.strictEqual(second.removed, 0);
-    holds(s, [second]);
+    const live = s.maps.filter((m) => !m.removed);
+    assert.strictEqual(live.length, 1, 'one map on the page');
+    assert.strictEqual(live[0], s.maps[s.maps.length - 1], 'the newest load drew it');
+    s.maps.filter((m) => m.removed).forEach((m) => {
+      assert.strictEqual(m.removed, 1);
+      assert.strictEqual(m.registeredAtRemove, false, 'still registered when Leaflet removed it');
+    });
+    holds(s, live);
   });
 
-  await test('a load that fails after another one drew a map removes and unregisters that map', async () => {
+  await test('two loads, the newer one failing: the error is shown and no map is left registered', async () => {
     const s = home();
     const calls = pendingApi(s);
     const p1 = load(s), p2 = load(s);
     calls[0].land(); await p1;
-    const map = s.maps[s.maps.length - 1];
-    holds(s, [map]);
     calls[1].fail(); await p2;
     assert.ok(/Failed to load node health/.test(s.card.innerHTML), 'the card shows the error');
-    assert.strictEqual(map.removed, 1, 'map removed with the card content');
-    assert.strictEqual(map.registeredAtRemove, false, 'still registered when Leaflet removed it');
+    s.maps.forEach((m) => {
+      assert.strictEqual(m.removed, 1, 'map removed with the card content');
+      assert.strictEqual(m.registeredAtRemove, false, 'still registered when Leaflet removed it');
+    });
     holds(s, []);
     s.flushTimers();
-    assert.strictEqual(map.invalidated, 0, 'a removed map was resized');
+    s.maps.forEach((m) => assert.strictEqual(m.invalidated, 0, 'a removed map was resized'));
   });
 }
 
