@@ -10,6 +10,8 @@
  *   buildSnrSparkline(snrTrend)
  *   pathGroupKey(rawHops, filterHops)
  *   resolveDeepLinkObservation(observations, params)
+ *   pathsParamValue(rawHops)
+ *   withPathsParam(hash, value)
  *
  * `spiderFanFor` is NOT extracted — it consumes Leaflet LatLng / map types
  * (mapRef.latLngToLayerPoint, mk.getLatLng, mk.setLatLng, L.point) and is
@@ -169,14 +171,31 @@
   // Deep-link observation choice for #/map?packet=<hash>. params:
   //   obsId    — ?obs=<observation id>; wins when it names an observation
   //   observer — ?observer=<pubkey or hex prefix of 8+ chars>; that
-  //              observer's earliest observation, its path isolated in the
+  //              observer's shortest-path observation, its path isolated in the
   //              picker
-  //   paths    — ?paths=all; open the picker's union ("All") view
+  //   paths    — ?paths=all opens the picker's union ("All") view,
+  //              ?paths=<hop>-<hop>-... isolates that observed path; either
+  //              wins over observer (which then only picks the observation)
   // Returns { chosen, observationId, pathView }. observationId is the id of
   // the observation obs or observer actually selected (null on fallback to
   // the first), never an unmatched obs. pathView is { mode: 'all' },
   // { mode: 'path', path: <raw hops> } or null.
   var OBSERVER_KEY_RE = /^[0-9a-f]{8,}$/;
+  // An observation's path_json hops; [] when there are none to read.
+  function observedHops(o) {
+    var hops;
+    try { hops = JSON.parse(o.path_json || '[]'); } catch (_) { hops = null; }
+    return Array.isArray(hops) ? hops : [];
+  }
+  // Hops in an observation's path_json; Infinity when there are none to draw.
+  function observedHopCount(o) {
+    return observedHops(o).length || Infinity;
+  }
+  // A path as a ?paths= value. Raw hops, not the picker's key, which depends
+  // on the viewer's hide-1-byte-hops setting. '-' needs no URL escaping.
+  function pathsParamValue(rawHops) {
+    return (rawHops || []).join('-');
+  }
   function resolveDeepLinkObservation(observations, params) {
     observations = observations || [];
     params = params || {};
@@ -187,13 +206,20 @@
     var key = String(params.observer || '').trim().toLowerCase();
     if (!chosen && key) {
       if (OBSERVER_KEY_RE.test(key)) {
-        var best = null, bestTs = Infinity;
+        // One observer can hear a packet over several paths. Of those that
+        // can be drawn, the fewest hops wins; ties go to the earliest, then
+        // the lower id. A 0-hop (heard direct) or unparseable path ranks
+        // last, not first: it has no picker row to isolate, and as the
+        // canonical path the map would fall back to the longest one.
+        var best = null, bestLen = Infinity, bestTs = Infinity;
         observations.forEach(function (o) {
           if (String(o.observer_id || '').toLowerCase().indexOf(key) !== 0) return;
+          var len = observedHopCount(o);
           var ts = Date.parse(o.timestamp);
           if (isNaN(ts)) ts = Infinity;
-          if (!best || ts < bestTs || (ts === bestTs && Number(o.id) < Number(best.id))) {
-            best = o; bestTs = ts;
+          if (!best || len < bestLen ||
+              (len === bestLen && (ts < bestTs || (ts === bestTs && Number(o.id) < Number(best.id))))) {
+            best = o; bestLen = len; bestTs = ts;
           }
         });
         chosen = best;
@@ -203,14 +229,20 @@
     }
     var observationId = chosen ? String(chosen.id) : null;
     if (!chosen) chosen = observations[0] || null;
+    // paths wins the view: the picker writes it next to an existing observer=
+    // or obs=, which still pick the observation (the route's spine).
     var pathView = null;
-    if (byObserver) {
-      var path = [];
-      try { path = JSON.parse(chosen.path_json || '[]'); } catch (_) {}
-      pathView = { mode: 'path', path: path };
-    } else if (params.paths === 'all') {
+    if (params.paths === 'all') {
       pathView = { mode: 'all' };
+    } else if (params.paths) {
+      var wanted = String(params.paths).toLowerCase();
+      var named = observations.find(function (o) {
+        return pathsParamValue(observedHops(o)).toLowerCase() === wanted;
+      });
+      if (named) pathView = { mode: 'path', path: observedHops(named) };
+      else console.warn('[deep-link] no observation over path ' + wanted);
     }
+    if (!pathView && byObserver) pathView = { mode: 'path', path: observedHops(chosen) };
     return {
       chosen: chosen,
       observationId: observationId,
@@ -218,11 +250,27 @@
     };
   }
 
+  // The hash with ?paths= set to value ('all' or a pathsParamValue), the
+  // other params untouched. Only a #/map?packet=<hash> deep link reloads into
+  // that view (#/map?route=1 reads its paths from sessionStorage, once), so
+  // any other hash comes back as it was.
+  function withPathsParam(hash, value) {
+    hash = String(hash || '');
+    var q = hash.indexOf('?');
+    if (q < 0) return hash;
+    var params = new URLSearchParams(hash.slice(q + 1));
+    if (!params.get('packet') || params.get('paths') === value) return hash;
+    params.set('paths', value);
+    return hash.slice(0, q) + '?' + params.toString();
+  }
+
   window.MC_ROUTE_UTILS = {
     escapeHtml: escapeHtml,
     buildPacketContextBlock: buildPacketContextBlock,
     buildSnrSparkline: buildSnrSparkline,
     pathGroupKey: pathGroupKey,
-    resolveDeepLinkObservation: resolveDeepLinkObservation
+    resolveDeepLinkObservation: resolveDeepLinkObservation,
+    pathsParamValue: pathsParamValue,
+    withPathsParam: withPathsParam
   };
 })();

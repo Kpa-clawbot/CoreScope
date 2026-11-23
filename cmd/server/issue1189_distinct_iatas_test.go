@@ -36,7 +36,7 @@ func TestQueryGroupedPacketsReturnsDistinctIATAs(t *testing.T) {
 	// One transmission with 3 observations (SJC, SFO, no-IATA).
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
 		VALUES ('AABB', 'deadbeefcafef00d', ?, 1, 4, '{}')`, now.Format(time.RFC3339))
-	// v3 schema: observer_idx = observers.rowid (auto-assigned 1,2,3 in insert order).
+	// v3 schema: observer_idx = observers.idx (auto-assigned 1,2,3 in insert order).
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 1, 12.0, -80, '["aa"]', ?)`, recentEpoch)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)

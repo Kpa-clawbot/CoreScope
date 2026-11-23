@@ -88,7 +88,10 @@ func TestPlannerConfigRangesFollowMaxLeg(t *testing.T) {
 			t.Errorf("%+v: range %v, warnings %q", c.cfg, r.DefaultRangeKm, warns)
 		}
 		// Resolving again is stable and quiet.
-		if r2, warns := r.resolved(); r2 != r || len(warns) != 0 {
+		r2, warns := r.resolved()
+		same := *r2.UserReach == *r.UserReach // pointers differ, values must not
+		r2.UserReach, r.UserReach = nil, nil
+		if r2 != r || !same || len(warns) != 0 {
 			t.Errorf("%+v: re-resolved %+v, warnings %q", c.cfg, r2, warns)
 		}
 	}
@@ -216,5 +219,44 @@ func TestPlannerAPIConfiguredSizes(t *testing.T) {
 	h.stubs.mu.Unlock()
 	if rangeKm != 20 {
 		t.Fatalf("default range %v, want 20", rangeKm)
+	}
+}
+
+func TestPlannerUserReachDefaults(t *testing.T) {
+	for _, c := range []*PlannerConfig{nil, {}, {Enabled: true}} {
+		r, warns := c.resolved()
+		if r.UserReach == nil || *r.UserReach != (PlannerUserReach{D50Km: 2.7, Slope: 0.30}) || len(warns) != 0 {
+			t.Fatalf("%+v: resolved %+v, warnings %q", c, r.UserReach, warns)
+		}
+	}
+	r, warns := (&PlannerConfig{Enabled: true, UserReach: &PlannerUserReach{D50Km: 0.2, Slope: 2}}).resolved()
+	if *r.UserReach != (PlannerUserReach{D50Km: 0.2, Slope: 2}) || len(warns) != 0 {
+		t.Fatalf("range ends: resolved %+v, warnings %q", r.UserReach, warns)
+	}
+}
+
+func TestPlannerUserReachOutOfRange(t *testing.T) {
+	for _, c := range []struct {
+		in   PlannerUserReach
+		want PlannerUserReach
+		warn string
+	}{
+		{PlannerUserReach{D50Km: 0.1, Slope: 0.4}, PlannerUserReach{D50Km: 2.7, Slope: 0.4}, "planner.userReach.d50Km"},
+		{PlannerUserReach{D50Km: 3, Slope: 5}, PlannerUserReach{D50Km: 3, Slope: 0.30}, "planner.userReach.slope"},
+	} {
+		r, warns := (&PlannerConfig{Enabled: true, UserReach: &c.in}).resolved()
+		if *r.UserReach != c.want || len(warns) != 1 || !strings.Contains(warns[0], c.warn) {
+			t.Errorf("%+v: resolved %+v, warnings %q", c.in, r.UserReach, warns)
+		}
+	}
+}
+
+func TestPlannerClientConfigUserReach(t *testing.T) {
+	cc := (&PlannerConfig{Enabled: true, UserReach: &PlannerUserReach{D50Km: 4, Slope: 0.5}}).clientConfig(nil)
+	if cc.UserReach != (PlannerUserReach{D50Km: 4, Slope: 0.5}) {
+		t.Fatalf("client config %+v", cc.UserReach)
+	}
+	if cc := (&PlannerConfig{Enabled: true}).clientConfig(nil); cc.UserReach != (PlannerUserReach{D50Km: 2.7, Slope: 0.30}) {
+		t.Fatalf("default client config %+v", cc.UserReach)
 	}
 }

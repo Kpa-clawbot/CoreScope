@@ -16,6 +16,7 @@ func (c *PlannerConfig) resolved() (PlannerConfig, []string) {
 		MaxAreaKm:        defaultPlannerMaxAreaKm,
 		NodeMarginKm:     defaultPlannerNodeMarginKm,
 		MaxLegKm:         defaultPlannerMaxLegKm,
+		UserReach:        &PlannerUserReach{D50Km: defaultPlannerUserD50Km, Slope: defaultPlannerUserSlope},
 	}
 	if c == nil {
 		return out, nil
@@ -47,6 +48,12 @@ func (c *PlannerConfig) resolved() (PlannerConfig, []string) {
 	out.NodeMarginKm = plannerSizeKm("nodeMarginKm", c.NodeMarginKm, defaultPlannerNodeMarginKm,
 		plannerMarginKmMin, plannerMarginKmMax, &warns)
 	out.MaxLegKm = plannerSizeKm("maxLegKm", c.MaxLegKm, defaultPlannerMaxLegKm, plannerLegKmMin, plannerLegKmMax, &warns)
+	if u := c.UserReach; u != nil {
+		out.UserReach.D50Km = plannerSizeKm("userReach.d50Km", u.D50Km, defaultPlannerUserD50Km,
+			plannerUserD50KmMin, plannerUserD50KmMax, &warns)
+		out.UserReach.Slope = plannerSizeKm("userReach.slope", u.Slope, defaultPlannerUserSlope,
+			plannerUserSlopeMin, plannerUserSlopeMax, &warns)
+	}
 	// No range above the leg limit is offered, so the default cannot be one.
 	if out.DefaultRangeKm > out.MaxLegKm {
 		r := out.rangesKm()
@@ -125,6 +132,7 @@ func (c *PlannerConfig) clientConfig(los *LOSConfig) *PlannerClientConfig {
 		NodeMarginKm:     r.NodeMarginKm,
 		MaxSites:         plannerMaxSites,
 		MinClearance:     plannerMinClearance,
+		UserReach:        *r.UserReach,
 	}
 }
 
@@ -138,9 +146,10 @@ func logPlannerConfig(c *PlannerConfig) {
 	}
 	lim := r.tileLimits()
 	log.Printf("[planner] enabled (range=%.0f km, new=%.0f m, existing=%.0f m, "+
-		"maxArea=%g km, nodeMargin=%g km, maxLeg=%g km)",
-		r.DefaultRangeKm, r.NewAntennaM, r.ExistingAntennaM, r.MaxAreaKm, r.NodeMarginKm, r.MaxLegKm)
-	log.Printf("[planner] terrain tiles per request: coverage %d, relay %d, profile %d; "+
+		"maxArea=%g km, nodeMargin=%g km, maxLeg=%g km, userReach d50=%g km slope=%g)",
+		r.DefaultRangeKm, r.NewAntennaM, r.ExistingAntennaM, r.MaxAreaKm, r.NodeMarginKm, r.MaxLegKm,
+		r.UserReach.D50Km, r.UserReach.Slope)
+	log.Printf("[planner] terrain tiles per request: coverage %d, relay %d, profile %d, viewshed %d; "+
 		"one view takes up to %.0f MB (%.1f MB a tile)",
-		lim.Coverage, lim.Relay, lim.Profile, float64(lim.max())*srtmTileBytes/1e6, float64(srtmTileBytes)/1e6)
+		lim.Coverage, lim.Relay, lim.Profile, lim.Viewshed, float64(lim.max())*srtmTileBytes/1e6, float64(srtmTileBytes)/1e6)
 }

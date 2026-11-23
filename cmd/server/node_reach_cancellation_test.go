@@ -94,8 +94,8 @@ func (c *reachFailureConn) QueryContext(_ context.Context, query string, _ []dri
 		return r, nil
 	case strings.Contains(query, "FROM observations o"):
 		return &reachFailureRows{
-			columns: []string{"observer", "originator", "type", "path", "snr"},
-			values:  [][]driver.Value{{"", "", int64(5), `["01FA"]`, float64(-7)}},
+			columns: []string{"observer", "originator", "route", "type", "path", "snr"},
+			values:  [][]driver.Value{{"", "", int64(RouteFlood), int64(5), `["01FA"]`, float64(-7)}},
 			done:    func() { f.scans++ },
 		}, nil
 	case strings.HasPrefix(query, "SELECT since FROM "):

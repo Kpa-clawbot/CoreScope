@@ -18,10 +18,13 @@ COPY scripts/static/ scripts/static/
 COPY deploy/static/ deploy/static/
 # GIT_COMMIT is the cache buster on every asset (?v=); without one, the build
 # time, as the server does at start. CHANNEL beta, next or dev shows a badge.
+# CORESCOPE_URL is the public URL for link previews (og:url, og:image); a
+# static image cannot read it from requests, so without one og:url is left out.
 ARG GIT_COMMIT=
 ARG CHANNEL=static
+ARG CORESCOPE_URL=
 RUN COMMIT="$(printf '%.12s' "${GIT_COMMIT:-$(date +%s)}")" \
-    API_BASE=same-origin AUTH=true CHANNEL="$CHANNEL" OUT=/srv \
+    API_BASE=same-origin AUTH=true CHANNEL="$CHANNEL" CORESCOPE_URL="$CORESCOPE_URL" OUT=/srv \
     bash scripts/static/build.sh && \
     rm /srv/_headers
 

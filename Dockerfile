@@ -18,6 +18,17 @@ FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 ARG APP_VERSION=unknown
 ARG GIT_COMMIT=unknown
+# musl sizes every non-main thread's stack from the ELF PT_GNU_STACK size
+# (floor 128 KiB, cap 8 MiB). cgo calls into SQLite run on the calling thread's
+# stack, and a deep query (multiSelect recursing ~850 B per UNION ALL term)
+# overflows 128 KiB and SIGSEGVs the process. zig's linker already writes a
+# 16 MiB PT_GNU_STACK, so these binaries got 8 MiB threads before this flag
+# existed; GNU ld writes 0, which is where the crash was seen (a native Alpine
+# gcc link). The flag pins the size so it no longer rests on a linker default,
+# and the readelf check after the builds fails the image if it is ever lost.
+# Reserved address space, not resident memory. Go rejects this flag in
+# #cgo LDFLAGS, so it must go in -extldflags.
+ARG STACK_LDFLAG="-Wl,-z,stack-size=8388608"
 ARG BUILD_TIME=unknown
 # Provided by buildx for multi-arch builds
 ARG TARGETOS
@@ -33,7 +44,8 @@ ENV GO_BUILD_TAGS=netgo,osusergo,sqlite_omit_load_extension \
 # TARGETARCH because this stage is pinned to BUILDPLATFORM — it has to work when
 # someone builds on an arm64 machine too.
 ARG ZIG_VERSION=0.16.0
-RUN apk add --no-cache curl xz && \
+# binutils: readelf, for the thread-stack check after the builds.
+RUN apk add --no-cache curl xz binutils && \
     case "$(uname -m)" in \
       x86_64)  ZA=x86_64;  ZSHA=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00 ;; \
       aarch64) ZA=aarch64; ZSHA=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17 ;; \
@@ -81,7 +93,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/tmp/zig-cache \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
-    -ldflags "-s -w -extldflags '-static -Wl,-s' -X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}' -X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" \
     -o /corescope-server .
 
 # Build ingestor
@@ -106,7 +118,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/tmp/zig-cache \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
-    -ldflags "-s -w -extldflags '-static -Wl,-s'" \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}'" \
     -o /corescope-ingestor .
 
 # Build decrypt CLI
@@ -123,8 +135,16 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/tmp/zig-cache \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -tags ${GO_BUILD_TAGS} \
-    -ldflags "-s -w -extldflags '-static -Wl,-s' -X main.version=${APP_VERSION}" \
+    -ldflags "-s -w -extldflags '-static -Wl,-s ${STACK_LDFLAG}' -X main.version=${APP_VERSION}" \
     -o /corescope-decrypt .
+
+# The thread-stack size must be in every binary's PT_GNU_STACK (see
+# STACK_LDFLAG). The Go test for it runs on glibc in CI, where it passes with
+# or without the flag, so the artifact is checked here.
+RUN for f in /corescope-server /corescope-ingestor /corescope-decrypt; do \
+      readelf -lW "$f" | grep -Eq 'GNU_STACK .* 0x0*800000 +RW' || \
+        { echo "$f: PT_GNU_STACK is not 8 MiB, musl thread stacks are not pinned" >&2; readelf -lW "$f" | grep GNU_STACK >&2; exit 1; }; \
+    done
 
 # Runtime image
 FROM alpine:3.24

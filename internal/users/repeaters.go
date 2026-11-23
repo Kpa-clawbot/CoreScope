@@ -87,11 +87,17 @@ func ValidateRepeaterEdit(e RepeaterEdit) (RepeaterEdit, error) {
 	return e, nil
 }
 
+// ErrRepeaterConflict: a conditional SaveRepeaterInfoAt was given a base
+// revision that is not the stored one.
+var ErrRepeaterConflict = errors.New("users: repeater details revision conflict")
+
 // RepeaterInfo is the community-maintained detail row of one repeater.
 // UpdatedBy and UpdatedByName are empty when the editor was deleted or is not
-// an active user.
+// an active user. Revision counts saves from 1; a repeater without a row is
+// at revision 0.
 type RepeaterInfo struct {
 	Pubkey        string
+	Revision      int64
 	HeightM       *float64
 	GainDBi       float64
 	Status        string
@@ -110,7 +116,7 @@ type RepeaterClaim struct {
 	ClaimedAt   time.Time
 }
 
-const repeaterInfoSelect = `SELECT i.pubkey, i.height_m, i.gain_dbi, i.status, i.power, i.notes, i.updated_at, u.id, u.display_name
+const repeaterInfoSelect = `SELECT i.pubkey, i.revision, i.height_m, i.gain_dbi, i.status, i.power, i.notes, i.updated_at, u.id, u.display_name
 	FROM repeater_info i LEFT JOIN users u ON u.id = i.updated_by AND u.status = 'active'`
 
 func scanRepeaterInfo(r rowScanner) (*RepeaterInfo, error) {
@@ -121,7 +127,7 @@ func scanRepeaterInfo(r rowScanner) (*RepeaterInfo, error) {
 		ub            sql.NullInt64
 		updatedAtUnix int64
 	)
-	if err := r.Scan(&ri.Pubkey, &h, &ri.GainDBi, &st, &pw, &ri.Notes, &updatedAtUnix, &ub, &name); err != nil {
+	if err := r.Scan(&ri.Pubkey, &ri.Revision, &h, &ri.GainDBi, &st, &pw, &ri.Notes, &updatedAtUnix, &ub, &name); err != nil {
 		return nil, err
 	}
 	if h.Valid {
@@ -168,10 +174,22 @@ func (s *Store) ListRepeaterInfo() ([]RepeaterInfo, error) {
 	return out, rows.Err()
 }
 
-// SaveRepeaterInfo validates and upserts the row. It returns the row the write
-// replaced (nil if there was none), read in the same transaction, for the
-// audit diff.
+// SaveRepeaterInfo validates and upserts the row, whatever its revision. It
+// returns the row the write replaced (nil if there was none), read in the
+// same transaction, for the audit diff.
 func (s *Store) SaveRepeaterInfo(userID int64, pubkey string, e RepeaterEdit) (*RepeaterInfo, error) {
+	return s.saveRepeaterInfo(userID, pubkey, e, nil)
+}
+
+// SaveRepeaterInfoAt is SaveRepeaterInfo only while the stored revision is
+// base (0: no row yet). Otherwise it writes nothing and returns
+// ErrRepeaterConflict. The check is part of the write statement, so of two
+// saves from the same base exactly one wins.
+func (s *Store) SaveRepeaterInfoAt(userID int64, pubkey string, e RepeaterEdit, base int64) (*RepeaterInfo, error) {
+	return s.saveRepeaterInfo(userID, pubkey, e, &base)
+}
+
+func (s *Store) saveRepeaterInfo(userID int64, pubkey string, e RepeaterEdit, base *int64) (*RepeaterInfo, error) {
 	pk, err := NormalizePubkey(pubkey)
 	if err != nil {
 		return nil, err
@@ -202,13 +220,35 @@ func (s *Store) SaveRepeaterInfo(userID int64, pubkey string, e RepeaterEdit) (*
 	if e.Power != "" {
 		pw = e.Power
 	}
-	if _, err := tx.Exec(`INSERT INTO repeater_info (pubkey, height_m, gain_dbi, status, power, notes, updated_at, updated_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(pubkey) DO UPDATE SET height_m = excluded.height_m, gain_dbi = excluded.gain_dbi,
-			status = excluded.status, power = excluded.power, notes = excluded.notes,
-			updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
-		pk, h, e.GainDBi, st, pw, e.Notes, unix(s.now()), userID); err != nil {
+	now := unix(s.now())
+	var res sql.Result
+	switch {
+	case base == nil:
+		res, err = tx.Exec(`INSERT INTO repeater_info (pubkey, revision, height_m, gain_dbi, status, power, notes, updated_at, updated_by)
+			VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(pubkey) DO UPDATE SET revision = repeater_info.revision + 1,
+				height_m = excluded.height_m, gain_dbi = excluded.gain_dbi,
+				status = excluded.status, power = excluded.power, notes = excluded.notes,
+				updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+			pk, h, e.GainDBi, st, pw, e.Notes, now, userID)
+	case *base == 0:
+		// Only the first save of a repeater: a row that exists is a conflict.
+		res, err = tx.Exec(`INSERT INTO repeater_info (pubkey, revision, height_m, gain_dbi, status, power, notes, updated_at, updated_by)
+			VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(pubkey) DO NOTHING`,
+			pk, h, e.GainDBi, st, pw, e.Notes, now, userID)
+	default:
+		res, err = tx.Exec(`UPDATE repeater_info SET revision = revision + 1, height_m = ?, gain_dbi = ?,
+				status = ?, power = ?, notes = ?, updated_at = ?, updated_by = ?
+			WHERE pubkey = ? AND revision = ?`,
+			h, e.GainDBi, st, pw, e.Notes, now, userID, pk, *base)
+	}
+	if err != nil {
 		return nil, err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return nil, err
+	} else if n != 1 {
+		return nil, ErrRepeaterConflict
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -295,6 +335,45 @@ func (s *Store) RepeaterClaimsByUser(userID int64) ([]RepeaterClaim, error) {
 		return nil, err
 	}
 	return scanRepeaterClaims(rows)
+}
+
+// RepeaterClaimsOfUserRepeaters returns the active claimers of every
+// repeater the user claimed, by pubkey, in one query (My repeaters).
+func (s *Store) RepeaterClaimsOfUserRepeaters(userID int64) (map[string][]RepeaterClaim, error) {
+	rows, err := s.db.Query(repeaterClaimsSelect+` WHERE u.status = 'active'
+		AND c.pubkey IN (SELECT pubkey FROM repeater_claims WHERE user_id = ?)
+		ORDER BY c.pubkey, c.claimed_at, c.user_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	list, err := scanRepeaterClaims(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]RepeaterClaim)
+	for _, c := range list {
+		out[c.Pubkey] = append(out[c.Pubkey], c)
+	}
+	return out, nil
+}
+
+// RepeaterInfoOfUserRepeaters returns the saved info of every repeater the
+// user claimed that has some, by pubkey, in one query (My repeaters).
+func (s *Store) RepeaterInfoOfUserRepeaters(userID int64) (map[string]RepeaterInfo, error) {
+	rows, err := s.db.Query(repeaterInfoSelect+` WHERE i.pubkey IN (SELECT pubkey FROM repeater_claims WHERE user_id = ?)`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]RepeaterInfo)
+	for rows.Next() {
+		ri, err := scanRepeaterInfo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[ri.Pubkey] = *ri
+	}
+	return out, rows.Err()
 }
 
 // CanEditRepeater: admin always; a non-active user never; with no active

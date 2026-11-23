@@ -557,6 +557,20 @@ type SnrTrendEntry struct {
 	ObserverName interface{} `json:"observer_name"`
 }
 
+// HeardByObserver is one fixed observer that heard the node directly in the
+// analytics window. SNR fields are nil when no reception carried an SNR;
+// the two change medians are nil unless the change column applies.
+type HeardByObserver struct {
+	ObserverID       string   `json:"observer_id"`
+	ObserverName     string   `json:"observer_name"`
+	Count            int      `json:"count"`
+	MedianSNR        *float64 `json:"medianSnr"`
+	P10SNR           *float64 `json:"p10Snr"`
+	P90SNR           *float64 `json:"p90Snr"`
+	RecentMedianSNR  *float64 `json:"recentMedianSnr"`
+	EarlierMedianSNR *float64 `json:"earlierMedianSnr"`
+}
+
 type PayloadTypeCount struct {
 	PayloadType int `json:"payload_type"`
 	Count       int `json:"count"`
@@ -601,6 +615,7 @@ type NodeAnalyticsResponse struct {
 	TimeRange           TimeRangeResp           `json:"timeRange"`
 	ActivityTimeline    []TimeBucket            `json:"activityTimeline"`
 	SnrTrend            []SnrTrendEntry         `json:"snrTrend"`
+	HeardBy             []HeardByObserver       `json:"heardBy"`
 	PacketTypeBreakdown []PayloadTypeCount      `json:"packetTypeBreakdown"`
 	ObserverCoverage    []NodeObserverStatsResp `json:"observerCoverage"`
 	HopDistribution     []HopDistEntry          `json:"hopDistribution"`
@@ -608,6 +623,8 @@ type NodeAnalyticsResponse struct {
 	UptimeHeatmap       []HeatmapCell           `json:"uptimeHeatmap"`
 	ComputedStats       ComputedNodeStats       `json:"computedStats"`
 	ClockSkew           *NodeClockSkew          `json:"clockSkew,omitempty"`
+	// MobileReceptions is set only when clientRxCoverage is enabled.
+	MobileReceptions *MobileReceptionsSummary `json:"mobileReceptions,omitempty"`
 }
 
 // NodeHopPacket is one flood packet this node forwarded, with the hop count
@@ -701,12 +718,6 @@ type TopPair struct {
 	PubkeyB interface{} `json:"pubkeyB"`
 }
 
-type HopsVsSnr struct {
-	Hops   int     `json:"hops"`
-	Count  int     `json:"count"`
-	AvgSnr float64 `json:"avgSnr"`
-}
-
 type ObserverRef struct {
 	ID   string      `json:"id"`
 	Name interface{} `json:"name"`
@@ -761,7 +772,6 @@ type TopologyResponse struct {
 	HopDistribution  []TopologyHopDist         `json:"hopDistribution"`
 	TopRepeaters     []TopRepeater             `json:"topRepeaters"`
 	TopPairs         []TopPair                 `json:"topPairs"`
-	HopsVsSnr        []HopsVsSnr               `json:"hopsVsSnr"`
 	Observers        []ObserverRef             `json:"observers"`
 	PerObserverReach map[string]*ObserverReach `json:"perObserverReach"`
 	MultiObsNodes    []MultiObsNode            `json:"multiObsNodes"`
@@ -809,17 +819,15 @@ type DistanceSummary struct {
 }
 
 type DistanceHop struct {
-	FromName  string      `json:"fromName"`
-	FromPk    string      `json:"fromPk"`
-	ToName    string      `json:"toName"`
-	ToPk      string      `json:"toPk"`
-	Dist      float64     `json:"dist"`
-	Type      string      `json:"type"`
-	BestSnr   interface{} `json:"bestSnr"`
-	MedianSnr interface{} `json:"medianSnr"`
-	ObsCount  int         `json:"obsCount"`
-	Hash      string      `json:"hash"`
-	Timestamp string      `json:"timestamp"`
+	FromName  string  `json:"fromName"`
+	FromPk    string  `json:"fromPk"`
+	ToName    string  `json:"toName"`
+	ToPk      string  `json:"toPk"`
+	Dist      float64 `json:"dist"`
+	Type      string  `json:"type"`
+	ObsCount  int     `json:"obsCount"`
+	Hash      string  `json:"hash"`
+	Timestamp string  `json:"timestamp"`
 }
 
 type DistancePathHop struct {
@@ -1145,12 +1153,16 @@ type ClientConfigResponse struct {
 // channel proposals and node notifications are on. CompanionLinking says the
 // device-token and companion routes exist: CoreDrive RX shows its login only
 // then, because an older CoreScope answers those paths with the SPA page.
+// RepeaterTokens says device tokens may ask for the repeater scopes and that
+// repeater edits take a baseRevision; a client offers native claims and
+// edits only then.
 type ClientUserManagement struct {
 	Enabled          bool `json:"enabled"`
 	ChannelProposals bool `json:"channelProposals,omitempty"`
 	Notifications    bool `json:"notifications,omitempty"`
 	CompanionLinking bool `json:"companionLinking,omitempty"`
 	ObserverLogins   bool `json:"observerLogins,omitempty"`
+	RepeaterTokens   bool `json:"repeaterTokens,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that
