@@ -1554,10 +1554,15 @@
     }
 
     // Another tab changed the ticked overlays, or cleared localStorage (key
-    // null). Another storage area's events are not this preference.
+    // null). Another storage area's events are not this preference. Storage
+    // now holds the newest value, which supersedes this tab's copy of a
+    // write that failed, as for the pin.
     function onStorage(e) {
       if (!e || _otherStorageArea(e)) return;
-      if (e.key === OVERLAYS_KEY || e.key === null) sync();
+      if (e.key !== OVERLAYS_KEY && e.key !== null) return;
+      _overlaysMemo = (e.key === OVERLAYS_KEY && e.newValue) ? e.newValue : null;
+      _overlaysUnsaved = false;
+      sync();
     }
 
     try {

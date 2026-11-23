@@ -855,6 +855,31 @@ test('cross-tab overlays: localStorage cleared (key null) re-syncs them; session
   }
 });
 
+// An overlay tick whose save failed (quota) is this tab's newest copy, but a
+// newer value from another tab, or storage cleared there, supersedes it, as
+// for the pin.
+test('cross-tab overlays: a newer value or a clear from another tab supersedes an unsaved tick', () => {
+  for (const other of ['cleared', 'newer']) {
+    const s = makeSandbox({ theme: 'light', mapCfg: { tiles: { providers: { eox: { enabled: true } } } } });
+    const map = makeMap();
+    const h = s.w.MC_attachAutoTiles(map, { controlPosition: 'topleft' });
+    const labelsOn = () => map._layers.filter(l => l.kind === 'tile' && l._url === s.w.MC_TILE_OVERLAYS['eox-labels'].url).length;
+    const ls = s.w.localStorage, set = ls.setItem;
+    ls.setItem = (k, v) => { if (k === 'mc-tile-overlays') throw new Error('QuotaExceededError'); return set.call(ls, k, v); };
+    assert.ok(s.w.MC_setTileOverlay('eox-labels', true));
+    ls.setItem = set;
+    assert.strictEqual(labelsOn(), 1, 'unsaved tick still drawn here');
+    if (other === 'cleared') {
+      s.w.dispatchEvent({ type: 'storage', key: null, newValue: null, oldValue: null, storageArea: ls });
+    } else {
+      set.call(ls, 'mc-tile-overlays', '[]');
+      s.w.dispatchEvent({ type: 'storage', key: 'mc-tile-overlays', newValue: '[]', oldValue: null, storageArea: ls });
+    }
+    assert.strictEqual(labelsOn(), 0, other + ' in another tab: the unsaved tick still wins');
+    h.destroy();
+  }
+});
+
 // Static/secondary maps pass { raster: true }: a vector desc builds its
 // raster fallback directly and MapLibre is never touched.
 test('MC_buildTileLayer({ raster: true }): vector -> raster fallback without MapLibre; raster unchanged', () => {
