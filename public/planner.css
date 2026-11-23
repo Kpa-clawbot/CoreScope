@@ -446,6 +446,27 @@
   background: var(--selected-bg);
 }
 .mc-pl-opt .mc-pl-main { gap: 4px; }
+.mc-pl-site-coords {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.mc-pl-opt:has(+ .mc-pl-site-coords) { border-radius: 10px 10px 0 0; }
+.mc-pl-opt + .mc-pl-site-coords {
+  margin-top: 0;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: var(--surface-1);
+}
+.mc-pl-opt-on + .mc-pl-site-coords {
+  border-color: var(--link-color);
+  background: var(--selected-bg);
+}
 .mc-pl-opt-legs {
   display: flex;
   flex-wrap: wrap;
