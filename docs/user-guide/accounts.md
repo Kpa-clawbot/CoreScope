@@ -401,12 +401,13 @@ Pushover** (with a subscription code), confirm on pushover.net and come back con
 or paste the user key from their pushover.net dashboard. **Send test** checks it.
 CoreScope checks every key with Pushover before saving it.
 
-- **Connect Pushover** gives CoreScope a key made for this application only. A user who
-  is already subscribed and goes through **Connect Pushover** again can unsubscribe on
-  pushover.net; CoreScope then removes the key. The return from pushover.net only counts for the
-  signed-in user who clicked the button, within 15 minutes and once, so a link from
-  someone else can't put their key on your account.
-
+- **Connect Pushover** gives CoreScope a key made for this application only. The return
+  from pushover.net only counts for the signed-in user who clicked the button, within 15
+  minutes and once, so a link from someone else can't put their key on your account.
+- To stop, a user removes the key on the account page, or unsubscribes in the Pushover
+  app (tap and hold the application, then **Unsubscribe**). Pushover then rejects the
+  key, and CoreScope turns Pushover off for that user at their next message. To connect
+  again, remove the old key and click **Connect Pushover**.
 - Pushover uses the events a user chose for notifications, and has its own on and off:
   turning notification mails off, or the unsubscribe link in a mail, doesn't stop
   Pushover, and the reverse.
