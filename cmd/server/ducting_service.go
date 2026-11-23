@@ -192,10 +192,9 @@ func (s *ductingService) refreshOnce(ctx context.Context) error {
 		// The previous snapshot is immutable once stored, and resp is not
 		// shared yet: no lock is involved (refreshMu only keeps a second
 		// refresh out).
-		var carried int
-		resp.Cells, carried = ductingCarryOver(resp, fetched.FailedCells, s.snap.Load())
+		resp.Cells, resp.Carried = ductingCarryOver(resp, fetched.FailedCells, s.snap.Load())
 		failed = ", " + strconv.Itoa(fetched.Failed) + " of " + strconv.Itoa(fetched.Batches) + " batches failed, " +
-			strconv.Itoa(carried) + " carried over from the previous forecast"
+			strconv.Itoa(resp.Carried) + " carried over from the previous forecast"
 	}
 	s.snap.Store(encodeDuctingSnapshot(resp))
 	log.Printf("[ducting] refreshed: %d cells (%d dropped%s), %d hours, ~%.0f calls, %s",

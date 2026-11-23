@@ -1117,7 +1117,7 @@ func TestDuctingServicePartialFetchCarriesPreviousCells(t *testing.T) {
 	if err := svc.refreshOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	prev, _ := ductingServe(t, svc)
+	prev, prevBody := ductingServe(t, svc)
 	if len(prev.Cells) != 100 || len(prev.Times) != 48 {
 		t.Fatalf("first refresh: %d cells, %d hours", len(prev.Cells), len(prev.Times))
 	}
@@ -1200,6 +1200,16 @@ func TestDuctingServicePartialFetchCarriesPreviousCells(t *testing.T) {
 	}
 	if carried != 50 || fresh != 50 {
 		t.Errorf("%d carried, %d fetched; want 50 and 50", carried, fresh)
+	}
+	// The response counts them; a complete fetch leaves the field out.
+	if resp.Carried != 50 {
+		t.Errorf("carried = %d in the response, want 50", resp.Carried)
+	}
+	if _, body := ductingServe(t, svc); !bytes.Contains(body, []byte(`"carried":50`)) {
+		t.Errorf("no \"carried\":50 in the body")
+	}
+	if prev.Carried != 0 || bytes.Contains(prevBody, []byte(`"carried"`)) {
+		t.Errorf("complete fetch: carried = %d, want the field left out", prev.Carried)
 	}
 	if out := buf.String(); !strings.Contains(out, "100 cells (0 dropped, 1 of 2 batches failed, 50 carried over from the previous forecast)") {
 		t.Errorf("log %q", out)

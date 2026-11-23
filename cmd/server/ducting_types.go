@@ -153,4 +153,9 @@ type DuctingResponse struct {
 	StepDeg     float64       `json:"stepDeg"`
 	Times       []int64       `json:"times"` // unix seconds, hourly, ascending
 	Cells       []DuctingCell `json:"cells"`
+	// Carried is how many of Cells are not from this refresh: their batch
+	// failed, and they hold the previous forecast's values (an older model
+	// run) for the hours it covers. GeneratedAt is the new fetch all the
+	// same. Omitted when 0.
+	Carried int `json:"carried,omitempty"`
 }

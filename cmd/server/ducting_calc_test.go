@@ -128,9 +128,10 @@ func TestDuctAnalyzeMNoDuct(t *testing.T) {
 	})
 }
 
-// ISA standard atmosphere at 100 m elevation, RH 40 %. Python gives
-// min dN/dh = -45.398 N/km (between the 2 m point and the 1000 hPa level)
-// and every other layer between -26.6 and -36.5 N/km.
+// ISA standard atmosphere at 100 m elevation, RH 40 %. The 1000 hPa level
+// is 10.9 m above ground and dropped (ductMinLevelGapM). Python gives
+// min dN/dh = -36.813 N/km (between the 2 m point and the 975 hPa level)
+// and every other layer between -26.6 and -35.4 N/km.
 func TestDuctStandardAtmosphereIsNormal(t *testing.T) {
 	isaT := func(z float64) float64 { return 15 - 6.5*z/1000 }
 	isaZ := func(p float64) float64 { return (1 - math.Pow(p/1013.25, 1/5.25588)) / 2.25577e-5 }
