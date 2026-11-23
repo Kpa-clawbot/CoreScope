@@ -48,7 +48,8 @@ var errDuctingNoCells = errors.New("no grid cells")
 // errDuctingPartial: the refresh stored a new snapshot, but some batches of
 // its fetch failed (at most half, or the fetch itself fails). The cells of
 // those batches are the previous forecast's or missing, so the next refresh
-// comes on the failure backoff instead of a whole refresh interval later.
+// comes on the failure backoff instead of a whole refresh interval later,
+// when the call budget has room for it (partialRetryDelay).
 var errDuctingPartial = errors.New("ducting forecast incomplete: some batches failed")
 
 // ductingSnapshot is what the handler serves: the response and its JSON.
@@ -72,6 +73,9 @@ type ductingService struct {
 
 	refreshMu   sync.Mutex // one refresh at a time
 	emptyLogged bool       // the empty grid was logged; guarded by refreshMu
+	// lastCalls is what the last refresh that reached the source asked for,
+	// in Open-Meteo calls: the cost of asking for the grid again.
+	lastCalls atomic.Uint64 // math.Float64bits
 }
 
 func newDuctingService(c *DuctingConfig, nodes func() ([][2]float64, error)) *ductingService {
@@ -157,6 +161,9 @@ func (s *ductingService) refreshOnce(ctx context.Context) error {
 	defer s.refreshMu.Unlock()
 	started := time.Now()
 	resp, queried, fetched, err := s.build(ctx)
+	if queried > 0 {
+		s.lastCalls.Store(math.Float64bits(float64(queried) * ductingCallsPerPoint(s.model)))
+	}
 	if errors.Is(err, errDuctingNoCells) {
 		if !s.emptyLogged {
 			log.Printf("[ducting] no grid cells yet (no node positions from the last %d days, or none the model covers); retrying every %s",
@@ -376,6 +383,8 @@ func (s *ductingService) analyzeColumn(col ductingColumn) DuctingCell {
 // 5 minutes (ductingBackoffBase) while the grid is empty. Every retry asks
 // for the whole grid again and is counted by the source's call budget,
 // which answers errDuctingBudget before sending anything once it is spent.
+// The run loop passes the wait after an incomplete fetch through
+// partialRetryDelay, so that retry cannot spend it.
 func (s *ductingService) nextDelay(err error, failures int) time.Duration {
 	refresh := time.Duration(s.cfg.RefreshMinutes) * time.Minute
 	if err == nil {
@@ -397,6 +406,34 @@ func (s *ductingService) nextDelay(err error, failures int) time.Duration {
 		d = ductingRateLimitBackoff
 	}
 	return d
+}
+
+// partialRetryDelay is the wait after an incomplete fetch
+// (errDuctingPartial), given backoff, nextDelay's answer for it. The early
+// retry asks for the whole grid again, and the public API's call budget has
+// room for about one fetch a day beyond the regular ones, so the retry is
+// only taken when the budget affords it and every regular refresh that
+// would follow it, RefreshMinutes apart, for as long as the retry stays in
+// the budget's rolling day. Otherwise the wait is RefreshMinutes, as after
+// a complete fetch: the failed cells keep the previous forecast's values
+// meanwhile, and no refresh is refused later for the calls a retry spent.
+// A self-hosted source has no budget and always gets backoff.
+func (s *ductingService) partialRetryDelay(backoff time.Duration) time.Duration {
+	refresh := time.Duration(s.cfg.RefreshMinutes) * time.Minute
+	if backoff >= refresh || !s.source.capped {
+		return backoff
+	}
+	// The source's clock: the one its ledger is written with.
+	retry := s.source.now().Add(backoff)
+	at := []time.Time{retry}
+	for t := retry.Add(refresh); t.Before(retry.Add(ductingLedgerWindow)); t = t.Add(refresh) {
+		at = append(at, t)
+	}
+	if s.source.affords(math.Float64frombits(s.lastCalls.Load()), at) {
+		return backoff
+	}
+	log.Printf("[ducting] no early retry: the call budget is kept for the regular refreshes; next refresh in %s", refresh)
+	return refresh
 }
 
 // run starts the refresh loop in a goroutine and returns a channel closed
@@ -423,7 +460,11 @@ func (s *ductingService) run(ctx context.Context) <-chan struct{} {
 			default:
 				failures = 0
 			}
-			if s.sleep(ctx, s.nextDelay(err, failures)) != nil {
+			delay := s.nextDelay(err, failures)
+			if errors.Is(err, errDuctingPartial) {
+				delay = s.partialRetryDelay(delay)
+			}
+			if s.sleep(ctx, delay) != nil {
 				return
 			}
 		}

@@ -65,7 +65,9 @@ var errDuctingRateLimited = errors.New("open-meteo rate limit (HTTP 429)")
 // would push the calls spent in the last hour or day past the hard caps.
 // Only the public API is capped (ductingSource.capped).
 // Regular refreshes never reach them (ductingMaxPoints sizes the grid for
-// ductingDailyCallBudget); repeated retries can.
+// ductingDailyCallBudget); repeated retries after failed fetches can. The
+// early retry after an incomplete fetch is only scheduled while it leaves
+// room for them (ductingService.partialRetryDelay).
 var errDuctingBudget = errors.New("open-meteo call budget exhausted")
 
 // ductingHTTPError is a non-2xx answer other than 429. Reason is the API's
@@ -222,6 +224,48 @@ func (s *ductingSource) spentLocked(now time.Time) (hour, day float64) {
 	}
 	s.ledger = keep
 	return hour, day
+}
+
+// affords reports whether the call caps leave room for a fetch of planned
+// calls at each of the times at (ascending, none before now), every one
+// counted against the ones after it as well as the calls already recorded.
+// Always true for a source that is not capped. It changes nothing: the
+// ledger is copied under mu and summed outside it.
+func (s *ductingSource) affords(planned float64, at []time.Time) bool {
+	if !s.capped {
+		return true
+	}
+	s.mu.Lock()
+	ledger := append([]ductingLedgerEntry(nil), s.ledger...)
+	s.mu.Unlock()
+	return ductingLedgerAffords(ledger, planned, at)
+}
+
+// ductingLedgerAffords is affords for a capped source, on a copy of its
+// ledger. The windows are the ones spentLocked uses.
+func ductingLedgerAffords(ledger []ductingLedgerEntry, planned float64, at []time.Time) bool {
+	for i, t := range at {
+		hour, day := planned, planned
+		add := func(age time.Duration, calls float64) {
+			if age < 0 || age >= ductingLedgerWindow {
+				return
+			}
+			day += calls
+			if age < time.Hour {
+				hour += calls
+			}
+		}
+		for _, e := range ledger {
+			add(t.Sub(e.at), e.calls)
+		}
+		for _, earlier := range at[:i] {
+			add(t.Sub(earlier), planned)
+		}
+		if hour > ductingHourlyCallCap || day > ductingDailyCallCap {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *ductingSource) record(calls float64) {
