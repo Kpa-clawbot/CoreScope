@@ -221,18 +221,21 @@ test('a 409 without edit rights any more shows the view', async () => {
   assert(!f.el.innerHTML.includes('data-ri-form') && f.el.innerHTML.includes('7 m'), f.el.innerHTML);
   assert(/can no longer edit this repeater/.test(f.el.msg.textContent), 'no explanation: ' + f.el.msg.textContent);
 });
-test('a re-mount after a 409 keeps the typed values and the stored revision', async () => {
+test('a re-mount after a 409 keeps the typed values, the stored revision and the saved-meanwhile block', async () => {
   const opts = { info: INFO({ canEdit: true, revision: 4 }), form: { heightM: '12', gainDbi: '3', status: '', power: '', notes: 'mine' } };
   const a = mountFlow(opts);
   await a.l.R.mount(a.el, { public_key: PK, role: 'repeater' });
   a.click('data-ri-edit');
-  a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: false, status: 409, data: INFO({ canEdit: true, revision: 6 }) }); };
+  a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: false, status: 409, data: INFO({ canEdit: true, revision: 6, heightM: 30, updatedBy: 'Bob' }) }); };
   a.click('data-ri-save');
   await tick();
   a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: true, revision: 6 }) }); };
   const b = mountFlow(opts, a.l);
   await b.l.R.mount(b.el, { public_key: PK, role: 'repeater' });
   assert(b.el.innerHTML.includes('>mine</textarea>'), 'draft lost the typed notes: ' + b.el.innerHTML);
+  const restored = b.el.innerHTML.slice(b.el.innerHTML.indexOf('data-ri-theirs'));
+  assert(b.el.innerHTML.includes('data-ri-theirs') && restored.includes('Saved meanwhile by Bob:') && restored.includes('30 m'),
+    'draft lost the saved-meanwhile block: ' + b.el.innerHTML);
   b.click('data-ri-save');
   await tick();
   assert.strictEqual(a.l.calls[a.l.calls.length - 1].body.baseRevision, 6, 'draft did not keep the stored revision');
@@ -247,6 +250,7 @@ test('a re-mounted draft keeps the revision it was opened at', async () => {
   a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: true, revision: 9 }) }); };
   const b = mountFlow(opts, a.l);
   await b.l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+  assert(!b.el.innerHTML.includes('data-ri-theirs'), 'a draft without a 409 shows a saved-meanwhile block');
   b.click('data-ri-save');
   await tick();
   assert.strictEqual(a.l.calls[a.l.calls.length - 1].body.baseRevision, 3, 'the draft must not adopt the newer revision');
