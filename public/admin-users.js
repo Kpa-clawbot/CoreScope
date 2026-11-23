@@ -82,9 +82,12 @@
       '<h3 tabindex="-1">' + escapeHtml(d.user.displayName) + ' — ' + escapeHtml(d.user.email) + '</h3>' +
       '<p class="account-hint">' + escapeHtml(String((d.sessions || []).length)) + ' active session(s). "Opened" depends on tracking pixels: some mail apps load them automatically, others block them.</p>' +
       '<h4>Mail</h4><ol>';
+    // false only with the smtp provider: no delivery events, nothing to refresh.
+    var noStatus = d.mailDeliveryStatus === false;
     (d.mail || []).forEach(function (m) {
-      html += '<li>' + escapeHtml(m.purpose) + ' to ' + escapeHtml(m.to) + ', ' + escapeHtml(fmt(m.sentAt)) + ' ' + chip(m.lastEvent, m.lastReason) +
-        ' <button type="button" class="account-btn account-btn-secondary" data-act="refresh" data-id="' + escapeHtml(String(d.user.id)) + '" data-mail="' + escapeHtml(String(m.id)) + '">Refresh status</button>';
+      html += '<li>' + escapeHtml(m.purpose) + ' to ' + escapeHtml(m.to) + ', ' + escapeHtml(fmt(m.sentAt)) + ' ' +
+        (noStatus ? 'sent (no delivery status with SMTP)' : chip(m.lastEvent, m.lastReason) +
+          ' <button type="button" class="account-btn account-btn-secondary" data-act="refresh" data-id="' + escapeHtml(String(d.user.id)) + '" data-mail="' + escapeHtml(String(m.id)) + '">Refresh status</button>');
       if (m.events && m.events.length) {
         html += '<ul>';
         m.events.forEach(function (e) {

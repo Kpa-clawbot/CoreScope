@@ -266,6 +266,17 @@ async function until(fn, label) {
     assert((await admin.evaluate(() => location.hash)).indexOf('tab=audit') !== -1, 'not on the audit tab');
   });
 
+  await step('admin overview: Send test mail mails the admin and shows the result', async () => {
+    await admin.goto(BASE + '/#/admin');
+    await admin.click('#aoMailTest');
+    await admin.waitForSelector('#aoMailTestResult:has-text("Test mail sent")');
+    const r = await admin.request.get(BASE + '/__e2e/last-mail');
+    assert(r.ok(), 'last-mail HTTP ' + r.status());
+    const m = await r.json();
+    assert(m.to === 'admin@e2e.test', 'test mail went to ' + m.to);
+    assert(/Test mail/.test(m.subject), 'subject ' + m.subject);
+  });
+
   await step('the old #/admin/users link lands on the Users tab with its filter', async () => {
     await admin.goto(BASE + '/#/admin/users?status=disabled');
     await admin.waitForSelector('tr[data-email="user@e2e.test"]');

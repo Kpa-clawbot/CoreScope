@@ -417,6 +417,85 @@ test('Refresh and Retry start no second full refresh while one is in flight; the
   ov.unmount();
 });
 
+// A click on #aoMailTest: closest() matches only that selector.
+const mailTestClick = (env) => env.els.aoBody.handlers.click({ target: { closest: (sel) => (sel === '#aoMailTest' ? {} : null) } });
+const MAIL_TEST = '/api/admin/mail/test';
+
+test('overview: Send test mail posts once and shows the result', async () => {
+  const held = [];
+  const env = overviewEnv((p) => (p === MAIL_TEST ? new Promise((r) => { held.push(r); }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('id="aoMailTest"') !== -1, 'button in the System card');
+  assert(env.els.aoBody.innerHTML.indexOf('id="aoMailTestResult"') !== -1, 'result element in the System card');
+  const posts = () => env.calls.filter((p) => p === MAIL_TEST).length;
+  mailTestClick(env);
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(posts(), 1, 'two quick clicks make one POST');
+  assert.strictEqual(env.els.aoMailTest.disabled, true, 'disabled while pending');
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(/id="aoMailTest"[^>]* disabled/.test(env.els.aoBody.innerHTML), 'a rebuild while pending keeps it disabled');
+
+  held.shift()(OK({ ok: true, provider: 'brevo', messageId: 'm1' }));
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail sent to your address through brevo.');
+  assert.strictEqual(env.els.aoMailTest.disabled, false, 'enabled once it settles');
+
+  mailTestClick(env);
+  await tick();
+  held.shift()({ ok: false, status: 502, data: { ok: false, provider: 'smtp', error: '535 5.7.8 authentication failed' } });
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: 535 5.7.8 authentication failed');
+
+  mailTestClick(env);
+  await tick();
+  held.shift()({ ok: false, status: 502, data: { ok: false, provider: 'smtp', error: XSS } });
+  await tick();
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('<img') === -1, 'raw markup: ' + env.els.aoBody.innerHTML);
+  assert(env.els.aoBody.innerHTML.indexOf('Test mail failed: &lt;img src=x onerror=alert(1)&gt;') !== -1);
+
+  mailTestClick(env);
+  await tick();
+  held.shift()({ ok: false, status: 429, data: { error: 'too many requests' } });
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Too many test mails, try again later.');
+  assert.strictEqual(posts(), 4);
+  ov.unmount();
+});
+
+test('overview: test-mail result survives the 60 s refresh', async () => {
+  const env = overviewEnv((p) => (p === MAIL_TEST ? OK({ ok: true, provider: 'smtp', messageId: 'm2' }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  mailTestClick(env);
+  await tick();
+  const text = 'Test mail sent to your address through smtp.';
+  assert.strictEqual(env.els.aoMailTestResult.textContent, text);
+  env.timers[env.timers.length - 1].fn(); // refresh(false)
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf(text) !== -1, 'result kept after the rebuild: ' + env.els.aoBody.innerHTML);
+  ov.unmount();
+});
+
+test('overview: SMTP shows one sent count', () => {
+  const t = ovT();
+  const smtp = Object.assign({}, STATS, { mailDeliveryStatus: false,
+    mail7d: { delivered: 0, bounced: 0, blocked: 0, spam: 0, pending: 2, other: 3 } });
+  const html = t.usersCardHtml({ data: smtp });
+  assert(html.indexOf('data-stat="mailSent">5<') !== -1, html);
+  assert(html.indexOf('No delivery status with SMTP.') !== -1);
+  assert(html.indexOf('data-stat="mailDelivered"') === -1 && html.indexOf('data-stat="mailBounced"') === -1, html);
+  const brevo = t.usersCardHtml({ data: Object.assign({}, STATS, { mailDeliveryStatus: true }) });
+  assert(brevo.indexOf('data-stat="mailDelivered">1<') !== -1 && brevo.indexOf('data-stat="mailSent"') === -1, brevo);
+  assert(brevo.indexOf('No delivery status with SMTP.') === -1);
+});
+
 console.log('admin.js');
 
 function loadShell(hash, opts) {
