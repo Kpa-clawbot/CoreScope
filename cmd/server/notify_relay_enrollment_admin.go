@@ -55,9 +55,9 @@ func relayPresetFor(origin string) (relayPreset, bool) {
 // canonicalRelayOrigin returns the origin in the one form the push relay
 // contract defines (spec, Enrollment step 3), so presets and saved
 // enrollments compare equal and the enrollment proof signs what the relay
-// rebuilds: "https://", the host in lowercase ASCII without a trailing dot
-// (an internationalized name in its xn-- form), and ":<port>" in plain
-// decimal only when it isn't 443.
+// rebuilds: "https://", a DNS hostname in lowercase ASCII without a trailing
+// dot (an internationalized name in its xn-- form; IP literals are not
+// accepted), and ":<port>" in plain decimal only when it isn't 443.
 func canonicalRelayOrigin(raw string) (string, error) {
 	client, err := newNotifyRelayClient(strings.TrimSuffix(strings.TrimSpace(raw), "/"), nil)
 	if err != nil {
@@ -71,13 +71,16 @@ func canonicalRelayOrigin(raw string) (string, error) {
 	if host == "" {
 		return "", errors.New("notification relay requires an HTTPS origin")
 	}
+	if strings.HasSuffix(host, ".") {
+		return "", errors.New("notification relay host has more than one trailing dot")
+	}
 	for i := 0; i < len(host); i++ {
 		if host[i] >= utf8.RuneSelf {
 			return "", errors.New("notification relay host must be ASCII: write an internationalized domain name in its xn-- form")
 		}
 	}
-	if strings.Contains(host, ":") {
-		host = "[" + host + "]" // IPv6 literal
+	if net.ParseIP(host) != nil || strings.Contains(host, ":") {
+		return "", errors.New("notification relay origin must use a DNS hostname, not an IP address")
 	}
 	port := u.Port()
 	if port == "" {
