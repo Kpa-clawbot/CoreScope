@@ -14,9 +14,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/meshcore-analyzer/users"
 )
@@ -50,15 +52,45 @@ func relayPresetFor(origin string) (relayPreset, bool) {
 	return relayPreset{}, false
 }
 
-// canonicalRelayOrigin returns the origin as the relay client uses it, with
-// a lowercase host and no default port, so presets and saved enrollments
-// compare equal. The enrollment proof signs this form.
+// canonicalRelayOrigin returns the origin in the one form the push relay
+// contract defines (spec, Enrollment step 3), so presets and saved
+// enrollments compare equal and the enrollment proof signs what the relay
+// rebuilds: "https://", the host in lowercase ASCII without a trailing dot
+// (an internationalized name in its xn-- form), and ":<port>" in plain
+// decimal only when it isn't 443.
 func canonicalRelayOrigin(raw string) (string, error) {
 	client, err := newNotifyRelayClient(strings.TrimSuffix(strings.TrimSpace(raw), "/"), nil)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(strings.ToLower(client.origin), ":443"), nil
+	u, err := url.Parse(client.origin)
+	if err != nil {
+		return "", err
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" {
+		return "", errors.New("notification relay requires an HTTPS origin")
+	}
+	for i := 0; i < len(host); i++ {
+		if host[i] >= utf8.RuneSelf {
+			return "", errors.New("notification relay host must be ASCII: write an internationalized domain name in its xn-- form")
+		}
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]" // IPv6 literal
+	}
+	port := u.Port()
+	if port == "" {
+		return "https://" + host, nil
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "", errors.New("notification relay origin has an invalid port")
+	}
+	if n == 443 {
+		return "https://" + host, nil
+	}
+	return "https://" + host + ":" + strconv.Itoa(n), nil
 }
 
 // relayProofContext separates enrollment proofs from any other use of the
@@ -299,6 +331,8 @@ func (s *Server) handlePushRelayEnable(w http.ResponseWriter, r *http.Request, a
 		Origin: status.PublicOrigin, PublicKey: base64.RawURLEncoding.EncodeToString(publicKey), SenderCredential: credential,
 	}
 	enrollment, err := relay.SelfEnroll(r.Context(), req)
+	// The relay has answered: the proof route closes before anything else.
+	flow.proofKey.Store(nil)
 	if err != nil {
 		writeRelayEnrollmentError(w, err)
 		return
@@ -402,7 +436,7 @@ func writeRelayEnrollmentError(w http.ResponseWriter, err error) {
 			writeError(w, http.StatusConflict, "This origin already has a relay enrollment. Restore it or revoke it before connecting again.")
 			return
 		case http.StatusUnprocessableEntity:
-			writeError(w, http.StatusUnprocessableEntity, "The relay could not verify this analyzer. Check that its public HTTPS URL exposes the enrollment proof route.")
+			writeError(w, http.StatusUnprocessableEntity, "The relay could not verify this analyzer. Check that its public HTTPS URL exposes the enrollment proof route, and that the relay origin entered here is the relay's own public origin, not an alias (the relay checks the proof against the origin it is configured with).")
 			return
 		case http.StatusNotFound:
 			writeError(w, http.StatusServiceUnavailable, "The push relay is not accepting self-service enrollments.")

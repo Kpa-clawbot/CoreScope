@@ -58,7 +58,7 @@ The admin picks the relay on **Admin → Notifications → Mobile push**: a pres
    ```json
    {"origin": "https://analyzer.example.org", "public_key": "<base64url Ed25519 public key>", "sender_credential": "<base64url 32 bytes>"}
    ```
-3. The relay generates a 32-byte challenge and fetches `GET <origin>/api/push-relay/enrollment-proof?challenge=<base64url>` from the analyzer. It requires a public DNS hostname with public addresses only and a valid certificate, and rejects redirects. CoreScope answers only while this admin request is in flight:
+3. The relay generates a 32-byte challenge and fetches `GET <origin>/api/push-relay/enrollment-proof?challenge=<base64url>` from the analyzer. It requires a public DNS hostname with public addresses only and a valid certificate, and rejects redirects. CoreScope answers only while this admin request is waiting for the relay's answer; otherwise the route answers 404:
    ```json
    {"signature": "<base64url Ed25519 signature>"}
    ```
@@ -66,7 +66,12 @@ The admin picks the relay on **Admin → Notifications → Mobile push**: a pres
    ```
    "corescope-push-relay-proof-v1" LF <relay origin> LF <decoded 32-byte challenge>
    ```
-   `<relay origin>` is the origin CoreScope sent the enrollment to: `https://`, the lowercase host, and `:<port>` only when it isn't 443, with no trailing slash (for example `https://push.nodescope.app`). The relay verifies against its own public origin in that form and rejects a signature over the bare challenge. Otherwise the route answers 404.
+   `<relay origin>` is the origin CoreScope sent the enrollment to, in this form, with no trailing slash (for example `https://push.nodescope.app`):
+   - `https://`;
+   - the host in lowercase ASCII, without a trailing dot. An internationalized domain name is written in its A-label (`xn--`) form; a host with other non-ASCII characters is rejected;
+   - `:<port>` in decimal without leading zeros, only when the port isn't 443. An empty port (`host:`) counts as none.
+
+   The relay verifies against its own public origin in that form and rejects a signature over the bare challenge.
 4. After verifying the signature, the relay answers `201 {"analyzer_id": "...", "sender_credential": "..."}`.
 5. CoreScope confirms with `GET /v1/analyzer` (below) that the analyzer ID and origin match, then saves the enrollment and removes the pending file.
 

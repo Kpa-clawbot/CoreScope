@@ -120,6 +120,10 @@ func testRelayAdminEnrollment(t *testing.T, setup func(*authService), requested,
 			if r.Header.Get("Authorization") != "Bearer "+savedCredential {
 				t.Error("verification did not use the sender credential")
 			}
+			// The relay has answered the enrollment: the proof route is closed.
+			if p := f.serve(http.MethodGet, proofPath+"?challenge="+strings.Repeat("A", 43), nil); p.Code != http.StatusNotFound {
+				t.Errorf("proof route still answers after the relay's response: %d", p.Code)
+			}
 			writeJSON(w, notifyRelayAnalyzer{AnalyzerID: "an_test", Origin: testBase, ContractVersion: 1})
 		default:
 			t.Errorf("unexpected relay request: %s", r.URL.Path)
@@ -316,6 +320,14 @@ func TestResolveSelfEnrollRelay(t *testing.T) {
 		{NotifyRelayConfig{Origin: "https://push.nodescope.app/"}, "https://push.nodescope.app", "ios,android"},
 		{NotifyRelayConfig{Origin: "https://relay.example.org"}, "https://relay.example.org", "ios,android"},
 		{NotifyRelayConfig{Origin: "https://relay.example.org", Platforms: []string{"android"}}, "https://relay.example.org", "android"},
+		{NotifyRelayConfig{Origin: "https://relay.example.org:"}, "https://relay.example.org", "ios,android"},
+		{NotifyRelayConfig{Origin: "https://relay.example.org:0443"}, "https://relay.example.org", "ios,android"},
+		{NotifyRelayConfig{Origin: "https://relay.example.org:08443"}, "https://relay.example.org:8443", "ios,android"},
+		{NotifyRelayConfig{Origin: "https://Relay.Example.org./"}, "https://relay.example.org", "ios,android"},
+		{NotifyRelayConfig{Origin: "https://xn--rlay-bpa.example.org"}, "https://xn--rlay-bpa.example.org", "ios,android"},
+		{NotifyRelayConfig{Origin: "https://rélay.example.org"}, "", ""},
+		{NotifyRelayConfig{Origin: "https://relay.example.org:0"}, "", ""},
+		{NotifyRelayConfig{Origin: "https://relay.example.org:65536"}, "", ""},
 		{NotifyRelayConfig{Origin: "http://relay.example.org"}, "", ""},
 		{NotifyRelayConfig{Origin: "https://relay.example.org", Platforms: []string{"web"}}, "", ""},
 	} {

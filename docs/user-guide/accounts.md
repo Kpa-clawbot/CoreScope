@@ -347,7 +347,11 @@ separate relay enrollment, analyzer data directory and accounts.
    relay** takes the HTTPS origin of any other relay that implements the push
    relay contract; it reaches only the users of the app whose push
    credentials it holds. CoreScope proves control of its public origin and
-   saves the verified enrollment on the server.
+   saves the verified enrollment on the server. Enter the relay's own public
+   origin, not an alias: the proof names the relay it was made for, and a
+   relay that sees a different origin rejects it ("The relay could not verify
+   this analyzer"). The same error appears when the relay is configured with
+   the wrong public origin.
 
    To fix the relay in the server configuration instead, add a `pushRelay`
    block with only an `origin` (and optionally `platforms`) inside
