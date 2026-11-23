@@ -79,13 +79,14 @@ already use) with no HTTP API or webhook involved:
   `none` is accepted only for the host `localhost`, `127.0.0.1` or `::1`.
 - `smtpPort` defaults to 587 with `starttls`, 465 with `tls` and 25 with `none`. 0 or
   leaving it out means the default. Otherwise 1 to 65535.
-- The server certificate is always verified against `smtpHost`. There is no option to
-  skip the check.
+- With `starttls` and `tls` the server certificate is always verified against
+  `smtpHost`. There is no option to skip the check.
 - `smtpHost` may be an IPv6 literal in brackets, e.g. `[2001:db8::25]`. Verification
   then needs a certificate that names that address.
 - `mail.webhookSecret` in the config is a startup error with SMTP, and
   `CORESCOPE_BREVO_WEBHOOK_SECRET` is ignored.
-- At startup CoreScope connects, negotiates TLS and logs in, then quits without sending
+- At startup CoreScope connects, negotiates TLS (unless `smtpTls` is `none`) and logs in
+  (only when `smtpUser` is set), then quits without sending
   anything. The log shows `[mail] SMTP ready: smtp.example.org:587 (starttls)` or
   `[mail] SMTP check failed: <error>`. After a failed check the server keeps starting.
 - There is **no delivery status** with SMTP: the server only tells CoreScope that it
@@ -180,9 +181,11 @@ the *System* card and press *Send test mail*. It works with every provider and s
 fixed message only to your own address (the address of the logged-in admin, never one you
 type). Each admin and each IP address can send 3 per 10 minutes, and a failed attempt
 counts too. The counter is in memory, so a restart resets it. The attempt is recorded in
-the audit log as `mail.test` and in the mail log with purpose `test`. With Brevo or
-Postal the delivery status of the test mail shows on your own user page, and a bounce of
-it flags your own address like any other mail.
+the audit log as `mail.test` (result `ok` or `failed`). A mail that was sent also appears
+in the mail log with purpose `test`. With Brevo or Postal, once the webhook is set up or
+*Refresh status* is pressed, the delivery status of the test mail shows in your own
+entry's details under **Admin, Users**, and a bounce of it flags your own address like
+any other mail.
 
 ### When mail fails
 
