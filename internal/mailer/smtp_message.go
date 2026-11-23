@@ -99,11 +99,15 @@ func randomHex(n int) string {
 
 // newMessageID returns "<32 hex chars@domain of fromEmail>".
 func newMessageID(fromEmail string) string {
-	domain := fromEmail
-	if i := strings.LastIndex(fromEmail, "@"); i >= 0 {
-		domain = fromEmail[i+1:]
+	return "<" + randomHex(16) + "@" + emailDomain(fromEmail) + ">"
+}
+
+// emailDomain returns the part after the last "@", or addr when it has none.
+func emailDomain(addr string) string {
+	if i := strings.LastIndex(addr, "@"); i >= 0 {
+		return addr[i+1:]
 	}
-	return "<" + randomHex(16) + "@" + domain + ">"
+	return addr
 }
 
 // newBoundary returns a random multipart boundary.
