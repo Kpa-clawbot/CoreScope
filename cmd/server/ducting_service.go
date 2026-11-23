@@ -376,18 +376,21 @@ func (s *ductingService) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSONBytes(w, snap.body)
 }
 
-// ductingETag is the strong ETag of an ok snapshot: "<generatedAt>-<model>".
+// ductingETag is the weak ETag of an ok snapshot: W/"<generatedAt>-<model>".
+// Weak because the gzip middleware sends the same ETag with the compressed
+// and the identity body, which are the same forecast but not the same bytes.
 func ductingETag(resp DuctingResponse) string {
-	return `"` + strconv.FormatInt(resp.GeneratedAt, 10) + "-" + resp.Model + `"`
+	return `W/"` + strconv.FormatInt(resp.GeneratedAt, 10) + "-" + resp.Model + `"`
 }
 
 // ductingETagMatches reports whether an If-None-Match header names etag:
-// "*", or a comma-separated list compared weakly (a W/ prefix is ignored),
-// as RFC 9110 13.1.2 asks for If-None-Match.
+// "*", or a comma-separated list compared weakly (a W/ prefix is ignored on
+// either side), as RFC 9110 13.1.2 asks for If-None-Match.
 func ductingETagMatches(header, etag string) bool {
+	opaque := strings.TrimPrefix(etag, "W/")
 	for _, t := range strings.Split(header, ",") {
 		t = strings.TrimSpace(t)
-		if t == "*" || strings.TrimPrefix(t, "W/") == etag {
+		if t == "*" || strings.TrimPrefix(t, "W/") == opaque {
 			return true
 		}
 	}

@@ -274,17 +274,20 @@ func ductingMedian(v []float64) float64 {
 
 // ductingTrimOutliers drops the nodes farther (great circle) from the nodes'
 // median position than max(ductingTrimFloorKm, ductingTrimMADs x the median
-// of those distances), and returns how many it dropped. The median position
-// is the median latitude and the median longitude, the latter measured on
-// the unwrapped axis of the smallest arc containing every node, so a mesh
-// across the antimeridian is one cluster, not two ends of the world. Medians
-// ignore any minority of nodes, so several nodes advertising the same wrong
-// position are dropped as surely as one; the floor keeps a compact mesh
-// (median distance near 0) from losing its outer nodes. With fewer than
-// ductingTrimMinNodes nodes it returns them all.
+// of those distances), at most ductingTrimMaxShare of them (the farthest
+// first), and returns how many it dropped; kept is in the order of valid.
+// The median position is the median latitude and the median longitude, the
+// latter measured on the unwrapped axis of the smallest arc containing every
+// node, so a mesh across the antimeridian is one cluster, not two ends of
+// the world. Medians ignore any minority of nodes, so several nodes
+// advertising the same wrong position are dropped as surely as one (up to
+// that share); the floor keeps a compact mesh (median distance near 0) from
+// losing its outer nodes. With fewer than ductingTrimMinNodes nodes it
+// returns them all.
 // ductingTrimMaxShare is the largest share of nodes the outlier filter may
 // drop (but always at least one): a bigger group far from the median cannot
-// be told apart from a real second area by position alone, so it is kept.
+// be told apart from a real second area by position alone, so only that
+// share of it goes, the farthest nodes first, and the rest is kept.
 const ductingTrimMaxShare = 0.10
 
 func ductingTrimOutliers(valid [][2]float64) (kept [][2]float64, trimmed int) {
@@ -310,21 +313,35 @@ func ductingTrimOutliers(valid [][2]float64) (kept [][2]float64, trimmed int) {
 		dist[i] = haversineKm(medLat, medLon, n[0], n[1])
 	}
 	limit := math.Max(ductingTrimFloorKm, ductingTrimMADs*ductingMedian(append([]float64(nil), dist...)))
-	kept = make([][2]float64, 0, len(valid))
-	for i, n := range valid {
-		if dist[i] <= limit {
-			kept = append(kept, n)
+	var far []int // indices beyond the limit, in the order of valid
+	for i := range valid {
+		if dist[i] > limit {
+			far = append(far, i)
 		}
+	}
+	if len(far) == 0 {
+		return valid, 0
 	}
 	// Outliers are a few bad positions, not a region: if more than
 	// ductingTrimMaxShare of the nodes (or more than one, in a small mesh)
-	// would go, the mesh really spans several areas, so keep them all (the
-	// box, or its fallback, covers it).
-	allowed := math.Max(1, math.Floor(ductingTrimMaxShare*float64(len(valid))))
-	if trimmed = len(valid) - len(kept); float64(trimmed) > allowed {
-		return valid, 0
+	// are beyond the limit, the mesh may really span several areas, so only
+	// the farthest ones go, up to that share (equally far: the earlier one
+	// in valid first). The rest stay in the box (or its fallback).
+	if allowed := int(math.Max(1, math.Floor(ductingTrimMaxShare*float64(len(valid))))); len(far) > allowed {
+		sort.SliceStable(far, func(a, b int) bool { return dist[far[a]] > dist[far[b]] })
+		far = far[:allowed]
 	}
-	return kept, trimmed
+	drop := make([]bool, len(valid))
+	for _, i := range far {
+		drop[i] = true
+	}
+	kept = make([][2]float64, 0, len(valid)-len(far))
+	for i, n := range valid {
+		if !drop[i] {
+			kept = append(kept, n)
+		}
+	}
+	return kept, len(far)
 }
 
 // ductingBoxCells fills the boxes with the area lattice (same cell centres as

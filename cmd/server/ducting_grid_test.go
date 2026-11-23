@@ -618,15 +618,85 @@ func TestDuctingGridTrimCoLocatedOutliers(t *testing.T) {
 			t.Fatalf("cell %v outside Europe", c)
 		}
 	}
-	// 8 of 20 at one far spot is more than ductingTrimMaxShare: by position
-	// alone that is indistinguishable from a real second area, so all are
-	// kept (the box, or its regions-around-nodes fallback, covers both).
+	// 8 of 20 at one far spot is more than ductingTrimMaxShare: only the
+	// share is trimmed (2 of 20), the other 6 stay, so the box (or its
+	// regions-around-nodes fallback) still covers what may be a second area.
 	many := append(append([][2]float64{}, nodes[:12]...), make([][2]float64, 0, 8)...)
 	for i := 0; i < 8; i++ {
 		many = append(many, [2]float64{-33, 151})
 	}
-	if kept, tr := ductingTrimOutliers(many); tr != 0 || len(kept) != 20 {
-		t.Errorf("8 of 20 far away: trimmed %d, kept %d; want all kept", tr, len(kept))
+	kept, tr := ductingTrimOutliers(many)
+	if tr != 2 || len(kept) != 18 {
+		t.Fatalf("8 of 20 far away: trimmed %d, kept %d; want 2 and 18", tr, len(kept))
+	}
+	far := 0
+	for _, n := range kept {
+		if n == [2]float64{-33, 151} {
+			far++
+		}
+	}
+	if far != 6 {
+		t.Errorf("8 of 20 far away: %d far nodes kept, want 6", far)
+	}
+}
+
+// More outliers than the cap: only the farthest ones go, up to the cap, and
+// the rest stay in their original order.
+func TestDuctingTrimCapsAtFarthestSmallMesh(t *testing.T) {
+	// 12 nodes around Seattle, then London and Tokyo (about 7,700 km) and
+	// Sydney (about 12,500 km): a mesh under 20 nodes loses one node, the
+	// farthest.
+	sydney, tokyo := [2]float64{-33.9, 151.2}, [2]float64{35.7, 139.7}
+	nodes := append(ductingTestMesh(47.3, -122.6, 3, 4), [2]float64{51.5, -0.1}, sydney, tokyo)
+	kept, trimmed := ductingTrimOutliers(nodes)
+	if trimmed != 1 || len(kept) != 14 {
+		t.Fatalf("trimmed %d, kept %d; want 1 and 14", trimmed, len(kept))
+	}
+	want := append(append([][2]float64{}, nodes[:13]...), tokyo)
+	for i := range want {
+		if kept[i] != want[i] {
+			t.Fatalf("kept[%d] = %v, want %v (Sydney dropped, order kept)", i, kept[i], want[i])
+		}
+	}
+	if _, _, _, info := ductingGridWithInfo(nodes, nil, 0.5, 450, 0); info.trimmed != 1 || info.nodes != 14 {
+		t.Errorf("info %+v, want 14 nodes and 1 trimmed", info)
+	}
+}
+
+func TestDuctingTrimCapsAtFarthestLargeMesh(t *testing.T) {
+	// 85 nodes around Seattle and 15 strung out east of it, 10 to 38 degrees
+	// of longitude away, mixed into the list in no distance order: 15% are
+	// beyond the limit, floor(10% of 100) = 10 go, the 10 farthest.
+	mesh := ductingTestMesh(47.3, -122.6, 17, 5)
+	farLon := func(k int) float64 { return -112.6 + 2*float64(k) }
+	var nodes [][2]float64
+	for i, n := range mesh {
+		nodes = append(nodes, n)
+		if i < 15 {
+			nodes = append(nodes, [2]float64{47.3, farLon(i * 7 % 15)})
+		}
+	}
+	if len(nodes) != 100 {
+		t.Fatalf("%d nodes", len(nodes))
+	}
+	kept, trimmed := ductingTrimOutliers(nodes)
+	if trimmed != 10 || len(kept) != 90 {
+		t.Fatalf("trimmed %d, kept %d; want 10 and 90", trimmed, len(kept))
+	}
+	for k := 0; k < 15; k++ {
+		if got, want := hasCell(kept, 47.3, farLon(k)), k < 5; got != want {
+			t.Errorf("far node %d (lon %v): kept %v, want %v", k, farLon(k), got, want)
+		}
+	}
+	// The survivors keep their original order.
+	j := 0
+	for _, n := range nodes {
+		if j < len(kept) && kept[j] == n {
+			j++
+		}
+	}
+	if j != len(kept) {
+		t.Errorf("kept is not a subsequence of the input (%d of %d matched)", j, len(kept))
 	}
 }
 
@@ -739,11 +809,16 @@ func TestDuctingGridLongitudeWrap(t *testing.T) {
 
 func TestDuctingTrimKeepsARealSecondArea(t *testing.T) {
 	// Three nodes around Denver, two around Salt Lake City (~600 km): a
-	// two-city mesh, not bad positions. Nothing is trimmed.
+	// two-city mesh, not bad positions. Both Salt Lake City nodes are beyond
+	// the limit, but a mesh this small loses at most one, the farther one, so
+	// the other still puts Salt Lake City in the box.
 	nodes := [][2]float64{{39.7, -104.9}, {39.8, -105.0}, {39.6, -104.8}, {40.7, -111.9}, {40.8, -111.8}}
 	kept, trimmed := ductingTrimOutliers(nodes)
-	if trimmed != 0 || len(kept) != len(nodes) {
-		t.Fatalf("trimmed %d of %d, want 0", trimmed, len(nodes))
+	if trimmed != 1 || len(kept) != 4 {
+		t.Fatalf("trimmed %d, kept %d; want 1 and 4", trimmed, len(kept))
+	}
+	if hasCell(kept, 40.7, -111.9) || !hasCell(kept, 40.8, -111.8) {
+		t.Errorf("kept %v; want the nearer Salt Lake City node kept and the farther dropped", kept)
 	}
 }
 

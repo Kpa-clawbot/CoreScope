@@ -972,12 +972,15 @@ func TestDuctingServiceETag(t *testing.T) {
 	if err := svc.refreshOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	const etag = `"1795046400-gfs"`
+	// Weak: the gzip middleware serves the same ETag on the compressed and
+	// the identity body.
+	const bare = `"1795046400-gfs"`
+	const etag = "W/" + bare
 	rec := get("")
 	if rec.Code != 200 || rec.Header().Get("ETag") != etag || rec.Body.Len() == 0 {
 		t.Fatalf("ok: %d, ETag %q, %d bytes", rec.Code, rec.Header().Get("ETag"), rec.Body.Len())
 	}
-	for _, inm := range []string{etag, "W/" + etag, `"other", ` + etag, "*"} {
+	for _, inm := range []string{etag, bare, `"other", ` + etag, `W/"other", ` + bare, "*"} {
 		rec := get(inm)
 		if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
 			t.Errorf("If-None-Match %s: %d with %d bytes, want 304 and no body", inm, rec.Code, rec.Body.Len())
@@ -986,7 +989,7 @@ func TestDuctingServiceETag(t *testing.T) {
 			t.Errorf("If-None-Match %s: headers %v", inm, rec.Header())
 		}
 	}
-	for _, inm := range []string{`"1795046399-gfs"`, `"1795046400-icon"`, "1795046400-gfs"} {
+	for _, inm := range []string{`"1795046399-gfs"`, `W/"1795046400-icon"`, "1795046400-gfs", "W/1795046400-gfs"} {
 		if rec := get(inm); rec.Code != 200 || rec.Body.Len() == 0 {
 			t.Errorf("If-None-Match %s: %d, want 200 with the body", inm, rec.Code)
 		}
@@ -1007,10 +1010,10 @@ func TestDuctingRouteETag(t *testing.T) {
 	resp.Times = []int64{time.Now().Unix()}
 	s.ducting.snap.Store(encodeDuctingSnapshot(resp))
 	req := httptest.NewRequest(http.MethodGet, "/api/ducting", nil)
-	req.Header.Set("If-None-Match", `"1795046400-gfs"`)
+	req.Header.Set("If-None-Match", `W/"1795046400-gfs"`)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 || rec.Header().Get("ETag") != `"1795046400-gfs"` {
+	if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 || rec.Header().Get("ETag") != `W/"1795046400-gfs"` {
 		t.Errorf("through the router: %d, %d bytes, ETag %q", rec.Code, rec.Body.Len(), rec.Header().Get("ETag"))
 	}
 }
