@@ -1,7 +1,9 @@
 package dbschema
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -147,7 +149,7 @@ func TestObserversRebuildRefusesUnrecreatableLocalObject(t *testing.T) {
 	before := localObjectsSchema(t, db)
 	assertRefusedUntouched(t, db, "could not recreate view idx_observers_iata_norm")
 	err := ensureObserversIdx(db, nil)
-	for _, want := range []string{"DROP VIEW idx_observers_iata_norm", "recreate it after the upgrade", "previous CoreScope version"} {
+	for _, want := range []string{`(DROP VIEW "idx_observers_iata_norm")`, "recreate it after the upgrade", "previous CoreScope version"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal %v does not say %q", err, want)
 		}
@@ -250,4 +252,116 @@ func TestObserversRebuildConcurrentApply(t *testing.T) {
 		t.Errorf("observers_new left behind: %d (%v)", stale, err)
 	}
 	assertPacketsViewReadable(t, db)
+}
+
+// A DELETE trigger on observers whose body references a table that has since
+// been dropped is carried across like any other trigger (review of #2445).
+// SQLite compiles a table's DELETE triggers for every DELETE on it, even one
+// that matches no row, so the rebuild must not issue one: it failed with
+// "no such table: main.gone" and left the table unmigrated.
+func TestObserversRebuildCarriesBrokenDeleteTrigger(t *testing.T) {
+	db := legacyApplyableDB(t)
+	mustExec(t, db,
+		`CREATE TABLE gone (id TEXT)`,
+		`CREATE TRIGGER local_observers_cleanup AFTER DELETE ON observers BEGIN DELETE FROM gone WHERE id = OLD.id; END`,
+		`DROP TABLE gone`,
+	)
+	const trigger = `SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger'`
+	before := dumpRows(t, db, trigger)
+	if len(before) != 1 {
+		t.Fatalf("fixture: triggers = %v, want the one broken DELETE trigger", before)
+	}
+	if err := Apply(db, nil); err != nil {
+		t.Fatalf("Apply with a broken DELETE trigger on observers: %v", err)
+	}
+	if _, idxIsPK, err := observersColumnsInfo(context.Background(), db); err != nil || !idxIsPK {
+		t.Fatalf("observers.idx is not the rowid alias after Apply (%v)", err)
+	}
+	if got := dumpRows(t, db, trigger); !reflect.DeepEqual(before, got) {
+		t.Errorf("trigger changed by the rebuild:\nbefore=%v\nafter=%v", before, got)
+	}
+	if got, want := dumpRows(t, db, `SELECT idx, id FROM observers ORDER BY idx`), []string{"[1 a]", "[2 b]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("observers = %v, want %v", got, want)
+	}
+}
+
+// The DROP the refusal suggests quotes the name the way dropLocalObservers
+// does, so it runs as pasted for a name that needs quoting (review of #2445).
+func TestRecreateRefusalSuggestsRunnableDrop(t *testing.T) {
+	for _, tc := range []struct{ kind, name, create, wantDrop string }{
+		{"view", "my view", `CREATE VIEW "my view" AS SELECT id FROM observers`, `DROP VIEW "my view"`},
+		{"trigger", `say "hi"`, `CREATE TRIGGER "say ""hi""" AFTER INSERT ON observers BEGIN SELECT 1; END`, `DROP TRIGGER "say ""hi"""`},
+		{"index", "select", `CREATE INDEX "select" ON observers(name)`, `DROP INDEX "select"`},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			db := legacyFullDB(t)
+			mustExec(t, db, tc.create)
+			cause := errors.New("boom")
+			err := recreateRefusal(localObserver{kind: tc.kind, name: tc.name}, cause)
+			if !errors.Is(err, cause) {
+				t.Errorf("refusal does not wrap its cause: %v", err)
+			}
+			if !strings.Contains(err.Error(), "("+tc.wantDrop+")") {
+				t.Fatalf("refusal %v does not suggest %s", err, tc.wantDrop)
+			}
+			mustExec(t, db, tc.wantDrop)
+			var left int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?`, tc.kind, tc.name).Scan(&left); err != nil || left != 0 {
+				t.Errorf("%s left %d object(s) named %q (%v)", tc.wantDrop, left, tc.name, err)
+			}
+		})
+	}
+}
+
+// A view whose name needs quoting is dropped and recreated by the rebuild.
+func TestObserversRebuildKeepsViewNeedingQuotes(t *testing.T) {
+	db := legacyApplyableDB(t)
+	mustExec(t, db, `CREATE VIEW "my view" AS SELECT id, name FROM observers`)
+	before := localObjectsSchema(t, db)
+	rebuildLogging(t, db)
+	if got := localObjectsSchema(t, db); !reflect.DeepEqual(before, got) || len(got) != 1 {
+		t.Fatalf("local objects changed by the rebuild:\nbefore=%v\nafter=%v", before, got)
+	}
+	if got, want := dumpRows(t, db, `SELECT id FROM "my view" ORDER BY id`), []string{"[a]", "[b]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf(`"my view" = %v, want %v`, got, want)
+	}
+}
+
+func TestMentionsIdentifier(t *testing.T) {
+	for _, tc := range []struct {
+		sql, name string
+		want      bool
+	}{
+		{"SELECT id FROM observers", "observers", true},
+		{"observers", "observers", true},
+		{"observers WHERE id = 1", "observers", true},  // start of string
+		{"SELECT * FROM observers", "observers", true}, // end of string
+		{"SELECT * FROM OBSERVERS o", "observers", true},
+		{`SELECT * FROM "Observers"`, "observers", true},
+		{"SELECT * FROM main.observers", "observers", true},
+		{"SELECT * FROM [observers]", "observers", true},
+		{"SELECT * FROM `observers`", "observers", true},
+		{"SELECT * FROM t,observers;", "observers", true},
+		{"SELECT (SELECT COUNT(*) FROM observers)", "observers", true},
+		{"SELECT * FROM observers_archive", "observers", false},
+		{"SELECT * FROM client_observers", "observers", false},
+		{"observers_archive", "observers", false},
+		{"client_observers", "observers", false},
+		{"SELECT * FROM observers2", "observers", false},
+		{"SELECT * FROM 2observers", "observers", false},
+		{"SELECT * FROM observers$x", "observers", false},
+		{"SELECT * FROM observersé", "observers", false},
+		{"SELECT * FROM éobservers", "observers", false},
+		{"SELECT * FROM observer", "observers", false},
+		{"", "observers", false},
+		// A rejected occurrence does not hide a later whole-word one.
+		{"SELECT * FROM observers_archive JOIN observers", "observers", true},
+		{"SELECT * FROM xobserversobservers JOIN t", "observers", false},
+		{"SELECT * FROM packets_v", "packets_v", true},
+		{"SELECT * FROM local_packets_v", "packets_v", false},
+	} {
+		if got := mentionsIdentifier(tc.sql, tc.name); got != tc.want {
+			t.Errorf("mentionsIdentifier(%q, %q) = %v, want %v", tc.sql, tc.name, got, tc.want)
+		}
+	}
 }

@@ -202,9 +202,10 @@ func openFDsOn(t *testing.T, path string) (n int, ok bool) {
 // cleanup of TestOpenStoreRefusesUnconvertibleObservers failed there).
 func TestOpenStoreClosesDBOnFailure(t *testing.T) {
 	path := legacyStoreDB(t, `ALTER TABLE observers ADD COLUMN operator_note TEXT`)
-	if n, ok := openFDsOn(t, path); !ok {
-		t.Skip("/proc/self/fd not available; cannot observe open handles")
-	} else if n != 0 {
+	// Descriptors are only countable where /proc/self/fd exists (Linux); the
+	// removal at the end observes the leak on Windows.
+	n, countable := openFDsOn(t, path)
+	if countable && n != 0 {
 		t.Fatalf("fixture left %d descriptor(s) open on the database", n)
 	}
 	s, err := OpenStore(path)
@@ -212,7 +213,10 @@ func TestOpenStoreClosesDBOnFailure(t *testing.T) {
 		s.Close()
 		t.Fatal("OpenStore accepted an observers table the rebuild must refuse")
 	}
-	if n, _ := openFDsOn(t, path); n != 0 {
+	if n, _ := openFDsOn(t, path); countable && n != 0 {
 		t.Fatalf("failed OpenStore left %d descriptor(s) open on the database (%v)", n, err)
+	}
+	if rerr := os.Remove(path); rerr != nil {
+		t.Fatalf("database file cannot be removed after the failed OpenStore, a handle is still open: %v", rerr)
 	}
 }

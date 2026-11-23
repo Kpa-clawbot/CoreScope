@@ -3,9 +3,19 @@ package dbschema
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 )
+
+// sqlRunner is the statement surface shared by *sql.Conn, *sql.Tx and
+// *sql.DB. The observers rebuild runs every statement of its transaction on
+// one pinned *sql.Conn, so its helpers take this, not *sql.Tx.
+type sqlRunner interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
 
 // observations.observer_idx points at an observer row by integer. Until this
 // migration that integer was the observers table's hidden implicit rowid (its
@@ -110,9 +120,7 @@ func EnsurePacketsView(rw *sql.DB) error {
 // any primary key that is not the rowid, which also catches the two shapes
 // that pass the first tests yet alias nothing: `INTEGER PRIMARY KEY DESC`
 // (a documented quirk) and a WITHOUT ROWID table.
-func observersColumnsInfo(ctx context.Context, q interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}) (cols []string, idxIsPK bool, err error) {
+func observersColumnsInfo(ctx context.Context, q sqlRunner) (cols []string, idxIsPK bool, err error) {
 	rows, err := q.QueryContext(ctx, `PRAGMA table_info(observers)`)
 	if err != nil {
 		return nil, false, err
@@ -161,11 +169,17 @@ func observersColumnsInfo(ctx context.Context, q interface {
 // observer. Idempotent: a table whose idx is already the rowid alias (see
 // observersColumnsInfo) is left alone. Fails closed — without touching the
 // table — on any column the canonical shape doesn't know (the rebuild would
-// drop it; that includes an idx that is not the rowid alias) or a NULL id (a
-// legacy `TEXT PRIMARY KEY` admits one; the new NOT NULL would reject it).
+// drop it), an idx that is not the rowid alias (the copy would overwrite it)
+// or a NULL id (a legacy `TEXT PRIMARY KEY` admits one; the new NOT NULL
+// would reject it).
 // Indexes, triggers and views the operator added are recreated over the new
 // table (captureLocalObservers); one that no longer applies rolls the whole
 // rebuild back, naming it.
+//
+// The rebuild is one BEGIN IMMEDIATE … COMMIT issued as plain statements on a
+// pinned connection (database/sql's Tx can only BEGIN deferred with this
+// driver). Every exit that does not COMMIT issues ROLLBACK on that same
+// connection, so it never goes back to the pool inside a transaction.
 //
 // MUST run last in Apply: the ensure*Column steps before it bring a legacy
 // table up to (a subset of) the canonical columns.
@@ -198,19 +212,15 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
 		return fmt.Errorf("disable foreign_keys: %w", err)
 	}
+	// Set when a failed ROLLBACK made us close the connection for good: its
+	// foreign_keys setting went with it.
+	discarded := false
 	defer func() {
+		if discarded {
+			return
+		}
 		if _, rerr := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA foreign_keys=%d`, fkPrev)); rerr != nil && err == nil {
 			err = fmt.Errorf("restore foreign_keys: %w", rerr)
-		}
-	}()
-
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
 		}
 	}()
 
@@ -218,24 +228,40 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 	// that reads and then writes, while another process rebuilds the same
 	// file, holds a stale WAL snapshot and fails with "database is locked"
 	// without waiting (busy_timeout does not apply to a snapshot upgrade).
-	// A write as the first statement waits on busy_timeout instead, so
-	// concurrent rebuilds serialise and the later one sees the table done.
-	// The driver has no per-transaction BEGIN IMMEDIATE; this no-op write
-	// is the equivalent. WHERE 0 touches no row, so no trigger or foreign
-	// key action fires, and it names no column, so the refusals below still
-	// report a malformed table themselves.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM observers WHERE 0`); err != nil {
-		return fmt.Errorf("lock observers: %w", err)
+	// BEGIN IMMEDIATE waits on busy_timeout instead, so concurrent rebuilds
+	// serialise and the later one sees the table done. It compiles nothing
+	// against observers, so a table, trigger or view the operator left
+	// broken cannot fail it; the refusals below report a malformed table
+	// themselves.
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin observers rebuild: %w", err)
 	}
+	committed := false
+	// Registered after the foreign_keys restore and conn.Close, so it runs
+	// before both, on every return that did not COMMIT and on a panic.
+	defer func() {
+		if committed {
+			return
+		}
+		if _, rerr := conn.ExecContext(ctx, `ROLLBACK`); rerr != nil {
+			// The transaction may still be open. Have database/sql close
+			// the connection (which rolls back) instead of pooling it.
+			discarded = true
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			if err == nil {
+				err = fmt.Errorf("roll back observers rebuild: %w", rerr)
+			}
+		}
+	}()
 
 	// Re-read inside the transaction so the checks and the copy see the
 	// same table.
-	cols, idxIsPK, err = observersColumnsInfo(ctx, tx)
+	cols, idxIsPK, err = observersColumnsInfo(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("inspect observers: %w", err)
 	}
 	if idxIsPK {
-		return tx.Commit()
+		return nil // rebuilt by another process meanwhile; the deferred ROLLBACK ends the empty transaction
 	}
 	known := make(map[string]bool, len(observersColumns))
 	for _, c := range observersColumns {
@@ -245,23 +271,25 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 	hasCol := make(map[string]bool, len(cols))
 	for _, c := range cols {
 		hasCol[c] = true
-		// idx is canonical only as the rowid alias; any other idx column
-		// (plain, or a key that is not the rowid) would be clobbered by the
-		// copy, so it counts as unknown.
-		if !known[c] || c == "idx" {
+		if !known[c] {
 			unknown = append(unknown, c)
 		}
 	}
+	// idx is canonical only as the rowid alias; any other idx column (plain,
+	// or a key that is not the rowid) would be clobbered by the copy.
+	if hasCol["idx"] {
+		return refuseNonAliasIdx(ctx, conn)
+	}
 	if len(unknown) > 0 {
 		return fmt.Errorf("observers has columns outside the canonical shape (%s); refusing to rebuild it — they would be dropped. "+
-			"To continue, save their data and drop or rename them (ALTER TABLE observers DROP COLUMN <name>), "+
+			"To continue, save their data and drop them (ALTER TABLE observers DROP COLUMN <name>), "+
 			"or run the previous CoreScope version", strings.Join(unknown, ", "))
 	}
 	if !hasCol["id"] {
 		return fmt.Errorf("observers has no id column; refusing to rebuild it")
 	}
 	var nullIDs int64
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM observers WHERE id IS NULL`).Scan(&nullIDs); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM observers WHERE id IS NULL`).Scan(&nullIDs); err != nil {
 		return fmt.Errorf("count NULL observer ids: %w", err)
 	}
 	if nullIDs > 0 {
@@ -280,46 +308,46 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 	}
 	colList := strings.Join(copyCols, ", ")
 
-	local, err := captureLocalObservers(ctx, tx)
+	local, err := captureLocalObservers(ctx, conn)
 	if err != nil {
 		return err
 	}
 
 	// packets_v joins observers; modern SQLite refuses ALTER TABLE RENAME
 	// while a view references a table that no longer exists.
-	if _, err := tx.ExecContext(ctx, `DROP VIEW IF EXISTS packets_v`); err != nil {
+	if _, err := conn.ExecContext(ctx, `DROP VIEW IF EXISTS packets_v`); err != nil {
 		return fmt.Errorf("drop packets_v: %w", err)
 	}
-	if err := dropLocalObservers(ctx, tx, local); err != nil {
+	if err := dropLocalObservers(ctx, conn, local); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS observers_new`); err != nil {
+	if _, err := conn.ExecContext(ctx, `DROP TABLE IF EXISTS observers_new`); err != nil {
 		return fmt.Errorf("drop stale observers_new: %w", err)
 	}
 	// PREFLIGHT: async=true reason="full rebuild of observers, a low-cardinality table (~1k rows in prod): one INSERT…SELECT copy plus two index builds over ~1k rows, milliseconds at any deployment size; observations (1.9M+) is never scanned — only MAX(observer_idx) via idx_observations_observer_idx"
-	if _, err := tx.ExecContext(ctx, `CREATE TABLE observers_new (`+strings.Join(defs, ", ")+`)`); err != nil {
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE observers_new (`+strings.Join(defs, ", ")+`)`); err != nil {
 		return fmt.Errorf("create observers_new: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO observers_new (idx, `+colList+`) SELECT rowid, `+colList+` FROM observers`); err != nil {
+	if _, err := conn.ExecContext(ctx, `INSERT INTO observers_new (idx, `+colList+`) SELECT rowid, `+colList+` FROM observers`); err != nil {
 		return fmt.Errorf("copy observers: %w", err)
 	}
 	var before, after int64
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM observers`).Scan(&before); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM observers`).Scan(&before); err != nil {
 		return err
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM observers_new`).Scan(&after); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM observers_new`).Scan(&after); err != nil {
 		return err
 	}
 	if before != after {
 		return fmt.Errorf("observers rebuild copied %d of %d rows; rolled back", after, before)
 	}
-	if err := seedObserversSequence(ctx, tx); err != nil {
+	if err := seedObserversSequence(ctx, conn); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DROP TABLE observers`); err != nil {
+	if _, err := conn.ExecContext(ctx, `DROP TABLE observers`); err != nil {
 		return fmt.Errorf("drop old observers: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `ALTER TABLE observers_new RENAME TO observers`); err != nil {
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE observers_new RENAME TO observers`); err != nil {
 		return fmt.Errorf("rename observers_new: %w", err)
 	}
 	for _, s := range []string{
@@ -327,23 +355,22 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 		`CREATE INDEX IF NOT EXISTS idx_observers_iata_norm ON observers(UPPER(TRIM(iata)))`,
 		packetsViewSQL(observersKey),
 	} {
-		if _, err := tx.ExecContext(ctx, s); err != nil {
+		if _, err := conn.ExecContext(ctx, s); err != nil {
 			return fmt.Errorf("observers rebuild: %q: %w", s, err)
 		}
 	}
 	for _, o := range local {
-		if _, err := tx.ExecContext(ctx, o.sql); err != nil {
-			return fmt.Errorf("observers rebuild could not recreate %s %s: %w; rolled back. "+
-				"To continue, drop it (DROP %s %s) and recreate it after the upgrade, "+
-				"or run the previous CoreScope version", o.kind, o.name, err, strings.ToUpper(o.kind), o.name)
+		if _, err := conn.ExecContext(ctx, o.sql); err != nil {
+			return recreateRefusal(o, err)
 		}
 	}
-	if err := checkObserversForeignKeys(ctx, tx); err != nil {
+	if err := checkObserversForeignKeys(ctx, conn); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return fmt.Errorf("commit observers rebuild: %w", err)
 	}
+	committed = true
 	logf("[dbschema] rebuilt observers with explicit idx primary key (%d rows, every rowid preserved as idx)", after)
 	if len(local) > 0 {
 		names := make([]string, len(local))
@@ -358,6 +385,44 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 // localObserver is a schema object the operator added that the observers
 // rebuild has to take down and put back (#2443).
 type localObserver struct{ kind, name, table, sql string }
+
+// quoteIdent quotes name as an SQL identifier, so one holding a space, a
+// keyword or a quote still names the same object.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// dropPlainIdxSQL is the way out refuseNonAliasIdx gives for an idx column
+// that is in no key.
+const dropPlainIdxSQL = `ALTER TABLE observers DROP COLUMN idx`
+
+// refuseNonAliasIdx is the refusal for an observers table whose idx column is
+// not the rowid alias. SQLite can drop a plain column, but not one in the
+// primary key ("cannot drop PRIMARY KEY column"), so the way out differs.
+func refuseNonAliasIdx(ctx context.Context, q sqlRunner) error {
+	var pk int
+	if err := q.QueryRowContext(ctx, `SELECT pk FROM pragma_table_info('observers') WHERE LOWER(name) = 'idx'`).Scan(&pk); err != nil {
+		return fmt.Errorf("inspect observers.idx: %w", err)
+	}
+	const refusal = "observers already has an idx column that is not the rowid alias (the rowid alias is a sole `idx INTEGER PRIMARY KEY` on a table that is not WITHOUT ROWID); " +
+		"refusing to rebuild it — the upgrade would overwrite idx. "
+	if pk > 0 {
+		return fmt.Errorf(refusal + "This idx is in the primary key, which SQLite cannot drop or change in place: " +
+			"to continue, recreate the observers table without an idx column (copy the rows to a new table, drop the old one, rename), " +
+			"or run the previous CoreScope version")
+	}
+	return fmt.Errorf(refusal+"To continue, save its data and drop it (%s), "+
+		"or run the previous CoreScope version", dropPlainIdxSQL)
+}
+
+// recreateRefusal is the error for a local object whose definition no longer
+// runs over the rebuilt table. The DROP it suggests quotes the name, like the
+// one dropLocalObservers runs.
+func recreateRefusal(o localObserver, cause error) error {
+	return fmt.Errorf("observers rebuild could not recreate %s %s: %w; rolled back. "+
+		"To continue, drop it (DROP %s %s) and recreate it after the upgrade, "+
+		"or run the previous CoreScope version", o.kind, o.name, cause, strings.ToUpper(o.kind), quoteIdent(o.name))
+}
 
 // captureLocalObservers lists, in creation (sqlite_master rowid) order,
 // every index, trigger and view the rebuild would otherwise lose or trip
@@ -375,7 +440,7 @@ type localObserver struct{ kind, name, table, sql string }
 // only means an unrelated view or trigger is dropped and recreated as is.
 // Indexes on other tables cannot reference observers and are never touched.
 // SQL is NULL for SQLite's own auto-indexes, which follow their table.
-func captureLocalObservers(ctx context.Context, tx *sql.Tx) ([]localObserver, error) {
+func captureLocalObservers(ctx context.Context, tx sqlRunner) ([]localObserver, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT type, name, tbl_name, sql FROM sqlite_master
 		WHERE type IN ('index', 'trigger', 'view') AND sql IS NOT NULL ORDER BY rowid`)
 	if err != nil {
@@ -443,13 +508,13 @@ func captureLocalObservers(ctx context.Context, tx *sql.Tx) ([]localObserver, er
 // dropLocalObservers drops the captured views and the captured triggers on
 // other tables, newest first. Indexes and triggers on observers go with the
 // table; IF EXISTS covers a trigger its view already took.
-func dropLocalObservers(ctx context.Context, tx *sql.Tx, local []localObserver) error {
+func dropLocalObservers(ctx context.Context, tx sqlRunner, local []localObserver) error {
 	for i := len(local) - 1; i >= 0; i-- {
 		o := local[i]
 		if o.kind == "index" || (o.kind == "trigger" && strings.EqualFold(o.table, "observers")) {
 			continue
 		}
-		q := `DROP ` + strings.ToUpper(o.kind) + ` IF EXISTS "` + strings.ReplaceAll(o.name, `"`, `""`) + `"`
+		q := `DROP ` + strings.ToUpper(o.kind) + ` IF EXISTS ` + quoteIdent(o.name)
 		if _, err := tx.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("observers rebuild: %s: %w", q, err)
 		}
@@ -485,12 +550,13 @@ func mentionsIdentifier(sqlText, name string) bool {
 // row's orphaned observations to a brand-new observer; seeding past
 // MAX(observations.observer_idx) closes that for good. The MAX is an index
 // seek (idx_observations_observer_idx, ensured earlier in Apply).
-func seedObserversSequence(ctx context.Context, tx *sql.Tx) error {
-	hasObsIdx, err := TableHasColumn(tx, "observations", "observer_idx")
-	if err != nil {
-		return err
+func seedObserversSequence(ctx context.Context, tx sqlRunner) error {
+	// Not TableHasColumn: its Querier is not the Context surface of *sql.Conn.
+	var hasObsIdx int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('observations') WHERE name = 'observer_idx'`).Scan(&hasObsIdx); err != nil {
+		return fmt.Errorf("inspect observations: %w", err)
 	}
-	if !hasObsIdx {
+	if hasObsIdx == 0 {
 		return nil
 	}
 	var maxRef sql.NullInt64
@@ -516,7 +582,7 @@ func seedObserversSequence(ctx context.Context, tx *sql.Tx) error {
 // every table whose foreign keys reference it — the only rows the rebuild can
 // have invalidated. A whole-database check would scan observations (1.9M+
 // rows in prod) and fail on unrelated pre-existing orphans.
-func checkObserversForeignKeys(ctx context.Context, tx *sql.Tx) error {
+func checkObserversForeignKeys(ctx context.Context, tx sqlRunner) error {
 	tables := []string{"observers"}
 	rows, err := tx.QueryContext(ctx, `SELECT m.name FROM sqlite_master m, pragma_foreign_key_list(m.name) f
 		WHERE m.type = 'table' AND f."table" = 'observers' GROUP BY m.name`)

@@ -368,9 +368,14 @@ func TestObserversIdxRefusesUnknownColumn(t *testing.T) {
 		`UPDATE observers SET operator_note = 'keep me'`)
 	assertRefusedUntouched(t, db, "operator_note")
 	// The refusal names the way out, since it stops the ingestor on every start.
-	if err := ensureObserversIdx(db, nil); err == nil || !strings.Contains(err.Error(), "DROP COLUMN") ||
+	if err := ensureObserversIdx(db, nil); err == nil || !strings.Contains(err.Error(), "ALTER TABLE observers DROP COLUMN <name>") ||
 		!strings.Contains(err.Error(), "previous CoreScope version") {
 		t.Errorf("refusal does not say how to continue: %v", err)
+	}
+	// The statement it gives, with the column it named, runs and clears the way.
+	mustExec(t, db, `ALTER TABLE observers DROP COLUMN operator_note`)
+	if err := ensureObserversIdx(db, nil); err != nil {
+		t.Fatalf("rebuild after the suggested DROP COLUMN: %v", err)
 	}
 }
 
