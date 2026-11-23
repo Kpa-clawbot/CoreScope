@@ -37,13 +37,23 @@ function extract(file, re) {
   return src.slice(m.index, i);
 }
 
+// A helper another change may add to the page (#2446 adds removeMiniMap and
+// removeSubpathMap, which the functions above then call): taken when present,
+// so this suite runs on either side of that change.
+function extractIfPresent(file, re) {
+  const src = fs.readFileSync(path.join(ROOT, 'public', file), 'utf8');
+  return re.test(src) ? extract(file, re) : '';
+}
+
 const HOME = [
+  extractIfPresent('home.js', /function removeMiniMap\s*\(\)\s*\{/),
   extract('home.js', /async function loadHealth\s*\(pubkey\)\s*\{/),
   extract('home.js', /function destroy\s*\(\)\s*\{/),
   extract('home.js', /function renderHome\s*\(container\)\s*\{/),
   extract('home.js', /function showChooser\s*\(container\)\s*\{/),
 ].join('\n');
 const ANALYTICS = [
+  extractIfPresent('analytics.js', /function removeSubpathMap\s*\(\)\s*\{/),
   extract('analytics.js', /function renderSubpathDetail\s*\(panel, data\)\s*\{/),
   extract('analytics.js', /async function loadSubpathDetail\s*\(hopsStr\)\s*\{/),
   extract('analytics.js', /function destroy\s*\(\)\s*\{/),
