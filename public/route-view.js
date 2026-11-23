@@ -81,6 +81,17 @@
   var buildPacketContextBlock = _MC_RT_U.buildPacketContextBlock;
   var buildSnrSparkline = _MC_RT_U.buildSnrSparkline;
   var pathGroupKey = _MC_RT_U.pathGroupKey;
+  var pathsParamValue = _MC_RT_U.pathsParamValue;
+  var withPathsParam = _MC_RT_U.withPathsParam;
+
+  // Mirror the path picker's view in the deep link (?paths=), so the address
+  // bar shows a link that reopens it. replaceState, not location.hash: a
+  // hashchange would make the router re-run the deep link and redraw.
+  function writePathViewParam(view) {
+    var next = withPathsParam(location.hash, view.mode === 'all' ? 'all' : pathsParamValue(view.path));
+    if (next === location.hash) return;
+    try { history.replaceState(null, '', next); } catch (e) { console.warn('[route-view]', e); }
+  }
 
   // Polish review (carmack #1423): bound _detailCache (was unbounded plain
   // object; every distinct pubkey ever clicked was retained for the tab's
@@ -409,7 +420,7 @@
             hopsHtml += ' <span class="text-muted" style="font-size:0.85em" title="One or more hops in this path have a shorter prefix than the configured ' + _tt + '-byte trust threshold. These observations count as speculative — raise pathTrust.minHashBytesForMapping in config.json for stricter evidence.">(speculative, <' + _tt + '-byte hops)</span>';
           }
         }
-        return '<li class="mc-rt-path-row" data-path-key="' + escapeHtml(g.key) + '" data-obs-count="' + g.count + '" tabindex="0" role="button" aria-label="Isolate path with ' + hopsCount + ' hops, seen by ' + g.count + ' of ' + totalObservers + ' observers">' +
+        return '<li class="mc-rt-path-row" data-path-key="' + escapeHtml(g.key) + '" data-raw-hops="' + escapeHtml(JSON.stringify(g.rawHops)) + '" data-obs-count="' + g.count + '" tabindex="0" role="button" aria-label="Isolate path with ' + hopsCount + ' hops, seen by ' + g.count + ' of ' + totalObservers + ' observers">' +
           '<span class="mc-rt-path-count">' + g.count + '/' + totalObservers + '</span>' +
           '<span class="mc-rt-path-hops">' + hopsHtml + '</span>' +
           '<span class="mc-rt-path-obs" title="' + escapeHtml(g.observers.join(', ')) + '">' + escapeHtml(sample) + moreSuffix + '</span>' +
@@ -1013,11 +1024,21 @@
       requestAnimationFrame(_restoreFit);
     }
     var pathRows = sidebar.querySelectorAll('.mc-rt-path-row');
+    // The operator's pick goes to the link and to the caller, whose in-place
+    // redraw (hide-1-byte-hops toggle) has to reopen it.
+    function syncPathView(view) {
+      writePathViewParam(view);
+      if (opts.onPathViewChange) opts.onPathViewChange(view);
+    }
+    function selectRow(row) {
+      pathRows.forEach(function (r) { r.classList.remove('mc-rt-path-active'); });
+      row.classList.add('mc-rt-path-active');
+      isolatePath(row.dataset.pathKey);
+    }
     pathRows.forEach(function (row) {
       row.addEventListener('click', function () {
-        pathRows.forEach(function (r) { r.classList.remove('mc-rt-path-active'); });
-        row.classList.add('mc-rt-path-active');
-        isolatePath(row.dataset.pathKey);
+        selectRow(row);
+        syncPathView({ mode: 'path', path: JSON.parse(row.dataset.rawHops) });
       });
       row.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); }
@@ -1030,6 +1051,7 @@
         e.preventDefault();
         pathRows.forEach(function (r) { r.classList.remove('mc-rt-path-active'); });
         restoreAllPaths();
+        syncPathView({ mode: 'all' });
       });
     }
     // On-map "N hops shown" badge: the sidebar chip says the same, but someone
@@ -1058,13 +1080,15 @@
         mapBadge.addEventListener('click', function () {
           pathRows.forEach(function (r) { r.classList.remove('mc-rt-path-active'); });
           restoreAllPaths();
+          syncPathView({ mode: 'all' });
           mapBadge.remove();
         });
         mapContainerEl.appendChild(mapBadge);
       }
     }
-    // Deep-link initial view (?paths=all / ?observer=, see map.js
-    // loadRouteFromDeepLink): the same handlers as the operator's click.
+    // Deep-link initial view (?paths= / ?observer=, see map.js
+    // loadRouteFromDeepLink), drawn as the operator's click would. A path is
+    // not written back, so an observer= link stays as it was shared.
     sidebar._applyPathView = function (view) {
       if (!view) return;
       if (view.mode === 'all') {
@@ -1072,7 +1096,7 @@
       } else if (view.mode === 'path') {
         var key = pathGroupKey(view.path, filterHops);
         for (var ri = 0; ri < pathRows.length; ri++) {
-          if (pathRows[ri].dataset.pathKey === key) { pathRows[ri].click(); return; }
+          if (pathRows[ri].dataset.pathKey === key) { selectRow(pathRows[ri]); return; }
         }
       }
     };
@@ -1523,6 +1547,9 @@
     // Special case: a single point gives degenerate bounds → max zoom (street
     // level on empty water often). setView with reasonable zoom instead.
     var fitPts = positions.filter(function(p){return p.lat!=null});
+    // With a deep-linked view to follow, the first fit doesn't animate:
+    // Leaflet drops any fit asked for during a zoom animation.
+    var jumpFit = !!opts.initialPathView;
     function refit() {
       try {
         mapRef.invalidateSize();
@@ -1561,9 +1588,12 @@
         if (fitPts.length === 1 && !bounds) {
           mapRef.setView([fitPts[0].lat, fitPts[0].lon], 11, { animate: false });
         } else if (bounds && bounds.isValid()) {
-          mapRef.fitBounds(bounds, isMob
+          var fitOpts = isMob
             ? { paddingTopLeft: [30, 70], paddingBottomRight: [30, 190], maxZoom: 14 }
-            : { padding: [40, 40], maxZoom: 14 });
+            : { padding: [40, 40], maxZoom: 14 };
+          if (jumpFit) fitOpts.animate = false;
+          jumpFit = false;
+          mapRef.fitBounds(bounds, fitOpts);
         }
       } catch (e) { console.warn('[route-view]', e); }
     }

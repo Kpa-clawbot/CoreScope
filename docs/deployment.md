@@ -160,6 +160,7 @@ docker run -d --name corescope \
 | `-v /your/caddy-data:/data/caddy` | No | Caddy TLS certificate storage |
 | `-e DISABLE_MOSQUITTO=true` | No | Skip the internal Mosquitto broker (use your own) |
 | `-e DISABLE_CADDY=true` | No | Skip the built-in Caddy reverse proxy |
+| `-e CORESCOPE_URL=https://analyzer.example.org` | No | Public URL for link previews — see [Link previews](#link-previews-og-tags) |
 | `-e MQTT_BROKER=mqtt://host:1883` | No | Override MQTT broker URL |
 | `-e RUN_AS_UID=1000` | No | Run the Go services as this uid instead of root — see [Running the Go services unprivileged](#running-the-go-services-unprivileged) |
 | `-e RUN_AS_GID=1000` | No | Group for `RUN_AS_UID` (defaults to it) |
@@ -208,6 +209,7 @@ docker compose up -d
 | `DATA_DIR` | `./data` | Host path for persistent data |
 | `DISABLE_MOSQUITTO` | `false` | Set `true` to use an external MQTT broker |
 | `DISABLE_CADDY` | `false` | Set `true` to skip the built-in Caddy proxy |
+| `CORESCOPE_URL` | unset | Public URL for link previews — see [Link previews](#link-previews-og-tags) |
 
 ### manage.sh (legacy alternative)
 
@@ -337,6 +339,48 @@ CoreScope uses a layered configuration system (highest priority wins):
 | `DB_PATH` | `data/meshcore.db` | SQLite database path |
 | `DISABLE_MOSQUITTO` | `false` | Skip the internal Mosquitto broker |
 | `DISABLE_CADDY` | `false` | Skip the built-in Caddy reverse proxy |
+| `CORESCOPE_URL` | unset | Public URL for link previews — see [Link previews](#link-previews-og-tags) |
+
+### Link previews (og tags)
+
+Discord, Slack, Facebook and other link previews read `og:image` and
+`twitter:image` from `index.html`, and need them absolute. The page holds a
+`__CORESCOPE_URL__` placeholder, which the server fills in the same way it
+fills in the `__BUST__` cache buster:
+
+- **`CORESCOPE_URL` set** (`http(s)://host[:port]`, optionally with a path,
+  e.g. `https://analyzer.example.org`): that URL, on every page, and no request
+  header is consulted. Trailing slashes are dropped. `og:url` is sent too.
+- **Unset, or invalid** (logged at startup): the origin each request reached:
+  the `Host` header, with the scheme from TLS or `X-Forwarded-Proto`.
+  `og:url` is left out. `X-Forwarded-Host` is never used.
+
+`og:url` can only be the site root, because the part of a link after `#` never
+reaches the server. Platforms that follow it, such as Facebook and Messenger,
+may then open the home page when someone clicks the preview of a shared deep
+link. Leave `CORESCOPE_URL` unset if that matters more to you than the tag.
+
+On a public instance, setting `CORESCOPE_URL` is otherwise recommended. Unset,
+a forged `Host` header is echoed into that response's image links. Only the
+sender sees it as long as nothing in front caches the page (it is `no-store`).
+
+Also set `CORESCOPE_URL` when:
+
+- a proxy in front rewrites the `Host` header;
+- TLS ends before the last proxy (the built-in Caddy behind nginx sees plain
+  HTTP and says so in `X-Forwarded-Proto`, so previews would link `http://`);
+- a proxy serves CoreScope under a path: include the path, or the image link
+  misses the prefix;
+- a CDN caches pages despite their `no-store` header, so that no visitor's
+  request ends up in another's preview.
+
+With compose, put it in the `.env` next to the compose file:
+`CORESCOPE_URL=https://analyzer.example.org`.
+
+The static build (`scripts/static/build.sh`, the web container) has no
+request to take an origin from: it takes `CORESCOPE_URL` when the UI is
+packaged (a build argument of `Dockerfile.web`), and without one leaves
+`og:url` out and links the project's preview image on GitHub.
 
 ### config.json
 
