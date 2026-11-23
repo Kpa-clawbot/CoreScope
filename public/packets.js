@@ -1160,6 +1160,7 @@
   let directPacketId = null;
   let directPacketHash = null;
   let initGeneration = 0;
+  let detailGeneration = 0;
   let _docActionHandler = null;
   let _docMenuCloseHandler = null;
   let _docColMenuCloseHandler = null;
@@ -1589,6 +1590,7 @@
   }
 
   function destroy() {
+    ++detailGeneration;
     clearTimeout(_renderTimer);
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
@@ -2496,14 +2498,8 @@
             selectPacket(child.id, parentHash, {packet: obsPacket, observations: parentData?.observations}, child.id);
           }
         }
-        else if (action === 'select-hash') pktSelectHash(value);
-        else if (action === 'toggle-select') {
-          // #1486: pktToggleGroup() already opens the detail panel on EXPAND
-          // (via selectPacket()), and must NOT open it on COLLAPSE. The
-          // previously-unconditional pktSelectHash() trailing call was both
-          // redundant on expand AND reopened the panel the operator had just
-          // closed when they clicked the chevron to collapse — drop it.
-          pktToggleGroup(value);
+        else if (action === 'select-hash' || action === 'toggle-select') {
+          pktSelectHash(value, action === 'toggle-select');
         }
       };
       pktBody.addEventListener('click', handler);
@@ -3563,20 +3559,23 @@
       initPanelResize();
     }
 
+    const gen = ++detailGeneration;
     try {
       const data = prefetchedData || await api(hash ? `/packets/${hash}` : `/packets/${id}`);
+      if (gen !== detailGeneration) return;
       // Resolve path hops for detail view
       const pkt = data.packet;
       try {
         await resolveHopsForPackets([pkt]);
       } catch {}
+      if (gen !== detailGeneration) return;
       panel.innerHTML = isMobileNow ? '' : (useSlideOver ? '' : ('<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML));
       const content = document.createElement('div');
       panel.appendChild(content);
       await renderDetail(content, data, selectedObservationId);
       if (!isMobileNow && !useSlideOver) initPanelResize();
     } catch (e) {
-      panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
+      if (gen === detailGeneration) panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
     }
   }
 
@@ -4432,38 +4431,34 @@
   }
 
   // Global handlers
-  async function pktToggleGroup(hash) {
-    if (expandedHashes.has(hash)) {
+  async function pktSelectHash(hash, toggleGroup) {
+    if (toggleGroup && expandedHashes.has(hash)) {
       expandedHashes.delete(hash);
       renderTableRows();
       return;
     }
-    // Single fetch — gets packet + observations + path
+    // The address can change before the router handles hashchange. A second row
+    // click can supersede this one while the address still points to the list.
+    const gen = ++detailGeneration;
+    const route = location.hash;
+    const isCurrent = () => gen === detailGeneration && location.hash === route;
     try {
       const data = await api(`/packets/${hash}`);
-      const pkt = data.packet;
-      if (!pkt) return;
-      const group = hashIndex.get(hash);
-      if (group && data.observations) {
-        group._children = data.observations.map(o => clearParsedCache({...pkt, ...o, _isObservation: true}));
-        group._fetchedData = data;
-        // Sort children based on current sort mode
-        sortGroupChildren(group);
+      if (!isCurrent() || !data?.packet) return;
+      if (toggleGroup) {
+        const group = hashIndex.get(hash);
+        if (group && data.observations) {
+          group._children = data.observations.map(o => clearParsedCache({...data.packet, ...o, _isObservation: true}));
+          group._fetchedData = data;
+          sortGroupChildren(group);
+        }
+        await cacheResolvedPaths(group?._children || []);
+        await resolveHopsForPackets(group?._children || []);
+        if (!isCurrent()) return;
+        expandedHashes.add(hash);
+        renderTableRows();
       }
-      // Resolve hops from children: prefer server-side resolved_path
-      await cacheResolvedPaths(group?._children || []);
-      await resolveHopsForPackets(group?._children || []);
-      expandedHashes.add(hash);
-      renderTableRows();
-      // Also open detail panel — no extra fetch needed
-      selectPacket(pkt.id, hash, data);
-    } catch {}
-  }
-  async function pktSelectHash(hash) {
-    // When grouped, select packet — reuse cached detail endpoint
-    try {
-      const data = await api(`/packets/${hash}`);
-      if (data?.packet) selectPacket(data.packet.id, hash, data);
+      selectPacket(data.packet.id, hash, data);
     } catch {}
   }
 
