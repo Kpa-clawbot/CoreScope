@@ -1,5 +1,5 @@
 /* scripts/static/build.sh: packages public/ for a static host. The output is
- * public/ byte for byte except index.html (cache buster) and deployment.js
+ * public/ byte for byte except the top-level pages (cache buster, site URL) and deployment.js
  * (where the API is), plus _headers; every input is validated because it
  * lands inside a JS string literal. */
 'use strict';
@@ -87,13 +87,48 @@ test('every local script and stylesheet in a top-level page carries ?v=__BUST__'
   assert.deepStrictEqual(missing, []);
 });
 
-test('the build replaces the cache buster in every top-level page and changes nothing else', () => {
-  const r = run(OK);
+test('the build replaces the cache buster and site URL in every top-level page and changes nothing else', () => {
+  const r = run(Object.assign({}, OK, { CORESCOPE_URL: 'https://mesh.example.org/' }));
+  assert.strictEqual(r.status, 0, r.stderr);
   for (const page of PAGES) {
     const src = fs.readFileSync(path.join(ROOT, 'public', page), 'utf8');
-    assert.strictEqual(fs.readFileSync(path.join(r.out, page), 'utf8'), src.split('__BUST__').join('abc1234'), page);
+    const want = src.split('__BUST__').join('abc1234').split('__CORESCOPE_URL__').join('https://mesh.example.org');
+    assert.strictEqual(fs.readFileSync(path.join(r.out, page), 'utf8'), want, page);
   }
   assert.ok(fs.readFileSync(path.join(r.out, 'area-map.html'), 'utf8').includes('api-base.js?v=abc1234'));
+});
+
+const OG_FALLBACK = 'https://raw.githubusercontent.com/Kpa-clawbot/corescope/master/public';
+test('CORESCOPE_URL makes og:url, og:image and twitter:image absolute on it', () => {
+  const r = run(Object.assign({}, OK, { CORESCOPE_URL: 'https://example.org/corescope' }));
+  assert.strictEqual(r.status, 0, r.stderr);
+  const html = fs.readFileSync(path.join(r.out, 'index.html'), 'utf8');
+  assert.ok(html.includes('<meta property="og:url" content="https://example.org/corescope/">'), 'og:url');
+  assert.ok(html.includes('<meta property="og:image" content="https://example.org/corescope/og-image.png">'), 'og:image');
+  assert.ok(html.includes('<meta name="twitter:image" content="https://example.org/corescope/og-image.png">'), 'twitter:image');
+  assert.ok(!html.includes(OG_FALLBACK), 'no GitHub fallback');
+});
+
+test('every trailing slash of CORESCOPE_URL is dropped, as the server does', () => {
+  for (const [given, want] of [['https://example.org//', 'https://example.org'], ['https://example.org/corescope///', 'https://example.org/corescope']]) {
+    const r = run(Object.assign({}, OK, { CORESCOPE_URL: given }));
+    assert.strictEqual(r.status, 0, r.stderr);
+    const html = fs.readFileSync(path.join(r.out, 'index.html'), 'utf8');
+    assert.ok(html.includes('<meta property="og:image" content="' + want + '/og-image.png">'), given);
+  }
+});
+
+// A static host has no request to take an origin from: without CORESCOPE_URL
+// the build keeps what shipped before the placeholder, no og:url (#1890) and
+// the project's own image.
+test('without CORESCOPE_URL, og:url is left out and the image is the GitHub copy', () => {
+  const r = run(OK);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const html = fs.readFileSync(path.join(r.out, 'index.html'), 'utf8');
+  assert.ok(!/property="og:url"/.test(html), 'og:url left in');
+  assert.ok(!html.includes('__CORESCOPE_URL__'), 'placeholder left in');
+  assert.ok(html.includes('<meta property="og:image" content="' + OG_FALLBACK + '/og-image.png">'), 'og:image');
+  assert.ok(html.includes('<meta name="twitter:image" content="' + OG_FALLBACK + '/og-image.png">'), 'twitter:image');
 });
 
 test('_headers makes every top-level page and deployment.js revalidate', () => {
@@ -184,6 +219,9 @@ const refusals = [
   ['an unknown channel', { CHANNEL: 'prod' }, /CHANNEL must be/],
   ['a commit with a quote', { COMMIT: "abc'1" }, /COMMIT must be/],
   ['a classic URL with a path', { CLASSIC_URL: 'https://analyzer.example/x' }, /CLASSIC_URL must be/],
+  ['a site URL with no scheme', { CORESCOPE_URL: 'mesh.example.org' }, /CORESCOPE_URL must be/],
+  ['a site URL with a quote', { CORESCOPE_URL: 'https://mesh.example.org/"><script>' }, /CORESCOPE_URL must be/],
+  ['a site URL with a sed metacharacter', { CORESCOPE_URL: 'https://mesh.example.org/a|b&c' }, /CORESCOPE_URL must be/],
 ];
 for (const [what, env, re] of refusals) {
   test('refuses ' + what, () => {

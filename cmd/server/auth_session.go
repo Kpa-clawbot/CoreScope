@@ -83,10 +83,12 @@ func bearerScopesFor(method, path string) []string {
 	return nil
 }
 
-// bearerCORSPath reports whether path takes cross-origin writes from an
-// allowlisted origin: the device-token login and the bearer routes. It is
-// judged on the path alone, since a preflight names the method only in a
-// header; outside the repeater routes the scopes do not depend on the method.
+// bearerCORSPath reports whether path takes cross-origin bearer requests
+// from an allowlisted origin: the device-token login and the bearer routes.
+// It is judged on the path alone, since a preflight names the method only in
+// a header: the repeater routes count whatever the method, and every other
+// route by the scopes a GET needs. That covers the My repeaters list, which
+// takes a token for GET and HEAD only.
 func bearerCORSPath(path string) bool {
 	return path == "/api/auth/device-token" || repeaterRoute(path) != "" ||
 		len(bearerScopesFor(http.MethodGet, path)) > 0
