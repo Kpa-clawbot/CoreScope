@@ -542,7 +542,9 @@
           if (typeof window._applyTilesToNodeMap === 'function') window._applyTilesToNodeMap(miniMap);
           else L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(miniMap);
           L.marker([node.lat, node.lon]).addTo(miniMap);
-          setTimeout(() => miniMap.invalidateSize(), 100);
+          // The map may be removed or replaced before the timer fires.
+          const m = miniMap;
+          setTimeout(() => { if (miniMap === m) m.invalidateSize(); }, 100);
         }
       }
 

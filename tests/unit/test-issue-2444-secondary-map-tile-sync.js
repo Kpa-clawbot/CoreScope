@@ -76,10 +76,10 @@ function makeL(ctx) {
     map() {
       const pane = { style: { filter: '' } };
       const map = {
-        layers: [], pane, removed: 0, registeredAtRemove: null,
+        layers: [], pane, removed: 0, invalidated: 0, registeredAtRemove: null,
         container: { isConnected: true },
         getPane: () => pane, getContainer: () => map.container,
-        setView() { return map; }, fitBounds() {}, invalidateSize() {}, off() {},
+        setView() { return map; }, fitBounds() {}, invalidateSize() { map.invalidated++; }, off() {},
         removeLayer(l) { const i = map.layers.indexOf(l); if (i >= 0) map.layers.splice(i, 1); },
         remove() { map.removed++; map.registeredAtRemove = registered(ctx, map); },
       };
@@ -120,10 +120,11 @@ function makeSandbox(opts) {
   const observers = [];
   const store = {};
   const state = { theme: 'light' };
+  const timers = [];
   const ctx = {
     console: { log: console.log, error: console.error, warn() {} },
     JSON, Date, Math, Object, Array, String, Number, Boolean, Promise, Set, Map, isFinite, encodeURIComponent,
-    setTimeout: () => 0, clearTimeout() {},
+    setTimeout: (fn) => timers.push(fn), clearTimeout() {}, // queued; run by flushTimers
     fetch: () => new Promise(() => {}), // roles.js's config fetch never lands: MC_MAP_CFG below stays
     localStorage: {
       getItem: (k) => (Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null),
@@ -166,6 +167,8 @@ function makeSandbox(opts) {
       ctx.dispatchEvent({ type: 'storage', key: 'mc-tile-pinned', newValue: id, oldValue: null, storageArea: ctx.localStorage });
     },
     setTheme(t) { state.theme = t; observers.slice().forEach((cb) => cb([])); },
+    // Run every queued setTimeout callback; one that throws fails the test.
+    flushTimers() { timers.splice(0).forEach((fn) => { if (typeof fn === 'function') fn(); }); },
     registry: () => (ctx.__mcNodeTileSync ? ctx.__mcNodeTileSync.maps.map((r) => r.map) : []),
   };
 }
@@ -346,8 +349,83 @@ async function suite(label, key, make) {
   });
 }
 
+// The health card's own races: the 100 ms invalidateSize timer against a map
+// that is gone by then, and a second loadHealth started before the first lands.
+async function homeRaces() {
+  console.log('── Home mini-map: timers and overlapping loads ──');
+
+  // Each api() call waits here until the test settles it.
+  function pendingApi(s) {
+    const calls = [];
+    const body = { node: { lat: 10, lon: 20, name: 'n', role: 'repeater' }, stats: {}, recentPackets: [], observers: [] };
+    s.ctx.api = () => new Promise((resolve, reject) => {
+      calls.push({ land: () => resolve(body), fail: () => reject(new Error('down')) });
+    });
+    return calls;
+  }
+  const load = (s) => vm.runInContext('loadHealth("abc")', s.ctx);
+
+  await test('the size timer of a shown map resizes it', async () => {
+    const s = home();
+    const map = await s.show();
+    s.flushTimers();
+    assert.strictEqual(map.invalidated, 1);
+  });
+
+  await test('the size timer of a map removed meanwhile does nothing (no throw)', async () => {
+    const s = home();
+    const map = await s.show();
+    s.destroy();
+    s.flushTimers(); // threw "Cannot read properties of null" before the fix
+    assert.strictEqual(map.invalidated, 0, 'a removed map was resized');
+  });
+
+  await test('the size timer of a map replaced meanwhile leaves both alone; the new one has its own', async () => {
+    const s = home();
+    const first = await s.show();
+    const second = await s.show();
+    s.flushTimers();
+    assert.strictEqual(first.invalidated, 0, 'a removed map was resized');
+    assert.strictEqual(second.invalidated, 1, 'the new map is resized once, by its own timer');
+  });
+
+  await test('two loads started before either lands: the first map is removed, only the second stays registered', async () => {
+    const s = home();
+    const calls = pendingApi(s);
+    const p1 = load(s), p2 = load(s);
+    assert.strictEqual(calls.length, 2, 'both loads are waiting');
+    calls[0].land(); await p1;
+    const first = s.maps[s.maps.length - 1];
+    holds(s, [first]);
+    calls[1].land(); await p2;
+    assert.strictEqual(s.maps.length, 2, 'the second load drew its own map');
+    const second = s.maps[1];
+    assert.strictEqual(first.removed, 1, 'first map removed');
+    assert.strictEqual(first.registeredAtRemove, false, 'still registered when Leaflet removed it');
+    assert.strictEqual(second.removed, 0);
+    holds(s, [second]);
+  });
+
+  await test('a load that fails after another one drew a map removes and unregisters that map', async () => {
+    const s = home();
+    const calls = pendingApi(s);
+    const p1 = load(s), p2 = load(s);
+    calls[0].land(); await p1;
+    const map = s.maps[s.maps.length - 1];
+    holds(s, [map]);
+    calls[1].fail(); await p2;
+    assert.ok(/Failed to load node health/.test(s.card.innerHTML), 'the card shows the error');
+    assert.strictEqual(map.removed, 1, 'map removed with the card content');
+    assert.strictEqual(map.registeredAtRemove, false, 'still registered when Leaflet removed it');
+    holds(s, []);
+    s.flushTimers();
+    assert.strictEqual(map.invalidated, 0, 'a removed map was resized');
+  });
+}
+
 (async () => {
   await suite('Home mini-map', 'home', home);
+  await homeRaces();
   await suite('Analytics route map', 'analytics', analytics);
   console.log('\n#2444 secondary map tile sync: ' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed === 0 ? 0 : 1);

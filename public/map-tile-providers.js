@@ -1553,7 +1553,12 @@
       busy = false;
     }
 
-    function onStorage(e) { if (e && e.key === OVERLAYS_KEY) sync(); }
+    // Another tab changed the ticked overlays, or cleared localStorage (key
+    // null). Another storage area's events are not this preference.
+    function onStorage(e) {
+      if (!e || _otherStorageArea(e)) return;
+      if (e.key === OVERLAYS_KEY || e.key === null) sync();
+    }
 
     try {
       window.addEventListener(OVERLAYS_EVENT, sync);
@@ -1705,7 +1710,6 @@
     }
     if (overlays) overlays.sync(); // restore the ticked overlays
     if (opts.controlPosition) lc = _createLayerControl(map, group, opts.controlPosition, overlays);
-    if (lazy && !lc) group.addTo(map); // no control to show the pick: Auto
 
     function destroy() {
       if (destroyed) return;

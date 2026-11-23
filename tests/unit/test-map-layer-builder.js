@@ -682,13 +682,22 @@ test('pinned picker load: no Auto tiles started; picking Auto then shows the the
   assert.ok(!map._layers.includes(h.group), 'Auto group not on the map');
   assert.strictEqual(count(map.requested, CARTO), 0, 'Auto tiles started: ' + map.requested.join(' '));
   assert.ok(count(map.requested, OSMFR) > 0, 'pinned tiles started');
+  assert.strictEqual(h.group.getLayers().length, 0, 'Auto group empty after attach');
   // A theme flip while the pick is shown starts nothing for Auto either.
   s.setTheme('dark');
+  assert.strictEqual(h.group.getLayers().length, 0, 'Auto group empty after a theme flip');
   s.setTheme('light');
   assert.strictEqual(count(map.requested, CARTO), 0, 'theme flip started Auto tiles');
+  // Nor does a pick saved in another tab.
+  pinFromOtherTab(s, 'osmfr-cyclosm');
+  assert.strictEqual(h.group.getLayers().length, 0, 'Auto group empty after a cross-tab pin');
+  assert.ok(!map._layers.includes(h.group), 'Auto group still off the map');
   // The user picks Auto: Leaflet swaps the layers, then fires baselayerchange.
+  // The Auto layer is built as the group joins the map, before that event.
   map.removeLayer(c.baseMaps['osmfr-hot']);
   map.addLayer(h.group);
+  assert.strictEqual(h.group.getLayers().length, 1, 'Auto layer built when the group joins the map');
+  assert.strictEqual(count(map.requested, CARTO), 1, 'and its tiles started');
   map._handlers.baselayerchange({ name: '__auto__', layer: h.group });
   assert.strictEqual(s.w.MC_getPinnedTileProvider(), null, 'Auto clears the pin');
   assert.strictEqual(h.group._layers.length, 1, 'one Auto layer');
@@ -699,6 +708,38 @@ test('pinned picker load: no Auto tiles started; picking Auto then shows the the
   assert.ok(/dark_all/.test(tilesOf(h.group._layers[0])[0]._url), 'dark after a flip');
   h.destroy();
   assert.ok(!map._layers.includes(h.group), 'destroy removes the group');
+});
+
+// The theme's map being a vector entry changes nothing: MapLibre is not
+// loaded for a hidden Auto group.
+test('pinned picker load: a vector theme default is not built (no MapLibre) while the pin stands', () => {
+  const s = makeSandbox({ theme: 'light', mapCfg: { tiles: {
+    providers: { osmfr: { enabled: true } },
+    custom: [{ id: 'vec', url: 'https://v.example/style.json', format: 'vector', type: 'light' }],
+    lightDefault: 'custom-vec',
+  } } });
+  const built = [];
+  s.w.MC_buildVectorLayer = (desc, o) => { built.push(desc.url); return o.fallback(); };
+  assert.strictEqual(s.w.MC_resolveTile(false, { ignorePin: true }).format, 'vector', 'the theme default is the vector entry');
+  s.w.localStorage.setItem('mc-tile-pinned', 'osmfr-hot');
+  const map = makeTrackingMap();
+  const h = s.w.MC_attachAutoTiles(map, { controlPosition: 'topleft' });
+  const c = s.stats.controls[s.stats.controls.length - 1];
+  assert.ok(map.hasLayer(c.baseMaps['osmfr-hot']), 'the pick is shown');
+  assert.strictEqual(built.length, 0, 'vector builder called on attach');
+  s.setTheme('dark');
+  s.setTheme('light');
+  assert.strictEqual(built.length, 0, 'vector builder called on a theme flip');
+  pinFromOtherTab(s, 'osmfr-cyclosm');
+  assert.strictEqual(built.length, 0, 'vector builder called on a cross-tab pin');
+  assert.strictEqual(h.group.getLayers().length, 0, 'Auto group empty');
+  // Auto picked: now, and only now, the vector layer is built, once.
+  map.removeLayer(c.baseMaps['osmfr-hot']);
+  map.addLayer(h.group);
+  map._handlers.baselayerchange({ name: '__auto__', layer: h.group });
+  assert.deepStrictEqual(built, ['https://v.example/style.json'], 'built once when Auto is shown');
+  assert.strictEqual(h.group.getLayers().length, 1);
+  h.destroy();
 });
 
 test('pinned picker load: a config that turns the pin off shows Auto; turning it back on restores the pick', () => {
@@ -789,6 +830,29 @@ test('cross-tab pin: a picker map keeps its layer, radio and hidden Auto group; 
   assert.ok(/light_all/.test(urlsOf(ha.group)) && /light_all/.test(urlsOf(he.group)), 'Auto groups stay the theme map');
   assert.strictEqual(explicit.tilePane.getAttribute('data-explicit-layer'), 'true');
   ha.destroy(); he.destroy();
+});
+
+// Storage cleared in another tab (key null) drops the ticked overlays here,
+// as it drops the pin; another storage area's events are not this module's.
+test('cross-tab overlays: localStorage cleared (key null) re-syncs them; sessionStorage events do not', () => {
+  for (const withArea of [true, false]) {
+    const s = makeSandbox({ theme: 'light', mapCfg: { tiles: { providers: { eox: { enabled: true } } } } });
+    const map = makeMap();
+    const h = s.w.MC_attachAutoTiles(map, { controlPosition: 'topleft' });
+    const labelsOn = () => map._layers.filter(l => l.kind === 'tile' && l._url === s.w.MC_TILE_OVERLAYS['eox-labels'].url).length;
+    assert.ok(s.w.MC_setTileOverlay('eox-labels', true));
+    assert.strictEqual(labelsOn(), 1, 'ticked overlay on the map');
+    const ls = s.w.localStorage, session = makeStorage();
+    ls.removeItem('mc-tile-overlays');
+    s.w.dispatchEvent({ type: 'storage', key: null, newValue: null, oldValue: null, storageArea: session });
+    s.w.dispatchEvent({ type: 'storage', key: 'mc-tile-overlays', newValue: null, oldValue: null, storageArea: session });
+    assert.strictEqual(labelsOn(), 1, 'a sessionStorage event re-synced the overlays');
+    const ev = { type: 'storage', key: null, newValue: null, oldValue: null };
+    if (withArea) ev.storageArea = ls;
+    s.w.dispatchEvent(ev);
+    assert.strictEqual(labelsOn(), 0, 'storageArea ' + (withArea ? 'localStorage' : 'absent') + ': overlay still on the map');
+    h.destroy();
+  }
 });
 
 // Static/secondary maps pass { raster: true }: a vector desc builds its
