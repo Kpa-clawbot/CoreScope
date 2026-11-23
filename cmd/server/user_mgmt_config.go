@@ -490,6 +490,9 @@ func resolveSMTP(m UserMailConfig, fromEmail, fromName string, getenv func(strin
 		Password:  envOrValue(getenv, "CORESCOPE_SMTP_PASSWORD", m.SMTPPassword),
 		FromEmail: fromEmail, FromName: fromName,
 	}
+	if len(c.Host) >= 2 && strings.HasPrefix(c.Host, "[") && strings.HasSuffix(c.Host, "]") {
+		c.Host = strings.TrimSpace(c.Host[1 : len(c.Host)-1])
+	}
 	if c.Host == "" {
 		return c, errors.New("userManagement.mail.smtpHost is required with the smtp provider")
 	}

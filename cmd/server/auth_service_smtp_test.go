@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
 	"log"
 	"net"
 	"path/filepath"
@@ -69,5 +71,43 @@ func TestStartupSMTPCheckLogsAndContinues(t *testing.T) {
 	srv.closeUserManagement() // waits for the check goroutine
 	if out := buf.String(); !strings.Contains(out, "[mail] SMTP check failed:") || strings.Contains(out, secret) {
 		t.Fatalf("log after init = %q", out)
+	}
+}
+
+func TestStartupSMTPCheckLogsReady(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		fmt.Fprint(c, "220 fake ESMTP\r\n")
+		r := bufio.NewReader(c)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if strings.ToUpper(strings.TrimSpace(line)) == "QUIT" {
+				fmt.Fprint(c, "221 bye\r\n")
+				return
+			}
+			fmt.Fprint(c, "250 ok\r\n")
+		}
+	}()
+	port := l.Addr().(*net.TCPAddr).Port
+	buf := captureLogBuf(t)
+	srv := &Server{cfg: &Config{}}
+	srv.checkSMTPAtStartup(mailer.NewSMTP(mailer.SMTPConfig{
+		Host: "127.0.0.1", Port: port, TLS: "none", FromEmail: "noreply@example.org", FromName: "CoreScope",
+	}))
+	want := fmt.Sprintf("[mail] SMTP ready: 127.0.0.1:%d (none)", port)
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("log = %q, want %q", buf.String(), want)
 	}
 }

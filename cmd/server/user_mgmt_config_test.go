@@ -422,6 +422,8 @@ func TestResolveUserManagementSMTPDefaults(t *testing.T) {
 		{"none 127.0.0.1", "127.0.0.1", "none", 0, "none", 25},
 		{"none ::1", "::1", "none", 0, "none", 25},
 		{"explicit port", "mail.example.org", "starttls", 2525, "starttls", 2525},
+		{"none bracketed ::1", "[::1]", "none", 0, "none", 25},
+		{"bracketed ipv6", "[2001:db8::1]", "starttls", 0, "starttls", 587},
 		{"upper case mode", "mail.example.org", " TLS ", 0, "tls", 465},
 	}
 	for _, c := range cases {
@@ -432,7 +434,8 @@ func TestResolveUserManagementSMTPDefaults(t *testing.T) {
 			t.Errorf("%s: %v", c.name, err)
 			continue
 		}
-		if set.provider != "smtp" || set.smtp.Host != c.host || set.smtp.TLS != c.wantTLS || set.smtp.Port != c.wantPort ||
+		wantHost := strings.Trim(c.host, "[]")
+		if set.provider != "smtp" || set.smtp.Host != wantHost || set.smtp.TLS != c.wantTLS || set.smtp.Port != c.wantPort ||
 			set.smtp.FromEmail != "noreply@example.org" || set.smtp.FromName != "CoreScope" {
 			t.Errorf("%s: provider=%q host=%q tls=%q port=%d from=%q/%q", c.name, set.provider,
 				set.smtp.Host, set.smtp.TLS, set.smtp.Port, set.smtp.FromEmail, set.smtp.FromName)
@@ -500,5 +503,15 @@ func TestResolveUserManagementUnknownProviderListsAll(t *testing.T) {
 	_, err := resolveUserManagement(u, "meshcore.db", noEnv)
 	if err == nil || !strings.Contains(err.Error(), `"brevo", "postal" or "smtp"`) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResolveUserManagementSMTPNoneIsExactLocalhost(t *testing.T) {
+	for _, h := range []string{"localhost.evil.com", "localhost.", "127.0.0.2"} {
+		u := validSMTPUM()
+		u.Mail.SMTPHost, u.Mail.SMTPTLS = h, "none"
+		if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), "localhost") {
+			t.Errorf("%s: err = %v", h, err)
+		}
 	}
 }
