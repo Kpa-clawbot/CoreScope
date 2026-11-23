@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"mime"
 	"mime/quotedprintable"
 	"net/mail"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -16,15 +17,28 @@ import (
 // buildSMTPMessage renders m as a multipart/alternative message (text part
 // first, then HTML) with CRLF line ends and quoted-printable bodies. It
 // rejects any CR or LF in a header name or value so a caller-supplied field
-// cannot inject headers.
+// cannot inject headers, and extra header names that are malformed or that
+// the builder writes itself.
 func buildSMTPMessage(fromEmail, fromName string, m Message, messageID string, date time.Time, boundary string) ([]byte, error) {
-	fields := []string{fromEmail, fromName, m.To, m.ToName, m.Subject, messageID, boundary}
+	fields := []struct{ name, value string }{
+		{"from address", fromEmail}, {"from name", fromName}, {"to address", m.To},
+		{"to name", m.ToName}, {"subject", m.Subject}, {"message id", messageID}, {"boundary", boundary},
+	}
 	for k, v := range m.Headers {
-		fields = append(fields, k, v)
+		fields = append(fields, struct{ name, value string }{"extra header name", k},
+			struct{ name, value string }{"extra header value", v})
+		if !headerNameRe.MatchString(k) {
+			return nil, errors.New("mailer: extra header name is empty or has characters outside A-Z a-z 0-9 -")
+		}
+		for _, r := range reservedHeaders {
+			if strings.EqualFold(k, r) {
+				return nil, errors.New("mailer: extra header name collides with a header the builder writes")
+			}
+		}
 	}
 	for _, f := range fields {
-		if strings.ContainsAny(f, "\r\n") {
-			return nil, fmt.Errorf("mailer: header contains CR or LF")
+		if strings.ContainsAny(f.value, "\r\n") {
+			return nil, errors.New("mailer: header field " + f.name + " contains CR or LF")
 		}
 	}
 
@@ -103,8 +117,12 @@ func newBoundary() string {
 func formatAddress(a mail.Address) string {
 	for _, r := range a.Name {
 		if r > 127 {
-			return mime.QEncoding.Encode("UTF-8", a.Name) + " <" + a.Address + ">"
+			return mime.QEncoding.Encode("UTF-8", a.Name) + " " + (&mail.Address{Address: a.Address}).String()
 		}
 	}
 	return a.String()
 }
+
+var headerNameRe = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
+var reservedHeaders = []string{"From", "To", "Subject", "Date", "Message-ID", "MIME-Version", "Content-Type", "Content-Transfer-Encoding"}

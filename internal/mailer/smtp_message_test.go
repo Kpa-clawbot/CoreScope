@@ -49,14 +49,15 @@ func TestBuildSMTPMessageExact(t *testing.T) {
 	}
 }
 
-func textPart(t *testing.T, msg []byte, boundary string) string {
+func partBody(t *testing.T, msg []byte, boundary, ctype string) string {
 	t.Helper()
 	s := string(msg)
-	start := strings.Index(s, "Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+	hdr := "Content-Type: " + ctype + "; charset=UTF-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n"
+	start := strings.Index(s, hdr)
 	if start < 0 {
-		t.Fatal("no text part")
+		t.Fatal("no " + ctype + " part")
 	}
-	start += len("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+	start += len(hdr)
 	end := strings.Index(s[start:], "\r\n--"+boundary)
 	if end < 0 {
 		t.Fatal("no part end")
@@ -79,37 +80,76 @@ func TestBuildSMTPMessageEncodesNonASCII(t *testing.T) {
 	if want := "Subject: " + mime.QEncoding.Encode("UTF-8", "Activez ✓") + "\r\n"; !strings.Contains(s, want) {
 		t.Fatalf("subject not Q-encoded, want %q in %q", want, s)
 	}
-	if !strings.Contains(s, "From: ") || strings.Contains(strings.SplitN(s, "\r\n\r\n", 2)[0], "Réseau") {
-		t.Fatalf("From not encoded: %q", s)
+	if want := "From: =?UTF-8?q?R=C3=A9seau_Mesh?= <noreply@example.org>\r\n"; !strings.Contains(s, want) {
+		t.Fatalf("From line, want %q in %q", want, s)
 	}
-	if !strings.Contains(s, mime.QEncoding.Encode("UTF-8", "Réseau Mesh")) {
-		t.Fatalf("From name not Q-encoded: %q", s)
-	}
-	if g := textPart(t, got, "b1"); g != body {
+	if g := partBody(t, got, "b1", "text/plain"); g != body {
 		t.Fatalf("body mismatch: %q vs %q", g, body)
+	}
+	if g := partBody(t, got, "b1", "text/html"); g != "<p>é</p>" {
+		t.Fatalf("html mismatch: %q", g)
 	}
 }
 
 func TestBuildSMTPMessageRejectsCRLF(t *testing.T) {
-	ok := Message{To: "a@example.org", ToName: "Ann", Subject: "Hi", Text: "t", HTML: "h"}
-	cases := map[string]func() (string, Message){
-		"subject cr":   func() (string, Message) { m := ok; m.Subject = "a\rb"; return "N", m },
-		"subject lf":   func() (string, Message) { m := ok; m.Subject = "a\nBcc: x"; return "N", m },
-		"to":           func() (string, Message) { m := ok; m.To = "a@example.org\r\nBcc: x@y"; return "N", m },
-		"toname":       func() (string, Message) { m := ok; m.ToName = "A\nB"; return "N", m },
-		"fromname":     func() (string, Message) { return "N\r\nX: y", ok },
-		"header key":   func() (string, Message) { m := ok; m.Headers = map[string]string{"X-A\nB": "v"}; return "N", m },
-		"header value": func() (string, Message) { m := ok; m.Headers = map[string]string{"X-A": "v\r\nBcc: x"}; return "N", m },
+	type args struct {
+		fromEmail, fromName, messageID, boundary string
+		m                                        Message
 	}
-	for name, f := range cases {
-		fromName, m := f()
-		got, err := buildSMTPMessage("noreply@example.org", fromName, m, "<abc@example.org>", testDate, "b1")
+	base := func() args {
+		return args{"noreply@example.org", "N", "<abc@example.org>", "b1",
+			Message{To: "a@example.org", ToName: "Ann", Subject: "Hi", Text: "t", HTML: "h"}}
+	}
+	cases := map[string]func(a *args){
+		"subject cr":   func(a *args) { a.m.Subject = "a\rb" },
+		"subject lf":   func(a *args) { a.m.Subject = "a\nBcc: x" },
+		"to":           func(a *args) { a.m.To = "a@example.org\r\nBcc: x@y" },
+		"toname":       func(a *args) { a.m.ToName = "A\nB" },
+		"fromname":     func(a *args) { a.fromName = "N\r\nX: y" },
+		"fromemail":    func(a *args) { a.fromEmail = "n@example.org\r\nX: y" },
+		"messageid":    func(a *args) { a.messageID = "<a@b>\r\nX: y" },
+		"boundary":     func(a *args) { a.boundary = "b\r\nX: y" },
+		"header key":   func(a *args) { a.m.Headers = map[string]string{"X-A\nB": "v"} },
+		"header value": func(a *args) { a.m.Headers = map[string]string{"X-A": "v\r\nBcc: x"} },
+	}
+	for name, mut := range cases {
+		a := base()
+		mut(&a)
+		got, err := buildSMTPMessage(a.fromEmail, a.fromName, a.m, a.messageID, testDate, a.boundary)
 		if err == nil || !strings.Contains(err.Error(), "header") {
 			t.Errorf("%s: want error containing %q, got %v", name, "header", err)
 		}
 		if got != nil {
 			t.Errorf("%s: want nil bytes, got %q", name, got)
 		}
+	}
+}
+
+func TestBuildSMTPMessageRejectsBadHeaderNames(t *testing.T) {
+	for _, k := range []string{"", "X A", "X:A", "from", "TO", "Subject", "Date", "message-id", "MIME-Version", "Content-Type", "content-transfer-encoding"} {
+		m := Message{To: "a@example.org", Subject: "Hi", Text: "t", HTML: "h", Headers: map[string]string{k: "secret-value"}}
+		got, err := buildSMTPMessage("noreply@example.org", "N", m, "<abc@example.org>", testDate, "b1")
+		if err == nil || !strings.Contains(err.Error(), "header name") {
+			t.Errorf("key %q: want header name error, got %v", k, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "secret-value") {
+			t.Errorf("key %q: error leaks the value: %v", k, err)
+		}
+		if got != nil {
+			t.Errorf("key %q: want nil bytes", k)
+		}
+	}
+}
+
+func TestBuildSMTPMessageNonASCIIToName(t *testing.T) {
+	m := Message{To: "a b@example.org", ToName: "Zoë", Subject: "Hi", Text: "t", HTML: "h"}
+	got, err := buildSMTPMessage("noreply@example.org", "N", m, "<abc@example.org>", testDate, "b1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "To: =?UTF-8?q?Zo=C3=AB?= <\"a b\"@example.org>\r\n"
+	if !strings.Contains(string(got), want) {
+		t.Fatalf("want %q in %q", want, got)
 	}
 }
 
@@ -126,7 +166,10 @@ func TestBuildSMTPMessageLongLinesAndDots(t *testing.T) {
 			t.Fatalf("line of %d bytes: %q", len(sc.Text()), sc.Text())
 		}
 	}
-	if g := textPart(t, got, "b1"); g != body {
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if g := partBody(t, got, "b1", "text/plain"); g != body {
 		t.Fatalf("decoded body differs")
 	}
 }
