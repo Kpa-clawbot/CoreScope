@@ -306,7 +306,7 @@ func TestSpaHandler(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "style.css"), []byte("body{}"), 0644)
 
 	fs := http.FileServer(http.Dir(dir))
-	handler := spaHandler(dir, fs)
+	handler := spaHandler(dir, fs, "")
 
 	t.Run("existing JS file with cache control", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/app.js", nil)
@@ -408,7 +408,7 @@ func TestSpaHandlerCacheBust(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "index.html"), []byte(htmlWithBust), 0644)
 
 	fs := http.FileServer(http.Dir(dir))
-	handler := spaHandler(dir, fs)
+	handler := spaHandler(dir, fs, "")
 
 	t.Run("__BUST__ is replaced with a Unix timestamp", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/", nil)
@@ -455,7 +455,7 @@ func TestSpaHandlerBustsEveryTopLevelPage(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<script src="app.js?v=__BUST__"></script>`), 0644)
 	os.WriteFile(filepath.Join(dir, "tool.html"), []byte(`<script src="api-base.js?v=__BUST__"></script>`), 0644)
-	handler := spaHandler(dir, http.FileServer(http.Dir(dir)))
+	handler := spaHandler(dir, http.FileServer(http.Dir(dir)), "")
 
 	get := func(p string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
