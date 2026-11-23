@@ -16,6 +16,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/dbschema"
+	"github.com/meshcore-analyzer/packetpath"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -34,6 +35,7 @@ var reachScanRowLimit = 200000
 // uppercase hex hop prefixes (as stored in observations.path_json). SNR is a
 // value + validity flag (not *float64) to avoid a heap escape per row.
 type pathRow struct {
+	routeType   int    // header route type; -1 when the transmission has none
 	observerPK  string // lowercase pubkey of the observer (may be "")
 	fromPubkey  string // lowercase originator pubkey (may be "")
 	payloadType int
@@ -73,6 +75,12 @@ func attributeDirections(rows []pathRow, ourTokens map[string]bool, ourPK string
 	for _, r := range rows {
 		n := len(r.path)
 		if n == 0 {
+			continue
+		}
+		// Only a flood path lists hops that transmitted, in order. A
+		// direct-route path is the remaining route and TRACE path bytes are
+		// SNR values, so neither says who heard whom.
+		if !packetpath.PathHopsTransmitted(r.routeType, byte(r.payloadType)) {
 			continue
 		}
 		hit := false
@@ -775,7 +783,7 @@ func reachScanSQL(nTokens int) string {
 	for i := range likes {
 		likes[i] = "o.path_json LIKE ?"
 	}
-	return `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.payload_type,0), o.path_json, o.snr
+	return `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.route_type,-1), COALESCE(t.payload_type,0), o.path_json, o.snr
 	      FROM observations o
 	      CROSS JOIN transmissions t ON t.id = o.transmission_id
 	      LEFT JOIN observers obs ON obs.idx = o.observer_idx
@@ -843,9 +851,9 @@ func (s *Server) readReachRows(ctx context.Context, q string, args []interface{}
 	var skipped int // malformed/empty rows discarded — surfaced below so ingest bugs aren't silent
 	for rows.Next() {
 		var oid, fpk, pj string
-		var pt int
+		var rt, pt int
 		var snr sql.NullFloat64
-		if err := rows.Scan(&oid, &fpk, &pt, &pj, &snr); err != nil {
+		if err := rows.Scan(&oid, &fpk, &rt, &pt, &pj, &snr); err != nil {
 			skipped++
 			continue
 		}
@@ -854,7 +862,7 @@ func (s *Server) readReachRows(ctx context.Context, q string, args []interface{}
 			skipped++
 			continue
 		}
-		pr := pathRow{observerPK: oid, fromPubkey: fpk, payloadType: pt, path: path}
+		pr := pathRow{routeType: rt, observerPK: oid, fromPubkey: fpk, payloadType: pt, path: path}
 		if snr.Valid {
 			pr.snr = snr.Float64
 			pr.snrValid = true
@@ -902,7 +910,7 @@ func (s *Server) scanReachRowsIndexed(ctx context.Context, tokens map[string]boo
 		args = append(args, tok)
 	}
 	args = append(args, sinceEpoch, reachScanRowLimit)
-	q := `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.payload_type,0), o.path_json, o.snr
+	q := `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.route_type,-1), COALESCE(t.payload_type,0), o.path_json, o.snr
 	      FROM observations o
 	      JOIN transmissions t ON t.id = o.transmission_id
 	      LEFT JOIN observers obs ON obs.idx = o.observer_idx

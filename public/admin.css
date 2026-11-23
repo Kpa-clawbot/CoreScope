@@ -71,3 +71,6 @@
 @media (pointer: fine) {
   .admin-notification-relay select { min-height: 36px; padding: 4px 10px; }
 }
+/* Send test mail (admin-overview.js): the result wraps next to the button, long provider errors included. */
+.admin-mailtest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; }
+.admin-mailtest .account-msg { min-width: 0; overflow-wrap: anywhere; }

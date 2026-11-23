@@ -61,6 +61,7 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/admin/notifications/push-relay", s.withAdmin(s.handlePushRelayDisconnect)).Methods("DELETE")
 	r.HandleFunc("/api/push-relay/enrollment-proof", s.handlePushRelayEnrollmentProof).Methods("GET")
 	r.HandleFunc("/api/admin/stats", s.withAdmin(s.handleAdminStats)).Methods("GET")
+	r.HandleFunc("/api/admin/mail/test", s.withAdmin(s.handleAdminMailTest)).Methods("POST")
 	r.HandleFunc("/api/admin/users-backup", s.withAdmin(s.handleAdminUsersBackup)).Methods("GET")
 	if s.auth.set.proposals.enabled {
 		s.registerProposalRoutes(r)

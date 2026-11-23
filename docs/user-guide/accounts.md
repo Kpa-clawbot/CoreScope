@@ -49,7 +49,57 @@ API instead of Brevo:
 }
 ```
 
-Everything else below applies to both providers, except where it names one.
+#### Or: use your own SMTP server
+
+CoreScope can also send through any SMTP server (your own Postfix, a mail host you
+already use) with no HTTP API or webhook involved:
+
+1. Make sure the server accepts mail from the address in `mail.fromEmail`.
+2. In `config.json`, set `mail.provider` to `"smtp"` and `mail.smtpHost` to the server's
+   name, e.g. `smtp.example.org`.
+3. If the server requires a login, set `mail.smtpUser` and provide the password as
+   `mail.smtpPassword` or, better, the environment variable `CORESCOPE_SMTP_PASSWORD`,
+   which wins over the config value. User and password are set together or not at all.
+   Leading and trailing whitespace of the password is removed. Only AUTH PLAIN is used.
+
+```json
+"mail": {
+  "provider": "smtp",
+  "smtpHost": "smtp.example.org",
+  "smtpPort": 587,
+  "smtpTls": "starttls",
+  "smtpUser": "noreply@example.org",
+  "smtpPassword": "<password, or leave out and use the env variable>",
+  "fromEmail": "noreply@example.org",
+  "fromName": "My CoreScope"
+}
+```
+
+- `smtpTls` is `starttls` (default), `tls` (implicit TLS) or `none`, in any letter case.
+  `none` is accepted only for the host `localhost`, `127.0.0.1` or `::1`.
+- `smtpPort` defaults to 587 with `starttls`, 465 with `tls` and 25 with `none`. 0 or
+  leaving it out means the default. Otherwise 1 to 65535.
+- With `starttls` and `tls` the server certificate is always verified against
+  `smtpHost`. There is no option to skip the check.
+- `smtpHost` may be an IPv6 literal in brackets, e.g. `[2001:db8::25]`. Verification
+  then needs a certificate that names that address.
+- A line break in `mail.fromName` is a startup error with SMTP.
+- An address with non-ASCII characters (e.g. `jürgen@example.org`) needs a server that
+  supports SMTPUTF8. Without it the mail fails with "the recipient address is not ASCII
+  and the server does not support SMTPUTF8" (or "sender" for `mail.fromEmail`).
+- `mail.webhookSecret` in the config is a startup error with SMTP, and
+  `CORESCOPE_BREVO_WEBHOOK_SECRET` is ignored.
+- At startup CoreScope connects, negotiates TLS (unless `smtpTls` is `none`) and logs in
+  (only when `smtpUser` is set), then quits without sending
+  anything. The log shows `[mail] SMTP ready: smtp.example.org:587 (starttls)` or
+  `[mail] SMTP check failed: <error>`. After a failed check the server keeps starting.
+- There is **no delivery status** with SMTP: the server only tells CoreScope that it
+  accepted the mail. A user's mail shows as "sent (no delivery status with SMTP)",
+  *Refresh status* is hidden and the admin overview shows one *Sent* figure instead of
+  delivered, bounced, blocked and so on. Bounces arrive in the mailbox of the sender
+  address, and CoreScope never flags an address as bouncing.
+
+Everything else below applies to every provider, except where it names one.
 
 ### 2. Configure
 
@@ -75,11 +125,16 @@ incomplete, and the log says what is missing.
 | `dbPath` | Where accounts are stored. Default: `users.db` next to the analyzer database. |
 | `sessionDays` | Login lifetime, extended while in use. Default 30, maximum 365. |
 | `trustedProxies` | CIDRs of your reverse proxy, so the per-IP login limits see real client IPs. Without it, behind a proxy every client shares the proxy's IP for the per-IP limits (they are switched off when that IP is loopback or private). Per-address and per-account limits apply either way. |
-| `mail.provider` | `brevo` (default) or `postal`. |
+| `mail.provider` | `brevo` (default), `postal` or `smtp`. |
 | `mail.brevoApiKey` | Brevo only: the API key. `CORESCOPE_BREVO_API_KEY` wins over it. Required with Brevo. |
 | `mail.postalBaseUrl` | Postal only: your Postal host, https (http only for localhost). Required with Postal. |
 | `mail.postalApiKey` | Postal only: the key of the server's API credential. `CORESCOPE_POSTAL_API_KEY` wins over it. Required with Postal. |
-| `mail.webhookSecret` | Enables delivery status (below). At least 16 characters. With Postal, only letters, digits, `.`, `_` and `-`. |
+| `mail.smtpHost` | SMTP only: the server. Required with SMTP. |
+| `mail.smtpPort` | SMTP only: default 587 (`starttls`), 465 (`tls`), 25 (`none`). |
+| `mail.smtpTls` | SMTP only: `starttls` (default), `tls` or `none` (localhost only). |
+| `mail.smtpUser` | SMTP only: login name. Set together with the password. |
+| `mail.smtpPassword` | SMTP only: the password. `CORESCOPE_SMTP_PASSWORD` wins over it. |
+| `mail.webhookSecret` | Enables delivery status (below). At least 16 characters. With Postal, only letters, digits, `.`, `_` and `-`. Not allowed with SMTP. |
 
 ### 3. The first admin
 
@@ -122,6 +177,19 @@ If the provider cannot reach your instance, use **Refresh status** in a user's d
 instead: CoreScope then asks the provider directly. Mails sent before you switched
 provider cannot be refreshed. "Opened" is indicative only. Some mail apps load
 tracking pixels automatically, and others block them.
+
+### Send a test mail
+
+To check the mail setup without registering an account, open **Admin, Overview**, find
+the *System* card and press *Send test mail*. It works with every provider and sends a
+fixed message only to your own address (the address of the logged-in admin, never one you
+type). Each admin and each IP address can send 3 per 10 minutes, and a failed attempt
+counts too. The counter is in memory, so a restart resets it. The attempt is recorded in
+the audit log as `mail.test` (result `ok` or `failed`). A mail that was sent also appears
+in the mail log with purpose `test`. With Brevo or Postal, once the webhook is set up or
+*Refresh status* is pressed, the delivery status of the test mail shows in your own
+entry's details under **Admin, Users**, and a bounce of it flags your own address like
+any other mail.
 
 ### When mail fails
 

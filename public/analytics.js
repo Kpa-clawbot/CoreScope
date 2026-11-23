@@ -58,6 +58,10 @@
   function statusYellow() { return cssVar('--status-yellow') || '#eab308'; }
   function statusRed() { return cssVar('--status-red') || '#ef4444'; }
   function accentColor() { return cssVar('--accent') || '#4a9eff'; }
+  // A node's SNR exists only from direct receptions (server: direct_heard.go).
+  function directSnrCell(snr) {
+    return snr != null ? Number(snr).toFixed(1) + ' dB' : '<span class="text-muted" title="No direct reception">—</span>';
+  }
   function snrColor(snr) { return snr > 6 ? statusGreen() : snr > 0 ? statusYellow() : statusRed(); }
 
   // --- SVG helpers ---
@@ -453,7 +457,7 @@
         </div>
         <div class="stat-card">
           <div class="stat-value">${sf(rf.snr.avg, 1)} dB</div>
-          <div class="stat-label">Avg SNR</div>
+          <div class="stat-label">Avg Receive SNR</div>
           <div class="stat-detail">${sf(rf.snr.min, 1)} to ${sf(rf.snr.max, 1)}</div>
         </div>
         <div class="stat-card">
@@ -657,6 +661,7 @@
     const rssiHist = histogram(rf.rssiValues, 20, accentColor());
 
     el.innerHTML = `
+      <p class="text-muted rf-scope-note">Observer reception: every value is an observer receiving the last transmitter of a packet (last hop → observer). It is not the signal of the node that sent the packet.</p>
       <div class="analytics-row">
         <div class="analytics-card flex-1">
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> SNR Distribution</h3>
@@ -687,7 +692,7 @@
       <div class="analytics-row">
         <div class="analytics-card flex-1">
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> SNR vs RSSI Scatter</h3>
-          <p class="text-muted">Each dot = one packet. Cluster position reveals link quality.</p>
+          <p class="text-muted">Each dot = one observation. Cluster position reveals link quality.</p>
           ${renderScatter(rf.scatterData)}
         </div>
       </div>
@@ -855,11 +860,6 @@
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-handshake"/></svg> Repeater Pair Heatmap</h3>
           <p class="text-muted">Which repeaters frequently appear together in paths</p>
           ${renderPairTable(topo.topPairs)}
-        </div>
-        <div class="analytics-card flex-1">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Hops vs SNR</h3>
-          <p class="text-muted">Does more hops = worse signal?</p>
-          ${renderHopsSNR(topo.hopsVsSnr)}
         </div>
       </div>
 
@@ -1063,25 +1063,6 @@
       </tr>`;
     });
     return html + '</tbody></table>';
-  }
-
-  function renderHopsSNR(data) {
-    if (!data.length) return '<div class="text-muted">No data</div>';
-    const w = 380, h = 160, pad = 40;
-    const maxHop = Math.max(...data.map(d => d.hops));
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:160px" role="img" aria-label="Hops vs SNR bubble chart showing signal degradation over distance"><title>Hops vs SNR bubble chart showing signal degradation over distance</title>`;
-    data.forEach(d => {
-      const x = pad + (d.hops / maxHop) * (w - pad * 2);
-      const y = h - pad - ((d.avgSnr + 12) / 27) * (h - pad * 2);
-      const r = Math.min(Math.sqrt(d.count) * 1.5, 12);
-      const color = d.avgSnr > 6 ? statusGreen() : d.avgSnr > 0 ? statusYellow() : statusRed();
-      svg += `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" opacity="0.6"/>`;
-      svg += `<text x="${x}" y="${y-r-3}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${d.hops}h</text>`;
-    });
-    svg += `<text x="${w/2}" y="${h-5}" text-anchor="middle" font-size="10" fill="var(--text-muted)">Hops</text>`;
-    svg += `<text x="10" y="${h/2}" text-anchor="middle" font-size="10" fill="var(--text-muted)" transform="rotate(-90,10,${h/2})">Avg SNR</text>`;
-    svg += '</svg>';
-    return svg;
   }
 
   function renderPerObserverReach(perObserverReach, obsId) {
@@ -2578,7 +2559,7 @@
 
           ${myKeys.size ? `<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> My Claimed Nodes</h3>
           <table class="analytics-table" style="margin-bottom:24px">
-            <thead><tr><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Packets</th><th scope="col">Avg SNR</th><th scope="col">Observers</th><th scope="col">Last Heard</th></tr></thead>
+            <thead><tr><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Packets</th><th scope="col">Direct SNR</th><th scope="col">Observers</th><th scope="col">Last Heard</th></tr></thead>
             <tbody>
               ${enriched.filter(n => myKeys.has(n.public_key)).map(n => {
                 const s = n.health.stats;
@@ -2586,7 +2567,7 @@
                   <td>${nodeLink(n)}</td>
                   <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
                   <td>${s.totalTransmissions || s.totalPackets || 0}</td>
-                  <td>${s.avgSnr != null ? s.avgSnr.toFixed(1) + ' dB' : '—'}</td>
+                  <td>${directSnrCell(s.avgSnr)}</td>
                   <td>${n.health.observers?.length || 0}</td>
                   <td>${s.lastHeard ? timeAgo(s.lastHeard) : '—'}</td>
                 </tr>`;
@@ -2610,30 +2591,31 @@
           </table>
 
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> Best Signal Quality</h3>
+          <p class="text-muted">Direct reception only: observers that heard the node's own transmission. Nodes only heard through a repeater are not ranked.</p>
           <table class="analytics-table" style="margin-bottom:24px">
-            <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Avg SNR</th><th scope="col">Observers</th><th scope="col">Analytics</th></tr></thead>
+            <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Direct SNR</th><th scope="col">Observers</th><th scope="col">Analytics</th></tr></thead>
             <tbody>
               ${bySnr.slice(0, 15).map((n, i) => `<tr>
                 <td>${i + 1}</td>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
                 <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
-                <td>${n.health.stats.avgSnr.toFixed(1)} dB</td>
+                <td>${directSnrCell(n.health.stats.avgSnr)}</td>
                 <td>${n.health.observers?.length || 0}</td>
                 <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
-              </tr>`).join('')}
+              </tr>`).join('') || '<tr><td colspan="6" class="text-muted best-signal-empty">No node in this list was heard directly by an observer</td></tr>'}
             </tbody>
           </table>
 
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Most Observed Nodes</h3>
           <table class="analytics-table" style="margin-bottom:24px">
-            <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Observers</th><th scope="col">Avg SNR</th><th scope="col">Analytics</th></tr></thead>
+            <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Observers</th><th scope="col">Direct SNR</th><th scope="col">Analytics</th></tr></thead>
             <tbody>
               ${byObservers.slice(0, 15).map((n, i) => `<tr>
                 <td>${i + 1}</td>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
                 <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
                 <td>${n.health.observers?.length || 0}</td>
-                <td>${n.health.stats.avgSnr != null ? n.health.stats.avgSnr.toFixed(1) + ' dB' : '—'}</td>
+                <td>${directSnrCell(n.health.stats.avgSnr)}</td>
                 <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
               </tr>`).join('')}
             </tbody>
@@ -3172,18 +3154,16 @@
       }
 
       // Top hops leaderboard
-      html += `<div class="analytics-section"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Top 20 Longest Hops</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Distance (${distUnitLabel})</th><th scope="col">Type</th><th scope="col">Obs</th><th scope="col">Best SNR</th><th scope="col">Median SNR</th><th scope="col">Packet</th><th scope="col" class="col-action"></th></tr></thead><tbody>`;
+      html += `<div class="analytics-section"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Top 20 Longest Hops</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Distance (${distUnitLabel})</th><th scope="col">Type</th><th scope="col">Obs</th><th scope="col">Packet</th><th scope="col" class="col-action"></th></tr></thead><tbody>`;
       const top20 = data.topHops.slice(0, 20);
       top20.forEach((h, i) => {
         const fromLink = h.fromPk ? `<a href="#/nodes/${encodeURIComponent(h.fromPk)}" class="analytics-link">${esc(h.fromName)}</a>` : esc(h.fromName || '?');
         const toLink = h.toPk ? `<a href="#/nodes/${encodeURIComponent(h.toPk)}" class="analytics-link">${esc(h.toName)}</a>` : esc(h.toName || '?');
-        const bestSnr = h.bestSnr != null ? Number(h.bestSnr).toFixed(1) + ' dB' : '<span class="text-muted">—</span>';
-        const medianSnr = h.medianSnr != null ? Number(h.medianSnr).toFixed(1) + ' dB' : '<span class="text-muted">—</span>';
         const obs = h.obsCount != null ? h.obsCount : 1;
         const pktLink = h.hash ? `<a href="#/packet/${encodeURIComponent(h.hash)}" class="analytics-link mono" style="font-size:0.85em">${esc(h.hash.slice(0, 12))}…</a>` : '—';
         const mapBtn = h.fromPk && h.toPk ? `<button class="btn-icon dist-map-hop" data-from="${esc(h.fromPk)}" data-to="${esc(h.toPk)}" title="View on map" aria-label="View on map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg></button>` : '';
         const tsTitle = h.timestamp ? `Best observation: ${h.timestamp}` : '';
-        html += `<tr title="${esc(tsTitle)}"><td>${i+1}</td><td>${fromLink}</td><td>${toLink}</td><td><strong>${formatDistance(h.dist)}</strong></td><td>${esc(h.type)}</td><td>${obs}</td><td>${bestSnr}</td><td>${medianSnr}</td><td>${pktLink}</td><td class="col-action">${mapBtn}</td></tr>`;
+        html += `<tr title="${esc(tsTitle)}"><td>${i+1}</td><td>${fromLink}</td><td>${toLink}</td><td><strong>${formatDistance(h.dist)}</strong></td><td>${esc(h.type)}</td><td>${obs}</td><td>${pktLink}</td><td class="col-action">${mapBtn}</td></tr>`;
       });
       html += `</tbody></table></div>`;
 
@@ -3248,6 +3228,7 @@ function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _s
     window._analyticsScopeAdvertsByRoleHtml = scopeAdvertsByRoleHtml;
     window._analyticsScopeSummaryCardsHtml = scopeSummaryCardsHtml;
     window._analyticsPacketsPerHourCard = packetsPerHourCard;
+    window._analyticsDirectSnrCell = directSnrCell;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────

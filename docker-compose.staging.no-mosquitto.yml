@@ -43,6 +43,10 @@ services:
       - NODE_ENV=staging
       - ENABLE_PPROF=true
       - DISABLE_MOSQUITTO=true
+      # Public URL for link previews (og:image, og:url). Unset: the image uses
+      # the origin each request reached and og:url is left out.
+      # e.g. CORESCOPE_URL=https://analyzer.example.org
+      - CORESCOPE_URL=${CORESCOPE_URL:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]
       interval: 30s

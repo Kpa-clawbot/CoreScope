@@ -1244,6 +1244,11 @@ func TestAnalyticsTopology(t *testing.T) {
 	if body["uniqueNodes"] == nil {
 		t.Error("expected uniqueNodes")
 	}
+	// The SNR on a transmission is the observer's reception of the last
+	// hop, unrelated to the path length, so "Hops vs SNR" measured nothing.
+	if _, ok := body["hopsVsSnr"]; ok {
+		t.Error("topology still reports hopsVsSnr")
+	}
 }
 
 func TestAnalyticsChannels(t *testing.T) {

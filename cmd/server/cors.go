@@ -122,9 +122,10 @@ const corsExposedHeaders = "Retry-After, X-CoreScope-Load-Status"
 // Same-origin writes (admin UI, API-key holders on the canonical origin) are
 // unaffected — they never go through the preflight path.
 // The exception is the bearer routes (bearerCORSPath, only with user
-// management on): companion linking and the repeater claim and details
-// routes. They also allow POST, PUT, DELETE and the Authorization header,
-// for every listed origin: each deployment under a wildcard entry included,
+// management on): the device-token login, the token's own session, account
+// settings, companion linking, the My repeaters list, and the repeater claim
+// and details routes. They also allow POST, PUT, DELETE and the Authorization
+// header, for every listed origin: each deployment under a wildcard entry included,
 // so with "*" in corsAllowedOrigins any origin may send token-bearing writes
 // to them. No cookies go with those requests, so a write needs the token.
 // Credentialed CORS is intentionally NOT enabled.

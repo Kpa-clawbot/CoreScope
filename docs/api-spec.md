@@ -132,7 +132,7 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | `GET /api/account/export` | session | -> attachment `corescope-account-<YYYY-MM-DD>.json`: `{formatVersion: 1, exportedAt, instance, profile, sessions, companions, settings, proposals, notifications, audit, mail}`. `profile` is `{id, email, displayName, role, status, createdAt, lastLoginAt, emailBouncing, activatedAt, activatedBy}` (`activatedBy` is the admin id, `null` for a link activation); `sessions` `[{kind, label?, createdAt, lastSeenAt, userAgent?}]` (`kind` is `web` or `device`, `label` the device name); `companions` `[{pubkey, name, linkedAt}]`; `settings` `{revision, updatedAt, doc}` or `null`; `proposals` `[{kind, subject, status, note, createdAt, decidedAt}]`; `notifications` `{prefs: {enabled, events} or null, watches: [{pubkey, createdAt}], pushDevices: [{analyzerId, installationId, expiresAt}]}` (`pushDevices` are mobile push device links); `audit` `[{at, action, actorUserId, targetUserId, detail}]` (other accounts by id only); `mail` `[{to, purpose, sentAt, status, statusAt, reason?, events}]`. No row caps. No password hash, no session, link or unsubscribe token and no companion link challenge. Writes a `user.export` audit row afterwards |
 | `DELETE /api/account` | session | `{currentPassword}` -> `{ok, message}`. `409` you are the last admin |
 | `GET /api/admin/users?status=&role=&q=&bouncing=` | admin | -> `[adminUser]`, at most 1000, newest first. `status` is `pending`, `active` or `disabled`; `role` is `user` or `admin`; `bouncing=1` keeps only addresses whose mail bounces (any other value is `400`) |
-| `GET /api/admin/users/{id}` | admin | -> `{user, sessions, mail, audit}` |
+| `GET /api/admin/users/{id}` | admin | -> `{user, sessions, mail, audit, mailDeliveryStatus}`. `mailDeliveryStatus` is `false` when the provider (`smtp`) cannot report delivery events: mail shows as sent and there is nothing to refresh |
 | `POST /api/admin/users/{id}/disable` | admin | -> adminUser. Active accounts only; ends the user's sessions and links |
 | `POST /api/admin/users/{id}/enable` | admin | -> adminUser. Disabled accounts only |
 | `DELETE /api/admin/users/{id}` | admin | -> `{ok}` |
@@ -141,7 +141,8 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | `POST /api/admin/users/{id}/activate` | admin | -> adminUser. Pending accounts only; the address stays unverified |
 | `POST /api/admin/users/{id}/mail/{mailId}/refresh` | admin | -> mail record with `events`, pulled from the provider. `502` provider unavailable |
 | `GET /api/admin/audit?action=&user=&from=&to=&before=&limit=` | admin | -> `{entries, next}`, newest first. `action` is one action or a group ending in `.*` (`user.login.*`); `user` matches actor or target; `from`/`to` are RFC 3339 and inclusive; pass `next` as `before` for the next page (`null` on the last page); `limit` defaults to 100, capped at 500. Entry: `{id, at, action, actor, target, detail}`, with actor and target `{id, displayName, email}`, `{id, deleted: true}` or `null` (system). Login rows are kept 90 days. `400` on an invalid parameter |
-| `GET /api/admin/stats` | admin | -> `{total, active, pending, disabled, admins, stuckPending, bouncing, new7d, new30d, newPerDay, active7d, active30d, logins24h, failedLogins24h, mail7d, guessing}`. `newPerDay` is `[{day, count}]` for 30 UTC days, oldest first; registrations count `user.register` audit rows. `stuckPending` counts pending accounts older than 24 hours. `mail7d` is `{delivered, bounced, blocked, spam, pending, other}` by latest delivery event. `guessing` is `[{userId, displayName, failed}]`: accounts with 5 or more failed logins in 24 hours |
+| `GET /api/admin/stats` | admin | -> `{total, active, pending, disabled, admins, stuckPending, bouncing, new7d, new30d, newPerDay, active7d, active30d, logins24h, failedLogins24h, mail7d, guessing, mailDeliveryStatus}`. `newPerDay` is `[{day, count}]` for 30 UTC days, oldest first; registrations count `user.register` audit rows. `stuckPending` counts pending accounts older than 24 hours. `mail7d` is `{delivered, bounced, blocked, spam, pending, other}` by latest delivery event. `guessing` is `[{userId, displayName, failed}]`: accounts with 5 or more failed logins in 24 hours. `mailDeliveryStatus` is `false` when the provider (`smtp`) cannot report delivery events, so mail counts only as sent |
+| `POST /api/admin/mail/test` | admin | any body ignored -> `{ok: true, provider, messageId}`: a fixed test mail to the calling admin's own address through the configured provider. `502` `{ok: false, provider, error}` with the provider's error text, addresses redacted. Mail log purpose `test`; audit row `mail.test` with detail `{provider, result}` (`ok` or `failed`). `429` above 3 test mails per admin and per IP address per 10 minutes |
 | `GET /api/admin/users-backup` | admin | -> `application/octet-stream`, attachment `corescope-users-<YYYYMMDD-HHMMSS>.db` (UTC): a fresh consistent copy of `users.db`. It holds every password hash and address, so store it encrypted. Writes a `user.backup` audit row. Restore: docs/user-guide/accounts.md, Backups |
 | `POST /api/mail/brevo/webhook` | `Authorization: Bearer <webhookSecret>` | Brevo transactional event payload -> `{ok}`. `401` on a wrong secret |
 | `POST /api/mail/postal/webhook` | HTTP Basic auth, password `<webhookSecret>` (any user name) | Postal webhook payload `{event, timestamp, payload, uuid}` -> `{ok}`, also for events that are not about a message. `401` on a wrong secret |
@@ -472,7 +473,7 @@ Returns a JSON array (not wrapped in an object):
       "totalObservations":  number,
       "totalPackets":       number,   // same as totalTransmissions (backward compat)
       "packetsToday":       number,
-      "avgSnr":             number | null,
+      "avgSnr":             number | null,  // direct receptions only, see /health
       "lastHeard":          string (ISO) | null
     },
     // Direct-RF only, same shape and rule as GET /api/nodes/:pubkey/health.
@@ -587,7 +588,8 @@ Detailed health information for a single node.
   // Observers that received this node's OWN transmission off the air:
   // a flood packet whose last path hop resolves unambiguously to this
   // node, or a flood ADVERT it originated that arrived with an empty
-  // path. Only here do avgSnr/avgRssi describe this node's signal.
+  // path. These rows and stats.avgSnr below are the only signal numbers
+  // that describe this node.
   // Direct routes never qualify: their path is the remaining route,
   // not the travelled one.
   "observers": [
@@ -609,6 +611,10 @@ Detailed health information for a single node.
     "totalObservations":  number,
     "totalPackets":       number,    // same as totalTransmissions (backward compat)
     "packetsToday":       number,
+    // Mean SNR over every direct reception in "observers" (all samples, all
+    // observers). null when no observer heard the node directly. Before
+    // #2451 this averaged every transmission involving the node, relayed
+    // copies included.
     "avgSnr":             number | null,
     "avgHops":            number,    // rounded integer
     "lastHeard":          string (ISO) | null
@@ -700,7 +706,9 @@ Per-node analytics over a time range.
   "activityTimeline": [
     { "bucket": string (ISO),  "count": number }   // hourly buckets
   ],
-  "snrTrend": [
+  "snrTrend": [                     // direct receptions by fixed observers only
+                                     // (see heardBy), newest 500 in the window,
+                                     // oldest first
     {
       "timestamp":     string (ISO),
       "snr":           number,
@@ -709,10 +717,29 @@ Per-node analytics over a time range.
       "observer_name": string | null
     }
   ],
+  "heardBy": [                      // fixed observers that heard this node itself:
+                                     // the last path hop names it with 2 or more
+                                     // bytes and no other node shares that prefix,
+                                     // or a zero-hop advert. Sorted by medianSnr,
+                                     // best first; rows without an SNR last.
+    {
+      "observer_id":      string,
+      "observer_name":    string,
+      "count":            number,        // direct receptions in the window
+      "medianSnr":        number | null, // null: no reception carried an SNR
+      "p10Snr":           number | null,
+      "p90Snr":           number | null,
+      "recentMedianSnr":  number | null, // last 24 h; both change medians are
+      "earlierMedianSnr": number | null  // null unless the window is >= 3 days
+                                         // and each part has >= 3 receptions
+    }
+  ],
   "packetTypeBreakdown": [
     { "payload_type": number, "count": number }
   ],
-  "observerCoverage": [
+  "observerCoverage": [              // deprecated: every observer that saw a
+                                     // packet attributed to this node, relayed
+                                     // or not. The analytics page uses heardBy.
     {
       "observer_id":   string,
       "observer_name": string | null,
@@ -741,17 +768,38 @@ Per-node analytics over a time range.
     "availabilityPct":    number,     // 0–100
     "longestSilenceMs":   number,
     "longestSilenceStart": string (ISO) | null,
-    "signalGrade":        string,     // "A", "A-", "B+", "B", "C", "D"
-    "snrMean":            number,
-    "snrStdDev":          number,
+    "signalGrade":        string,     // "A", "A-", "B+", "B", "C", "D", from
+                                      // snrMean and snrStdDev
+    "snrMean":            number,     // mean of heardBy medianSnr: each observer
+                                      // counts once; 0 when there is none
+    "snrStdDev":          number,     // spread of those medians
     "relayPct":           number,     // % of packets with >1 hop
     "totalPackets":       number,
-    "uniqueObservers":    number,
+    "uniqueObservers":    number,     // fixed observers in heardBy
     "uniquePeers":        number,
     "avgPacketsPerDay":   number
   }
 }
 ```
+
+When `clientRxCoverage` is enabled the response also carries
+`mobileReceptions` (absent otherwise, and when there are none):
+
+```jsonc
+"mobileReceptions": {
+  "receptions":    number,        // mobile client receptions since timeRange.from
+  "receivers":     number,        // distinct receiving clients
+  "medianSnr":     number | null,
+  "maxDistanceKm": number | null  // null when the node has no position
+}
+```
+
+A reception counts when its heard key is this node's full key, its 8-byte
+discover prefix, or a 2- or 3-byte prefix that no other known node and no
+retired repeater shares. These receptions do not enter `computedStats`.
+
+`hopDistribution`, `peerInteractions` and `computedStats.relayPct` are
+deprecated: the analytics page will stop showing them.
 
 ### Response `404`
 
@@ -2052,9 +2100,6 @@ Network topology analytics.
       "pubkeyB": string | null
     }
   ],
-  "hopsVsSnr": [
-    { "hops": number, "count": number, "avgSnr": number }
-  ],
   "observers": [
     { "id": string, "name": string }
   ],
@@ -2262,7 +2307,7 @@ Hop distance analytics.
       "toPk":     string,
       "dist":     number,      // km
       "type":     string,      // "R↔R" | "C↔R" | "C↔C"
-      "snr":      number | null,
+      "obsCount": number,      // observations of this node pair
       "hash":     string,
       "timestamp": string (ISO)
     }
