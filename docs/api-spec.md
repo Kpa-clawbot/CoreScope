@@ -18,6 +18,7 @@
 - [POST /api/perf/reset](#post-apiperfreset)
 - [GET /api/nodes](#get-apinodes)
 - [GET /api/nodes/search](#get-apinodessearch)
+- [GET /api/nodes/neighbor-rank](#get-apinodesneighbor-rank)
 - [GET /api/nodes/bulk-health](#get-apinodesbulk-health)
 - [GET /api/nodes/network-status](#get-apinodesnetwork-status)
 - [GET /api/nodes/:pubkey](#get-apinodespubkey)
@@ -408,6 +409,46 @@ Paginated node list with filtering.
 - `declared_regions` is what the map's region-scope filter reads (#1862), together with `transported_scopes`. It is the same list the Scope Audit shows as `declaredRegions`, split and normalised by the same function, so the audit's region search and the map list a repeater under the same names. Its presence follows `scope_config_state`: set whenever that field is one of the four declared states. An absent field or a region missing from the list is not evidence that the repeater lacks that region.
 - `declared_regions_truncated` is set only when the newest declared answer was flagged as cut off (`node_declared_regions.truncated`), and the map popup then marks the declared list as truncated, as the Scope Audit does. It is never `false`: the `nodes.configured_scope` source does not record whether its size cap fired, so an absent field does not mean the list is complete.
 - `scope_config_state` carries the same four declared states as [GET /api/scope-audit](#get-apiscope-audit) and is computed the same way, from the newest declared-regions answer merged across collectors. The audit lists only repeaters that have answered; this field also classifies the ones that have not, which is what the map colours by. `"none"` means the answer is missing, not that the node is misconfigured: firmware drops scoped floods for regions it holds no key for, so a repeater with no region config and one nobody sends scoped traffic past are indistinguishable here. The four declared states are computed from stored data and do not depend on a window; `"observed"` and `"none"` are separated by `transported_scopes`, which the in-memory packet store accumulates over its retention window, so a node can move between them after a restart. The field is absent entirely when this database carries no declared-regions source at all, since "nobody has answered" is then a claim the schema cannot support.
+
+---
+
+## GET /api/nodes/neighbor-rank
+
+Leaderboard of nodes ranked by neighbour count (#2100). The Reach page's Rank card (`importance.degree_rank`, `importance.nodes_with_edges`) uses the same rank, so the two always agree.
+
+### Query Parameters
+
+| Param    | Type    | Required | Description |
+|----------|---------|----------|-------------|
+| `q`      | string  | no       | Trimmed, max 64 chars. Case-insensitive name substring, or pubkey prefix. |
+| `role`   | string  | no       | One of `repeater`, `room`, `companion`, `sensor`. |
+| `offset` | integer | no       | 0 to 1,000,000. Default 0. |
+| `limit`  | integer | no       | 1 to 200. Default 50. |
+| `focus`  | string  | no       | 64-hex pubkey, case-insensitive; anything else is `400`. When that node is in the filtered list, `offset` is ignored and the `limit`-aligned page containing it is returned (`offset = index / limit * limit`). Otherwise `offset` applies. |
+
+A bad value returns `400`. `503` when the degree snapshot is unavailable.
+
+### Response `200`
+
+```jsonc
+{
+  "entries": [
+    { "rank": number, "pubkey": string (lowercase hex), "name": string,
+      "role": string, "neighbors": number }
+  ],                                     // never null
+  "total": number,                       // entries matching q/role, before paging
+  "offset": number,                      // offset of entries[0] in the filtered list (the focus page's when focus matched)
+  "ranked": number,                      // size of the visible ranked population
+  "snapshot_at": string (RFC3339 UTC)    // time of the degree snapshot
+}
+```
+
+**Rank rules:**
+- `neighbors` is the all-time count of distinct `neighbor_edges` rows touching the node. It is a historical neighbour count, not a measure of radio quality or current reachability. A node's count includes edges to hidden neighbours.
+- Population: nodes that have a row in the node cache and at least one edge and are visible by the same rule `/api/nodes` uses (blacklist, hidden name prefixes, geo_filter). A pubkey with no nodes row is never ranked (its name cannot be checked against the hidden prefixes). Only edges whose both ends are valid 64-hex pubkeys count toward `neighbors`; rows with an empty or short key are ignored. Hidden nodes are neither listed nor counted in `ranked`.
+- Order: neighbours descending, then pubkey ascending. Ties share a rank (competition ranking: 1, 1, 3).
+- `q` and `role` narrow the list but never renumber it: each entry keeps its rank in the whole population.
+- Degrees come from a snapshot refreshed at most every 60 seconds; the ranked view is rebuilt when the snapshot, the visibility rules or the node cache change (a rename into a hidden prefix applies after the next node-cache refresh, at most 30 s). Names and roles come from the node cache; a pubkey with no nodes row has empty `name` and `role`.
 
 ---
 
@@ -898,8 +939,8 @@ to a recent window. Identifies nodes only by **unique 2–3 byte** path prefixes
   "reliable_tokens": [string],          // uppercase hex prefixes unique to this node ([] if unidentifiable)
   "importance": {
     "neighbor_degree":    number,        // all-time, from neighbor_edges
-    "degree_rank":        number,        // 1-based rank among nodes with edges
-    "nodes_with_edges":   number,
+    "degree_rank":        number,        // 1-based rank among visible nodes with edges (0 = not ranked); ties share a rank
+    "nodes_with_edges":   number,        // size of that visible population
     "relay_observations": number,        // windowed obs with this node anywhere in path
     "bidirectional_links":number,
     "direct_observers":   number

@@ -181,7 +181,7 @@ func TestNodeReach_AttributionAndCacheHit(t *testing.T) {
 
 	// Cache hit: the key (now generation-suffixed, #1629) must be populated
 	// and a second request must 200.
-	wantKey := n + "|30|g" + strconv.FormatUint(srv.cfg.BlacklistGeneration(), 10)
+	wantKey := n + "|30|g" + strconv.FormatUint(srv.cfg.BlacklistGeneration(), 10) + "|v" + srv.nodeVisibilityGen()
 	if _, ok := srv.reachCacheGet(wantKey); !ok {
 		t.Fatalf("expected reach response to be cached under %q", wantKey)
 	}

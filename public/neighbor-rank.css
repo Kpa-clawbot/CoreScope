@@ -1,0 +1,31 @@
+/* Neighbor Rank analytics tab (#2100). CSS variables only. */
+.nr-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 8px 0 12px; }
+.nr-search-label, .nr-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.nr-search { flex: 1 1 220px; max-width: 360px; padding: 8px 10px; background: var(--input-bg, var(--card-bg)); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+.nr-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.nr-chip, .nr-btn { padding: 6px 12px; background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: 16px; font-size: 13px; cursor: pointer; }
+.nr-btn { border-radius: 6px; }
+.nr-chip[aria-pressed="true"] { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
+.nr-chip:focus-visible, .nr-btn:focus-visible, .nr-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.nr-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.nr-table-wrap { overflow-x: auto; }
+.nr-rank, .nr-num { font-variant-numeric: tabular-nums; }
+.nr-num { text-align: right; }
+.nr-table { table-layout: auto; width: 100%; }
+.nr-table th:nth-child(4) { text-align: right; }
+.nr-c-rank, .nr-c-num { width: 1%; white-space: nowrap; }
+.nr-name { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .nr-c-role { display: none; } .nr-table th, .nr-table td { padding-left: 6px; padding-right: 6px; } }
+.nr-name, .nr-reach { color: var(--link-color); text-decoration: none; }
+.nr-name { font-weight: 600; }
+.nr-name:hover, .nr-reach:hover { text-decoration: underline; }
+.nr-focus { background: var(--selected-bg, var(--hover-bg)); outline: 2px solid var(--accent); outline-offset: -2px; }
+.nr-status { min-height: 24px; padding: 4px 0; }
+.nr-error { color: var(--status-red, var(--text)); }
+.nr-pager { display: flex; align-items: center; gap: 12px; margin: 12px 0; flex-wrap: wrap; }
+.nr-foot { font-size: 12px; }
+/* style.css gives every scrollable analytics table min-width:480px; this table
+   must fit a phone without sideways scrolling. */
+.analytics-table-scroll .analytics-table.nr-table, .nr-table { min-width: 0; }
+.nr-table td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 600px) { .nr-table th { font-size: 11px; } }

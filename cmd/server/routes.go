@@ -336,6 +336,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 
 	// Node endpoints — fixed routes BEFORE parameterized
 	r.HandleFunc("/api/nodes/search", s.handleNodeSearch).Methods("GET")
+	r.HandleFunc("/api/nodes/neighbor-rank", s.handleNeighborRank).Methods("GET")
 	r.HandleFunc("/api/nodes/bulk-health", s.handleBulkHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/network-status", s.handleNetworkStatus).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")

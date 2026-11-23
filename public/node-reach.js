@@ -48,10 +48,22 @@
     return Math.min(s, 30) * 1000;
   }
 
+  // Rank card value: "Not ranked" when degree_rank is 0, plus a leaderboard link (#2100).
+  // A ranked node opens the unfiltered list with its row highlighted (the server
+  // picks the page; rank ties make a client-side page guess wrong); an unranked
+  // one opens the top of the list.
+  function rankValueHtml(imp, pubkey) {
+    var board = '#/analytics?tab=neighbor-rank';
+    if (imp.degree_rank > 0) {
+      board += '&focus=' + encodeURIComponent(pubkey);
+    }
+    var val = imp.degree_rank > 0 ? '#' + imp.degree_rank + ' / ' + imp.nodes_with_edges : 'Not ranked';
+    return { html: escapeHtml(val) + ' <a class="nq-link nq-board-link" href="' + board + '">View leaderboard</a>' };
+  }
   function statCard(label, value, descShort, descFull) {
     return '<div class="analytics-stat-card" title="' + escapeHtml(descFull) + '">' +
       '<div class="analytics-stat-label">' + escapeHtml(label) + '</div>' +
-      '<div class="analytics-stat-value">' + escapeHtml(String(value)) + '</div>' +
+      '<div class="analytics-stat-value">' + (value && value.html ? value.html : escapeHtml(String(value))) + '</div>' +
       '<div class="analytics-stat-desc">' + escapeHtml(descShort) + '</div></div>';
   }
 
@@ -204,8 +216,8 @@
       '<div class="analytics-stats">' +
       statCard('Neighbours', imp.neighbor_degree, 'All-time distinct neighbours',
         'Distinct neighbours in the all-time neighbour graph (advert first-hop + observer last-hop, geo-filtered).') +
-      statCard('Rank', '#' + imp.degree_rank + ' / ' + imp.nodes_with_edges, 'Rank by neighbour count',
-        'Rank by neighbour count among all nodes with edges. #1 = most-connected node in the network.') +
+      statCard('Rank', rankValueHtml(imp, pubkey), 'Rank by neighbour count',
+        'Rank by neighbour count among the listed nodes that have edges (hidden and blacklisted nodes are not ranked). #1 = most-connected node in the network.') +
       '</div>' +
       '<div class="nq-group-h">Last ' + d.window.days + ' days</div>' +
       '<div class="analytics-stats">' +
@@ -327,7 +339,7 @@
     // #1865: exposed so the helper tests can assert what the scope line RENDERS
     // rather than grepping this file, the same reason map.js exposes its label
     // builder (#1356/#1933).
-    window.__meshcoreReachInternals = { scopeLineHtml: scopeLineHtml, reachRetryDelayMs: reachRetryDelayMs };
+    window.__meshcoreReachInternals = { scopeLineHtml: scopeLineHtml, rankValueHtml: rankValueHtml, reachRetryDelayMs: reachRetryDelayMs };
   }
 
   registerPage('node-reach', { init: init, destroy: destroy });

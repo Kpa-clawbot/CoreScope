@@ -182,7 +182,16 @@ func routeDescriptions() map[string]routeMeta {
 			Description: "Battery voltage history from observer_metrics for the exact stored pubkey. The node lookup does not normalize case or validate hex; unknown keys return 404. Observer IDs are matched in lowercase or uppercase. Samples with non-null battery_mv in the lookback window are sorted oldest first. With no samples, samples is [], latest_mv and latest_ts are null, and status is unknown. Errors use application/json objects with an error string: 404 (node not found), or 500 for node/history database query failures.",
 			QueryParams: []paramMeta{{Name: "days", Type: "integer", Description: "Lookback in whole days, 1 through 365. Defaults to 7 when omitted, invalid, non-positive or above 365; values are not clamped."}},
 		},
-		"GET /api/nodes/search":             {Summary: "Search nodes", Description: "Search nodes by name or public key prefix.", Tag: "nodes", QueryParams: []paramMeta{{Name: "q", Description: "Search query", Type: "string", Required: true}}},
+		"GET /api/nodes/search": {Summary: "Search nodes", Description: "Search nodes by name or public key prefix.", Tag: "nodes", QueryParams: []paramMeta{{Name: "q", Description: "Search query", Type: "string", Required: true}}},
+		"GET /api/nodes/neighbor-rank": {Summary: "Neighbour-count leaderboard", Tag: "nodes", Response: schemaRef("NeighborRankResponse"),
+			Description: "Nodes ranked by all-time distinct neighbor_edges count, the same rank the Reach page's Rank card shows. Population: nodes with a nodes row and at least one edge that are visible (not blacklisted, name not hidden, inside geo_filter); only edges whose both ends are 64-hex pubkeys count. Ties share a rank (1, 1, 3). q and role narrow the list but never renumber it. This is a historical neighbour count, not radio quality. 503 when the degree snapshot is unavailable; 400 for a bad parameter.",
+			QueryParams: []paramMeta{
+				{Name: "q", Type: "string", Description: "Case-insensitive name substring or pubkey prefix, max 64 characters."},
+				{Name: "role", Type: "string", Description: "One of repeater, room, companion, sensor."},
+				{Name: "offset", Type: "integer", Description: "Entries to skip, 0 through 1000000. Default 0."},
+				{Name: "limit", Type: "integer", Description: "Page size, 1 through 200. Default 50."},
+				{Name: "focus", Type: "string", Description: "64-hex pubkey (case-insensitive); anything else is 400. When that node is in the filtered list, offset is ignored and the limit-aligned page containing it is returned. Otherwise offset applies."},
+			}},
 		"GET /api/nodes/reported":           {Summary: "Repeaters known only from their reported name", Description: "Repeaters that told a mobile companion their own name (client_node_names, ANON_REQ_TYPE_OWNER) have no row in nodes or inactive_nodes, and were heard directly at least once (a discover or advert reception). 404 when clientRxCoverage is disabled. Each carries its reception counts and, when companions heard it directly from at least `method.min_spots` spots at least `method.min_spread_m` apart, an `estimate`: a SNR-weighted centroid of those spots with `radius_m` (never below `method.min_radius_m`). The estimate is where companions stood, weighted, not a measured position. Cached for 5 minutes.", Tag: "nodes"},
 		"GET /api/nodes/bulk-health":        {Summary: "Bulk node health", Description: "Returns health status for all nodes in one call.", Tag: "nodes"},
 		"GET /api/nodes/network-status":     {Summary: "Network status summary", Description: "Returns counts of active, stale, and offline nodes.", Tag: "nodes"},
@@ -326,6 +335,25 @@ func componentSchemas() map[string]interface{} {
 					"key":   {Type: "string", Description: "Area configuration map key, preserved verbatim."},
 					"label": {Type: "string", Description: "Non-empty configured display label, preserved verbatim."},
 				},
+			},
+		},
+		"NeighborRankResponse": openAPISchema{
+			Type: "object", Required: []string{"entries", "total", "offset", "ranked", "snapshot_at"},
+			Properties: map[string]openAPISchema{
+				"entries": {Type: "array", Description: "One page, never null.", Items: &openAPISchema{
+					Type: "object", Required: []string{"rank", "pubkey", "name", "role", "neighbors"},
+					Properties: map[string]openAPISchema{
+						"rank":      {Type: "integer", Description: "Placement in the whole visible population; ties share it (1, 1, 3)."},
+						"pubkey":    {Type: "string", Description: "Lowercase hex."},
+						"name":      {Type: "string", Description: "Empty when the node has no nodes row."},
+						"role":      {Type: "string", Description: "Empty when unknown."},
+						"neighbors": {Type: "integer", Description: "All-time distinct neighbours."},
+					},
+				}},
+				"total":       {Type: "integer", Description: "Entries matching q and role, before paging."},
+				"offset":      {Type: "integer", Description: "Offset of entries[0] in the filtered list: the requested offset, or the focus page's."},
+				"ranked":      {Type: "integer", Description: "Size of the visible ranked population."},
+				"snapshot_at": {Type: "string", Description: "RFC3339 UTC time of the degree snapshot (refreshed at most every 60 s)."},
 			},
 		},
 		"ConfigAreaPolygonsResponse": openAPISchema{
