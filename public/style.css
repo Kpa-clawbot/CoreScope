@@ -5860,6 +5860,9 @@ body { touch-action: pan-y; }
 .mc-duct-time-prefix { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .mc-duct-time-value { flex: none; }
 .mc-duct-time-head .mc-duct-now { height: 28px; padding: 0 8px; }
+/* Loading / being prepared / unavailable / out of date: in the part of the
+ * panel that collapse never hides. Wraps instead of widening the panel. */
+.mc-duct-status { margin: 0 0 4px; font-weight: 600; overflow-wrap: anywhere; }
 .mc-duct-tl-row { display: flex; align-items: stretch; gap: 4px; }
 .mc-duct-tl-row .mc-duct-step { height: auto; min-height: 32px; }
 .mc-duct-timeline-wrap { position: relative; flex: 1 1 auto; min-width: 0; }
@@ -5981,7 +5984,6 @@ body { touch-action: pan-y; }
   transform: translateX(-100%);
 }
 .mc-duct-legend-caption { margin-top: 2px; color: var(--mc-route-legend-fg); opacity: 0.8; }
-.mc-duct-legend-status { margin: 4px 0; font-weight: 600; }
 .mc-duct-legend-note,
 .mc-duct-legend-meta { margin-top: 4px; color: var(--mc-route-legend-fg); opacity: 0.8; }
 .mc-duct-popup-title { font-weight: 600; margin-bottom: 2px; }

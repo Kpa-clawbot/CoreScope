@@ -49,10 +49,32 @@ const BASE = (process.env.BASE_URL || 'http://localhost:13596').replace(/\/+$/, 
 const FAKE_PORT = parseInt(process.env.FAKE_PORT || '13597', 10);
 const SCENARIO = 'mixed';
 // The LoRa frequencies the overlay judges (map-ducting.js loraFreqs): the
-// site's los.frequencyMhz from /api/config/client when it is 100..6000 MHz,
-// else 868 and 915 MHz. Set once the client config is read.
+// site's los.frequencyMhz from /api/config/client when it is 100..6000 MHz
+// and not the shipped default 910.525 (not the operator's choice), else 868
+// and 915 MHz. Set once the client config is read.
 let LORA_FREQS = [868, 915];
-const loraFreqsOf = (cfg) => { const f = Number(cfg && cfg.los && cfg.los.frequencyMhz); return (f >= 100 && f <= 6000) ? [f] : [868, 915]; };
+const loraFreqsOf = (cfg) => { const f = Number(cfg && cfg.los && cfg.los.frequencyMhz); return (f >= 100 && f <= 6000 && Math.abs(f - 910.525) >= 0.0005) ? [f] : [868, 915]; };
+// The /api/ducting answer `d` with its times moved so the first one is
+// `startHoursAgo` whole hours before the current hour.
+const shifted = (d, startHoursAgo) => {
+  const hour = Math.floor(Date.now() / 3600000) * 3600, by = hour - startHoursAgo * 3600 - d.times[0];
+  return Object.assign({}, d, { times: d.times.map(t => t + by) });
+};
+// The panel's status line as a user sees it: text of the visible
+// role=status elements, how many there are, whether one sits in the legend.
+const inPageStatus = () => {
+  const p = document.querySelector('.mc-duct-panel');
+  if (!p) return null;
+  const vis = (el) => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
+  const all = Array.prototype.slice.call(p.querySelectorAll('[role="status"]'));
+  const r = p.getBoundingClientRect();
+  return {
+    count: all.length, text: all.filter(vis).map(e => e.textContent).join(' | '),
+    inLegend: all.some(e => !!e.closest('.mc-duct-legend')),
+    legend: vis(p.querySelector('.mc-duct-legend')),
+    inView: r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth && r.bottom <= window.innerHeight,
+  };
+};
 // f_min as the popup shows it (2 significant figures); verdicts use this value.
 const sig2 = (v) => Number(Number(v).toPrecision(2));
 const shownFmin = (c, h) => (c.c[h] >= 3 && c.f[h] > 0) ? sig2(c.f[h]) : 0;
@@ -1132,18 +1154,83 @@ async function run() {
       ['error', 200, { status: 'error', error: 'weather data unavailable', times: [], cells: [] }, /unavailable/],
       ['HTTP 500', 500, { error: 'x' }, /unavailable/],
     ]) {
-      await test(`legend explains a ${name} /api/ducting answer, with no cells`, async () => {
+      await test(`the status line explains a ${name} /api/ducting answer, with no cells, also when collapsed`, async () => {
         const sp = await track({ theme: 'light', overlays: ['ducting'] });
         await sp.page.route('**/api/ducting', (route) => route.fulfill({ status, json: body }));
         await gotoRoute(sp.page, '#/map');
         await sp.page.waitForSelector('.mc-duct-legend', { state: 'visible', timeout: 25000 });
-        await sp.page.waitForFunction((src) => new RegExp(src).test((document.querySelector('.mc-duct-legend') || {}).textContent || ''), want.source, { timeout: 10000 });
+        await sp.page.waitForFunction((src) => new RegExp(src).test((document.querySelector('.mc-duct-status') || {}).textContent || ''), want.source, { timeout: 10000 });
+        let ss = await sp.page.evaluate(inPageStatus);
+        assert(ss.count === 1 && !ss.inLegend && want.test(ss.text), 'status: ' + JSON.stringify(ss));
+        await sp.page.locator('.mc-duct-collapse').first().click();
+        ss = await sp.page.evaluate(inPageStatus);
+        assert(!ss.legend && ss.count === 1 && want.test(ss.text) && ss.inView, 'collapsed: ' + JSON.stringify(ss));
         const st = await pageState(sp.page);
         assert(!st.cells && !st.lora.length && !st.fields.length, 'cells or field drawn');
         const errs = sp.page.__errors.filter(e => !/Failed to load resource/.test(e));
         assert(!errs.length, errs.slice(0, 3).join(' | '));
       });
     }
+
+    // A forecast whose last hour has ended is out of date at once. Phones
+    // start collapsed; the notice must not be hidden with the legend.
+    await test('out-of-date notice stays visible in a collapsed panel: 390x844 (collapsed by default) and 1280x800 (by click)', async () => {
+      const old = shifted(data, data.times.length + 1);
+      for (const [w, h] of [[390, 844], [1280, 800]]) {
+        const op = await track({ theme: 'light', overlays: ['ducting'] });
+        await op.page.setViewportSize({ width: w, height: h });
+        await op.page.route('**/api/ducting', (route) => route.fulfill({ status: 200, json: old }));
+        await gotoRoute(op.page, '#/map');
+        await waitCells(op.page, 1);
+        await op.page.waitForSelector('.mc-duct-timeline', { state: 'visible' });
+        if (w > 600) await op.page.locator('.mc-duct-collapse').first().click();
+        await sleep(200);
+        const ss = await op.page.evaluate(inPageStatus);
+        assert(!ss.legend, `${w}x${h}: legend not collapsed`);
+        assert(ss.count === 1 && !ss.inLegend && /^Forecast out of date/.test(ss.text), `${w}x${h}: status ${JSON.stringify(ss)}`);
+        assert(ss.inView, `${w}x${h}: collapsed panel outside the viewport`);
+        const ov = await op.page.evaluate(inPageOverlaps);
+        assert(!ov.hits.length, `${w}x${h}: ` + ov.hits.join('; '));
+        const st = await pageState(op.page);
+        assert(st.panels === 1 && st.times === 1 && st.legends === 1, `${w}x${h}: ${JSON.stringify([st.panels, st.times, st.legends])}`);
+        assert(!op.page.__errors.length, op.page.__errors.slice(0, 3).join(' | '));
+      }
+      // A current forecast says nothing.
+      const cp = await track({ theme: 'light', overlays: ['ducting'] });
+      await gotoRoute(cp.page, '#/map');
+      await waitCells(cp.page, 1);
+      const cur = await cp.page.evaluate(inPageStatus);
+      assert(cur.count === 1 && cur.text === '', 'status on a current forecast: ' + JSON.stringify(cur));
+    });
+
+    // The strip cannot scroll while the map has no layout; it must take its
+    // place when the map is shown, not stay on the first hour.
+    await test('a map laid out late (hidden while the forecast arrives) shows the current hour under the centre marker', async () => {
+      const hp = await track({ theme: 'light', overlays: ['ducting'] });
+      await hp.page.route('**/api/ducting', (route) => route.fulfill({ status: 200, json: shifted(data, 5) }));
+      await hp.page.addInitScript(() => {
+        const hide = () => { const st = document.createElement('style'); st.id = 'e2e-hide'; st.textContent = '#app{display:none !important}'; document.documentElement.appendChild(st); };
+        if (document.documentElement) hide(); else document.addEventListener('readystatechange', hide, { once: true });
+      });
+      await gotoRoute(hp.page, '#/map');
+      await waitCells(hp.page, 1);
+      const read = () => hp.page.evaluate(() => {
+        const vp = document.querySelector('.mc-duct-timeline');
+        const marks = Array.prototype.map.call(document.querySelectorAll('.mc-duct-tick'), (t) => parseFloat(t.style.left));
+        let under = 0;
+        marks.forEach((x, i) => { if (Math.abs(x - vp.scrollLeft) < Math.abs(marks[under] - vp.scrollLeft)) under = i; });
+        return { hidden: !vp.getClientRects().length, now: Number(vp.getAttribute('aria-valuenow')), under, scrollLeft: vp.scrollLeft, want: marks[Number(vp.getAttribute('aria-valuenow'))] };
+      });
+      let r = await read();
+      assert(r.hidden && r.now === 5 && r.scrollLeft === 0, 'precondition (hidden, hour 5 shown, strip not scrolled): ' + JSON.stringify(r));
+      await hp.page.evaluate(() => document.getElementById('e2e-hide').remove());
+      await hp.page.waitForSelector('.mc-duct-timeline', { state: 'visible' });
+      await hp.page.waitForFunction(() => { const vp = document.querySelector('.mc-duct-timeline'); return vp.scrollLeft > 0; }, null, { timeout: 5000 }).catch(() => {});
+      await sleep(400);
+      r = await read();
+      assert(r.now === 5 && r.under === 5 && Math.abs(r.scrollLeft - r.want) < 1, 'the shown hour is not under the centre marker: ' + JSON.stringify(r));
+      assert(!hp.page.__errors.length, hp.page.__errors.slice(0, 3).join(' | '));
+    });
 
     // ── The fake itself ──
     await test('fake: error500, ratelimit, nulls, pending and validation scenarios', async () => {
