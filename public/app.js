@@ -34,6 +34,23 @@ function pathHashSize(rawHex) {
   const size = (pathByte >> 6) + 1;
   return size > 3 ? 0 : size;
 }
+/**
+ * Frame bytes of a packet for header/path-byte reads: raw_hex, or frame_head
+ * (header, transport codes, path length and path bytes) when the server hid
+ * raw_hex for a located advert (location privacy). '' when neither is a string.
+ */
+function frameHex(p) {
+  if (!p) return '';
+  if (typeof p.raw_hex === 'string' && p.raw_hex) return p.raw_hex;
+  return typeof p.frame_head === 'string' ? p.frame_head : '';
+}
+/** Full frame length in bytes: from raw_hex, else the server's frame_bytes, else 0. */
+function frameSize(p) {
+  if (!p) return 0;
+  if (typeof p.raw_hex === 'string' && p.raw_hex) return Math.floor(p.raw_hex.length / 2);
+  const n = Number(p.frame_bytes);
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
 function transportBadge(rt) { return isTransportRoute(rt) ? ' <span class="badge badge-transport" title="' + routeTypeName(rt) + '">T</span>' : ''; }
 
 /**

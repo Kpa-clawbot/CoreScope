@@ -1356,6 +1356,7 @@
             <li><span class="live-ring live-ring--repeater" aria-hidden="true"></span> Bright white ring — repeater</li>
             <li><span class="live-ring live-ring--other" aria-hidden="true"></span> Faded ring — companion / sensor / room</li>
           </ul>
+          ${window.LocationPrivacy ? window.LocationPrivacy.slotHtml('legend') : ''}
           </div>
         </div>
 
@@ -1982,6 +1983,7 @@
     // Legend toggle for mobile (#60)
     const legendEl = document.getElementById('liveLegend');
     const legendToggleBtn = document.getElementById('legendToggleBtn');
+    if (window.LocationPrivacy && legendEl) window.LocationPrivacy.hydrate(legendEl);
 
     // ── Live header / controls toggles (#1178, #1179) ──────────────────────
     // At narrow viewports (≤768px) the header collapses to a single
@@ -3304,7 +3306,7 @@
     for (var i = 0; i < packets.length; i++) {
       var p = packets[i];
       var size = window.MC_packetHashSize
-        ? window.MC_packetHashSize(p.raw_hex, p.route_type)
+        ? window.MC_packetHashSize(p.raw_hex || p.frame_head, p.route_type)
         : 0;
       if (size > 0) return size >= 2;
     }

@@ -73,6 +73,9 @@ type StoreTx struct {
 	// accountedBytes is what trackedBytes was last charged for this tx
 	// (observations excluded). See rechargeTx.
 	accountedBytes int64
+	// hidden is set for a located advert served redacted (location privacy,
+	// packet_redact.go): RawHex is then "" and this keeps the frame header.
+	hidden *hiddenFrame
 }
 
 // isOwnTransmission reports whether the observation is the observer's own
@@ -170,7 +173,8 @@ var decodedCacheDroppedKeys = []string{
 }
 
 // broadcastPayload returns the packet's whole decoded payload for the live
-// feed: the stored JSON as it is, since the feed only serialises it. Copying
+// feed: the stored JSON as it is, since the feed only serialises it (for a
+// located advert under location privacy, the redacted form the store holds). Copying
 // the cache would lose the fields it drops, and decoding again would run
 // under the store's write lock; this does neither. nil if the JSON is not
 // valid, as before.
@@ -1053,6 +1057,8 @@ func (s *PacketStore) Load() error {
 				DecodedJSON: nullStrVal(decodedJSON),
 				ScopeName:   nullStrPtr(scopeName),
 			}
+			// Location privacy: keep only the served form (packet_redact.go).
+			redactStoreTx(s.db.locationFuzzer(), tx)
 			s.byHash[hashStr] = tx
 			s.packets = append(s.packets, tx)
 			s.byTxID[txID] = tx
@@ -1389,6 +1395,8 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				DecodedJSON: nullStrVal(decodedJSON),
 				ScopeName:   nullStrPtr(scopeName),
 			}
+			// Location privacy: keep only the served form (packet_redact.go).
+			redactStoreTx(s.db.locationFuzzer(), tx)
 			localByHash[hashStr] = tx
 			localPackets = append(localPackets, tx)
 			localByTxID[txID] = tx
@@ -2290,8 +2298,9 @@ type groupedRow struct {
 	payloadType, routeType                 *int
 	snr, rssi                              *float64
 	scopeName                              *string
-	radio                                  string      // header observation's setting (#1869)
-	observations                           []*StoreObs // slice header only, see snapshotGroupedRow
+	radio                                  string       // header observation's setting (#1869)
+	observations                           []*StoreObs  // slice header only, see snapshotGroupedRow
+	hidden                                 *hiddenFrame // located advert, served redacted
 }
 
 // groupedPage builds the requested page of txs (sorted by LatestSeen DESC).
@@ -2339,6 +2348,7 @@ func snapshotGroupedRow(tx *StoreTx) groupedRow {
 		scopeName:        tx.ScopeName,
 		radio:            txRadio(tx),
 		observations:     tx.Observations,
+		hidden:           tx.hidden,
 	}
 }
 
@@ -2372,6 +2382,9 @@ func groupedRowsToPage(rows []groupedRow, total int) *PacketResult {
 			"rssi":              floatPtrOrNil(r.rssi),
 			"scope_name":        strPtrOrNil(r.scopeName),
 			"radio":             strOrNil(r.radio),
+		}
+		if r.hidden != nil {
+			r.hidden.mark(m)
 		}
 		// resolved_path omitted for grouped view (cold path, not worth SQL round-trip)
 		packets[i] = m
@@ -3089,11 +3102,18 @@ func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, er
 		scopeName                                                          *string
 		snr, rssi                                                          *float64
 		score                                                              *int
+		hidden                                                             *hiddenFrame
 	}
 
 	var tempRows []tempRow
 	txCount := 0
 	lastTxID := sinceID
+	// Location privacy: each transmission is redacted once, here, before
+	// s.mu is taken; its other observation rows reuse the result.
+	locFuzz := s.db.locationFuzzer()
+	redactedTxID := -1
+	var redRaw, redDecoded string
+	var redHidden *hiddenFrame
 
 	for rows.Next() {
 		var txID int
@@ -3128,12 +3148,17 @@ func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, er
 			lastTxID = txID
 		}
 
+		if txID != redactedTxID {
+			redactedTxID = txID
+			redRaw, redDecoded, redHidden = redactLocatedAdvert(locFuzz, nullIntPtr(payloadType), nullStrVal(rawHex), nullStrVal(decodedJSON))
+		}
 		tr := tempRow{
 			txID:           txID,
-			rawHex:         nullStrVal(rawHex),
+			rawHex:         redRaw,
 			hash:           nullStrVal(hash),
 			firstSeen:      nullStrVal(firstSeen),
-			decodedJSON:    nullStrVal(decodedJSON),
+			decodedJSON:    redDecoded,
+			hidden:         redHidden,
 			routeType:      nullIntPtr(routeType),
 			payloadType:    nullIntPtr(payloadType),
 			observerID:     internStr(nullStrVal(observerID)),
@@ -3214,6 +3239,7 @@ func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, er
 				PayloadType: r.payloadType,
 				DecodedJSON: r.decodedJSON,
 				ScopeName:   r.scopeName,
+				hidden:      r.hidden,
 			}
 			s.byHash[r.hash] = tx
 			s.packets = append(s.packets, tx) // oldest-first; new items go to tail
@@ -3383,6 +3409,7 @@ func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, er
 				"scope_name":        strPtrOrNil(tx.ScopeName),
 				"radio":             strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 			}
+			markLocationHidden(pkt, tx)
 			// Use decode-window resolved path for broadcast (never from struct)
 			if broadcastRP != nil {
 				if rp, ok := broadcastRP[obs.ID]; ok && rp != nil {
@@ -3666,6 +3693,7 @@ func (s *PacketStore) ingestNewObservations(sinceObsID, limit int) (wsPacketMaps
 			"scope_name":        strPtrOrNil(tx.ScopeName),
 			"radio":             strOrNil(observationRadio(obs.ID, obs.ObserverID, obs.Timestamp)),
 		}
+		markLocationHidden(pkt, tx)
 		// Use decode-window resolved path for broadcast
 		if obsRPMap != nil {
 			if rp, ok := obsRPMap[obs.ID]; ok && rp != nil {
@@ -4274,7 +4302,7 @@ func (s *PacketStore) nodeZeroHopRegionCounts(obsIATA map[string]string) map[str
 	}
 	// Adverts only: the full packet list is mostly other traffic.
 	for _, tx := range s.byPayloadType[PayloadADVERT] {
-		if tx.RawHex == "" || len(tx.RawHex) < 4 {
+		if len(tx.frameHead()) < 4 {
 			continue
 		}
 		if tx.DecodedJSON == "" {
@@ -4282,7 +4310,7 @@ func (s *PacketStore) nodeZeroHopRegionCounts(obsIATA map[string]string) map[str
 		}
 		// Transport-direct carries four transport-code bytes before the
 		// path byte; PathByte reads it at the right offset (#2225).
-		routeType, pathByte, ok := packetpath.PathByte(tx.RawHex)
+		routeType, pathByte, ok := packetpath.PathByte(tx.frameHead())
 		if !ok || (routeType != RouteDirect && routeType != RouteTransportDirect) {
 			continue
 		}
@@ -4366,6 +4394,7 @@ func enrichObsFields(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 		m["payload_type"] = intPtrOrNil(tx.PayloadType)
 		m["route_type"] = intPtrOrNil(tx.RouteType)
 		m["decoded_json"] = strOrNil(tx.DecodedJSON)
+		markLocationHidden(m, tx)
 	}
 
 	return m
@@ -4395,6 +4424,7 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 		"scope_name":        strPtrOrNil(tx.ScopeName),
 		"radio":             strOrNil(txRadio(tx)),
 	}
+	markLocationHidden(m, tx)
 	// Include parsed path array to match Node.js output shape
 	if hops := txGetParsedPath(tx); len(hops) > 0 {
 		m["_parsedPath"] = hops
@@ -5152,6 +5182,10 @@ const (
 func estimateStoreTxBytes(tx *StoreTx) int64 {
 	base := int64(storeTxBaseBytes)
 	base += int64(len(tx.RawHex) + len(tx.Hash) + len(tx.DecodedJSON) + len(tx.PathJSON))
+	if tx.hidden != nil {
+		// A located advert keeps its own copy of the frame head (packet_redact.go).
+		base += int64(hiddenFrameBaseBytes + len(tx.hidden.head))
+	}
 	base += int64(numIndexesPerTx * indexEntryBytes)
 	base += int64(decodedCacheFactor * len(tx.DecodedJSON))
 
@@ -6734,9 +6768,9 @@ func (s *PacketStore) computeAnalyticsRF(region, area string, window TimeWindow)
 				}
 
 				// Packet sizes (unique by hash)
-				if hash != "" && !seenSizeHashes[hash] && tx != nil && tx.RawHex != "" {
+				if hash != "" && !seenSizeHashes[hash] && tx != nil && tx.frameBytes() > 0 {
 					seenSizeHashes[hash] = true
-					packetSizes = append(packetSizes, len(tx.RawHex)/2)
+					packetSizes = append(packetSizes, tx.frameBytes())
 				}
 
 				// Payload type distribution (unique by hash)
@@ -6768,9 +6802,9 @@ func (s *PacketStore) computeAnalyticsRF(region, area string, window TimeWindow)
 			hash := tx.Hash
 			if hash != "" {
 				regionalHashes[hash] = true
-				if !seenSizeHashes[hash] && tx.RawHex != "" {
+				if !seenSizeHashes[hash] && tx.frameBytes() > 0 {
 					seenSizeHashes[hash] = true
-					packetSizes = append(packetSizes, len(tx.RawHex)/2)
+					packetSizes = append(packetSizes, tx.frameBytes())
 				}
 				if !seenTypeHashes[hash] && tx.PayloadType != nil {
 					seenTypeHashes[hash] = true
@@ -7178,6 +7212,26 @@ type nodeInfo struct {
 	LastSeen         time.Time
 	FirstSeen        string // RFC3339; populated by buildNodeInfoMap for callers that need it (e.g. /api/nodes/{pk}/reach)
 	ObservationCount int    // count of advertisements/observations; used for tier-3 tiebreak in resolveWithContext
+
+	// exactLat/exactLon are the stored position when location privacy
+	// moved Lat/Lon (hasExact), for the geo_filter only: never serve them
+	// or compute with them. Read them through geoFilterPos.
+	exactLat, exactLon float64
+	hasExact           bool
+}
+
+// geoFilterPos is the position the geo_filter classifies the node by: the
+// stored one, even with location privacy on, so a node near the polygon
+// edge does not flip in and out with its approximate position. (0, 0) when
+// the node has no fix.
+func (n *nodeInfo) geoFilterPos() (lat, lon float64) {
+	if !n.HasGPS {
+		return 0, 0
+	}
+	if n.hasExact {
+		return n.exactLat, n.exactLon
+	}
+	return n.Lat, n.Lon
 }
 
 // schemaDegradationLogged is now a PacketStore field (see type definition) so
@@ -7188,78 +7242,6 @@ func (s *PacketStore) logSchemaDegradationOnce(msg string) {
 	if _, loaded := s.schemaDegradationLogged.LoadOrStore(msg, true); !loaded {
 		log.Printf("[store] schema-degradation: %s", msg)
 	}
-}
-
-func (s *PacketStore) getAllNodes() []nodeInfo {
-	// Schema probe: try richest → leanest. Logs a one-shot warning at each
-	// rung when we fall back to a thinner schema so operators see that a
-	// column is missing and the new tiebreak features are degraded. See
-	// #1197 (adversarial r1 #10). first_seen was added (#1627 r3) so callers
-	// like /api/nodes/{pk}/reach can avoid a per-request single-row SELECT;
-	// we fold it into the cached load (see getCachedNodesAndPM, 30s TTL) so
-	// the 4 buildNodeInfoMap call sites don't each pay for a fresh scan.
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, COALESCE(advert_count, 0), COALESCE(first_seen, '') FROM nodes")
-	hasLastSeen := true
-	hasAdvertCount := true
-	hasFirstSeen := true
-	if err != nil {
-		s.logSchemaDegradationOnce("nodes.first_seen missing — buildNodeInfoMap will not populate FirstSeen for /api/nodes/{pk}/reach and friends")
-		hasFirstSeen = false
-		rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, COALESCE(advert_count, 0) FROM nodes")
-		if err != nil {
-			s.logSchemaDegradationOnce("nodes.advert_count missing — tier-3/4 ObservationCount tiebreak degraded; resolveWithContext will fall back to lex-pubkey order")
-			rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen FROM nodes")
-			hasAdvertCount = false
-			if err != nil {
-				s.logSchemaDegradationOnce("nodes.last_seen missing — node freshness signal unavailable")
-				rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes")
-				hasLastSeen = false
-				if err != nil {
-					return nil
-				}
-			}
-		}
-	}
-	defer rows.Close()
-	var nodes []nodeInfo
-	for rows.Next() {
-		var pk string
-		var name, role sql.NullString
-		var lat, lon sql.NullFloat64
-		var lastSeen sql.NullString
-		var advertCount sql.NullInt64
-		var firstSeen sql.NullString
-		if hasFirstSeen {
-			rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &advertCount, &firstSeen)
-		} else if hasAdvertCount {
-			rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &advertCount)
-		} else if hasLastSeen {
-			rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen)
-		} else {
-			rows.Scan(&pk, &name, &role, &lat, &lon)
-		}
-		n := nodeInfo{PublicKey: pk, Name: nullStrVal(name), Role: nullStrVal(role)}
-		if hasFirstSeen && firstSeen.Valid {
-			n.FirstSeen = firstSeen.String
-		}
-		if lat.Valid && lon.Valid {
-			n.Lat = lat.Float64
-			n.Lon = lon.Float64
-			n.HasGPS = !(n.Lat == 0 && n.Lon == 0)
-		}
-		if hasLastSeen && lastSeen.Valid && lastSeen.String != "" {
-			if t, err := time.Parse(time.RFC3339, lastSeen.String); err == nil {
-				n.LastSeen = t
-			} else if t, err := time.Parse("2006-01-02 15:04:05", lastSeen.String); err == nil {
-				n.LastSeen = t
-			}
-		}
-		if hasAdvertCount && advertCount.Valid {
-			n.ObservationCount = int(advertCount.Int64)
-		}
-		nodes = append(nodes, n)
-	}
-	return nodes
 }
 
 type prefixMap struct {
@@ -8753,12 +8735,12 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 	total := 0
 
 	for _, tx := range s.packets {
-		if tx.RawHex == "" {
+		if tx.frameHead() == "" {
 			continue
 		}
 
 		// Parse header and path byte
-		routeType, actualPathByte, ok := packetpath.PathByte(tx.RawHex)
+		routeType, actualPathByte, ok := packetpath.PathByte(tx.frameHead())
 		if !ok {
 			continue
 		}
@@ -9422,12 +9404,12 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		if tx.FirstSeen != "" && tx.FirstSeen < cutoff {
 			continue
 		}
-		if tx.RawHex == "" || tx.DecodedJSON == "" {
+		if tx.frameHead() == "" || tx.DecodedJSON == "" {
 			continue
 		}
 		// Transport routes (0, 3) have 4 transport code bytes before the path
 		// byte, so the path byte is at offset 5 instead of 1.
-		routeType, pathByte, ok := packetpath.PathByte(tx.RawHex)
+		routeType, pathByte, ok := packetpath.PathByte(tx.frameHead())
 		if !ok {
 			continue
 		}
@@ -9744,7 +9726,7 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 	for pfx, entries := range nodePrefixes {
 		txList := s.byPathHop[pfx]
 		for _, tx := range txList {
-			if tx.RawHex == "" || len(tx.RawHex) < 4 {
+			if len(tx.frameHead()) < 4 {
 				continue
 			}
 			// Skip TRACE packets (payload_type 8) — they carry hash size in
@@ -9754,7 +9736,7 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 			if tx.PayloadType != nil && *tx.PayloadType == 8 {
 				continue
 			}
-			_, actualPathByte, ok := packetpath.PathByte(tx.RawHex)
+			_, actualPathByte, ok := packetpath.PathByte(tx.frameHead())
 			if !ok {
 				continue
 			}
@@ -9847,42 +9829,6 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 type bulkHealthNode struct {
 	pk, name, role string
 	lat, lon       interface{}
-}
-
-// bulkHealthNodes reads the most recently seen nodes for GetBulkHealth,
-// keeping only areaNodes when set. With a region or area filter it reads up
-// to 10000 rows so the caller does not under-fill after its exclusions;
-// otherwise it stops at limit.
-func (s *PacketStore) bulkHealthNodes(limit int, regionFilter bool, areaNodes map[string]bool) ([]bulkHealthNode, error) {
-	filtered := regionFilter || areaNodes != nil
-	queryLimit := limit
-	if filtered {
-		queryLimit = 10000
-	}
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC LIMIT ?", queryLimit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var nodes []bulkHealthNode
-	for rows.Next() {
-		var pk string
-		var name, role sql.NullString
-		var lat, lon sql.NullFloat64
-		rows.Scan(&pk, &name, &role, &lat, &lon)
-		if areaNodes != nil && !areaNodes[pk] {
-			continue
-		}
-		nodes = append(nodes, bulkHealthNode{
-			pk: pk, name: nullStrVal(name), role: nullStrVal(role),
-			lat: nullFloat(lat), lon: nullFloat(lon),
-		})
-		if !filtered && len(nodes) >= limit {
-			break
-		}
-	}
-	return nodes, nil
 }
 
 func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string]interface{} {

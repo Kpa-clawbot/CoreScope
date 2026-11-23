@@ -1465,27 +1465,6 @@ func TestDBGetMaxTransmissionID(t *testing.T) {
 	}
 }
 
-// --- GetNodeLocations ---
-
-func TestGetNodeLocations(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	locs := db.GetNodeLocations()
-	if len(locs) == 0 {
-		t.Error("expected some node locations")
-	}
-	pk := strings.ToLower("aabbccdd11223344")
-	if entry, ok := locs[pk]; ok {
-		if entry["lat"] == nil {
-			t.Error("expected non-nil lat")
-		}
-	} else {
-		t.Error("expected node location for test repeater")
-	}
-}
-
 // --- GetNodeLocationsByKeys ---
 
 func TestGetNodeLocationsByKeys(t *testing.T) {
@@ -1500,7 +1479,7 @@ func TestGetNodeLocationsByKeys(t *testing.T) {
 		t.Errorf("expected 1 location, got %d", len(locs))
 	}
 	if entry, ok := locs[strings.ToLower(pk)]; ok {
-		if entry["lat"] == nil {
+		if entry.Lat == nil {
 			t.Error("expected non-nil lat")
 		}
 	} else {

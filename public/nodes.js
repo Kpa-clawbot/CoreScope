@@ -787,6 +787,7 @@
         <button class="btn-secondary nodes-export-btn" id="nodesExportBtn" disabled
           title="Download the visible nodes as a MeshCore companion config">Export JSON</button>
       </div>
+      ${window.LocationPrivacy ? window.LocationPrivacy.slotHtml('export') : ''}
       <div id="nodesRegionFilter" class="region-filter-container"></div>
       <div id="nodesAreaFilter" style="display:none"></div>
       <div class="split-layout">
@@ -795,6 +796,7 @@
       </div>
     </div>`;
 
+    if (window.LocationPrivacy) window.LocationPrivacy.hydrate(document);
     RegionFilter.init(document.getElementById('nodesRegionFilter'));
     AreaFilter.init(document.getElementById('nodesAreaFilter'));
     regionChangeHandler = RegionFilter.onChange(function () { _allNodes = null; _fleetSkew = null; loadNodes(); });
@@ -1032,7 +1034,7 @@
           <tr><td>${renderPacketCountLabel('fullNodePacketCountHelp')}</td><td>${formatNodeCount(stats.totalTransmissions || stats.totalPackets || n.advert_count || 0)}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + formatNodeCount(stats.totalObservations) + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${formatNodeCount(stats.packetsToday || 0)}</td></tr>
           ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
-          ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
+          ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}${window.LocationPrivacy ? window.LocationPrivacy.slotHtml('location') : ''}</td></tr>` : ''}
           ${renderHashPrefix(n, true)}
           ${rfOn() ? `<tr><td title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</td><td data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</td></tr>` : ''}
         </table>
@@ -1055,8 +1057,8 @@
               const obsBadge = p.observation_count > 1 ? ` <span class="badge badge-obs" title="Seen ${p.observation_count} times"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${p.observation_count}</span>` : '';
               // Show hash size per advert if inconsistent
               let hashSizeBadge = '';
-              if (n.hash_size_inconsistent && p.payload_type === 4 && p.raw_hex) {
-                const pb = parseInt(p.raw_hex.slice(2, 4), 16);
+              if (n.hash_size_inconsistent && p.payload_type === 4 && (p.raw_hex || p.frame_head)) {
+                const pb = parseInt((p.raw_hex || p.frame_head).slice(2, 4), 16);
                 if ((pb & 0x3F) !== 0) {
                   const hs = ((pb >> 6) & 0x3) + 1;
                   const hsColor = hs >= 3 ? '#16a34a' : hs === 2 ? '#86efac' : '#f97316';
@@ -1119,12 +1121,15 @@
       if (window.CSNotify) window.CSNotify.mount(document.getElementById('nodeNotifySlotFull'), n.public_key);
       if (window.CSRepeaterInfo) window.CSRepeaterInfo.mount(document.getElementById('node-repeater-info'), n);
 
+      if (window.LocationPrivacy) window.LocationPrivacy.hydrate(document);
+
       // Map
       if (hasLoc) {
         try {
           detailMap = L.map('nodeFullMap', { zoomControl: true, attributionControl: false }).setView([n.lat, n.lon], 13);
           _applyTilesToNodeMap(detailMap);
           L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
+          if (window.LocationPrivacy) window.LocationPrivacy.drawUncertainty(detailMap, [n.lat, n.lon]);
           resizeDetailMapAfterLayout();
         } catch {}
       }
@@ -2146,7 +2151,7 @@
             <dt>${renderPacketCountLabel('nodePacketCountHelp')}</dt><dd>${formatNodeCount(totalPackets)}</dd>
             <dt>Packets Today</dt><dd>${formatNodeCount(stats.packetsToday || 0)}</dd>
             ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
-            ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
+            ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}${window.LocationPrivacy ? window.LocationPrivacy.slotHtml('location') : ''}</dd>` : ''}
             ${renderHashPrefix(n)}
             ${rfOn() ? `<dt title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</dt><dd data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</dd>` : ''}
           </dl>
@@ -2215,12 +2220,15 @@
     if (window.CSNotify) window.CSNotify.mount(document.getElementById('nodeNotifySlot'), n.public_key);
     if (window.CSRepeaterInfo) window.CSRepeaterInfo.mount(document.getElementById('node-repeater-info-pane'), n);
 
+    if (window.LocationPrivacy) window.LocationPrivacy.hydrate(document);
+
     // Init map
     if (hasLoc) {
       try {
         detailMap = L.map('nodeMap', { zoomControl: false, attributionControl: false }).setView([n.lat, n.lon], 13);
         _applyTilesToNodeMap(detailMap);
         L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
+        if (window.LocationPrivacy) window.LocationPrivacy.drawUncertainty(detailMap, [n.lat, n.lon]);
         resizeDetailMapAfterLayout();
       } catch {}
     }

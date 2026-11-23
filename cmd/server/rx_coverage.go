@@ -273,14 +273,17 @@ func sqlPlaceholders(n int) string {
 
 // queryCoverageRows returns raw coverage rows where the directly-heard node
 // matches the target pubkey by its 2-3 byte prefix (or full pubkey), within the
-// bbox. Read-only (server RO connection).
+// bbox. Read-only (server RO connection). With location privacy on, the rows
+// carry their privacy cell centres and the bbox applies to those (binCoverageRows).
 func (s *Server) queryCoverageRows(pubkey string, b bbox) ([]coverageRow, error) {
+	grid := fixGridFor(s.cfg.LocationFuzzer())
+	qb := b.widenForFixCells(grid)
 	cands := coverageHeardKeyCandidates(pubkey)
 	args := make([]interface{}, 0, len(cands)+4)
 	for _, c := range cands {
 		args = append(args, c)
 	}
-	args = append(args, b.MinLat, b.MaxLat, b.MinLon, b.MaxLon)
+	args = append(args, qb.MinLat, qb.MaxLat, qb.MinLon, qb.MaxLon)
 	rows, err := s.db.conn.Query(`
 		SELECT lat, lon, snr, rssi, heard_key, rx_at
 		FROM client_receptions
@@ -290,7 +293,17 @@ func (s *Server) queryCoverageRows(pubkey string, b bbox) ([]coverageRow, error)
 		return nil, err
 	}
 	defer rows.Close()
-	return scanCoverageRows(rows)
+	out, err := scanCoverageRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return binCoverageRows(out, grid, b), nil
+}
+
+// binCoverageRows is binFixesInBBox for coverage rows; rows unchanged when
+// grid is nil (privacy off), so the SQL bbox alone decides as before.
+func binCoverageRows(rows []coverageRow, grid *fixGrid, b bbox) []coverageRow {
+	return binFixesInBBox(rows, grid, b, func(r *coverageRow) (*float64, *float64) { return &r.Lat, &r.Lon })
 }
 
 // mobileRxStats returns the total mobile-client receptions of a node (by its
@@ -323,6 +336,20 @@ func zoomToHexRes(z int) int {
 	default:
 		return z
 	}
+}
+
+// coverageHexRes is the hex resolution a GPS-fix layer (coverage, gaps, RF
+// noise) is served at for zoom z over the bbox b: zoomToHexRes, and with
+// location privacy on no finer than hexes of the radius at b's poleward
+// latitude (the binned fixes, hence the cells, lie inside b).
+func (s *Server) coverageHexRes(z int, b bbox) int {
+	res := zoomToHexRes(z)
+	if radius := s.cfg.LocationFuzzer().RadiusM(); radius > 0 {
+		if c := maxHexResForRadius(radius, math.Max(math.Abs(b.MinLat), math.Abs(b.MaxLat))); c < res {
+			res = c
+		}
+	}
+	return res
 }
 
 func parseBBox(s string) (bbox, bool) {
@@ -374,7 +401,7 @@ func (s *Server) handleNodeRxCoverage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
-	fc := aggregateCoverage(rows, zoomToHexRes(z), s.heardKeyResolverFor(rows))
+	fc := aggregateCoverage(rows, s.coverageHexRes(z, b), s.heardKeyResolverFor(rows))
 	// Attach the node-wide reception/contributor totals (#3): the bbox limits the
 	// hex features to the current view, but these summarise all of this node's
 	// mobile coverage so the UI can show "heard by N clients" regardless of pan.
@@ -420,7 +447,8 @@ func uniqueHeardKeyCandidates(pubkey string, pm *prefixMap) []string {
 
 // mobileReceptionsSummary reads this node's mobile receptions since fromISO.
 // SQL on the read-only connection, so callers run it outside s.mu (#2146).
-// nil when there are none or the query fails.
+// nil when there are none or the query fails. With location privacy on, the
+// distance is measured to each fix's privacy cell centre, never the fix.
 func (s *Server) mobileReceptionsSummary(pubkey, fromISO string, nodeLat, nodeLon *float64, pm *prefixMap) *MobileReceptionsSummary {
 	if s.db == nil || s.db.conn == nil {
 		return nil
@@ -438,6 +466,7 @@ func (s *Server) mobileReceptionsSummary(pubkey, fromISO string, nodeLat, nodeLo
 		return nil
 	}
 	defer rows.Close()
+	grid := fixGridFor(s.cfg.LocationFuzzer())
 	var sum MobileReceptionsSummary
 	var snrs []float64
 	receivers := map[string]struct{}{}
@@ -454,7 +483,8 @@ func (s *Server) mobileReceptionsSummary(pubkey, fromISO string, nodeLat, nodeLo
 			snrs = append(snrs, snr.Float64)
 		}
 		if nodeLat != nil && nodeLon != nil && lat.Valid && lon.Valid {
-			maxKm = math.Max(maxKm, haversineKm(*nodeLat, *nodeLon, lat.Float64, lon.Float64))
+			fLat, fLon := grid.centre(lat.Float64, lon.Float64)
+			maxKm = math.Max(maxKm, haversineKm(*nodeLat, *nodeLon, fLat, fLon))
 		}
 	}
 	if rows.Err() != nil || sum.Receptions == 0 {

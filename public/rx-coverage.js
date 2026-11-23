@@ -203,6 +203,7 @@
     return '<div style="max-width:1100px;margin:0 auto;padding:12px 16px">' +
       '<h2 style="margin:4px 0 2px;font-size:18px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Mobile RX coverage</h2>' +
       '<div style="color:var(--text-muted);font-size:11px" id="rxSubtitle">' + subtitleHtml() + '</div>' +
+      (window.LocationPrivacy ? window.LocationPrivacy.approxNoteHtml('coverage') : '') +
       appPanelHtml(window.MC_CLIENT_RX_APP_URL, window.qrcode) +
       '<div class="analytics-time-range" id="rxDays" style="margin:8px 0">' + dayBtn(1) + dayBtn(7) + dayBtn(14) + dayBtn(30) + '</div>' +
       '<div class="analytics-time-range" id="rxMineBar" style="margin:8px 0" hidden></div>' +

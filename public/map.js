@@ -669,6 +669,7 @@
       }
     }
     map = L.map('leaflet-map', { zoomControl: true }).setView(initCenter, initZoom);
+    if (window.LocationPrivacy) window.LocationPrivacy.addAttribution(map);
     const initializedMap = map;
 
     // If navigated with ?node=PUBKEY, highlight that node after markers load

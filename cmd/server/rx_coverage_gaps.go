@@ -85,10 +85,13 @@ func aggregateGaps(track []trackPoint, receptions []coverageRow, res int) (gaps 
 // queryTrackPoints returns client_rf_samples GPS fixes within a bbox and time
 // window (days; 0 = all time), optionally for one companion. Unlike the noise
 // layer it keeps rows without a noise_floor reading: any sample proves the
-// companion was connected there. Read-only.
+// companion was connected there. Read-only. With location privacy on, the
+// points are privacy cell centres and the bbox applies to those.
 func (s *Server) queryTrackPoints(rx string, days int, b bbox) ([]trackPoint, error) {
+	grid := fixGridFor(s.cfg.LocationFuzzer())
+	qb := b.widenForFixCells(grid)
 	where := []string{"lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?", "stationary = 0"}
-	args := []interface{}{b.MinLat, b.MaxLat, b.MinLon, b.MaxLon}
+	args := []interface{}{qb.MinLat, qb.MaxLat, qb.MinLon, qb.MaxLon}
 	if rx != "" {
 		where = append(where, "rx_pubkey = ?")
 		args = append(args, strings.ToLower(rx))
@@ -110,5 +113,8 @@ func (s *Server) queryTrackPoints(rx string, days int, b bbox) ([]trackPoint, er
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return binFixesInBBox(out, grid, b, func(p *trackPoint) (*float64, *float64) { return &p.Lat, &p.Lon }), nil
 }

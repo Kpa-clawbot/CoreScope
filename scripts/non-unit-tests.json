@@ -94,6 +94,7 @@
       "tests/e2e/test-live-layout-1178-1179-e2e.js",
       "tests/e2e/test-live-mql-leak-1180-e2e.js",
       "tests/e2e/test-live-multibyte-only-e2e.js",
+      "tests/e2e/test-location-privacy-e2e.js",
       "tests/e2e/test-logo-default-sage-teal-e2e.js",
       "tests/e2e/test-logo-pulse-1173-e2e.js",
       "tests/e2e/test-logo-rebrand-e2e.js",

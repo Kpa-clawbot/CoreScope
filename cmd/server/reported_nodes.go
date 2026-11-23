@@ -147,6 +147,19 @@ func estimatePosition(pts []rxPoint) (*PositionEstimate, int) {
 	return est, len(spots)
 }
 
+// fuzzEstimate serves, with location privacy on, the estimate of node pk as
+// any other position of that node: Fuzz(pk, ·), with the radius grown by the
+// fuzzing radius so the circle still holds the estimate. The result is not
+// rounded again: the fuzzed point is the one every route serves for pk.
+// No-op when fz is nil (privacy off) or there is no estimate.
+func fuzzEstimate(fz *locationFuzzer, pk string, est *PositionEstimate) {
+	if fz == nil || est == nil {
+		return
+	}
+	est.Lat, est.Lon = fz.Fuzz(pk, est.Lat, est.Lon)
+	est.RadiusM += fz.RadiusM()
+}
+
 type reportedNodesCache struct {
 	mu   sync.Mutex
 	at   time.Time
@@ -271,6 +284,7 @@ func (s *Server) computeReportedNodes() (*ReportedNodesResponse, error) {
 			n.Receptions = len(rx.points)
 			n.FirstHeard, n.LastHeard = rx.first, rx.last
 			n.Estimate, n.Spots = estimatePosition(rx.points)
+			fuzzEstimate(s.cfg.LocationFuzzer(), pk, n.Estimate)
 		}
 	}
 	for _, pk := range order {

@@ -101,9 +101,28 @@ func main() {
 	flag.Parse()
 
 	// Load config
-	cfg, err := LoadConfig(configDir)
+	cfg, cfgFailures := loadConfigReport(configDir)
+	for _, cf := range cfgFailures {
+		log.Printf("[config] warning: %s could not be parsed (skipped): %v", cf.Path, cf.Err)
+		// A broken config.json falls back to the next file or the defaults,
+		// which would silently serve exact positions.
+		if err := locationPrivacyFailClosed(cf.Err, cf.Path, os.Getenv); err != nil {
+			log.Fatalf("[privacy] %v", err)
+		}
+	}
+	// Location privacy (location_privacy.go): an enabled block with a short
+	// secret or an out-of-range radius never starts. The error never
+	// contains the secret.
+	locFuzz, err := newLocationFuzzer(cfg.LocationPrivacy)
 	if err != nil {
-		log.Printf("[config] warning: %v (using defaults)", err)
+		log.Fatalf("[privacy] refusing to start: %v", err)
+	}
+	if err := locationPrivacyStartupCheck(cfg.LocationPrivacy, locFuzz, os.Getenv); err != nil {
+		log.Fatalf("[privacy] refusing to start: %v", err)
+	}
+	cfg.setLocationFuzzer(locFuzz)
+	if locFuzz.Enabled() {
+		log.Printf("[privacy] location privacy on: positions approximate within %g m", locFuzz.RadiusM())
 	}
 	warnClientRxAppURL(cfg)
 
@@ -182,6 +201,9 @@ func main() {
 		return err
 	}
 	defer dbClose()
+	// Location privacy: node positions are fuzzed as they are read, from
+	// the first query on (node_coords.go).
+	database.setLocationFuzzer(cfg.LocationFuzzer())
 
 	// Verify DB has expected tables
 	var tableName string

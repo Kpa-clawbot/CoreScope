@@ -231,6 +231,10 @@ Can also be configured live via the **🗺️ GeoFilter** tab in the Customizer 
 
 See [Geographic Filtering](geofilter.md) for the full guide.
 
+## Location privacy
+
+Opt-in: serve approximate node positions instead of exact ones (`locationPrivacy` block, secret via `CORESCOPE_LOCATION_SECRET`). See [Location Privacy](../location-privacy.md).
+
 ## Areas
 
 ```json

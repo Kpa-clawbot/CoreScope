@@ -43,6 +43,11 @@ type Config struct {
 	DBPath     string            `json:"dbPath"`
 	ListLimits *ListLimitsConfig `json:"listLimits"`
 
+	// LocationPrivacy serves approximate node positions (location_privacy.go).
+	// locFuzz is the validated fuzzer main installs with setLocationFuzzer.
+	LocationPrivacy *LocationPrivacyConfig `json:"locationPrivacy,omitempty"`
+	locFuzz         *locationFuzzer
+
 	// NodeBlacklist is a list of public keys to exclude from all API responses.
 	// Blacklisted nodes are hidden from node lists, search, detail, map, and stats.
 	// Use this to filter out trolls, nodes with offensive names, or nodes
@@ -553,22 +558,44 @@ type ThemeFile struct {
 }
 
 func LoadConfig(baseDirs ...string) (*Config, error) {
+	cfg, _ := loadConfigReport(baseDirs...)
+	return cfg, nil
+}
+
+// configParseFailure is a config file that exists but could not be parsed;
+// LoadConfig skips it and tries the next candidate (or the defaults).
+type configParseFailure struct {
+	Path string
+	Err  error
+}
+
+// configCandidatePaths lists the files LoadConfig tries, in order.
+func configCandidatePaths(baseDirs ...string) []string {
 	if len(baseDirs) == 0 {
 		baseDirs = []string{"."}
 	}
-	paths := make([]string, 0)
+	paths := make([]string, 0, 2*len(baseDirs))
 	for _, d := range baseDirs {
 		paths = append(paths, filepath.Join(d, "config.json"))
 		paths = append(paths, filepath.Join(d, "data", "config.json"))
 	}
+	return paths
+}
 
+// loadConfigReport is LoadConfig that also returns every candidate file it
+// read but could not parse before settling on a file or the defaults. main
+// uses it to refuse a start whose broken config may have dropped a privacy
+// setting (locationPrivacyFailClosed).
+func loadConfigReport(baseDirs ...string) (*Config, []configParseFailure) {
+	var failures []configParseFailure
 	cfg := &Config{Port: 3000}
-	for _, p := range paths {
+	for _, p := range configCandidatePaths(baseDirs...) {
 		data, err := os.ReadFile(p)
 		if err != nil {
 			continue
 		}
 		if err := json.Unmarshal(data, cfg); err != nil {
+			failures = append(failures, configParseFailure{Path: p, Err: err})
 			continue
 		}
 		cfg.NormalizeTimestampConfig()
@@ -576,14 +603,14 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		cfg.applyListLimitsDefaults()
 		applyCORSEnv(cfg)
 		cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
-		return cfg, nil
+		return cfg, failures
 	}
 	cfg.NormalizeTimestampConfig()
 	cfg.migrateDeprecatedConfig()
 	cfg.applyListLimitsDefaults()
 	applyCORSEnv(cfg)
 	cfg.CORSAllowedOrigins = sanitizeCORSOrigins(cfg.CORSAllowedOrigins)
-	return cfg, nil // defaults
+	return cfg, failures // defaults
 }
 
 // WebSocketConfig holds the /ws transport limits (#1794). These sit behind

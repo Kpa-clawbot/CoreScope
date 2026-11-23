@@ -146,13 +146,16 @@ func (s *Server) requireClientRfSamples(w http.ResponseWriter, r *http.Request) 
 // queryRfNoiseRows returns raw RF-environment samples within a bbox, over a
 // time window (days; 0 = all time), optionally narrowed to one companion (rx)
 // or a set of companions (rxIn, see queryCoverageFiltered). Read-only (server
-// RO connection).
+// RO connection). With location privacy on, the rows carry their privacy cell
+// centres and the bbox applies to those.
 func (s *Server) queryRfNoiseRows(rx string, rxIn []string, days int, b bbox) ([]rfNoiseRow, error) {
 	if rxIn != nil && len(rxIn) == 0 {
 		return []rfNoiseRow{}, nil
 	}
+	grid := fixGridFor(s.cfg.LocationFuzzer())
+	qb := b.widenForFixCells(grid)
 	where := []string{"lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?", "noise_floor IS NOT NULL"}
-	args := []interface{}{b.MinLat, b.MaxLat, b.MinLon, b.MaxLon}
+	args := []interface{}{qb.MinLat, qb.MaxLat, qb.MinLon, qb.MaxLon}
 	where, args = appendRxFilter(where, args, "rx_pubkey", rx, rxIn)
 	if days > 0 {
 		since := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
@@ -176,7 +179,10 @@ func (s *Server) queryRfNoiseRows(rx string, rxIn []string, days int, b bbox) ([
 		}
 		out = append(out, rfNoiseRow{Lat: lat, Lon: lon, NoiseFloor: noiseFloor, Stationary: stationary != 0})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return binFixesInBBox(out, grid, b, func(r *rfNoiseRow) (*float64, *float64) { return &r.Lat, &r.Lon }), nil
 }
 
 // handleRfNoise serves the RF noise-floor map layer as GeoJSON hex cells,
@@ -204,12 +210,16 @@ func (s *Server) handleRfNoise(w http.ResponseWriter, r *http.Request) {
 	}
 	days := clampDays(atoiDefault(r.URL.Query().Get("days"), 7))
 	z, _ := strconv.Atoi(r.URL.Query().Get("z"))
-	rows, err := s.queryRfNoiseRows(r.URL.Query().Get("rx"), mine, days, b)
+	rx := r.URL.Query().Get("rx")
+	if !s.requireCompanionView(w, r, rx) {
+		return
+	}
+	rows, err := s.queryRfNoiseRows(rx, mine, days, b)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
-	fc := aggregateRfNoise(rows, zoomToHexRes(z))
+	fc := aggregateRfNoise(rows, s.coverageHexRes(z, b))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fc)
 }

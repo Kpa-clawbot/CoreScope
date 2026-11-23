@@ -48,13 +48,29 @@ func (v nodeVisibility) filters() bool {
 // foreign flag: foreign holds the pubkeys flagged foreign_advert (nil: none).
 func (v nodeVisibility) infoRule(foreign map[string]struct{}) func(n *nodeInfo) bool {
 	return func(n *nodeInfo) bool {
-		lat, lon := n.Lat, n.Lon
-		if !n.HasGPS {
-			lat, lon = 0, 0 // no fix, as getAllNodes stores a NULL or 0,0 position
-		}
+		// The stored position, not the approximate one (location privacy);
+		// no fix (0, 0) when getAllNodes read a NULL or 0,0 position.
+		lat, lon := n.geoFilterPos()
 		_, f := foreign[n.PublicKey]
 		return v.Visible(n.PublicKey, n.Name, lat, lon, f)
 	}
+}
+
+// geoFilterNodePositions returns the stored positions of the /api/nodes rows
+// for the geo_filter when location privacy serves approximate ones (keyed by
+// public_key as stored). nil when the rows hold the stored position already
+// (privacy off) or no geo_filter is set: then the rows' own lat/lon decide.
+func (s *Server) geoFilterNodePositions(v nodeVisibility, nodes []map[string]interface{}) (map[string]exactNodePos, error) {
+	if v.geo == nil || s.db.locationFuzzer() == nil {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if pk, ok := node["public_key"].(string); ok {
+			keys = append(keys, pk)
+		}
+	}
+	return s.db.exactNodePositions(keys)
 }
 
 // visibleNodeInfo returns the current rule for node-cache rows. It reads the

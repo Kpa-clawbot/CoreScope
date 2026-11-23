@@ -55,6 +55,12 @@ func TestBroadcastPayloadKeepsEveryKey(t *testing.T) {
 	}
 }
 
+// decodedKeyListDecls are the key lists the guard below skips: the dropped
+// keys themselves, and locatedAdvertHiddenKeys (packet_redact.go), which
+// names "signature" only to delete it from a located advert's served JSON.
+// Deleting a key is not reading it; any other line naming one still fails.
+var decodedKeyListDecls = []string{"var decodedCacheDroppedKeys", "var locatedAdvertHiddenKeys"}
+
 // Guard: if server code starts reading one of the dropped keys, it must come
 // off the list. Any string literal naming one outside a struct tag fails.
 func TestDecodedCacheDroppedKeysAreUnread(t *testing.T) {
@@ -69,8 +75,10 @@ func TestDecodedCacheDroppedKeysAreUnread(t *testing.T) {
 		}
 		inList := false
 		for i, line := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(line, "var decodedCacheDroppedKeys") {
-				inList = true
+			for _, decl := range decodedKeyListDecls {
+				if strings.HasPrefix(line, decl) {
+					inList = true
+				}
 			}
 			if inList {
 				inList = !strings.HasPrefix(line, "}")

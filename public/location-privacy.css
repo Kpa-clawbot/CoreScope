@@ -1,0 +1,18 @@
+/* Location privacy notices — theme variables only. */
+.lp-slot[hidden] { display: none; }
+.lp-notice,
+.lp-hidden-bytes {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent-strong);
+  border-radius: 6px;
+  background: var(--surface-2, var(--card-bg));
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.lp-hidden-bytes { font-size: 13px; }
+.lp-attr { color: var(--text); font-weight: 600; }
+.leaflet-container .lp-attr { color: inherit; }
+.lp-loc { display: block; color: var(--text-muted); font-size: 12px; }

@@ -269,13 +269,21 @@
   }
 
   // ── Field Resolver ─────────────────────────────────────────────────────────
+  // Frame length: from raw_hex, else the frame_bytes the server sends when it
+  // hides raw_hex (location privacy). Standalone copy — no app globals.
+  function frameBytes(packet) {
+    if (typeof packet.raw_hex === 'string' && packet.raw_hex) return packet.raw_hex.length / 2;
+    var n = Number(packet.frame_bytes);
+    return isFinite(n) && n > 0 && Math.floor(n) === n ? n : 0;
+  }
+
   function resolveField(packet, field) {
     if (field === 'type') return FW_PAYLOAD_TYPES[packet.payload_type] || '';
     if (field === 'route') return getRT()[packet.route_type] || '';
     if (field === 'transport') return isTransportRouteType(packet.route_type);
     if (field === 'hash') return packet.hash || '';
     if (field === 'raw') return packet.raw_hex || '';
-    if (field === 'size') return packet.raw_hex ? packet.raw_hex.length / 2 : 0;
+    if (field === 'size') return frameBytes(packet);
     if (field === 'snr') return packet.snr;
     if (field === 'rssi') return packet.rssi;
     if (field === 'hops') {
@@ -337,7 +345,8 @@
       return arr.map(function(h) { return String(h || '').toLowerCase(); }).join(' ');
     }
     if (field === 'payload_bytes') {
-      return packet.raw_hex ? Math.max(0, packet.raw_hex.length / 2 - 2) : 0;
+      var fb = frameBytes(packet);
+      return fb ? Math.max(0, fb - 2) : 0;
     }
     if (field === 'payload_hex') {
       return packet.raw_hex ? packet.raw_hex.slice(4) : '';

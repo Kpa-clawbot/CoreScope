@@ -372,6 +372,9 @@ type TransmissionResp struct {
 	Direction        interface{}       `json:"direction"`
 	Score            interface{}       `json:"score,omitempty"`
 	Observations     []ObservationResp `json:"observations,omitempty"`
+	LocationHidden   bool              `json:"location_hidden,omitempty"` // located advert, served redacted
+	FrameBytes       int               `json:"frame_bytes,omitempty"`     // hidden packet: frame length
+	FrameHead        string            `json:"frame_head,omitempty"`      // hidden packet: header and path bytes, hex
 }
 
 type ObservationResp struct {
@@ -388,6 +391,9 @@ type ObservationResp struct {
 	Direction      interface{} `json:"direction,omitempty"`
 	RawHex         interface{} `json:"raw_hex,omitempty"`
 	Timestamp      interface{} `json:"timestamp"`
+	LocationHidden bool        `json:"location_hidden,omitempty"` // located advert, served redacted
+	FrameBytes     int         `json:"frame_bytes,omitempty"`     // hidden packet: frame length
+	FrameHead      string      `json:"frame_head,omitempty"`      // hidden packet: header and path bytes, hex
 }
 
 type GroupedPacketResp struct {
@@ -1147,6 +1153,9 @@ type ClientConfigResponse struct {
 	LOS *LOSClientConfig `json:"los,omitempty"`
 	// Present only when planner.enabled (planner_config.go).
 	Planner *PlannerClientConfig `json:"planner,omitempty"`
+	// Present only when locationPrivacy is on: served positions are
+	// approximate, within radiusM (location_privacy.go).
+	LocationPrivacy *ClientLocationPrivacy `json:"locationPrivacy,omitempty"`
 }
 
 // ClientUserManagement tells the frontend that accounts exist, and whether
