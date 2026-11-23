@@ -1741,27 +1741,44 @@
       // The bottom-left corner shares the map's bottom edge with Leaflet's
       // attribution bar, which wraps to several lines on narrow screens.
       // Lift the corner by the bar's measured height whenever the two overlap
-      // horizontally; re-measured on resize, layer changes and bar resizes.
+      // horizontally; re-measured when the map or the bar resizes.
       // A moved panel is not in the corner: no lift.
+      //
+      // Measuring forces a layout, so it never runs per layer: the map fires
+      // layeradd/layerremove for every marker and line (thousands on the Map
+      // and Live pages). Only where the bar cannot be observed (no
+      // ResizeObserver, or no bar yet) are layer events used, and then only
+      // those of layers that carry attribution, at most once per frame.
       _watchAttribution: function (map) {
         var self = this;
         this._lift = function () { self._applyLift(); };
-        try { map.on('resize layeradd layerremove', this._lift); } catch (_) {}
+        try { map.on('resize', this._lift); } catch (_) {}
         try {
           var attr = this._attrEl();
           if (attr && typeof ResizeObserver === 'function') {
             this._ro = new ResizeObserver(this._lift);
             this._ro.observe(attr);
           }
-        } catch (_) {}
+        } catch (_) { this._ro = null; }
+        if (!this._ro) {
+          this._liftLayer = function (e) {
+            var l = e && e.layer;
+            if (self._liftFrame || !l || typeof l.getAttribution !== 'function' || !l.getAttribution()) return;
+            self._liftFrame = frame(function () { self._liftFrame = null; self._applyLift(); });
+          };
+          try { map.on('layeradd layerremove', this._liftLayer); } catch (_) {}
+        }
         this._applyLift();
       },
 
       _unwatchAttribution: function (map) {
         if (this._ro) { try { this._ro.disconnect(); } catch (_) {} this._ro = null; }
-        if (this._lift && map) { try { map.off('resize layeradd layerremove', this._lift); } catch (_) {} }
+        if (this._lift && map) { try { map.off('resize', this._lift); } catch (_) {} }
+        if (this._liftLayer && map) { try { map.off('layeradd layerremove', this._liftLayer); } catch (_) {} }
+        cancelFrame(this._liftFrame);
+        this._liftFrame = null;
         if (this._corner) { try { this._corner.style.marginBottom = ''; } catch (_) {} }
-        this._lift = this._corner = null;
+        this._lift = this._liftLayer = this._corner = null;
       },
 
       _attrEl: function () {
@@ -1880,8 +1897,11 @@
         p.then(function (d) {
           if (gen !== self._gen) return;
           self._apply(d);
-        }, function () {
+        }, function (e) {
           if (gen !== self._gen) return;
+          // Aborted by the next _load (same generation): not a failure, its
+          // answer is the one that counts.
+          if (e && e.name === 'AbortError') return;
           self._fail('error');
         });
       },
@@ -1977,9 +1997,10 @@
         var prevTime = this._shown != null ? this._shown : null;
         this._build();
         var idx = ductTimeIndex(d.times, Date.now() / 1000);
-        if (this._userPicked && prevTime != null) {
-          var keep = d.times.indexOf(prevTime);
+        if (this._userPicked) {
+          var keep = prevTime != null ? d.times.indexOf(prevTime) : -1;
           if (keep >= 0) idx = keep;
+          else this._userPicked = false;   // that hour is gone: follow the clock again
         }
         this._tlBuild();
         this._renderLegend();

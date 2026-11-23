@@ -36,6 +36,12 @@
  *   - the hour tick: one timer aimed at the top of the hour moves the now
  *     line and the shown hour (not a user-picked one) without a request
  *   - remove during an in-flight fetch, timer cleanup, refresh cadence
+ *   - a refresh that aborts the request before it never marks the held
+ *     forecast out of date; a user-picked hour that left the forecast is
+ *     dropped, so the shown hour follows the clock again
+ *   - the corner lift above the attribution bar: measured on map resize and
+ *     when the bar resizes, never per added or removed layer (at most once a
+ *     frame, for attributed layers only, where ResizeObserver is missing)
  *   - overlay registry + MC_buildOverlayLayer (factory absent -> null)
  *   - the panel: one control (header, timeline, legend body), collapse and
  *     its persistence (storage missing, null or throwing), moving it
@@ -234,6 +240,9 @@ function makeApi() {
   const api = { calls: [] };
   api.fetch = (url, opts) => new Promise((resolve, reject) => {
     api.calls.push({ url, opts, ok(body) { resolve({ ok: true, json: () => Promise.resolve(body) }); }, fail() { reject(new Error('net')); } });
+    // Like fetch: an aborted request rejects with the signal's AbortError.
+    const sig = opts && opts.signal;
+    if (sig) sig.addEventListener('abort', () => reject(sig.reason));
   });
   return api;
 }
@@ -263,6 +272,20 @@ function makeSandbox(opts) {
     cancelAnimationFrame(id) { const i = frames.findIndex(t => t.id === id); if (i >= 0) frames.splice(i, 1); },
   };
   if ('storage' in opts) ctx.localStorage = opts.storage;
+  // Off by default (the fallback paths); abort: the real AbortController;
+  // ro: a ResizeObserver whose instances (in `observers`) fire on demand.
+  const observers = [];
+  if (opts.abort) ctx.AbortController = AbortController;
+  if (opts.ro) {
+    ctx.ResizeObserver = function (cb) {
+      const o = this;
+      o.targets = [];
+      o.observe = (t) => { o.targets.push(t); };
+      o.disconnect = () => { o.targets = []; o.gone = true; };
+      o.fire = () => { if (!o.gone) cb([]); };
+      observers.push(o);
+    };
+  }
   if (opts.narrow) ctx.matchMedia = (q) => ({ matches: /max-width: 600px/.test(q) });
   ctx.window = ctx;
   ctx.CSApi = makeApi();
@@ -280,7 +303,7 @@ function makeSandbox(opts) {
   const runHourTick = () => { const i = timeouts.findIndex(t => !short(t)); if (i >= 0) timeouts.splice(i, 1)[0].fn(); };
   // What the browser does after scrollLeft changes: scroll events, then a frame.
   const settleScroll = () => { flushScroll(); runFrames(); };
-  return { ctx, stats, timers, cleared, api: ctx.CSApi, vars, winL, timeouts, frames, runFrames, runTimeouts, uiTimeouts, hourTicks, runHourTick, settleScroll };
+  return { ctx, stats, timers, cleared, observers, api: ctx.CSApi, vars, winL, timeouts, frames, runFrames, runTimeouts, uiTimeouts, hourTicks, runHourTick, settleScroll };
 }
 
 // A Map-like localStorage; throwing: every call throws.
@@ -1794,6 +1817,62 @@ test('an ok answer re-picks the hour, keeping a user-picked one that is still th
   } finally { Date.now = realNow; }
 });
 
+test('a refresh that aborts the request before it does not call the held forecast out of date', async () => {
+  const s = await mount(SAMPLE, T0, null, { abort: true });
+  s.timers[0].fn();                          // refresh 1, left in flight
+  s.timers[0].fn();                          // refresh 2 aborts it
+  assert.strictEqual(s.api.calls.length, 3);
+  assert.ok(s.api.calls[1].opts.signal.aborted && !s.api.calls[2].opts.signal.aborted);
+  await tick(); await tick();
+  assert.ok(!s.layer._stale, 'the aborted request is not a failure');
+  assert.ok(!legendText(s).includes('out of date'));
+  s.api.calls[2].fail();                     // the live request failing still is
+  await tick(); await tick();
+  assert.ok(s.layer._stale && legendText(s).includes('out of date'));
+});
+
+test('an aborted first request (no data yet) changes neither the status nor the retry timer', async () => {
+  const s = makeSandbox({ abort: true });
+  const map = makeMap();
+  const layer = s.ctx.MC_createDuctingLayer({});
+  layer.onAdd(map);
+  s.timers[0].fn();
+  await tick(); await tick();
+  assert.strictEqual(layer._state, 'loading');
+  assert.strictEqual(s.timers[0].ms, 30 * 60 * 1000, 'not switched to the retry period');
+  s.api.calls[1].ok(clone(SAMPLE));
+  await tick(); await tick();
+  assert.strictEqual(layer._cells.length, 3);
+});
+
+test('a user-picked hour that left the forecast is dropped: the shown hour follows the clock again', async () => {
+  const s = await mount(SAMPLE, T0);
+  const realNow = Date.now;
+  try {
+    Date.now = () => (T0 + 60) * 1000;
+    s.layer._tl.fire('keydown', { key: 'Home' });
+    assert.ok(s.layer._userPicked && s.layer._idx === 0);
+    // The next forecast starts an hour later: T0 is gone.
+    Date.now = () => (T1 + 60) * 1000;
+    const body = clone(SAMPLE);
+    body.generatedAt = SAMPLE.generatedAt + 3600;
+    body.times = [T1, T2, T2 + 3600];
+    s.timers[0].fn();
+    s.api.calls[1].ok(body);
+    await tick(); await tick();
+    assert.strictEqual(s.layer._idx, 0, 'fell back to now (T1)');
+    assert.strictEqual(s.layer._userPicked, false, 'no longer a user pick');
+    Date.now = () => (T2 + 60) * 1000;
+    s.runHourTick();
+    assert.strictEqual(s.layer._idx, 1, 'the hour tick moves on');
+    Date.now = () => (T2 + 3660) * 1000;
+    s.timers[0].fn();
+    s.api.calls[2].ok(clone(body));
+    await tick(); await tick();
+    assert.strictEqual(s.layer._idx, 2, 'and so does a refresh');
+  } finally { Date.now = realNow; }
+});
+
 // ── legend text, compact legend ─────────────────────────────────────────────
 
 test('legend shows only the attribution, not the model twice', async () => {
@@ -1822,6 +1901,18 @@ test('legend is collapsible and starts collapsed on narrow screens; header and t
   assert.ok(!one(panel, 'mc-duct-time').hidden && !one(panel, 'mc-duct-head').hidden, 'timeline and header stay');
 });
 
+// Counts each measurement of the attribution bar (a forced layout in the browser).
+function countMeasures(map) {
+  const a = map.attr, c = { n: 0 };
+  let h = a.offsetHeight;
+  Object.defineProperty(a, 'offsetHeight', { get() { c.n++; return h; }, set(v) { h = v; } });
+  a.getBoundingClientRect = function () { c.n++; return this.rect; };
+  return c;
+}
+const attrObserver = (s, map) => s.observers.filter(o => o.targets.includes(map.attr))[0];
+const tileLayer = { getAttribution: () => '(c) tiles' };
+const marker = { getAttribution: () => undefined };
+
 test('bottom-left corner is lifted above the attribution bar, re-measured, and released', () => {
   const s = makeSandbox();
   const map = makeMap();
@@ -1832,7 +1923,7 @@ test('bottom-left corner is lifted above the attribution bar, re-measured, and r
   map.fire('resize');
   assert.strictEqual(map.corner.style.marginBottom, '54px', 'follows a taller bar');
   map.attr.rect = { left: 400 };            // short bar at the right: no overlap
-  map.fire('layeradd');
+  map.fire('resize');
   assert.strictEqual(map.corner.style.marginBottom, '', 'no lift without overlap');
   map.attr.rect = { left: 0 };
   map.fire('resize');
@@ -1841,6 +1932,88 @@ test('bottom-left corner is lifted above the attribution bar, re-measured, and r
   assert.strictEqual(map.corner.style.marginBottom, '', 'released on remove');
   assert.strictEqual((map._on.resize || []).length, 0);
   assert.strictEqual((map._on.layeradd || []).length, 0);
+  assert.strictEqual((map._on.layerremove || []).length, 0);
+});
+
+test('corner lift with ResizeObserver: 1000 layers added and removed measure nothing; the bar resizing and a map resize do', () => {
+  const s = makeSandbox({ ro: true });
+  const map = makeMap();
+  const layer = s.ctx.MC_createDuctingLayer({});
+  layer.onAdd(map);
+  assert.strictEqual(map.corner.style.marginBottom, '36px');
+  const ro = attrObserver(s, map);
+  assert.ok(ro, 'the attribution bar is observed');
+  const m = countMeasures(map);
+  for (let i = 0; i < 1000; i++) {
+    const l = i % 10 ? marker : tileLayer;
+    map.fire('layeradd', { layer: l });
+    map.fire('layerremove', { layer: l });
+  }
+  s.runFrames(); s.runTimeouts();
+  assert.strictEqual(m.n, 0, 'no layout read per layer');
+  map.attr.offsetHeight = 54;                // the bar wrapped to another line
+  ro.fire();
+  assert.strictEqual(map.corner.style.marginBottom, '54px', 'bar resize re-measures');
+  map.attr.offsetHeight = 18;
+  map.fire('resize');
+  assert.strictEqual(map.corner.style.marginBottom, '18px', 'map resize re-measures');
+  layer.onRemove(map);
+  assert.ok(ro.gone, 'observer disconnected');
+  assert.strictEqual(map.corner.style.marginBottom, '');
+  ['resize', 'layeradd', 'layerremove'].forEach(e => assert.strictEqual((map._on[e] || []).length, 0, e));
+});
+
+test('corner lift without ResizeObserver: only attributed layers re-measure, once per frame however many', () => {
+  const s = makeSandbox();
+  const map = makeMap();
+  const layer = s.ctx.MC_createDuctingLayer({});
+  layer.onAdd(map);
+  s.runFrames();
+  const m = countMeasures(map);
+  const frames0 = s.frames.length;
+  for (let i = 0; i < 1000; i++) {
+    map.fire('layeradd', { layer: marker });
+    map.fire('layerremove', { layer: marker });
+  }
+  map.fire('layeradd');                      // no event object: ignored, no throw
+  map.fire('layeradd', { layer: {} });
+  assert.strictEqual(m.n, 0, 'markers and lines never measure');
+  assert.strictEqual(s.frames.length, frames0, 'nor queue a frame');
+  map.attr.offsetHeight = 54;
+  for (let i = 0; i < 1000; i++) {
+    map.fire('layeradd', { layer: tileLayer });
+    map.fire('layerremove', { layer: tileLayer });
+  }
+  assert.strictEqual(m.n, 0, 'nothing measured inside the events');
+  assert.strictEqual(s.frames.length, frames0 + 1, 'one frame queued for 2000 events');
+  s.runFrames();
+  assert.strictEqual(map.corner.style.marginBottom, '54px', 'the lift follows the new bar');
+  assert.ok(m.n > 0 && m.n <= 3, 'one measurement pass (' + m.n + ' reads)');
+  // The next frame's events queue the next (single) pass.
+  map.attr.offsetHeight = 36;
+  map.fire('layerremove', { layer: tileLayer });
+  map.fire('layeradd', { layer: tileLayer });
+  assert.strictEqual(s.frames.length, frames0 + 1);
+  // Removed with a pass still queued: it is cancelled, the lift released.
+  layer.onRemove(map);
+  assert.strictEqual(s.frames.length, frames0, 'queued pass cancelled');
+  assert.strictEqual(map.corner.style.marginBottom, '');
+  ['resize', 'layeradd', 'layerremove'].forEach(e => assert.strictEqual((map._on[e] || []).length, 0, e));
+});
+
+test('corner lift: no attribution bar to observe falls back to the coalesced layer events', () => {
+  const s = makeSandbox({ ro: true });
+  const map = makeMap();
+  const bar = map.attr;
+  map.attributionControl = null;             // added to the map later
+  const layer = s.ctx.MC_createDuctingLayer({});
+  layer.onAdd(map);
+  assert.strictEqual(map.corner.style.marginBottom, '');
+  map.attributionControl = { getContainer: () => bar };
+  map.fire('layeradd', { layer: tileLayer });
+  s.runFrames();
+  assert.strictEqual(map.corner.style.marginBottom, '36px');
+  layer.onRemove(map);
 });
 
 // ── panel and timeline ──────────────────────────────────────────────────────
