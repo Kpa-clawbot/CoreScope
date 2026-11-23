@@ -383,7 +383,7 @@ func main() {
 	absPublic, _ := filepath.Abs(publicDir)
 	if _, err := os.Stat(absPublic); err == nil {
 		fs := http.FileServer(http.Dir(absPublic))
-		router.PathPrefix("/").Handler(wsOrStatic(hub, spaHandler(absPublic, fs)))
+		router.PathPrefix("/").Handler(wsOrStatic(hub, spaHandler(absPublic, fs, os.Getenv(siteURLEnv))))
 		log.Printf("[static] serving %s", absPublic)
 	} else {
 		log.Printf("[static] directory %s not found — API-only mode", absPublic)
@@ -606,9 +606,6 @@ func main() {
 	// process. The server reads the results via the periodic
 	// recompNeighborGraph / fetchResolvedPathForObs paths.
 
-	// Migrate old content hashes in background (one-time, idempotent).
-	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)
-
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("[server] %v", err)
 	}
@@ -617,21 +614,40 @@ func main() {
 // spaHandler serves static files, falling back to index.html for SPA routes.
 // It reads index.html once at creation time and replaces the __BUST__ placeholder
 // with a Unix timestamp so browsers fetch fresh JS/CSS after each server restart.
-func spaHandler(root string, fs http.Handler) http.Handler {
+// siteURL is CORESCOPE_URL (see site_url.go): when valid, __CORESCOPE_URL__ is
+// replaced with it at the same time; otherwise og:url is dropped then and each
+// response fills in the rest with the origin the request reached.
+func spaHandler(root string, fs http.Handler, siteURL string) http.Handler {
 	// Pre-process every top-level page, index.html and the tool pages
 	// (area-map.html, geofilter-builder.html): replace __BUST__ with a
 	// cache-bust timestamp, so each loads the scripts of this start.
 	bustValue := fmt.Sprintf("%d", time.Now().Unix())
 	pages := bustPages(root, bustValue)
+	if siteURL = resolveConfiguredSiteURL(siteURL); siteURL != "" {
+		for p, body := range pages {
+			pages[p] = []byte(strings.ReplaceAll(string(body), siteURLPlaceholder, siteURL))
+		}
+		log.Printf("[static] site URL: %s", siteURL)
+	} else {
+		for p, body := range pages {
+			pages[p] = withoutOGURL(body)
+		}
+		log.Printf("[static] site URL: %s unset or invalid, no og:url and using each request's origin", siteURLEnv)
+	}
 	indexHTML, ok := pages["/index.html"]
 	if !ok {
 		log.Printf("[static] warning: could not read index.html for cache-bust")
 		indexHTML = []byte("<!DOCTYPE html><html><body><h1>CoreScope</h1><p>index.html not found</p></body></html>")
 	}
 	log.Printf("[static] cache-bust value: %s (%d pages)", bustValue, len(pages))
-	servePage := func(w http.ResponseWriter, body []byte) {
+	// no-store also keeps a page filled in with one request's origin out of
+	// any shared cache.
+	servePage := func(w http.ResponseWriter, r *http.Request, body []byte) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		if siteURL == "" {
+			body = withSiteURL(body, r)
+		}
 		w.Write(body)
 	}
 
@@ -649,18 +665,18 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 		// Serve the pre-processed index.html for the root, and each
 		// pre-processed page (/index.html included) at its own path
 		if r.URL.Path == "/" {
-			servePage(w, indexHTML)
+			servePage(w, r, indexHTML)
 			return
 		}
 		if page, ok := pages[r.URL.Path]; ok {
-			servePage(w, page)
+			servePage(w, r, page)
 			return
 		}
 
 		path := filepath.Join(root, r.URL.Path)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			// SPA fallback — serve pre-processed index.html
-			servePage(w, indexHTML)
+			servePage(w, r, indexHTML)
 			return
 		}
 		// Disable caching for JS/CSS/HTML

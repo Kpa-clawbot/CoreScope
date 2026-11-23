@@ -543,6 +543,7 @@ async function main() {
         timers, fetch: fetchImpl,
         globals: Object.assign({
           L: stub(), document: stub(), MC_PLANNER_CFG: {},
+          MC_attachAutoTiles: () => ({ group: stub(), sync() {}, destroy() {} }),
           addEventListener() {}, removeEventListener() {},
           registerPage: (name, obj) => { pages[name] = obj; }
         }, globals)
@@ -570,6 +571,34 @@ async function main() {
     await flush(); await flush();
     const st2 = fb.II.state();
     assert(st2 && st2.nodesState === 'ready' && st2.rawNodes.length === 3, 'fallback: without fetchAllNodes, the single /api/nodes fetch still loads');
+  }
+
+  console.log('\n=== modes: the rendered tab order ===');
+  {
+    const stub = () => new Proxy(function () {}, {
+      get: (t, k) => (k === Symbol.toPrimitive ? () => 0 : k === 'then' ? undefined
+        : k === 'length' ? 0 : /^(parent|next|previous|first|last)/.test(String(k)) ? null
+        : (k in t ? t[k] : stub())),
+      set: () => true,
+      apply: () => stub(),
+      construct: () => stub()
+    });
+    const pages = {};
+    load({
+      fetch: makeFetch([]),
+      globals: {
+        L: stub(), document: stub(), MC_PLANNER_CFG: {}, MC_attachAutoTiles: () => ({ group: stub(), sync() {}, destroy() {} }), fetchAllNodes: () => new Promise(() => {}),
+        addEventListener() {}, removeEventListener() {},
+        registerPage: (name, obj) => { pages[name] = obj; }
+      }
+    });
+    let html = '';
+    const container = { set innerHTML(v) { html = v; }, get innerHTML() { return html; }, querySelector: () => stub(), querySelectorAll: () => stub() };
+    pages.planner.init(container);
+    const tabs = (html.match(/role="tab"[^>]*data-mode="([a-z]+)"/g) || []).map(s => /data-mode="([a-z]+)"/.exec(s)[1]);
+    assert(eq(tabs, ['chain', 'relay', 'area', 'coverage']), 'MODES is chain, relay, area, coverage (got ' + tabs.join(',') + ')');
+    assert(/id="mc-pl-panel-coverage"/.test(html), 'coverage tab panel rendered');
+    assert(load().I.parseParams('?mode=coverage&site=51,5').mode === 'coverage', 'parseParams accepts mode=coverage');
   }
 
   console.log('\n=== source checks ===');

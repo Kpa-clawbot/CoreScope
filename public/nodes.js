@@ -104,7 +104,7 @@
       // Drop the tile-sync record before Leaflet tears the map down (#review:
       // the shared onChange prune cannot see an attached container).
       try { if (window.__mcNodeTileSyncUnregister) window.__mcNodeTileSyncUnregister(detailMap); } catch (_e) {}
-      detailMap.remove();
+      window.MC_safeRemoveMap(detailMap);
       detailMap = null;
     }
   }
@@ -170,16 +170,34 @@
     function makeApply(rec) {
       return function () {
         var r = resolve();
+        // Skip the rebuild (a visible tile flash) when nothing that shapes the
+        // basemap changed; the pane filter below is still re-applied.
+        var sig = [r.id, r.url, r.refUrl, r.format, r.invertFilter, r.maxZoom, r.maxNativeZoom,
+          Array.isArray(r.subdomains) ? r.subdomains.join('') : r.subdomains, r.attribution].join('\u0001');
+        if (rec.layer && rec.last === sig) {
+          try {
+            var keepPane = map.getPane && map.getPane('tilePane');
+            if (keepPane) keepPane.style.filter = r.invertFilter || '';
+          } catch (_e) {}
+          return rec.layer;
+        }
         if (rec.layer) { try { map.removeLayer(rec.layer); } catch (_e) {} rec.layer = null; }
-        if (rec.refLayer) { try { map.removeLayer(rec.refLayer); } catch (_e) {} rec.refLayer = null; }
+        rec.last = sig;
         try {
-          rec.layer = L.tileLayer(r.url, { maxZoom: r.maxZoom || 18, attribution: r.attribution || '© OpenStreetMap contributors' }).addTo(map);
-          // Esri 2-layer provider: labels come as a separate reference tileset
-          // stacked on the base layer.
-          if (r.refUrl) {
-            rec.refLayer = L.tileLayer(r.refUrl, { maxZoom: r.maxZoom || 18, attribution: r.attribution || '© OpenStreetMap contributors' }).addTo(map);
+          // Shared builder: one layer (a layerGroup when the provider has an
+          // Esri refUrl labels tileset). Plain L.tileLayer only when
+          // map-tile-providers.js failed to load.
+          if (typeof window.MC_buildTileLayer === 'function') {
+            rec.layer = window.MC_buildTileLayer(r, { raster: true }).addTo(map);
+          } else {
+            var topts = { maxZoom: r.maxZoom || 18, attribution: r.attribution || '© OpenStreetMap contributors' };
+            rec.layer = L.tileLayer(r.url, topts);
+            if (r.refUrl && typeof L.layerGroup === 'function') {
+              rec.layer = L.layerGroup([rec.layer, L.tileLayer(r.refUrl, topts)]);
+            }
+            rec.layer.addTo(map);
           }
-        } catch (_e) { return rec.layer; }
+        } catch (_e) { rec.last = null; return rec.layer; }
         // Apply the invert CSS filter to the tile pane when the provider needs
         // it (dark-inverted light styles like positron-dark / carto-voyager-dark).
         try {
@@ -206,7 +224,7 @@
       st.maps = kept;
     }
 
-    var rec = { map: map, layer: null, refLayer: null, apply: null };
+    var rec = { map: map, layer: null, last: null, apply: null };
     rec.apply = makeApply(rec);
     pruneStaleRecords();
     // Re-registering the same map (rx-coverage re-init) replaces its record
@@ -217,7 +235,6 @@
         if (st.maps[i].map === map) {
           var prev = st.maps.splice(i, 1)[0];
           if (prev.layer) { try { map.removeLayer(prev.layer); } catch (_e) {} }
-          if (prev.refLayer) { try { map.removeLayer(prev.refLayer); } catch (_e) {} }
           break;
         }
       }
@@ -242,7 +259,6 @@
         if (st.maps[i].map === m) {
           var gone = st.maps.splice(i, 1)[0];
           if (gone.layer) { try { m.removeLayer(gone.layer); } catch (_e) {} }
-          if (gone.refLayer) { try { m.removeLayer(gone.refLayer); } catch (_e) {} }
           break;
         }
       }
@@ -330,6 +346,11 @@
     return Number.isFinite(value) && value >= 0 ? value : null;
   }
 
+  function formatNodeCount(raw) {
+    const value = nodeMetricNumber(raw);
+    return Number.isSafeInteger(value) ? (value || 0).toLocaleString() : '—';
+  }
+
   function renderLastRelayed(n, table) {
     if (n.role !== 'repeater' && n.role !== 'room') return '';
     const hasRelay = n.last_relayed && Number.isFinite(new Date(n.last_relayed).getTime());
@@ -343,8 +364,7 @@
       value += ' <span data-certain-relay-active style="color:var(--status-green-text);font-size:11px">actively relaying</span>';
     }
     if (n.relay_count_1h != null || n.relay_count_24h != null) {
-      const count = raw => { const v = nodeMetricNumber(raw); return Number.isSafeInteger(v) ? v : '—'; };
-      value += ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${count(n.relay_count_1h)} relays/hr, ${count(n.relay_count_24h)} relays/24h)</span>`;
+      value += ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${formatNodeCount(n.relay_count_1h)} relays/hr, ${formatNodeCount(n.relay_count_24h)} relays/24h)</span>`;
     }
     return renderNodeMetric('Last Relayed', value, table, "Last time this node was attributed as a relay hop in a non-advert packet observed by the network. This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: 'Last Heard' counts only packets that can be this node alone. The green actively relaying mark requires recent certain relay evidence, including forwarding another node's advert. No mark does not imply idle or offline.");
   }
@@ -378,6 +398,9 @@
     if (n.hash_size_inconsistent) {
       const sizes = Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : [];
       value += ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + escapeHtml(sizes.join(', ')) + '-byte"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>varies</span>';
+    }
+    if (size === 1 && n.role === 'repeater' && /^[0-9a-f]{64}$/i.test(key)) {
+      value += ' <a href="' + escapeHtml('#/analytics?tab=prefix-tool&prefix=' + encodeURIComponent(key)) + '" style="color:var(--link-color)">Inspect in Prefix Tool</a>';
     }
     return renderNodeMetric('Hash Prefix', value, table);
   }
@@ -444,10 +467,10 @@
     if (status === 'active') {
       // #2260: no "Last relayed" here. last_relayed also counts 1-byte prefix
       // matches of other repeaters; the certain relays are in last heard.
-      explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'unknown');
+      explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampHtml(lastHeardTime) : 'unknown');
     } else if (status === 'uncertain') {
-      explanation = 'Last certainly heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'never') +
-        ' \u2014 its shared hop prefix was last in a path ' + renderNodeTimestampText(n.last_relayed) + ', possibly another node';
+      explanation = 'Last certainly heard ' + (lastHeardTime ? renderNodeTimestampHtml(lastHeardTime) : 'never') +
+        ' \u2014 its shared hop prefix was last in a path ' + renderNodeTimestampHtml(n.last_relayed) + ', possibly another node';
     } else {
       const ageDays = Math.floor(statusAge / 86400000);
       const ageHours = Math.floor(statusAge / 3600000);
@@ -1006,8 +1029,8 @@
           ${(n.role === 'repeater' || n.role === 'room') && Array.isArray(n.transported_scopes) && n.transported_scopes.length ? `<tr id="row-transported-scopes"><td title="Distinct region scopes (transmissions.scope_name) of the non-advert packets whose path names this repeater by its full pubkey. Shows which regions' traffic it has carried (#1751). Packets that only carry a 1-byte hop are excluded: that byte is shared by every node with the same pubkey prefix, so it cannot say which of them relayed (#1902).">Transported scopes</td><td><span style="display:inline-flex;flex-wrap:wrap;gap:3px;vertical-align:middle">${n.transported_scopes.map(sc => '<span class="badge">' + escapeHtml(String(sc)) + '</span>').join('')}</span></td></tr>` : ''}
           ${'configured_scope' in n && n.configured_scope !== null ? `<tr id="row-configured-scope"><td title="Region scopes this node has CONFIGURED, confirmed via an observer /neighbors report (status=responded) — concrete evidence, distinct from observed default scope and transported scopes (#1865).${n.configured_scope_at ? ' Last confirmed ' + escapeHtml(String(n.configured_scope_at)) + '.' : ''}">Configured scope <span style="color:var(--status-green-text)" role="img" aria-label="confirmed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg></span></td><td>${n.configured_scope === '' ? '<span style="color:var(--text-muted)">none configured</span>' : `<code style="color:var(--link-color)">${escapeHtml(n.configured_scope)}</code>`}</td></tr>` : ''}
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
-          <tr><td>${renderPacketCountLabel('fullNodePacketCountHelp')}</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
-          <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
+          <tr><td>${renderPacketCountLabel('fullNodePacketCountHelp')}</td><td>${formatNodeCount(stats.totalTransmissions || stats.totalPackets || n.advert_count || 0)}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + formatNodeCount(stats.totalObservations) + '×)</span>' : ''}</td></tr>
+          <tr><td>Packets Today</td><td>${formatNodeCount(stats.packetsToday || 0)}</td></tr>
           ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
           ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
           ${renderHashPrefix(n, true)}
@@ -1053,8 +1076,8 @@
         </div>
 
         ${observers.length || relayObserverCount ? `<div class="node-full-card" id="node-observers">
-          <h4 title="Observers that received this node's own transmission off the air. An observer that only saw traffic relayed through this node is counted separately below.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
-          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
+          <h4 title="Observers that received this node's own transmission off the air. An observer that only saw traffic relayed through this node is counted separately below. A 1-byte path hop is never taken as proof of who transmitted, because an unknown node can share that byte.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
+          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop, or any 1-byte hop, is left unattributed rather than guessed: an unknown node can share that byte. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
           ${observers.length ? `<table class="data-table observer-sort-table" style="font-size:12px">
             <thead><tr>
               <th scope="col" data-sort-key="observer">Observer</th>
@@ -1065,7 +1088,7 @@
             <tbody>
               ${observers.map(o => `<tr>
                 <td data-value="${escapeHtml((o.observer_name || o.observer_id || '').toLowerCase())}" style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}${o.can_relay === false ? ' <span class="badge-listener" title="Firmware reported repeat:off — excluded from path-hop disambiguator (#1290)">listener</span>' : (o.can_relay === true ? ' <span class="badge-repeater" title="Firmware reported repeat:on — eligible as a path hop">repeater</span>' : '')}</td>
-                <td data-value="${o.packetCount || 0}">${o.packetCount}</td>
+                <td data-value="${o.packetCount || 0}">${formatNodeCount(o.packetCount)}</td>
                 <td data-value="${o.avgSnr != null ? Number(o.avgSnr) : ''}">${o.avgSnr != null ? Number(o.avgSnr).toFixed(1) + ' dB' : '—'}</td>
                 <td data-value="${o.avgRssi != null ? Number(o.avgRssi) : ''}">${o.avgRssi != null ? Number(o.avgRssi).toFixed(0) + ' dBm' : '—'}</td>
               </tr>`).join('')}
@@ -2033,7 +2056,7 @@
             '<dt>Last Heard</dt><dd>' + renderNodeTimestampHtml(lastHeard) + '</dd>' +
             renderLastRelayed(n) +
             renderTrafficShare(n) +
-            '<dt>Adverts</dt><dd>' + (n.advert_count != null ? n.advert_count : '—') + '</dd>' +
+            '<dt>Adverts</dt><dd>' + (n.advert_count != null ? formatNodeCount(n.advert_count) : '—') + '</dd>' +
             renderHashPrefix(n) +
           '</dl>' +
           '<p class="node-quick-actions" style="margin:14px 0 6px"><a class="btn-primary node-detail-btn" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>' +
@@ -2120,8 +2143,8 @@
             ${renderLastRelayed(n)}
             ${renderTrafficShare(n)}
             <dt>First Seen</dt><dd>${renderNodeTimestampHtml(n.first_seen)}</dd>
-            <dt>${renderPacketCountLabel('nodePacketCountHelp')}</dt><dd>${totalPackets}</dd>
-            <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
+            <dt>${renderPacketCountLabel('nodePacketCountHelp')}</dt><dd>${formatNodeCount(totalPackets)}</dd>
+            <dt>Packets Today</dt><dd>${formatNodeCount(stats.packetsToday || 0)}</dd>
             ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
             ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
             ${renderHashPrefix(n)}
@@ -2161,11 +2184,11 @@
         </div>
 
         ${observers.length || relayObserverCount ? `<div class="node-detail-section">
-          <h4 title="Observers that received this node's own transmission off the air.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
-          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
+          <h4 title="Observers that received this node's own transmission off the air. A 1-byte path hop is never taken as proof of who transmitted, because an unknown node can share that byte.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
+          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop, or any 1-byte hop, is left unattributed rather than guessed: an unknown node can share that byte. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
           <div class="observer-list">
             ${observers.map(o => {
-              const stats = [`${o.packetCount} pkts`];
+              const stats = [`${formatNodeCount(o.packetCount)} pkts`];
               if (o.avgSnr != null) stats.push('SNR ' + Number(o.avgSnr).toFixed(1) + 'dB');
               if (o.avgRssi != null) stats.push('RSSI ' + Number(o.avgRssi).toFixed(0));
               return `<div class="observer-row" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">

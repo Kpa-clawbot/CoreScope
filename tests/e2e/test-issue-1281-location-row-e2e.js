@@ -180,9 +180,9 @@ async function findPacketDetailByType(page, predicate, maxRows = 40) {
     first_seen: now, last_seen: now, advert_count: 1005,
   };
   const health = {
-    stats: { totalPackets: 1005, packetsToday: 7, avgSnr: 6.3, avgHops: 2, lastHeard: now },
+    stats: { totalPackets: 1005, totalObservations: '12278', packetsToday: '1234', avgSnr: 6.3, avgHops: 2, lastHeard: now },
     observers: [
-      { observer_id: 'observer-a', observer_name: 'Observer A', packetCount: 1000, avgSnr: 12.5, avgRssi: -45 },
+      { observer_id: 'observer-a', observer_name: 'Observer A', packetCount: '1000', avgSnr: 12.5, avgRssi: -45 },
       { observer_id: 'observer-b', observer_name: 'Observer B', packetCount: 5, avgSnr: -8.5, avgRssi: -110 },
     ],
     recentPackets: [],
@@ -192,10 +192,16 @@ async function findPacketDetailByType(page, predicate, maxRows = 40) {
     { name: 'desktop side panel', width: 1280, full: false },
     { name: 'desktop full detail', width: 1280, full: true },
     { name: 'mobile full detail', width: 390, full: true },
+    { name: 'German full detail', width: 1280, full: true, locale: 'de-DE' },
   ]) {
     await step('#1149 ' + view.name + ' retains observer SNR without an aggregate headline', async () => {
-      const nodePage = await browser.newPage({ viewport: { width: view.width, height: 900 } });
+      const nodePage = await browser.newPage({ locale: view.locale || 'en-US', viewport: { width: view.width, height: 900 } });
       try {
+        await nodePage.addInitScript(() => {
+          window.addEventListener('theme-refresh', () => {
+            if (window._customizerV2 && window._customizerV2.initDone) window.__nodeThemeReady = true;
+          });
+        });
         await nodePage.route('**/api/nodes**', async (route) => {
           const pathname = new URL(route.request().url()).pathname;
           const fixtures = {
@@ -213,6 +219,9 @@ async function findPacketDetailByType(page, predicate, maxRows = 40) {
             await route.continue();
           }
         });
+        // The initial server-theme refresh rebuilds node details and resets table sorting.
+        await nodePage.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+        await nodePage.waitForFunction(() => window.__nodeThemeReady);
         await nodePage.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
         await nodePage.locator('#nodesBody tr[data-key="' + pubkey + '"]').click();
         if (view.full && view.width > 640) {
@@ -228,15 +237,32 @@ async function findPacketDetailByType(page, predicate, maxRows = 40) {
           const text = (await row.innerText()).replace(/\s+/g, ' ');
           const snr = observer.avgSnr.toFixed(1) + (view.full ? ' dB' : 'dB');
           assert(text.includes(snr), observer.observer_name + ' must retain SNR ' + snr + ', got: ' + text);
+          const count = observer.observer_id === 'observer-a' ? (view.locale === 'de-DE' ? '1.000' : '1,000') : '5';
+          const countText = view.full ? await row.locator('td').nth(1).innerText() : text.split(' pkts')[0].split(' ').pop();
+          assert(countText === count, observer.observer_name + ' must show exact grouped packets ' + count + ', got: ' + countText);
+          if (view.full) assert(await row.locator('td').nth(1).getAttribute('data-value') === String(observer.packetCount), 'observer sort value must stay numeric');
         }
-        for (const [label, value] of [['Total Packets', '1005'], ['Packets Today', '7'], ['Avg Hops', '2']]) {
+        // #1154 U5: exact counts now use the browser locale's grouping.
+        const total = view.locale === 'de-DE' ? '1.005' : '1,005';
+        const seen = view.locale === 'de-DE' ? '12.278' : '12,278';
+        const today = view.locale === 'de-DE' ? '1.234' : '1,234';
+        for (const [label, value] of [['Total Packets', total + (view.full ? ' (seen ' + seen + '×)' : '')], ['Packets Today', today], ['Avg Hops', '2']]) {
           const metric = stats.locator(view.full ? 'td:first-child' : 'dt').filter({ hasText: label });
           const actual = await metric.evaluate(el => el.nextElementSibling.textContent.trim());
-          assert(actual === value, label + ' must remain ' + value + ', got: ' + actual);
+          assert(actual === value, label + ' must display ' + value + ', got: ' + actual);
+        }
+        if (view.full) {
+          const sort = nodePage.locator('#node-observers th[data-sort-key="packets"]');
+          assert((await readings.first().innerText()).includes('Observer A'), 'descending numeric sort must put 1000 before 5');
+          await sort.click();
+          assert((await readings.first().innerText()).includes('Observer B'), 'ascending numeric sort must put 5 before 1000');
+          await sort.click();
+          assert((await readings.first().innerText()).includes('Observer A'), 'descending numeric sort must restore 1000 before 5');
         }
         const headlineCount = await stats.getByText('Avg SNR', { exact: true }).count();
         assert(headlineCount === 0,
           'Expected no aggregate Avg SNR headline with stats.avgSnr=6.3, got ' + headlineCount);
+        assert(await stats.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'grouped counts must fit the stats container');
         if (process.env.SCREENSHOT_DIR) {
           await stats.scrollIntoViewIfNeeded();
           await nodePage.screenshot({

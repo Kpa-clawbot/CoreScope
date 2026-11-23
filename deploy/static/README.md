@@ -86,6 +86,7 @@ upstream.
    | `AUTH` | `false` | Required, no default. Must be `false`: the server allows no credentialed CORS, so `build.sh` refuses `true` with a cross-origin `API_BASE` |
    | `CHANNEL` | `beta` | `beta`, `next` or `dev` show a badge; `static` shows none |
    | `CLASSIC_URL` | `https://analyzer.example.org` | Optional. Target of the "Open in classic" links |
+   | `CORESCOPE_URL` | `https://beta.example.org` | Optional. This project's own public URL, for link previews (`og:url`, `og:image`). Without it `og:url` is left out and the preview image is the project's copy on GitHub |
    | `SKIP_DEPENDENCY_INSTALL` | `1` | `build.sh` needs no npm packages |
 
    `COMMIT` defaults to the first 7 characters of `CF_PAGES_COMMIT_SHA`.

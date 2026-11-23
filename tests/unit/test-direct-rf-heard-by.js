@@ -32,12 +32,14 @@ assert.ok(startIdx >= 0, 'could not find the Heard By card in public/nodes.js');
 const endIdx = src.indexOf(END, startIdx);
 assert.ok(endIdx > startIdx, 'could not find the end of the Heard By card');
 const block = src.slice(startIdx, endIdx).replace(/\s+$/, '');
+// Include the real count helpers used by the isolated card templates.
+const countHelpers = src.slice(src.indexOf('  function nodeMetricNumber('), src.indexOf('  function renderLastRelayed('));
 
 // The block is one `${cond ? `...` : ''}` substitution, so wrapping it in
 // backticks turns it back into the markup the page renders.
 const renderCard = new Function(
   'observers', 'relayObserverCount', 'escapeHtml',
-  'return `' + block + '`;'
+  countHelpers + '\nreturn `' + block + '`;'
 );
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -79,6 +81,11 @@ test('a node nobody hears directly still renders the card, with an empty state',
     'the empty state must not assert that nobody is in range');
   assert.ok(/not the same as being out of range/i.test(html),
     'the empty state must say what it cannot conclude, not only what it found');
+  // The most common reason for an empty list since the shared rule: a
+  // 1-byte hop, even with one known candidate, is not proof.
+  const emptyTitle = (html.match(/<div class="text-muted"[^>]*title="([^"]*)"[^>]*>[^<]*No observation proves/) || [])[1] || '';
+  assert.ok(/1-byte (path )?hop/.test(emptyTitle),
+    'the empty state title must say a 1-byte hop is not taken as proof');
   assert.ok(/Seen via relay by 35 observers/.test(html), 'expected the relay count');
   assert.ok(!/observer-sort-table/.test(html),
     'an empty direct list must not render a table header with no rows');
@@ -130,7 +137,7 @@ test('both Heard By views ignore unsupported region fields and escape names', ()
   const sideEnd = src.indexOf('<div class="node-detail-section" id="panelNeighborsSection">', sideStart);
   assert.ok(sideEnd > sideStart, 'could not find the end of the side-pane Heard By card');
   const renderSideCard = new Function('observers', 'relayObserverCount', 'escapeHtml',
-    'return `' + src.slice(sideStart, sideEnd).trimEnd() + '`;');
+    countHelpers + '\nreturn `' + src.slice(sideStart, sideEnd).trimEnd() + '`;');
   // Even a stale client-supplied region must not revive an unsupported field.
   const row = { ...directRow, observer_name: '<b>Observer</b>', iata: 'unsupported-region' };
   for (const render of [renderCard, renderSideCard]) {

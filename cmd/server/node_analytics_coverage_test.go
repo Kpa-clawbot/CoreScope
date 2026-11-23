@@ -1,9 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata" // TZ=Etc/GMT-2 in the child, without the host's zoneinfo
 )
 
 const coverageNodePK = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
@@ -130,10 +137,34 @@ func TestNodeAnalyticsCoverageEmptyStore(t *testing.T) {
 // TestNodeAnalyticsWindowIgnoresLocalZone: the window bound is compared as a
 // string with UTC FirstSeen values, so it must be formatted in UTC. With a
 // +02:00 local zone the old code dropped the oldest two hours of a 7d range.
+//
+// The zone is set by running this test again in a child process with
+// TZ=Etc/GMT-2 (UTC+2): assigning time.Local here would race with any timer
+// still running in the test binary (time.Now reads it), which the race
+// detector reports as a failure of whichever test is running.
 func TestNodeAnalyticsWindowIgnoresLocalZone(t *testing.T) {
-	saved := time.Local
-	time.Local = time.FixedZone("UTC+2", 2*3600)
-	t.Cleanup(func() { time.Local = saved })
+	if os.Getenv("CS_TEST_LOCAL_ZONE_CHILD") != "1" {
+		if runtime.GOOS == "windows" {
+			t.Skip("Go takes the local zone from the OS on Windows and ignores TZ")
+		}
+		// A hung child fails here with its output, not at the parent's timeout.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.v")
+		cmd.Env = append(os.Environ(), "CS_TEST_LOCAL_ZONE_CHILD=1", "TZ=Etc/GMT-2")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("child run with TZ=Etc/GMT-2 failed: %v\n%s", err, out)
+		}
+		// A pattern that matched nothing would also exit 0.
+		if !strings.Contains(string(out), "--- PASS: "+t.Name()) {
+			t.Fatalf("child run did not run %s:\n%s", t.Name(), out)
+		}
+		return
+	}
+	if _, off := time.Now().Zone(); off != 2*3600 {
+		t.Fatalf("child local zone offset %d s, want 7200 (TZ=Etc/GMT-2)", off)
+	}
 
 	ps := setupCoverageStore(t, 10*24)
 	a, err := ps.GetNodeAnalytics(coverageNodePK, 7)

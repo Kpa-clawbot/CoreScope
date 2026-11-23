@@ -118,7 +118,7 @@ go test -v ./...
 The Go ingestor creates the same v3 schema as the Node.js server:
 
 - `transmissions` — deduplicated by content hash
-- `observations` — per-observer sightings with `observer_idx` (rowid reference)
+- `observations` — per-observer sightings with `observer_idx` (references `observers.idx`)
 - `nodes` — mesh nodes discovered from adverts
 - `observers` — MQTT feed sources
 

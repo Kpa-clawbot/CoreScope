@@ -18,6 +18,8 @@ The feed scrolls automatically. New packets appear at the top.
 
 ## Map animations
 
+The map style can be changed with the layers button in the top-right corner, the same picker as on the [Map](map.md#map-style-and-overlays) page.
+
 When a packet arrives, the Live map animates the signal path:
 
 - A pulse appears at the sender's location

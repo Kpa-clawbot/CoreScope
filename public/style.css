@@ -280,6 +280,18 @@
   --status-amber: #f59e0b;
   --status-amber-light: #fef3c7;
   --status-amber-text: #92400e;
+  /* Planner Coverage tab: Users layer orange (10-25%) to green (>=75%), <10%
+     unpainted; Repeaters layer blocked (dots only), slightly blocked, line of
+     sight on the status red, amber and green hues. */
+  --pl-cov-user-2: var(--palette-amber-600);
+  --pl-cov-user-3: var(--palette-amber-400);
+  --pl-cov-user-4: var(--palette-green-400);
+  --pl-cov-user-5: var(--palette-green-600);
+  --pl-cov-rep-1: var(--status-red);
+  --pl-cov-rep-2: var(--status-amber);
+  --pl-cov-rep-3: var(--status-green);
+  --pl-cov-opacity: 0.5;
+  --pl-cov-opacity-outdated: 0.2;
   /* #1719 — `--skew-badge-no-clock-bg` carries the muted "no clock data"
      badge background (was --text-muted which renders #d1d5db in dark
      theme → #fff text = 1.47:1, BLOCKER × 137 on clock-health). Pinned
@@ -419,6 +431,15 @@
     --status-amber: #f59e0b;
     --status-amber-light: #422006;
     --status-amber-text: #fcd34d;
+    --pl-cov-user-2: var(--palette-amber-500);
+    --pl-cov-user-3: var(--palette-amber-300);
+    --pl-cov-user-4: var(--palette-green-300);
+    --pl-cov-user-5: var(--palette-green-500);
+    --pl-cov-rep-1: var(--status-red);
+    --pl-cov-rep-2: var(--status-amber);
+    --pl-cov-rep-3: var(--palette-green-300);
+    --pl-cov-opacity: 0.55;
+    --pl-cov-opacity-outdated: 0.25;
     --path-inspector-speculative: #f59e0b;
     /* #1715 — dark-theme role swatch overrides. Light values (palette-700)
      * fail 4.5:1 on the dark analytics card-bg #1a1a2e (e.g. #dc2626 →
@@ -490,6 +511,15 @@
   --status-amber: #f59e0b;
   --status-amber-light: #422006;
   --status-amber-text: #fcd34d;
+  --pl-cov-user-2: var(--palette-amber-500);
+  --pl-cov-user-3: var(--palette-amber-300);
+  --pl-cov-user-4: var(--palette-green-300);
+  --pl-cov-user-5: var(--palette-green-500);
+  --pl-cov-rep-1: var(--status-red);
+  --pl-cov-rep-2: var(--status-amber);
+  --pl-cov-rep-3: var(--palette-green-300);
+  --pl-cov-opacity: 0.55;
+  --pl-cov-opacity-outdated: 0.25;
   --status-info: #60a5fa;
   /* #1715 — dark-theme role swatch overrides (mirrors the media-query
    * block above). Palette-400/500 shades clear WCAG AA on #1a1a2e. */
@@ -2766,6 +2796,20 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .leaflet-control-layers-separator {
   border-top-color: var(--border) !important;
 }
+/* Tile picker category groups (map-tile-providers.js _decorateControl) */
+.leaflet-control-layers .mc-tile-group {
+  border: 0;
+  margin: 8px 0 0;
+  padding: 0;
+  min-width: 0;
+}
+.leaflet-control-layers .mc-tile-group-heading {
+  padding: 0;
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
 [data-theme="dark"] .leaflet-control-layers-toggle {
   filter: invert(1);
 }
@@ -3600,6 +3644,23 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .analytics-peer-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .analytics-peer-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border); color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
 .analytics-peer-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.na-heard-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.na-heard-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border); color: var(--text-muted); font-size: 11px; font-weight: normal; }
+.na-heard-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.na-heard-table .num { text-align: right; white-space: nowrap; }
+.na-heard-strip-cell { width: 45%; min-width: 120px; }
+.na-heard-strip { position: relative; height: 12px; background: var(--border); border-radius: 6px; }
+.na-heard-zero { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--text-muted); }
+.na-heard-range { position: absolute; top: 3px; height: 6px; background: var(--text-muted); opacity: .45; border-radius: 3px; }
+.na-heard-dot { position: absolute; top: 1px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--text-muted); }
+.na-heard-dot.na-heard-good { background: var(--status-green); }
+.na-heard-dot.na-heard-fair { background: var(--status-yellow); }
+.na-heard-dot.na-heard-weak { background: var(--status-red); }
+.na-heard-empty { padding: 12px 0; color: var(--text-muted); font-size: 12px; }
+.na-heard-showall { margin-top: 6px; font-size: 12px; }
+.na-heard-mobile { margin-top: 10px; font-size: 13px; }
+.na-heard-mobile summary { cursor: pointer; }
+.na-heard-mobile-row { padding: 6px 0; }
 .analytics-peer-table tr:hover td { background: var(--card-bg); }
 @media (max-width: 768px) { .analytics-stats { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 480px) { .analytics-stats { grid-template-columns: 1fr; } }
@@ -5976,6 +6037,8 @@ body.embed #app.app-fixed {
   display: block; width: 100%; box-sizing: border-box; margin-top: 2px;
   background: var(--input-bg, var(--card-bg)); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px;
 }
+.repeater-info-theirs { border-left: 3px solid var(--border); padding: 2px 0 2px 8px; margin: 0 0 8px; }
+.repeater-info-theirs p { margin: 0 0 4px; color: var(--text-muted); }
 .repeater-info-notice, .repeater-info-msg { color: var(--text-muted); font-size: 12px; }
 .repeater-info-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
 /* Global .btn-primary is white on --accent (2.75:1); same fix as .account-btn-primary. */

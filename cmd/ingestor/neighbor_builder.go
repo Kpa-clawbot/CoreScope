@@ -188,6 +188,7 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 	}
 
 	rows, err := s.db.Query(`SELECT
+		t.route_type,
 		t.payload_type,
 		t.decoded_json,
 		COALESCE(t.from_pubkey, ''),
@@ -196,7 +197,7 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 		o.timestamp
 	FROM observations o
 	JOIN transmissions t ON t.id = o.transmission_id
-	LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+	LEFT JOIN observers obs ON obs.idx = o.observer_idx
 	WHERE o.timestamp > ?
 	AND o.direction IS NOT 'tx' -- the observer's own transmission, not a reception (#667)
 	ORDER BY o.timestamp
@@ -208,12 +209,20 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 
 	var edges []edgeRow
 	for rows.Next() {
-		var payloadType sql.NullInt64
+		var routeType, payloadType sql.NullInt64
 		var decodedJSON, fromPubkey, pathJSON, observerID string
 		var epochTs int64
-		if err := rows.Scan(&payloadType, &decodedJSON, &fromPubkey, &pathJSON, &observerID, &epochTs); err != nil {
+		if err := rows.Scan(&routeType, &payloadType, &decodedJSON, &fromPubkey, &pathJSON, &observerID, &epochTs); err != nil {
 			continue
 		}
+		// Same rule as the server's neighbour graph: only a path that lists
+		// transmitted hops names a neighbour (packetpath.PathHopsTransmitted),
+		// and an empty path only when it proves the originator was heard.
+		// A NULL route type or payload type proves nothing.
+		if !routeType.Valid || !payloadType.Valid {
+			continue
+		}
+		rt, pt := int(routeType.Int64), byte(payloadType.Int64)
 		isAdvert := payloadType.Valid && payloadType.Int64 == int64(payloadADVERT)
 		isAnonReq := payloadType.Valid && payloadType.Int64 == int64(payloadAnonReq)
 		// #1777: ANON_REQ's ephemeralPubKey is as trustworthy an originator
@@ -233,9 +242,12 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 		path := parsePathArray(pathJSON)
 
 		if len(path) == 0 {
-			if hasFullOriginator && fromNode != "" && fromNode != observerPK && observerPK != "" {
+			if packetpath.EmptyPathHeardOriginator(rt, pt) && hasFullOriginator && fromNode != "" && fromNode != observerPK && observerPK != "" {
 				edges = append(edges, canonEdge(fromNode, observerPK, ts))
 			}
+			continue
+		}
+		if !packetpath.PathHopsTransmitted(rt, pt) {
 			continue
 		}
 		if hasFullOriginator && fromNode != "" {

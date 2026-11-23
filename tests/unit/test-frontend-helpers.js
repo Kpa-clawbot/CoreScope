@@ -482,6 +482,54 @@ console.log('\n=== nodes.js: getStatusTooltip / getStatusInfo (extracted) ===');
     });
   }
 
+  // #1154: exercise the real timestamp formatter in each status explanation.
+  const timestampCtx = makeNodesSandbox();
+  timestampCtx.Date = class extends Date { static now() { return Date.parse('2025-06-10T12:00:00Z'); } };
+  timestampCtx.localStorage.setItem('meshcore-timestamp-mode', 'ago');
+  timestampCtx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+  timestampCtx.localStorage.setItem('meshcore-timestamp-format', 'iso');
+  const statusInfo = timestampCtx.window._nodesGetStatusInfo;
+  const timestampSpans = html => Array.from(html.matchAll(/<span class="timestamp-text" title="([^"]*)">([^<]*)<\/span>/g), m => [m[1], m[2]]);
+  const certain = '2025-06-10T11:55:00Z', old = '2025-06-06T12:00:00Z', relayed = '2025-06-10T11:59:00Z';
+
+  test('active status explanation retains the newest certain timestamp and exact tooltip (#1154)', () => {
+    const info = statusInfo({ role: 'repeater', _lastHeard: old, last_heard: certain, last_seen: old, last_relayed: relayed });
+    assert.strictEqual(info.status, 'active');
+    assert.ok(info.statusLabel.includes('Active'));
+    assert.strictEqual(info.lastHeardMs, Date.parse(certain));
+    assert.strictEqual(info.explanation.replace(/<[^>]*>/g, ''), 'Last heard 5m ago');
+    assert.deepStrictEqual(timestampSpans(info.explanation), [['2025-06-10 11:55:00', '5m ago']]);
+  });
+
+  test('uncertain status explanation retains separate certain and attributed timestamps (#1154)', () => {
+    const info = statusInfo({ role: 'repeater', last_heard: old, last_relayed: relayed });
+    assert.strictEqual(info.status, 'uncertain');
+    assert.ok(info.statusLabel.includes('Uncertain'));
+    assert.strictEqual(info.lastHeardMs, Date.parse(old));
+    assert.strictEqual(info.explanation.replace(/<[^>]*>/g, ''),
+      'Last certainly heard 4d ago — its shared hop prefix was last in a path 1m ago, possibly another node');
+    assert.deepStrictEqual(timestampSpans(info.explanation), [
+      ['2025-06-06 12:00:00', '4d ago'], ['2025-06-10 11:59:00', '1m ago'],
+    ]);
+  });
+
+  test('uncertain status without certain activity keeps never and only the attributed timestamp (#1154)', () => {
+    const info = statusInfo({ role: 'room', last_seen: null, last_heard: 'invalid', last_relayed: relayed });
+    assert.strictEqual(info.status, 'uncertain');
+    assert.strictEqual(info.lastHeardMs, 0);
+    assert.strictEqual(info.explanation.replace(/<[^>]*>/g, ''),
+      'Last certainly heard never — its shared hop prefix was last in a path 1m ago, possibly another node');
+    assert.deepStrictEqual(timestampSpans(info.explanation), [['2025-06-10 11:59:00', '1m ago']]);
+  });
+
+  test('status explanation preserves the future clock warning and original date (#1154)', () => {
+    const info = statusInfo({ role: 'repeater', last_heard: '2025-06-10T12:05:00Z', last_relayed: relayed });
+    assert.strictEqual(info.status, 'active');
+    assert.deepStrictEqual(timestampSpans(info.explanation), [['in 5m', '2025-06-10 12:05:00']]);
+    assert.strictEqual((info.explanation.match(/class="timestamp-future-icon"/g) || []).length, 1);
+    assert.ok(info.explanation.includes('Timestamp is in the future — node clock may be skewed'));
+  });
+
   if (ex.renderNodeBadges) {
     test('renderNodeBadges includes role', () => {
       const html = ex.renderNodeBadges({ role: 'repeater', public_key: 'abcdef1234', last_heard: new Date().toISOString() }, '#ff0000');
@@ -4479,7 +4527,7 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
 // #2309: exercise the real side-panel renderer, not a copied formatter.
 console.log('\n=== nodes.js: preview metadata (#2309) ===');
 {
-  function renderPreview(overrides, relayActiveMs, now) {
+  function renderPreview(overrides, relayActiveMs, now, healthData = { stats: {} }) {
     const ctx = makeNodesSandbox();
     if (relayActiveMs !== undefined) ctx.HEALTH_THRESHOLDS.relayActiveMs = relayActiveMs;
     if (now !== undefined) ctx.Date = class extends Date { static now() { return now; } };
@@ -4491,7 +4539,7 @@ console.log('\n=== nodes.js: preview metadata (#2309) ===');
       last_seen: '2020-01-01T00:00:00Z', hash_size: 2, ...overrides,
     };
     const panel = { innerHTML: '', querySelector: () => null };
-    ctx.window.testRenderNodeDetail(panel, { node, recentAdverts: [], healthData: { stats: {} } });
+    ctx.window.testRenderNodeDetail(panel, { node, recentAdverts: [], healthData });
     const value = label => {
       const match = panel.innerHTML.match(new RegExp('<dt[^>]*>' + label + '(?: <span[\\s\\S]*?</span>)?</dt><dd[^>]*>([\\s\\S]*?)</dd>'));
       return match ? match[1] : null;
@@ -4541,6 +4589,46 @@ console.log('\n=== nodes.js: preview metadata (#2309) ===');
     assert.match(value('Last Relayed'), /— relays\/hr, 0 relays\/24h/);
     assert.doesNotMatch(value('Last Relayed'), /alive|actively relaying/i);
   });
+  test('node counts group exact numbers and numeric strings without compact rounding', () => {
+    for (const asInput of [n => n, String]) {
+      const { value, html } = renderPreview({
+        relay_count_1h: asInput(34255), relay_count_24h: asInput(1234567),
+      }, undefined, undefined, {
+        stats: { totalTransmissions: asInput(12345), totalPackets: 2, packetsToday: asInput(1234) },
+        observers: [{ observer_name: 'Count fixture', packetCount: asInput(34255) }],
+      });
+      assert.ok(html.includes('</button></dt><dd>' + (12345).toLocaleString() + '</dd>'), 'Total Packets must group the preferred transmission count');
+      assert.strictEqual(value('Packets Today'), (1234).toLocaleString());
+      assert.ok(html.includes((34255).toLocaleString() + ' pkts'), 'observer packet count must be grouped');
+      assert.ok(value('Last Relayed').includes((34255).toLocaleString() + ' relays/hr, ' + (1234567).toLocaleString() + ' relays/24h'));
+    }
+  });
+  test('count formatting retains zero, small counts and existing packet fallbacks', () => {
+    for (const raw of [0, '0', -0, '-0']) {
+      const { value } = renderPreview({ relay_count_1h: raw, relay_count_24h: 7 });
+      assert.ok(value('Last Relayed').includes('0 relays/hr, 7 relays/24h'));
+      assert.ok(!value('Last Relayed').includes('-0 relays/hr'), 'negative zero must retain its previous zero display');
+    }
+    for (const [node, stats, want] of [
+      [{}, {}, '0'],
+      [{ advert_count: 7 }, {}, '7'],
+      [{ advert_count: 9 }, { totalTransmissions: 0, totalPackets: 7 }, '7'],
+      [{ advert_count: 9 }, { totalTransmissions: 0, totalPackets: 0 }, '9'],
+      [{ advert_count: 9 }, { totalTransmissions: '0', totalPackets: 7 }, '0'],
+    ]) {
+      const { value, html } = renderPreview(node, undefined, undefined, { stats });
+      assert.ok(html.includes('</button></dt><dd>' + want + '</dd>'), 'existing Total Packets fallback must remain ' + want);
+      assert.strictEqual(value('Packets Today'), '0');
+    }
+  });
+  test('invalid and unsafe relay counts remain missing rather than becoming rounded counts', () => {
+    for (const raw of [undefined, null, '', ' ', 'bad', Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, true, {}]) {
+      const { value } = renderPreview({ relay_count_1h: raw, relay_count_24h: 0 });
+      assert.ok(value('Last Relayed').includes('— relays/hr, 0 relays/24h'), String(raw));
+    }
+    const { value } = renderPreview({ relay_count_1h: Number.MAX_SAFE_INTEGER, relay_count_24h: '7' });
+    assert.ok(value('Last Relayed').includes(Number.MAX_SAFE_INTEGER.toLocaleString() + ' relays/hr, 7 relays/24h'));
+  });
   test('certain relay evidence restores the green mark for repeaters and rooms only', () => {
     const now = Date.parse('2026-10-26T12:00:00Z');
     for (const role of ['repeater', 'room']) {
@@ -4574,6 +4662,41 @@ console.log('\n=== nodes.js: preview metadata (#2309) ===');
     for (const size of [null, 0, -1, 1.5, '<img src=x>']) {
       assert.strictEqual(renderPreview({ hash_size: size }).value('Hash Prefix'), 'Unknown');
     }
+  });
+  for (const size of [1, '1']) {
+    test('one-byte repeater prefix links its full key to Prefix Tool (' + typeof size + ')', () => {
+      const key = 'aBcDeF01'.repeat(8);
+      const value = renderPreview({ public_key: key, hash_size: size }).value('Hash Prefix');
+      assert.match(value, /<code[^>]*>AB<\/code> \(1-byte\)/);
+      const link = value.match(/<a\b[^>]*href="([^"]+)"[^>]*>Inspect in Prefix Tool<\/a>/);
+      assert.ok(link, 'known one-byte repeater must offer Inspect in Prefix Tool');
+      assert.strictEqual(link[1], '#/analytics?tab=prefix-tool&amp;prefix=' + key);
+      assert.doesNotMatch(value, /collision|other nodes/i, 'navigation must not assert a collision');
+    });
+  }
+  test('Prefix Tool action requires a known one-byte size and a repeater', () => {
+    for (const size of [undefined, null, '', ' ', 'bad', '<img src=x>', false, true, {}, [], NaN, Infinity, -1, 0, 1.5, 2, '2', 3, 4]) {
+      assert.doesNotMatch(renderPreview({ hash_size: size }).value('Hash Prefix'), /<a\b|Inspect in Prefix Tool/, 'size=' + String(size));
+    }
+    for (const role of [undefined, '', 'room', 'companion', 'sensor', 'Repeater', 'unknown']) {
+      assert.doesNotMatch(renderPreview({ role, hash_size: 1 }).value('Hash Prefix'), /<a\b|Inspect in Prefix Tool/, 'role=' + String(role));
+    }
+  });
+  test('Prefix Tool action rejects incomplete and non-hex public keys', () => {
+    for (const key of ['', 'ab', 'ab'.repeat(31), 'a'.repeat(63), 'a'.repeat(65), 'g'.repeat(64), 'ab'.repeat(31) + '"><']) {
+      const value = renderPreview({ public_key: key, hash_size: 1 }).value('Hash Prefix');
+      assert.doesNotMatch(value, /<a\b|Inspect in Prefix Tool/, 'key=' + key);
+    }
+    assert.match(renderPreview({ public_key: '<"' + 'a'.repeat(62), hash_size: 1 }).value('Hash Prefix'), /&lt;&quot;<\/code> \(1-byte\)/);
+  });
+  test('one-byte inspection link preserves the escaped variation marker', () => {
+    const bad = '"><img src=x onerror="bad()">';
+    const value = renderPreview({ hash_size: 1, hash_size_inconsistent: true, hash_sizes_seen: [1, bad] }).value('Hash Prefix');
+    assert.match(value, /<code[^>]*>AB<\/code> \(1-byte\)/);
+    assert.match(value, /title="Seen: 1, &quot;&gt;&lt;img src=x onerror=&quot;bad\(\)&quot;&gt;-byte"/);
+    assert.match(value, /<\/svg>varies<\/span>/);
+    assert.doesNotMatch(value, /<img/);
+    assert.match(value, />Inspect in Prefix Tool<\/a>/);
   });
   test('relay counts and hash-size tooltip text cannot inject markup', () => {
     const bad = '"><img src=x onerror="bad()">';
@@ -8228,5 +8351,53 @@ console.log('\n=== scope-audit.js: transport view (#2142) ===');
 
   test('region suggestions list every carried scope once, sorted', () => {
     assert.deepStrictEqual(Array.from(sa.transportRegions([neverAsked, asked])), ['be', 'fr']);
+  });
+}
+
+console.log('\n=== node SNR: direct reception only ===');
+{
+  // /api/nodes/*/health stats.avgSnr is null when no observer heard the
+  // node's own transmission (direct_heard.go). The UI must say so, never
+  // grade it or print a number.
+  const actx = makeSandbox();
+  actx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  actx.registerPage = () => {};
+  actx.api = () => Promise.resolve({});
+  actx.RegionFilter = { init: () => {}, onChange: () => {}, regionQueryString: () => '' };
+  actx.onWS = () => {}; actx.offWS = () => {}; actx.connectWS = () => {};
+  actx.invalidateApiCache = () => {}; actx.makeColumnsResizable = () => {}; actx.initTabBar = () => {};
+  actx.IATA_COORDS_GEO = {};
+  loadInCtx(actx, 'public/roles.js');
+  loadInCtx(actx, 'public/app.js');
+  try { loadInCtx(actx, 'public/analytics.js'); } catch (e) { /* page wiring only */ }
+  const cell = actx.window._analyticsDirectSnrCell;
+
+  test('analytics: a direct SNR prints in dB', () => {
+    assert.strictEqual(cell(7.25), '7.3 dB');
+    assert.strictEqual(cell(-3), '-3.0 dB');
+  });
+  test('analytics: no direct reception prints a dash that says why', () => {
+    for (const v of [null, undefined]) {
+      const h = cell(v);
+      assert.ok(h.includes('—') && h.includes('No direct reception'), h);
+    }
+  });
+
+  const hctx = makeSandbox();
+  hctx.registerPage = () => {};
+  loadInCtx(hctx, 'public/home.js');
+  const quality = hctx.window._homeSnrQuality;
+
+  test('home: no direct reception grades n/a in the muted colour, not Poor', () => {
+    for (const v of [null, undefined]) {
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(quality(v))), { label: 'n/a', color: 'var(--text-muted)' });
+    }
+  });
+  test('home: a direct SNR is graded on the existing scale, label and colour together', () => {
+    const got = [11, 0.5, -2, -6, 0].map(v => { const q = quality(v); return q.label + '|' + q.color; });
+    assert.deepStrictEqual(got, [
+      'Excellent|var(--status-green)', 'Good|var(--accent)', 'Marginal|var(--status-yellow)',
+      'Poor|var(--status-red)', 'Marginal|var(--status-yellow)',
+    ]);
   });
 }

@@ -6,30 +6,31 @@
 // file existed, and it is the only one for which the SNR and RSSI printed
 // next to an observer belong to the node the row names.
 //
-// The rule follows the firmware:
+// The rule is packetpath.HeardKey, shared with the ingestor's client
+// receptions: the last hop of a flood route, or the advertiser of a zero-hop
+// ADVERT (flood, or direct via Mesh::sendZeroHop). It refuses three things,
+// each because it can name the wrong node:
 //
-//   - Flood routes build the path up as they travel: a forwarding repeater
-//     appends its own hash before retransmitting (Mesh.cpp:349). The last
-//     hop is therefore the node whose transmission the observer received.
-//   - Direct routes carry the REMAINING route, not the travelled one. A
-//     forwarder matches itself against the head of the path and calls
-//     removeSelfFromPath (Mesh.cpp:89,103) before retransmitting, so the
-//     node the observer heard is not in the path at all. Direct routes
-//     therefore never attribute.
-//   - An empty flood path means the observer received the originator's own
-//     transmission. Only ADVERTs carry the originator's pubkey in the
-//     clear, so other payload types with an empty path attribute to nobody.
-//   - A hop prefix that matches more than one node attributes to nobody.
-//     Path hop sizes are chosen by the originator (Packet.h:83,
-//     Mesh.cpp:649) and default to one byte, so a hop often matches many
-//     candidates. resolveWithContext guesses in that case; this file does
-//     not. The gate matches resolvePathForObsColdLoad: under-attribute
-//     rather than credit the wrong node.
+//   - a 1-byte last hop: a node CoreScope does not know can share that byte,
+//     so even a prefix with one known candidate is not proof;
+//   - TRACE: its path bytes carry per-hop SNR, not node hashes;
+//   - a zero-hop ADVERT whose signature failed to verify: the pubkey in it
+//     is not proven to belong to the transmitter.
+//
+// Direct routes with a path never attribute: a forwarder calls
+// removeSelfFromPath (Mesh.cpp:89,103) before retransmitting, so the path
+// left behind is the remaining route. A hop prefix of 2 bytes or more that
+// matches more than one node, or that a retired repeater shares, also
+// attributes to nobody: under-attribute rather than credit the wrong node,
+// as resolvePathForObsColdLoad and uniqueHopPrefix do.
 package main
 
 import (
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // directHeardAgg accumulates one observer's direct receptions of one node.
@@ -40,6 +41,18 @@ type directHeardAgg struct {
 	SNRCount     int
 	RSSISum      float64
 	RSSICount    int
+	// Hours holds hourly reception counts and SNR histograms, keyed by hours
+	// since the Unix epoch. Recent holds the newest receptions (at most
+	// heardRecentMax after the pass), oldest first.
+	Hours  map[int32]*heardHour
+	Recent []heardSample
+
+	// lastKey/lastHour skip the map lookup for consecutive receptions in
+	// the same hour, the common case in a time-ordered store.
+	lastKey  int32
+	lastHour *heardHour
+	// recentHead is the next slot to overwrite once Recent is full.
+	recentHead int
 }
 
 // directHeardIndex maps node pubkey (lowercase) to observer id to aggregate.
@@ -101,49 +114,41 @@ func advertOriginPubkey(tx *StoreTx) string {
 
 // directHeardNode returns the lowercase pubkey of the node whose
 // transmission this observation received off the air, or "" when that cannot
-// be established. See the package comment for the rule and its firmware
-// grounding.
+// be established. See the package comment for the rule.
 func directHeardNode(tx *StoreTx, obs *StoreObs, pm *prefixMap) string {
-	if tx == nil || obs == nil || tx.RouteType == nil {
+	if tx == nil || obs == nil || tx.RouteType == nil || tx.PayloadType == nil {
 		return ""
 	}
 	hop := lastPathHop(obs.PathJSON)
-	switch *tx.RouteType {
-	case RouteFlood, RouteTransportFlood:
-		// Handled below: empty path means the originator, otherwise the last
-		// hop is whoever was heard.
-	case RouteDirect, RouteTransportDirect:
-		// A direct route normally says nothing about the transmitter, because
-		// the forwarder calls removeSelfFromPath before retransmitting
-		// (firmware Mesh.cpp) and the path left behind is the REMAINING route.
-		//
-		// The exception is a zero hop. Mesh::sendZeroHop sets ROUTE_TYPE_DIRECT
-		// (its transport overload ROUTE_TYPE_TRANSPORT_DIRECT) and path_len = 0,
-		// commented there as "path_len of zero means Zero Hop". Repeaters send
-		// their periodic local advert that way (simple_repeater/MyMesh.cpp, the
-		// next_local_advert branch and sendSelfAdvertisement with flood=false),
-		// and so do companions. An ADVERT arriving on a direct route with an
-		// empty path therefore cannot have been forwarded: the observer heard
-		// the advertiser's own transmission, and the advert carries its pubkey
-		// in the clear. That is the strongest direct-RF evidence there is.
-		//
-		// Anything else direct still says nothing: a non-empty path is the
-		// remaining route, and advertOriginPubkey returns "" for every payload
-		// type other than ADVERT.
-		if hop == "" {
-			return advertOriginPubkey(tx)
+	adv := ""
+	if hop == "" {
+		// advertOriginPubkey checks the type first, so signatureFailed (which
+		// may parse DecodedJSON) only runs for ADVERTs.
+		if pk := advertOriginPubkey(tx); pk != "" && !tx.signatureFailed() {
+			adv = pk
 		}
-		return ""
-	default:
+	}
+	key, src, ok := packetpath.HeardKey(*tx.RouteType, byte(*tx.PayloadType), hop, adv)
+	if !ok {
 		return ""
 	}
-	if hop == "" {
-		return advertOriginPubkey(tx)
+	if src == "advert" {
+		return key
 	}
 	if pm == nil {
 		return ""
 	}
-	candidates := pm.relayCandidates(hop)
+	// A retired repeater (moved to inactive_nodes) may still relay on this
+	// prefix, so the one active candidate is not proven (uniqueHopPrefix).
+	if _, shared := pm.retired[key]; shared {
+		return ""
+	}
+	// key is already lower case: look it up directly instead of through
+	// relayCandidates, which lower-cases again on every observation.
+	candidates, found := pm.relay[key]
+	if !found {
+		candidates = pm.m[key]
+	}
 	if len(candidates) != 1 {
 		return ""
 	}
@@ -183,9 +188,58 @@ func buildDirectHeardIndex(packets []*StoreTx, pm *prefixMap) directHeardIndex {
 				agg.RSSISum += *obs.RSSI
 				agg.RSSICount++
 			}
+			if t, ok := obs.ParsedTime(); ok {
+				agg.addReception(t, obs.SNR, obs.RSSI)
+			}
+		}
+	}
+	for _, byObs := range idx {
+		for _, agg := range byObs {
+			agg.trimRecent()
 		}
 	}
 	return idx
+}
+
+// addReception records one timed reception in the hourly histogram and the
+// ring. Once the ring is full each reception overwrites the oldest;
+// trimRecent restores arrival order after the pass.
+func (a *directHeardAgg) addReception(t time.Time, snr, rssi *float64) {
+	if a.Hours == nil {
+		a.Hours = make(map[int32]*heardHour, 8)
+	}
+	key := int32(t.Unix() / 3600)
+	h := a.lastHour
+	if h == nil || a.lastKey != key {
+		h = a.Hours[key]
+		if h == nil {
+			h = &heardHour{Bins: make([]snrBin, 0, 8)}
+			a.Hours[key] = h
+		}
+		a.lastKey, a.lastHour = key, h
+	}
+	h.N++
+	if snr != nil {
+		h.addSNR(*snr)
+	}
+	smp := newHeardSample(t, snr, rssi)
+	if len(a.Recent) < heardRecentMax {
+		a.Recent = append(a.Recent, smp)
+		return
+	}
+	a.Recent[a.recentHead] = smp
+	a.recentHead = (a.recentHead + 1) % heardRecentMax
+}
+
+// trimRecent puts a wrapped ring back in arrival order, oldest first.
+func (a *directHeardAgg) trimRecent() {
+	if a.recentHead == 0 {
+		return
+	}
+	r := make([]heardSample, 0, len(a.Recent))
+	r = append(r, a.Recent[a.recentHead:]...)
+	a.Recent = append(r, a.Recent[:a.recentHead]...)
+	a.recentHead = 0
 }
 
 // computeDirectHeard rebuilds the whole index from the current store. Run by
@@ -304,4 +358,22 @@ func buildDirectObserverRows(byObs map[string]*directHeardAgg, nonRelay, seen ma
 		return rows[i].ObserverID < rows[j].ObserverID
 	})
 	return rows
+}
+
+// directAvgSNR is a node's SNR over its direct receptions: the mean of every
+// sample across all observers that heard it on air. Nil when no observer
+// reported an SNR for a direct reception. Relayed copies never count, the
+// SNR on those belongs to whichever node transmitted the copy last.
+func directAvgSNR(byObs map[string]*directHeardAgg) *float64 {
+	var sum float64
+	var n int
+	for _, agg := range byObs {
+		sum += agg.SNRSum
+		n += agg.SNRCount
+	}
+	if n == 0 {
+		return nil
+	}
+	v := sum / float64(n)
+	return &v
 }

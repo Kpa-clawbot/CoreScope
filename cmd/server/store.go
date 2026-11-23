@@ -250,6 +250,14 @@ type PacketStore struct {
 	txRewriteMu     sync.Mutex
 	txRewriteCursor int64
 
+	// Poller start cursors: MAX(id) of transmissions / observations, read in
+	// NewPacketStore before any load query. A row above a mark may have been
+	// committed after the load's snapshot, so the poller re-reads from there.
+	// Written once before the store is shared; read-only afterwards.
+	startupTxMark  int
+	startupObsMark int
+	startupMarksOK bool // false: no conn, or a MAX query failed
+
 	mu             sync.RWMutex
 	db             *DB
 	packets        []*StoreTx                  // sorted by first_seen ASC (oldest first; newest at tail)
@@ -544,9 +552,6 @@ type PacketStore struct {
 	// Hot startup atomic gates — see contract below.
 	//
 	// Contract / ordering invariant (PR #1187):
-	//   * hashMigrationComplete (set by migrateContentHashesAsync) gates
-	//     content-hash–dependent code paths (e.g. dedup correctness on the
-	//     write side). Set true ONLY after the migration loop finishes.
 	//   * backgroundLoadDone is set true exactly once, after
 	//     loadBackgroundChunks finishes its loop AND its post-load index
 	//     rebuild. It gates "hot startup has finished filling
@@ -594,9 +599,6 @@ type PacketStore struct {
 	// loadBackgroundChunks after the chunk walk; surfaced via the typed
 	// perf payload for prod observability.
 	loadCoverageRatio float64
-
-	// Async hash migration state: set after migrateContentHashesAsync completes.
-	hashMigrationComplete atomic.Bool
 
 	// Chunked startup load state (#1009). LoadChunked closes
 	// firstChunkReady after the first chunk is merged so the HTTP
@@ -649,7 +651,21 @@ type PacketStore struct {
 	// ordering tests to capture the bg-loader entry timestamp/signal
 	// without polling. See runstartup_load_test.go.
 	bgLoaderEntryHook func()
+	// Test-only hooks for the poller/load interleaving tests. Nil in
+	// production. chunkQueriedHook fires in LoadChunked after a chunk's
+	// query returns, before its rows are merged (chunk counts from 1).
+	// obsPollHook fires in ingestNewObservations after the feeds are
+	// polled and again when it returns.
+	chunkQueriedHook func(chunk int)
+	obsPollHook      func(stage obsPollStage)
 }
+
+type obsPollStage int
+
+const (
+	obsPollAfterFeeds obsPollStage = iota
+	obsPollDone
+)
 
 // Precomputed distance records for fast analytics aggregation.
 type distHopRecord struct {
@@ -659,7 +675,6 @@ type distHopRecord struct {
 	ToPk       string
 	Dist       float64
 	Type       string // "R↔R", "C↔R", "C↔C"
-	SNR        *float64
 	Hash       string
 	Timestamp  string
 	HourBucket string
@@ -667,14 +682,12 @@ type distHopRecord struct {
 }
 
 // dedupeHopsByPair groups hops by unordered node-pair, keeps the max-distance
-// record per pair, and computes obsCount / bestSnr / medianSnr.  limit caps the
-// number of returned entries (sorted by distance descending).
+// record per pair, and computes obsCount. limit caps the number of returned
+// entries (sorted by distance descending).
 func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} {
 	type pairAgg struct {
 		best     *distHopRecord
 		obsCount int
-		maxSNR   *float64
-		snrs     []float64
 	}
 	pairMap := make(map[string]*pairAgg)
 	for i := range hops {
@@ -690,13 +703,6 @@ func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} 
 			pairMap[key] = agg
 		}
 		agg.obsCount++
-		if h.SNR != nil {
-			agg.snrs = append(agg.snrs, *h.SNR)
-			if agg.maxSNR == nil || *h.SNR > *agg.maxSNR {
-				v := *h.SNR
-				agg.maxSNR = &v
-			}
-		}
 		if agg.best == nil || h.Dist > agg.best.Dist {
 			agg.best = h
 		}
@@ -716,25 +722,10 @@ func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} 
 			break
 		}
 		h := pe.agg.best
-		var medianSNR *float64
-		if len(pe.agg.snrs) > 0 {
-			sorted := make([]float64, len(pe.agg.snrs))
-			copy(sorted, pe.agg.snrs)
-			sort.Float64s(sorted)
-			mid := len(sorted) / 2
-			if len(sorted)%2 == 0 {
-				v := (sorted[mid-1] + sorted[mid]) / 2
-				medianSNR = &v
-			} else {
-				v := sorted[mid]
-				medianSNR = &v
-			}
-		}
 		result = append(result, map[string]interface{}{
 			"fromName": h.FromName, "fromPk": h.FromPk,
 			"toName": h.ToName, "toPk": h.ToPk,
 			"dist": h.Dist, "type": h.Type,
-			"bestSnr": floatPtrOrNil(pe.agg.maxSNR), "medianSnr": floatPtrOrNil(medianSNR),
 			"obsCount": pe.agg.obsCount,
 			"hash":     h.Hash, "timestamp": h.Timestamp,
 		})
@@ -857,6 +848,11 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 			ps.invCooldown = v
 		}
 	}
+	// Capture BEFORE loading any packets: the load reads each chunk in its own
+	// snapshot, so a row committed while it runs is only safe if the poller
+	// starts at or below it. One writer commits ids in order, so everything
+	// the load can miss lies above these marks (see Poller.startCursors).
+	ps.startupTxMark, ps.startupObsMark, ps.startupMarksOK = db.highWaterMarks()
 	// Capture BEFORE loading any packets. Evidence arriving during startup
 	// remains above this watermark; each loaded tx also reads its full mask.
 	if db.advertEvidencePresent() {
@@ -976,7 +972,7 @@ func (s *PacketStore) Load() error {
 				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
-			LEFT JOIN observers obs ON obs.rowid = o.observer_idx` + filterClause + `
+			LEFT JOIN observers obs ON obs.idx = o.observer_idx` + filterClause + `
 			ORDER BY t.first_seen ASC, o.timestamp DESC`
 	} else {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
@@ -1289,7 +1285,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
-			LEFT JOIN observers obs ON obs.rowid = o.observer_idx` + filterClause + `
+			LEFT JOIN observers obs ON obs.idx = o.observer_idx` + filterClause + `
 			ORDER BY t.first_seen ASC, o.timestamp DESC`
 	} else {
 		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
@@ -3020,9 +3016,23 @@ func (s *PacketStore) queryMultiNodePacketsLocked(resolved []string, limit, offs
 	return &PacketResult{Packets: packets, Total: total}, jobs
 }
 
+// wsPacketMaps is a batch of broadcast-ready packet maps from the ingest paths.
+type wsPacketMaps []map[string]interface{}
+
 // IngestNewFromDB loads new transmissions from SQLite into memory and returns
 // broadcast-ready maps plus the new max transmission ID.
-func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interface{}, int) {
+func (s *PacketStore) IngestNewFromDB(sinceID, limit int) (wsPacketMaps, int) {
+	out, newMax, err := s.ingestNewFromDB(sinceID, limit)
+	if err != nil {
+		log.Printf("[store] %v", err)
+	}
+	return out, newMax
+}
+
+// ingestNewFromDB is IngestNewFromDB reporting a failed read. On error the
+// returned max is sinceID, so the caller's cursor stays put and the poll is
+// retried.
+func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -3047,7 +3057,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRHCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
-			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+			LEFT JOIN observers obs ON obs.idx = o.observer_idx
 			WHERE t.id > ?
 			ORDER BY t.id ASC, o.timestamp DESC`
 	} else {
@@ -3064,8 +3074,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 
 	rows, err := s.db.conn.Query(querySQL, sinceID)
 	if err != nil {
-		log.Printf("[store] ingest query error: %v", err)
-		return nil, sinceID
+		return nil, sinceID, fmt.Errorf("ingest query error: %w", err)
 	}
 	defer rows.Close()
 
@@ -3146,11 +3155,11 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		tempRows = append(tempRows, tr)
 	}
 
-	if len(tempRows) == 0 {
-		return nil, sinceID
-	}
 	if err := rows.Err(); err != nil {
-		return nil, sinceID
+		return nil, sinceID, fmt.Errorf("ingest read error: %w", err)
+	}
+	if len(tempRows) == 0 {
+		return nil, sinceID, nil
 	}
 	rows.Close()
 	s.advertEvidenceMu.Lock()
@@ -3163,8 +3172,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	}
 	masks, err := s.db.advertEvidenceForIDs(ids)
 	if err != nil {
-		log.Printf("[store] load advert evidence: %v", err)
-		return nil, sinceID
+		return nil, sinceID, fmt.Errorf("load advert evidence: %w", err)
 	}
 
 	// Now lock and merge into store
@@ -3427,16 +3435,31 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	if evidenceChanged {
 		s.invalidateAdvertEvidence()
 	}
-	return result, newMaxID
+	return result, newMaxID, nil
 }
 
 // IngestNewObservations loads new observations for transmissions already in the
 // store. This catches observations that arrive after IngestNewFromDB has already
 // advanced past the transmission's ID (fixes #174).
-func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]interface{} {
+func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) wsPacketMaps {
+	out, err := s.ingestNewObservations(sinceObsID, limit)
+	if err != nil {
+		log.Printf("[store] %v", err)
+	}
+	return out
+}
+
+// ingestNewObservations is IngestNewObservations reporting a failed read, so
+// the poller can keep its cursor and retry instead of passing rows it never
+// saw. A row that fails to scan is still skipped.
+func (s *PacketStore) ingestNewObservations(sinceObsID, limit int) (wsPacketMaps, error) {
 	// Must run even when observation IDs/timestamps have not changed.
 	s.refreshAdvertEvidence()
 	s.refreshTxRewrites() // #2107: rewrites never move IDs, so poll them here too
+	if s.obsPollHook != nil {
+		s.obsPollHook(obsPollAfterFeeds)
+		defer s.obsPollHook(obsPollDone)
+	}
 	if limit <= 0 {
 		limit = 500
 	}
@@ -3450,7 +3473,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		querySQL = `SELECT o.id, o.transmission_id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
 				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRHCol2 + `
 			FROM observations o
-			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+			LEFT JOIN observers obs ON obs.idx = o.observer_idx
 			WHERE o.id > ?
 			ORDER BY o.id ASC
 			LIMIT ?`
@@ -3466,8 +3489,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 
 	rows, err := s.db.conn.Query(querySQL, sinceObsID, limit)
 	if err != nil {
-		log.Printf("[store] ingest observations query error: %v", err)
-		return nil
+		return nil, fmt.Errorf("ingest observations query error: %w", err)
 	}
 	defer rows.Close()
 
@@ -3518,8 +3540,11 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ingest observations read error: %w", err)
+	}
 	if len(obsRows) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	s.mu.Lock()
@@ -3722,7 +3747,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	_ = pm
 	_ = graphRef
 
-	return broadcastMaps
+	return broadcastMaps, nil
 }
 
 // MaxTransmissionID returns the highest transmission ID in the store.
@@ -3730,6 +3755,12 @@ func (s *PacketStore) MaxTransmissionID() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.maxTxID
+}
+
+// StartupMarks returns the transmission and observation high-water marks taken
+// before the startup load, and whether both queries succeeded.
+func (s *PacketStore) StartupMarks() (txMark, obsMark int, ok bool) {
+	return s.startupTxMark, s.startupObsMark, s.startupMarksOK
 }
 
 // MaxObservationID returns the highest observation ID in the store.
@@ -5748,7 +5779,7 @@ func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterS
 			FromName: a.Name, FromPk: a.PublicKey,
 			ToName: b.Name, ToPk: b.PublicKey,
 			Dist: roundedDist, Type: hopType,
-			SNR: tx.SNR, Hash: tx.Hash, Timestamp: tx.FirstSeen,
+			Hash: tx.Hash, Timestamp: tx.FirstSeen,
 			HourBucket: hourBucket, tx: tx,
 		})
 		hopDetails = append(hopDetails, distHopDetail{
@@ -7822,7 +7853,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 
 	hopCounts := map[int]int{}
 	var allHopsList []int
-	hopSnr := map[int][]float64{}
 	hopFreq := map[string]int{}
 	pairFreq := map[string]int{}
 	observerMap := map[string]string{} // observer_id → observer_name
@@ -7854,9 +7884,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		n := len(hops)
 		hopCounts[n]++
 		allHopsList = append(allHopsList, n)
-		if tx.SNR != nil {
-			hopSnr[n] = append(hopSnr[n], *tx.SNR)
-		}
 		for _, h := range hops {
 			// Area filter: only count hops belonging to nodes in the area.
 			if areaNodes != nil {
@@ -8096,24 +8123,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		topPairs = append(topPairs, entry)
 	}
 
-	// Hops vs SNR
-	hopsVsSnr := make([]map[string]interface{}, 0)
-	for h, snrs := range hopSnr {
-		if h > 20 {
-			continue
-		}
-		sum := 0.0
-		for _, v := range snrs {
-			sum += v
-		}
-		hopsVsSnr = append(hopsVsSnr, map[string]interface{}{
-			"hops": h, "count": len(snrs), "avgSnr": sum / float64(len(snrs)),
-		})
-	}
-	sort.Slice(hopsVsSnr, func(i, j int) bool {
-		return hopsVsSnr[i]["hops"].(int) < hopsVsSnr[j]["hops"].(int)
-	})
-
 	// Observers list
 	observers := make([]map[string]interface{}, 0)
 	for id, name := range observerMap {
@@ -8245,7 +8254,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		"hopDistribution":  hopDist,
 		"topRepeaters":     topRepeaters,
 		"topPairs":         topPairs,
-		"hopsVsSnr":        hopsVsSnr,
 		"observers":        observers,
 		"perObserverReach": perObserverReach,
 		"multiObsNodes":    multiObsNodes,
@@ -9946,8 +9954,6 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 	for _, n := range nodes {
 		packets := s.byNode[n.pk]
 		var packetsToday int
-		var snrSum float64
-		var snrCount int
 		// Certain evidence only (#2260): packets merely attributed to the node
 		// (an ambiguous 1-byte hop) still count in the stats below.
 		lastHeard := s.certainHeard[n.pk]
@@ -9965,10 +9971,6 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 			if pkt.FirstSeen > todayStart {
 				packetsToday++
 			}
-			if pkt.SNR != nil {
-				snrSum += *pkt.SNR
-				snrCount++
-			}
 			if pkt.ObserverID != "" {
 				relayObservers[pkt.ObserverID] = struct{}{}
 			}
@@ -9978,10 +9980,8 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 		observerRows := buildDirectObserverRows(directByObs, nonRelaySet, seenSet)
 		relayObserverCount := relayOnlyObserverCount(relayObservers, directByObs)
 
-		var avgSnr interface{}
-		if snrCount > 0 {
-			avgSnr = snrSum / float64(snrCount)
-		}
+		// Direct receptions only, see direct_heard.go.
+		avgSnr := directAvgSNR(directByObs)
 		var lhVal interface{}
 		if lastHeard != "" {
 			lhVal = lastHeard
@@ -10046,8 +10046,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	todayStart := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 
 	var packetsToday int
-	var snrSum float64
-	var snrCount int
 	var totalHops, hopCount int
 	// Certain evidence only (#2260): see GetBulkHealth.
 	lastHeard := s.certainHeard[pubkey]
@@ -10065,10 +10063,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		if pkt.FirstSeen > todayStart {
 			packetsToday++
 		}
-		if pkt.SNR != nil {
-			snrSum += *pkt.SNR
-			snrCount++
-		}
 		// Hop counting
 		hops := txGetParsedPath(pkt)
 		if len(hops) > 0 {
@@ -10084,10 +10078,8 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	observerRows := buildDirectObserverRows(directByObs, nonRelaySet, seenSet)
 	relayObserverCount := relayOnlyObserverCount(relayObservers, directByObs)
 
-	var avgSnr interface{}
-	if snrCount > 0 {
-		avgSnr = snrSum / float64(snrCount)
-	}
+	// Direct receptions only, see direct_heard.go.
+	avgSnr := directAvgSNR(directByObs)
 	avgHops := 0
 	if hopCount > 0 {
 		avgHops = int(math.Round(float64(totalHops) / float64(hopCount)))
@@ -10228,6 +10220,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	toISO := now.Format(time.RFC3339)
 	// Before s.mu: its rare inline rebuild must not run under the read lock.
 	_, pm := s.getCachedNodesAndPM()
+	// Also before s.mu, so the lock order stays s.mu → analyticsRecomputerMu.
+	directByObs := directHeardFor(s.loadDirectHeard(), pubkey)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -10280,19 +10274,11 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		}
 	}
 
-	// SNR trend
-	snrTrend := make([]SnrTrendEntry, 0)
-	for _, p := range packets {
-		if p.SNR != nil {
-			snrTrend = append(snrTrend, SnrTrendEntry{
-				Timestamp:    p.FirstSeen,
-				SNR:          floatPtrOrNil(p.SNR),
-				RSSI:         floatPtrOrNil(p.RSSI),
-				ObserverID:   strOrNil(p.ObserverID),
-				ObserverName: strOrNil(p.ObserverName),
-			})
-		}
-	}
+	// Signal: only receptions in which a fixed observer heard this node
+	// itself, from the direct-heard snapshot. A relayed copy measures the
+	// last relay's link, not this node's.
+	heardBy := heardByRows(directByObs, coveredFrom, now)
+	snrTrend := heardSnrTrend(directByObs, coveredFrom, snrTrendMax)
 
 	// Packet type breakdown
 	typeBuckets := map[int]int{}
@@ -10492,39 +10478,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 
 	longestSilenceMs, longestSilenceStart := longestSilence(certainKeys, coveredFrom, now)
 
-	// Signal grade & SNR stats
-	var snrMean, snrStdDev float64
-	if len(snrTrend) > 0 {
-		var sum float64
-		for _, e := range snrTrend {
-			if v, ok := e.SNR.(float64); ok {
-				sum += v
-			}
-		}
-		snrMean = sum / float64(len(snrTrend))
-		if len(snrTrend) > 1 {
-			var sqSum float64
-			for _, e := range snrTrend {
-				if v, ok := e.SNR.(float64); ok {
-					sqSum += (v - snrMean) * (v - snrMean)
-				}
-			}
-			snrStdDev = math.Sqrt(sqSum / float64(len(snrTrend)))
-		}
-	}
-
-	signalGrade := "D"
-	if snrMean > 15 && snrStdDev < 2 {
-		signalGrade = "A"
-	} else if snrMean > 15 {
-		signalGrade = "A-"
-	} else if snrMean > 12 && snrStdDev < 3 {
-		signalGrade = "B+"
-	} else if snrMean > 8 {
-		signalGrade = "B"
-	} else if snrMean > 3 {
-		signalGrade = "C"
-	}
+	// Signal grade & SNR stats, each observer weighted once.
+	snrMean, snrStdDev, signalGrade := signalFromMedians(heardBy)
 
 	var relayPct float64
 	if totalWithPath > 0 {
@@ -10539,6 +10494,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days, DataFrom: dataFrom, DataFromReason: dataFromReason, Partial: dataFrom != ""},
 		ActivityTimeline:    activityTimeline,
 		SnrTrend:            snrTrend,
+		HeardBy:             heardBy,
 		PacketTypeBreakdown: packetTypeBreakdown,
 		ObserverCoverage:    observerCoverage,
 		HopDistribution:     hopDistribution,
@@ -10553,7 +10509,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 			SnrStdDev:           round(snrStdDev, 1),
 			RelayPct:            relayPct,
 			TotalPackets:        totalPackets,
-			UniqueObservers:     len(observerCoverage),
+			UniqueObservers:     len(heardBy),
 			UniquePeers:         len(peerSlice),
 			AvgPacketsPerDay:    avgPacketsPerDay,
 		},

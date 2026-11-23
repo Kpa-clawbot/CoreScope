@@ -53,12 +53,76 @@ function healthFor(n) {
   };
 }
 
+async function nodeStatusTimestamps(browser) {
+  const old = '2025-06-06T12:00:00Z', fresh = '2025-06-10T11:55:00Z', relayed = '2025-06-10T11:59:00Z';
+  const cases = [
+    { pk: pk('1'), name: 'Status active', role: 'repeater', lastSeen: old, lastHeard: old, healthHeard: fresh, lastRelayed: relayed,
+      label: 'Active', explanation: 'Last heard 5m ago', times: [['2025-06-10 11:55:00', '5m ago']] },
+    { pk: pk('2'), name: 'Status uncertain', role: 'repeater', lastSeen: old, lastHeard: old, lastRelayed: relayed,
+      label: 'Uncertain', explanation: 'Last certainly heard 4d ago — its shared hop prefix was last in a path 1m ago, possibly another node',
+      times: [['2025-06-06 12:00:00', '4d ago'], ['2025-06-10 11:59:00', '1m ago']] },
+    { pk: pk('3'), name: 'Status never certain', role: 'room', lastHeard: null, lastRelayed: relayed,
+      label: 'Uncertain', explanation: 'Last certainly heard never — its shared hop prefix was last in a path 1m ago, possibly another node',
+      times: [['2025-06-10 11:59:00', '1m ago']] },
+    { pk: pk('4'), name: 'Status future clock', role: 'repeater', lastHeard: '2025-06-10T12:05:00Z',
+      label: 'Active', explanation: 'Last heard 2025-06-10 12:05:00', times: [['in 5m', '2025-06-10 12:05:00']], future: true },
+  ];
+  const nodes = cases.map(n => ({ public_key: n.pk, name: n.name, role: n.role,
+    last_seen: n.lastSeen || n.lastHeard, last_heard: n.lastHeard, last_relayed: n.lastRelayed }));
+  for (const full of [true, false]) {
+    await test((full ? 'full detail' : 'wide preview') + ' status explanations retain timestamp context (#1154)', async () => {
+      const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+      try {
+        await ctx.addInitScript(() => {
+          localStorage.setItem('meshcore-user-level', 'experienced');
+          localStorage.setItem('meshcore-timestamp-mode', 'ago');
+          localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+          localStorage.setItem('meshcore-timestamp-format', 'iso');
+          window.addEventListener('theme-refresh', () => { window.__themeReady = true; }, { once: true });
+        });
+        const p = await ctx.newPage();
+        const errors = [];
+        p.on('pageerror', error => errors.push(error.message));
+        await p.clock.setFixedTime(new Date('2025-06-10T12:00:00Z'));
+        await p.route(url => url.pathname === '/api/nodes', route => route.fulfill({ json: {
+          nodes, total: nodes.length, has_more: false, counts: { repeaters: 3, rooms: 1 },
+        } }));
+        for (const n of cases) {
+          const node = nodes.find(node => node.public_key === n.pk);
+          await p.route('**/api/nodes/' + n.pk, route => route.fulfill({ json: { node, recentAdverts: [] } }));
+          await p.route('**/api/nodes/' + n.pk + '/health', route => route.fulfill({ json: healthFor({ ...n, lastHeard: n.healthHeard || n.lastHeard }) }));
+          await p.route('**/api/nodes/' + n.pk + '/paths', route => route.fulfill({ json: { paths: [] } }));
+        }
+        for (const n of cases) {
+          await p.goto(BASE + '/#/nodes' + (full ? '/' + n.pk : ''), { waitUntil: 'domcontentloaded' });
+          // Initial customizer application can replace either detail renderer.
+          await p.waitForFunction(() => window._customizerV2?.initDone && window.__themeReady && _themeRefreshTimer === null);
+          if (!full) await p.locator('#nodesBody tr[data-key="' + n.pk + '"]').click();
+          const host = p.locator(full ? '#nodeFullBody' : '#nodesRight');
+          await host.locator('.node-detail-name', { hasText: n.name }).waitFor();
+          const status = full
+            ? host.locator('#node-stats tr', { has: p.locator('td', { hasText: /^Status$/ }) }).locator('td').nth(1)
+            : host.locator('.node-detail > div', { hasText: /Last (certainly )?heard/ });
+          const explanation = full ? status.locator(':scope > span').nth(1) : status;
+          assert((await status.innerText()).includes(n.label), n.name + ': status label is unchanged');
+          assert((await explanation.innerText()).trim().endsWith(n.explanation), n.name + ': explanation wording is unchanged');
+          const times = await explanation.locator('.timestamp-text').evaluateAll(spans => spans.map(span => [span.title, span.textContent]));
+          assert(JSON.stringify(times) === JSON.stringify(n.times), n.name + ': explanation timestamps ' + JSON.stringify(times) + ', expected ' + JSON.stringify(n.times));
+          assert(await explanation.locator('.timestamp-future-icon').count() === (n.future ? 1 : 0), n.name + ': future warning');
+        }
+        assert(errors.length === 0, 'page errors: ' + errors.join(' | '));
+      } finally { await ctx.close(); }
+    });
+  }
+}
+
 async function run() {
   const browser = await chromium.launch({
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || undefined,
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
   });
+  await nodeStatusTimestamps(browser);
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   await ctx.addInitScript((nodes) => {
     localStorage.setItem('meshcore-user-level', 'experienced');
