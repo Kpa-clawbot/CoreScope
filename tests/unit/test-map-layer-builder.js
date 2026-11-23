@@ -685,6 +685,49 @@ test('attach: two maps on one page are independent', () => {
   assert.ok(m2._layers.includes(h2.group));
 });
 
+// The expanded list fits the visible map (above bottomInset) and scrolls;
+// Leaflet alone measured the whole map, under the Live replay bar.
+test('picker: the expanded list fits above the bottom inset and scrolls', () => {
+  const s = makeSandbox();
+  const cls = (el) => el._cls || (el._cls = new Set());
+  s.ctx.L.DomUtil = {
+    hasClass: (el, c) => cls(el).has(c),
+    addClass: (el, c) => { cls(el).add(c); },
+    removeClass: (el, c) => { cls(el).delete(c); },
+  };
+  const layers = s.ctx.L.control.layers;
+  s.ctx.L.control.layers = function () {
+    const c = layers.apply(this, arguments);
+    c._container = {};
+    c._section = { style: { height: '' }, scrollHeight: 800, getBoundingClientRect: () => ({ top: 176 }) };
+    c.expand = function () { cls(c._container).add('leaflet-control-layers-expanded'); return c; };
+    return c;
+  };
+  let bottom = 900;
+  s.w.innerHeight = 900;
+  const map = makeMap();
+  map.getContainer = () => ({ getBoundingClientRect: () => ({ bottom }) });
+  const boxes = [];
+  const h = s.w.MC_attachAutoTiles(map, { controlPosition: 'topright', bottomInset: (box) => { boxes.push(box); return 80; } });
+  const c = s.stats.controls[0];
+  const sec = c._section;
+  map._handlers.resize();
+  assert.strictEqual(sec.style.height, '', 'collapsed: untouched');
+  c.expand();
+  assert.strictEqual(sec.style.height, (900 - 80 - 176 - 12) + 'px');
+  assert.ok(cls(sec).has('leaflet-control-layers-scrollbar'), 'scrolls');
+  assert.strictEqual(boxes[0].top, 176, 'bottomInset gets the list box');
+  s.w.innerHeight = 1300; bottom = 1300;
+  map._handlers.resize();
+  assert.strictEqual(sec.style.height, '', 'fits a taller window');
+  assert.ok(!cls(sec).has('leaflet-control-layers-scrollbar'));
+  bottom = 700; // the map ends above the viewport's bottom
+  map._handlers.resize();
+  assert.strictEqual(sec.style.height, (700 - 176 - 12) + 'px');
+  h.destroy();
+  assert.ok(!map._handlers.resize, 'resize handler removed');
+});
+
 console.log('');
 console.log('map layer builder: ' + passed + ' passed, ' + failed + ' failed');
 if (failed > 0) process.exit(1);
