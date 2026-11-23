@@ -25,6 +25,7 @@ type fakeSMTPOpts struct {
 	authReply     string // reply to AUTH; default "235 2.7.0 accepted"
 	stallAfter    string // command verb after which the server stops answering
 	certDNSName   string // when set, the certificate names only this host, not 127.0.0.1
+	smtpUTF8      bool   // advertise SMTPUTF8 in EHLO
 }
 
 // fakeReceived is what the fake server saw on its connections.
@@ -164,6 +165,9 @@ func (s *fakeSMTP) serve(raw net.Conn) {
 			lines := []string{"250-fake.test"}
 			if s.opts.mode == "starttls" && s.opts.offerStartTLS && !tlsActive {
 				lines = append(lines, "250-STARTTLS")
+			}
+			if s.opts.smtpUTF8 {
+				lines = append(lines, "250-SMTPUTF8")
 			}
 			lines = append(lines, "250 AUTH PLAIN")
 			if !reply(lines...) {

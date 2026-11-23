@@ -1134,6 +1134,16 @@ test('users: no Refresh status without delivery status', () => {
   assert(brevo.indexOf('no delivery status') === -1, brevo);
 });
 
+test('users: no tracking-pixel hint without delivery status', () => {
+  const env = adminEnv();
+  const d = (status) => env.t.detailHtml({ user: { id: 4, displayName: 'A', email: 'a@x' }, sessions: [], audit: [], repeaterClaims: [], mail: [],
+    mailDeliveryStatus: status });
+  const smtp = d(false);
+  assert(smtp.indexOf('tracking pixels') === -1, smtp);
+  assert(smtp.indexOf('0 active session(s).') !== -1, smtp);
+  assert(d(true).indexOf('tracking pixels') !== -1);
+});
+
 test('deep link: filters, bouncing and detail id round-trip through the hash', () => {
   const env = adminEnv();
   const rh = (h) => JSON.parse(JSON.stringify(env.t.readHash(h)));

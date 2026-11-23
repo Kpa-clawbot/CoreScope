@@ -317,3 +317,62 @@ func TestSMTPRoundTripLongLineAndDot(t *testing.T) {
 		t.Errorf("text part = %q, want %q", body, want)
 	}
 }
+
+func TestSMTPNonASCIIRecipientWithoutSMTPUTF8(t *testing.T) {
+	host, port, srv := newFakeSMTP(t, fakeSMTPOpts{mode: "plain"})
+	s := newTestSMTP(host, port, "none", "", srv)
+	m := testSMTPMessage
+	m.To = "jürgen@example.org"
+	_, err := s.Send(context.Background(), m)
+	if err == nil || !strings.Contains(err.Error(), "SMTPUTF8") || !strings.Contains(err.Error(), "recipient") {
+		t.Fatalf("err = %v, want one naming the recipient and SMTPUTF8", err)
+	}
+	if strings.Contains(err.Error(), "jürgen") {
+		t.Errorf("err carries the address: %v", err)
+	}
+	if got := srv.received(); hasCommand(got.commands, "MAIL") {
+		t.Errorf("MAIL sent: %v", got.commands)
+	}
+}
+
+func TestSMTPNonASCIISenderWithoutSMTPUTF8(t *testing.T) {
+	host, port, srv := newFakeSMTP(t, fakeSMTPOpts{mode: "plain"})
+	s := newTestSMTP(host, port, "none", "", srv)
+	s.cfg.FromEmail = "noreply@exämple.org"
+	_, err := s.Send(context.Background(), testSMTPMessage)
+	if err == nil || !strings.Contains(err.Error(), "SMTPUTF8") || !strings.Contains(err.Error(), "sender") {
+		t.Fatalf("err = %v, want one naming the sender and SMTPUTF8", err)
+	}
+	if got := srv.received(); hasCommand(got.commands, "MAIL") {
+		t.Errorf("MAIL sent: %v", got.commands)
+	}
+}
+
+func TestSMTPNonASCIIRecipientWithSMTPUTF8(t *testing.T) {
+	host, port, srv := newFakeSMTP(t, fakeSMTPOpts{mode: "plain", smtpUTF8: true})
+	s := newTestSMTP(host, port, "none", "", srv)
+	m := testSMTPMessage
+	m.To = "jürgen@exämple.org"
+	m.ToName = "Jürgen"
+	if _, err := s.Send(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	got := srv.received()
+	if got.mailFrom != "MAIL FROM:<noreply@example.org> SMTPUTF8" {
+		t.Errorf("MAIL line = %q, want the SMTPUTF8 parameter", got.mailFrom)
+	}
+	if got.rcptTo != "RCPT TO:<jürgen@exämple.org>" {
+		t.Errorf("RCPT line = %q", got.rcptTo)
+	}
+	parsed, err := mail.ReadMessage(bytes.NewReader(got.data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	to, err := mail.ParseAddress(parsed.Header.Get("To"))
+	if err != nil {
+		t.Fatalf("To header %q: %v", parsed.Header.Get("To"), err)
+	}
+	if to.Address != "jürgen@exämple.org" || to.Name != "Jürgen" {
+		t.Errorf("To = %+v", to)
+	}
+}

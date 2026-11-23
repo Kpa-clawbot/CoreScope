@@ -83,6 +83,10 @@ already use) with no HTTP API or webhook involved:
   `smtpHost`. There is no option to skip the check.
 - `smtpHost` may be an IPv6 literal in brackets, e.g. `[2001:db8::25]`. Verification
   then needs a certificate that names that address.
+- A line break in `mail.fromName` is a startup error with SMTP.
+- An address with non-ASCII characters (e.g. `jürgen@example.org`) needs a server that
+  supports SMTPUTF8. Without it the mail fails with "the recipient address is not ASCII
+  and the server does not support SMTPUTF8" (or "sender" for `mail.fromEmail`).
 - `mail.webhookSecret` in the config is a startup error with SMTP, and
   `CORESCOPE_BREVO_WEBHOOK_SECRET` is ignored.
 - At startup CoreScope connects, negotiates TLS (unless `smtpTls` is `none`) and logs in

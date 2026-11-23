@@ -52,6 +52,16 @@ func (s *SMTP) Send(ctx context.Context, m Message) (string, error) {
 		return "", err
 	}
 	defer ss.release()
+	// net/smtp adds the SMTPUTF8 parameter to MAIL FROM when the server
+	// offers it; without it a non-ASCII address gets an opaque server error.
+	if ok, _ := ss.c.Extension("SMTPUTF8"); !ok {
+		if !isASCII(s.cfg.FromEmail) {
+			return "", errors.New("smtp: the sender address is not ASCII and the server does not support SMTPUTF8")
+		}
+		if !isASCII(m.To) {
+			return "", errors.New("smtp: the recipient address is not ASCII and the server does not support SMTPUTF8")
+		}
+	}
 	if err := ss.c.Mail(s.cfg.FromEmail); err != nil {
 		return "", ss.fail("mail from", err)
 	}
@@ -72,6 +82,15 @@ func (s *SMTP) Send(ctx context.Context, m Message) (string, error) {
 	// does not make it undelivered, so it is not reported as a send failure.
 	_ = ss.c.Quit()
 	return id, nil
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 // Events returns no events: plain SMTP has no delivery event feed.

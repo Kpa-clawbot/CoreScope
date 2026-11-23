@@ -515,3 +515,27 @@ func TestResolveUserManagementSMTPNoneIsExactLocalhost(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveUserManagementSMTPHostLowercased(t *testing.T) {
+	u := validSMTPUM()
+	u.Mail.SMTPHost, u.Mail.SMTPTLS = "LOCALHOST", "none"
+	u.Mail.SMTPUser, u.Mail.SMTPPassword = "mailer", "pw"
+	set, err := resolveUserManagement(u, "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// net/smtp PlainAuth compares the host exactly with "localhost".
+	if set.smtp.Host != "localhost" {
+		t.Errorf("host = %q, want localhost", set.smtp.Host)
+	}
+}
+
+func TestResolveUserManagementSMTPFromNameCRLF(t *testing.T) {
+	for _, name := range []string{"Core\r\nBcc: x@example.org", "Core\nScope", "Core\rScope"} {
+		u := validSMTPUM()
+		u.Mail.FromName = name
+		if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), "fromName") {
+			t.Errorf("%q: err = %v", name, err)
+		}
+	}
+}

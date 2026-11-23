@@ -496,6 +496,13 @@ func resolveSMTP(m UserMailConfig, fromEmail, fromName string, getenv func(strin
 	if c.Host == "" {
 		return c, errors.New("userManagement.mail.smtpHost is required with the smtp provider")
 	}
+	// Host names are case-insensitive, and net/smtp PlainAuth compares the
+	// host exactly with "localhost" before it allows an unencrypted AUTH.
+	c.Host = strings.ToLower(c.Host)
+	// The builder refuses CR or LF in a header, so every send would fail.
+	if strings.ContainsAny(fromName, "\r\n") {
+		return c, errors.New("userManagement.mail.fromName must not contain CR or LF with the smtp provider")
+	}
 	c.TLS = strings.ToLower(strings.TrimSpace(m.SMTPTLS))
 	defPort := 0
 	switch c.TLS {
@@ -505,7 +512,7 @@ func resolveSMTP(m UserMailConfig, fromEmail, fromName string, getenv func(strin
 		defPort = 465
 	case "none":
 		defPort = 25
-		switch strings.ToLower(c.Host) {
+		switch c.Host {
 		case "localhost", "127.0.0.1", "::1":
 		default:
 			return c, errors.New("userManagement.mail.smtpTls \"none\" is allowed only for the host localhost, 127.0.0.1 or ::1")
