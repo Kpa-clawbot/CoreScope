@@ -1174,28 +1174,71 @@
     return lc ? lc.control() : null;
   };
 
+  // Px covered at the bottom of a viewport vh tall by the rects that start
+  // below the list's top and overlap its columns (0 when none do). Pure, so
+  // the map's own bottom corners and a page's bottomInset share one rule.
+  function _coveredBelow(listRect, rects, vh) {
+    var top = vh;
+    (rects || []).forEach(function (r) {
+      if (!r || !r.height || !r.width) return;
+      if (r.top <= listRect.top || r.right <= listRect.left || r.left >= listRect.right) return;
+      top = Math.min(top, r.top);
+    });
+    return Math.max(0, vh - top);
+  }
+
+  // Rects of the elements that are on screen: skips display:none,
+  // visibility:hidden and faded-out (opacity 0) panels, whose boxes keep a
+  // size while hidden.
+  function _shownRects(els) {
+    var out = [];
+    Array.prototype.forEach.call(els || [], function (el) {
+      if (!el || typeof el.getBoundingClientRect !== 'function') return;
+      try {
+        var cs = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(el) : null;
+        if (cs && (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0)) return;
+      } catch (_) {}
+      out.push(el.getBoundingClientRect());
+    });
+    return out;
+  }
+
+  // Shortest list height kept when the visible room is smaller still, so a
+  // very short viewport gets a small scrolling list rather than none.
+  var LAYER_LIST_MIN_HEIGHT = 60;
+
   // Leaflet sizes the expanded list from the whole map's height, but the
   // Live map runs under the nav, the replay bar and the legend, so on a
   // short screen the end of the list was off screen or hidden, with no
   // scrollbar. Fit it to what is visible: the viewport, the map's bottom
-  // edge and bottomInset(listRect) (px covered at the bottom of the
-  // viewport in the list's columns).
+  // edge, the map's own bottom-corner controls (attribution, scale) in the
+  // list's columns, and bottomInset(listRect) (px covered at the bottom of
+  // the viewport, from the page). Keeps the scroll position across a re-fit.
   function _fitLayerList(control, map, bottomInset) {
     var section = control && control._section;
     var container = control && control._container;
     if (!section || !container || !L.DomUtil.hasClass(container, 'leaflet-control-layers-expanded')) return;
+    var scrollTop = section.scrollTop || 0;
     section.style.height = '';
     L.DomUtil.removeClass(section, 'leaflet-control-layers-scrollbar');
     var vh = window.innerHeight;
+    var listRect = section.getBoundingClientRect();
     var limit = vh;
     try { limit = Math.min(limit, map.getContainer().getBoundingClientRect().bottom); } catch (_) {}
+    var corners = map._controlCorners || {};
+    var cornerEls = [];
+    ['bottomleft', 'bottomright'].forEach(function (k) {
+      if (corners[k] && corners[k].children) Array.prototype.push.apply(cornerEls, corners[k].children);
+    });
+    limit = Math.min(limit, vh - _coveredBelow(listRect, _shownRects(cornerEls), vh));
     var inset = 0;
-    if (typeof bottomInset === 'function') { try { inset = +bottomInset(section.getBoundingClientRect()) || 0; } catch (_) {} }
+    if (typeof bottomInset === 'function') { try { inset = +bottomInset(listRect) || 0; } catch (_) {} }
     limit = Math.min(limit, vh - inset);
-    var room = Math.floor(limit - section.getBoundingClientRect().top - 12);
-    if (room > 0 && section.scrollHeight > room) {
+    var room = Math.max(LAYER_LIST_MIN_HEIGHT, Math.floor(limit - listRect.top - 12));
+    if (section.scrollHeight > room) {
       L.DomUtil.addClass(section, 'leaflet-control-layers-scrollbar');
       section.style.height = room + 'px';
+      section.scrollTop = scrollTop;
     }
   }
 
@@ -1647,6 +1690,21 @@
     layer.options.attribution = text;
     if (shown && ac.addAttribution) { try { ac.addAttribution(text); } catch (_) {} }
   }
+
+  /**
+   * Px covered at the bottom of the viewport by the shown elements that sit
+   * below the picker's list and overlap its columns. For a page's
+   * MC_attachAutoTiles bottomInset: MC_layerListInset(list, els).
+   * @param {DOMRect} listRect
+   * @param {ArrayLike<Element>} els
+   * @param {number} [vh] viewport height (default window.innerHeight)
+   * @returns {number}
+   */
+  window.MC_layerListInset = function (listRect, els, vh) {
+    return _coveredBelow(listRect, _shownRects(els), vh == null ? window.innerHeight : vh);
+  };
+  /** Pure form of MC_layerListInset, over rects already measured. */
+  window.MC_coveredBelow = _coveredBelow;
 
   /**
    * The theme-synced "Auto" basemap for one Leaflet map. Owns an L.layerGroup

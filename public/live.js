@@ -1561,16 +1561,12 @@
     // after the zoom control.
     _liveAutoTiles = window.MC_attachAutoTiles(map, {
       controlPosition: 'topright',
-      // Keep the picker's list clear of the replay bar and of the legend
-      // when it sits below the list.
+      // Keep the picker's list clear of what Live draws over the map's
+      // bottom right when it sits below the list: the replay bar, the
+      // legend or its toggle, the feed or its show button, a node detail.
       bottomInset: function (list) {
-        var inset = 0;
-        document.querySelectorAll('#vcrBar, .live-legend').forEach(function (el) {
-          var r = el.getBoundingClientRect();
-          if (!r.height || r.top <= list.top || r.right <= list.left || r.left >= list.right) return;
-          inset = Math.max(inset, window.innerHeight - r.top);
-        });
-        return inset;
+        return window.MC_layerListInset(list,
+          document.querySelectorAll('#vcrBar, .live-legend, .legend-toggle-btn, #feedShowBtn, .live-feed, .live-node-detail'));
       },
     });
 
