@@ -103,6 +103,15 @@ func (a *authService) activationMail(u *users.User, token string) mailer.Message
 		actionLabel: "Activate my account", actionURL: a.link("activate", token)})
 }
 
+// testMail is the admin's test mail: no link, no token, only the host and
+// the provider it went through.
+func (a *authService) testMail(u *users.User) mailer.Message {
+	return a.render(u.Email, u.DisplayName, "test", mailContent{
+		subject: "Test mail", greeting: "Hello " + u.DisplayName + ",",
+		paragraphs: []string{"This is a test mail from " + a.set.baseURL.Host + ", sent through " + a.set.provider +
+			" by an admin. No action is needed."}})
+}
+
 func (a *authService) resetMail(u *users.User, token string) mailer.Message {
 	return a.render(u.Email, u.DisplayName, "reset", mailContent{
 		subject: "Reset your password", greeting: "Hello " + u.DisplayName + ",",
@@ -147,15 +156,21 @@ func redactAddrs(err error) string {
 // sendMail sends msg and records it in the mail log. The error is logged
 // (without tokens) and returned so the caller can answer 503.
 func (a *authService) sendMail(ctx context.Context, u *users.User, purpose string, msg mailer.Message) error {
+	_, err := a.sendMailID(ctx, u, purpose, msg)
+	return err
+}
+
+// sendMailID is sendMail that also returns the provider's message id.
+func (a *authService) sendMailID(ctx context.Context, u *users.User, purpose string, msg mailer.Message) (string, error) {
 	id, err := a.mail.Send(ctx, msg)
 	if err != nil {
 		log.Printf("[users] mail %s for user #%d failed: %s", purpose, u.ID, redactAddrs(err))
-		return err
+		return "", err
 	}
 	if _, err := a.st.LogMail(idPtr(u.ID), msg.To, purpose, id); err != nil {
 		log.Printf("[users] mail log for user #%d: %v", u.ID, err)
 	}
-	return nil
+	return id, nil
 }
 
 // ingestMailEvents records provider events and flags undeliverable addresses.
