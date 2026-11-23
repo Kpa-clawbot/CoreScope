@@ -235,6 +235,73 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await ctx.close();
   }
 
+  for (const destination of ['detail link', 'second row', 'nodes page']) {
+    await step('delayed packet row preserves the ' + destination + ' selection', async () => {
+      const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+      page.setDefaultTimeout(8000);
+      try {
+        const list = '#/packets?timeWindow=180';
+        await page.goto(BASE + '/' + list, { waitUntil: 'domcontentloaded' });
+        const rows = page.locator('#pktBody tr[data-hash]');
+        await rows.nth(1).waitFor();
+        const first = page.locator('#pktBody tr[data-action="select-hash"]').first();
+        // An all-grouped fixture exposes the same row action in the flat list.
+        if (!await first.count()) await page.locator('#fGroup').click();
+        const a = await first.getAttribute('data-hash');
+        const other = page.locator('#pktBody tr[data-hash]:not([data-hash="' + a + '"])').first();
+        const b = await other.getAttribute('data-hash');
+
+        // Hold the real, decoded HTTP response at the boundary used by the row.
+        const secondClick = destination === 'second row';
+        await page.evaluate(hashes => {
+          const read = window.api;
+          window.heldRows = new Map();
+          window.api = async function (path, options) {
+            const data = await read(path, options);
+            const hash = data?.packet?.hash;
+            if (hashes.includes(hash) && path === '/packets/' + hash) {
+              await new Promise(resolve => { window.heldRows.set(hash, resolve); });
+            }
+            return data;
+          };
+        }, secondClick ? [a, b] : [a]);
+        const held = hash => page.waitForFunction(hash => window.heldRows.has(hash), hash);
+        const release = hash => page.evaluate(async hash => {
+          window.heldRows.get(hash)();
+          await new Promise(requestAnimationFrame);
+        }, hash);
+        await first.locator('.col-time').click();
+        await held(a);
+
+        const leftPackets = destination === 'nodes page';
+        const target = leftPackets ? '#/nodes' : '#/packets/' + b + '?timeWindow=180';
+        if (secondClick) {
+          await other.locator('.col-time').click();
+          await held(b);
+          await release(a);
+          assert(!new URL(page.url()).hash.includes(a), 'A took over while the newer row was loading');
+          await release(b);
+        } else await page.evaluate(route => { location.hash = route; }, target);
+        const panel = '.slide-over-panel[data-state="open"]';
+        if (leftPackets) await page.locator('#nodesTable').waitFor();
+        else await page.locator(panel + ' [data-packet-hash="' + b + '"]').waitFor();
+        const title = await page.title();
+        assert(title.includes(leftPackets ? 'Nodes' : b.slice(0, 12)), 'wrong destination title: ' + title);
+        assert(new URL(page.url()).hash === target, 'wrong destination URL before releasing A');
+
+        if (!secondClick) await release(a);
+        const after = await page.evaluate(panel => ({
+          route: location.hash, title: document.title,
+          shown: document.querySelector(panel + ' [data-packet-hash]')?.dataset.packetHash || null,
+          open: !!document.querySelector(panel),
+        }), panel);
+        assert(after.route === target && after.title === title && after.open === !leftPackets
+          && after.shown === (leftPackets ? null : b),
+          'expected ' + target + ' / ' + title + ' after releasing A, got ' + JSON.stringify(after));
+      } finally { await page.close(); }
+    });
+  }
+
   await browser.close();
 
   console.log(`\n=== #1168 Munger SlideOver hardening: ${passed} passed, ${failed} failed ===`);
