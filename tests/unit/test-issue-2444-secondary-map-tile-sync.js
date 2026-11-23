@@ -182,7 +182,8 @@ function home(opts) {
   };
   let node = { lat: 10, lon: 20, name: 'n', role: 'repeater' };
   Object.assign(s.ctx, {
-    CLIENT_TTL: {}, miniMap: null, searchTimeout: null, searchAbort: null, _themeRefreshHandler: null,
+    // _healthGen: the load counter #2461 adds (harmless without it).
+    CLIENT_TTL: {}, miniMap: null, _healthGen: 0, searchTimeout: null, searchAbort: null, _themeRefreshHandler: null,
     api: async () => ({ node, stats: {}, recentPackets: [], observers: [] }),
     isMyNode: () => true, getHealthStatus: () => 'healthy', timeAgo: () => 'now', truncate: String,
     snrQuality: () => ({ label: 'n/a', color: 'var(--text-muted)' }),
@@ -217,7 +218,8 @@ function analytics(opts) {
   const panel = { innerHTML: '', classList: { add() {}, remove() {} } };
   let data = ROUTE;
   Object.assign(s.ctx, {
-    _subpathMap: null, CLIENT_TTL: {}, esc: String, formatDistance: String,
+    // _subpathGen: the load counter #2461 adds (harmless without it).
+    _subpathMap: null, _subpathGen: 0, CLIENT_TTL: {}, esc: String, formatDistance: String,
     statusGreen: () => 'g', statusRed: () => 'r', statusYellow: () => 'y',
     api: async () => data,
     _stopRolesRefresh() {}, _stopScopesRefresh() {}, _stopDistanceRetry() {},
