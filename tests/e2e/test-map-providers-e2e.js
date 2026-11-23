@@ -375,6 +375,14 @@ async function run() {
     const drawn = (page, re, scope) => page.waitForFunction(([src, sel]) =>
       Array.from(document.querySelectorAll(sel + ' .leaflet-tile-pane img.leaflet-tile-loaded')).some(i => new RegExp(src).test(i.src)),
       [re, scope || ''], { timeout: 15000 });
+    // Home and the Analytics tabs rebuild their content on 'theme-refresh',
+    // which app.js fires 300 ms after each 'theme-changed'; a page load ends
+    // with one, once /api/config/theme is applied. A card or route detail
+    // opened before it is dropped with its map, and the network going idle
+    // does not order after it: wait for the config and for app.js's timer.
+    const themeSettled = (page) => page.waitForFunction(() =>
+      !!(window._customizerV2 && window._customizerV2.initDone) && _themeRefreshTimer === null,
+      null, { timeout: 15000 });
     {
       const c = await newPage(browser, { theme: 'light' });
       try {
@@ -559,12 +567,13 @@ async function run() {
             localStorage.setItem('meshcore-user-level', 'experienced');
           }, pk);
           await d.page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+          await themeSettled(d.page);
           await d.page.waitForSelector('.my-node-card');
-          await d.page.waitForLoadState('networkidle'); // Home re-renders while it loads; a card opened before that is lost
           await d.page.locator('.my-node-card .mnc-btn[data-action="health"]').first().click();
           await drawn(d.page, 'cartocdn', '#healthMap');
           // Analytics: the first route whose detail has a map (two located nodes).
           await e.page.goto(`${BASE}/#/analytics?tab=subpaths`, { waitUntil: 'domcontentloaded' });
+          await themeSettled(e.page);
           await e.page.waitForSelector('tr[data-hops]');
           const rows = await e.page.locator('tr[data-hops]').count();
           let found = false;
