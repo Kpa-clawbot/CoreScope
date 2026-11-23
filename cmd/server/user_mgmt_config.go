@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/meshcore-analyzer/mailer"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -38,6 +39,13 @@ type UserMailConfig struct {
 	FromEmail     string `json:"fromEmail,omitempty"`
 	FromName      string `json:"fromName,omitempty"`
 	WebhookSecret string `json:"webhookSecret,omitempty"`
+
+	// provider "smtp"
+	SMTPHost     string `json:"smtpHost,omitempty"`
+	SMTPPort     int    `json:"smtpPort,omitempty"`
+	SMTPTLS      string `json:"smtpTls,omitempty"` // starttls (default), tls or none
+	SMTPUser     string `json:"smtpUser,omitempty"`
+	SMTPPassword string `json:"smtpPassword,omitempty"`
 }
 
 // ChannelProposalsConfig is userManagement.channelProposals
@@ -345,13 +353,14 @@ type userMgmtSettings struct {
 	secureCookie   bool
 	sessionTTL     time.Duration
 	trustedProxies []*net.IPNet
-	provider       string // "brevo", "postal" or (e2etest builds only) "fake"
+	provider       string // "brevo", "postal", "smtp" or (e2etest builds only) "fake"
 	brevoAPIKey    string
 	postalBaseURL  string // no trailing slash
 	postalAPIKey   string
 	fromEmail      string
 	fromName       string
 	webhookSecret  string
+	smtp           mailer.SMTPConfig // carries the password: never log or format it
 	proposals      proposalSettings
 	notify         notifySettings
 	backup         backupSettings
@@ -411,6 +420,10 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 		webhookEnv = "CORESCOPE_POSTAL_WEBHOOK_SECRET"
 	}
 	set.webhookSecret = envOrValue(getenv, webhookEnv, u.Mail.WebhookSecret)
+	if set.provider == "smtp" {
+		// No webhook env var applies: a leftover Brevo one must not fail an smtp setup.
+		set.webhookSecret = strings.TrimSpace(u.Mail.WebhookSecret)
+	}
 	from, err := users.NormalizeEmail(u.Mail.FromEmail)
 	if err != nil {
 		return nil, errors.New("userManagement.mail.fromEmail must be a valid address")
@@ -438,12 +451,19 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 		if set.webhookSecret != "" && !postalSecretRe.MatchString(set.webhookSecret) {
 			return nil, errors.New("userManagement.mail.webhookSecret may contain only letters, digits, '.', '_' and '-' with the postal provider")
 		}
+	case "smtp":
+		if set.smtp, err = resolveSMTP(u.Mail, set.fromEmail, set.fromName, getenv); err != nil {
+			return nil, err
+		}
+		if set.webhookSecret != "" {
+			return nil, errors.New("userManagement.mail.webhookSecret cannot be used with the smtp provider: plain SMTP has no delivery webhook")
+		}
 	case "fake":
 		if !fakeMailerAllowed {
 			return nil, errors.New(`userManagement.mail.provider "fake" is only available in e2etest builds`)
 		}
 	default:
-		return nil, fmt.Errorf("userManagement.mail.provider %q is not supported (use \"brevo\" or \"postal\")", u.Mail.Provider)
+		return nil, fmt.Errorf("userManagement.mail.provider %q is not supported (use \"brevo\", \"postal\" or \"smtp\")", u.Mail.Provider)
 	}
 	if set.webhookSecret != "" && len(set.webhookSecret) < 16 {
 		return nil, errors.New("userManagement.mail.webhookSecret must be at least 16 characters")
@@ -460,6 +480,57 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 		return nil, err
 	}
 	return set, nil
+}
+
+// resolveSMTP validates the smtp* keys and fills the TLS mode and port,
+// because mailer.NewSMTP applies no defaults. The password is never put in an error.
+func resolveSMTP(m UserMailConfig, fromEmail, fromName string, getenv func(string) string) (mailer.SMTPConfig, error) {
+	c := mailer.SMTPConfig{
+		Host: strings.TrimSpace(m.SMTPHost), User: strings.TrimSpace(m.SMTPUser),
+		Password:  envOrValue(getenv, "CORESCOPE_SMTP_PASSWORD", m.SMTPPassword),
+		FromEmail: fromEmail, FromName: fromName,
+	}
+	if len(c.Host) >= 2 && strings.HasPrefix(c.Host, "[") && strings.HasSuffix(c.Host, "]") {
+		c.Host = strings.TrimSpace(c.Host[1 : len(c.Host)-1])
+	}
+	if c.Host == "" {
+		return c, errors.New("userManagement.mail.smtpHost is required with the smtp provider")
+	}
+	// Host names are case-insensitive, and net/smtp PlainAuth compares the
+	// host exactly with "localhost" before it allows an unencrypted AUTH.
+	c.Host = strings.ToLower(c.Host)
+	// The builder refuses CR or LF in a header, so every send would fail.
+	if strings.ContainsAny(fromName, "\r\n") {
+		return c, errors.New("userManagement.mail.fromName must not contain CR or LF with the smtp provider")
+	}
+	c.TLS = strings.ToLower(strings.TrimSpace(m.SMTPTLS))
+	defPort := 0
+	switch c.TLS {
+	case "", "starttls":
+		c.TLS, defPort = "starttls", 587
+	case "tls":
+		defPort = 465
+	case "none":
+		defPort = 25
+		switch c.Host {
+		case "localhost", "127.0.0.1", "::1":
+		default:
+			return c, errors.New("userManagement.mail.smtpTls \"none\" is allowed only for the host localhost, 127.0.0.1 or ::1")
+		}
+	default:
+		return c, fmt.Errorf("userManagement.mail.smtpTls %q is not supported (use starttls, tls, none)", m.SMTPTLS)
+	}
+	if m.SMTPPort < 0 || m.SMTPPort > 65535 {
+		return c, errors.New("userManagement.mail.smtpPort must be between 1 and 65535")
+	}
+	c.Port = m.SMTPPort
+	if c.Port == 0 {
+		c.Port = defPort
+	}
+	if (c.User == "") != (c.Password == "") {
+		return c, errors.New("userManagement.mail: smtpUser and smtpPassword must be set together (smtpPassword or CORESCOPE_SMTP_PASSWORD)")
+	}
+	return c, nil
 }
 
 var postalSecretRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)

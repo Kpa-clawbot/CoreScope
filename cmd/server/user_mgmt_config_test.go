@@ -56,7 +56,7 @@ func TestResolveUserManagementErrors(t *testing.T) {
 		"fromEmail":      func(u *UserManagementConfig) { u.Mail.FromEmail = "" },
 		"Brevo API key":  func(u *UserManagementConfig) { u.Mail.BrevoAPIKey = "" },
 		"adminEmails":    func(u *UserManagementConfig) { u.AdminEmails = []string{"not-an-address"} },
-		"not supported":  func(u *UserManagementConfig) { u.Mail.Provider = "smtp" },
+		"not supported":  func(u *UserManagementConfig) { u.Mail.Provider = "bogus" },
 		"e2etest builds": func(u *UserManagementConfig) { u.Mail.Provider = "fake" },
 		"webhookSecret":  func(u *UserManagementConfig) { u.Mail.WebhookSecret = "short" },
 	}
@@ -399,6 +399,143 @@ func TestResolveObserverLogins_TransportValues(t *testing.T) {
 		u.ObserverLogins.Broker.Transport = tr
 		if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), "broker.transport") {
 			t.Errorf("%s: err = %v", tr, err)
+		}
+	}
+}
+
+func validSMTPUM() *UserManagementConfig {
+	u := validUM()
+	u.Mail = UserMailConfig{Provider: "SMTP", SMTPHost: "mail.example.org", FromEmail: "noreply@example.org"}
+	return u
+}
+
+func TestResolveUserManagementSMTPDefaults(t *testing.T) {
+	cases := []struct {
+		name, host, tls string
+		port            int
+		wantTLS         string
+		wantPort        int
+	}{
+		{"default", "mail.example.org", "", 0, "starttls", 587},
+		{"tls", "mail.example.org", "tls", 0, "tls", 465},
+		{"none localhost", "localhost", "none", 0, "none", 25},
+		{"none 127.0.0.1", "127.0.0.1", "none", 0, "none", 25},
+		{"none ::1", "::1", "none", 0, "none", 25},
+		{"explicit port", "mail.example.org", "starttls", 2525, "starttls", 2525},
+		{"none bracketed ::1", "[::1]", "none", 0, "none", 25},
+		{"bracketed ipv6", "[2001:db8::1]", "starttls", 0, "starttls", 587},
+		{"upper case mode", "mail.example.org", " TLS ", 0, "tls", 465},
+	}
+	for _, c := range cases {
+		u := validSMTPUM()
+		u.Mail.SMTPHost, u.Mail.SMTPTLS, u.Mail.SMTPPort = c.host, c.tls, c.port
+		set, err := resolveUserManagement(u, "meshcore.db", noEnv)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		wantHost := strings.Trim(c.host, "[]")
+		if set.provider != "smtp" || set.smtp.Host != wantHost || set.smtp.TLS != c.wantTLS || set.smtp.Port != c.wantPort ||
+			set.smtp.FromEmail != "noreply@example.org" || set.smtp.FromName != "CoreScope" {
+			t.Errorf("%s: provider=%q host=%q tls=%q port=%d from=%q/%q", c.name, set.provider,
+				set.smtp.Host, set.smtp.TLS, set.smtp.Port, set.smtp.FromEmail, set.smtp.FromName)
+		}
+	}
+}
+
+func TestResolveUserManagementSMTPErrors(t *testing.T) {
+	cases := map[string]func(u *UserManagementConfig){
+		"smtpHost":                  func(u *UserManagementConfig) { u.Mail.SMTPHost = " " },
+		"localhost":                 func(u *UserManagementConfig) { u.Mail.SMTPTLS = "none" },
+		"starttls, tls, none":       func(u *UserManagementConfig) { u.Mail.SMTPTLS = "bogus" },
+		"smtpUser and smtpPassword": func(u *UserManagementConfig) { u.Mail.SMTPUser = "u" },
+		"smtpPort":                  func(u *UserManagementConfig) { u.Mail.SMTPPort = 70000 },
+		"smtpPort ":                 func(u *UserManagementConfig) { u.Mail.SMTPPort = -1 },
+		"webhookSecret":             func(u *UserManagementConfig) { u.Mail.WebhookSecret = "AbCd0123456789xyz" },
+	}
+	for want, mutate := range cases {
+		u := validSMTPUM()
+		mutate(u)
+		_, err := resolveUserManagement(u, "meshcore.db", noEnv)
+		if err == nil || !strings.Contains(err.Error(), strings.TrimSpace(want)) {
+			t.Errorf("%s: err = %v", want, err)
+		}
+	}
+	u := validSMTPUM()
+	u.Mail.WebhookSecret = "AbCd0123456789xyz"
+	if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), "smtp") {
+		t.Errorf("webhookSecret error must name smtp: %v", err)
+	}
+	// password without user
+	u = validSMTPUM()
+	u.Mail.SMTPPassword = "pw"
+	if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), "smtpUser and smtpPassword") {
+		t.Errorf("password without user: %v", err)
+	}
+	// the webhook env var of another provider does not trip the check
+	env := map[string]string{"CORESCOPE_BREVO_WEBHOOK_SECRET": "brevo-secret-0123456789"}
+	if _, err := resolveUserManagement(validSMTPUM(), "meshcore.db", func(k string) string { return env[k] }); err != nil {
+		t.Errorf("brevo webhook env with smtp provider: %v", err)
+	}
+}
+
+func TestResolveUserManagementSMTPPasswordEnvWins(t *testing.T) {
+	u := validSMTPUM()
+	u.Mail.SMTPUser, u.Mail.SMTPPassword = "mailer", "from-config"
+	env := map[string]string{"CORESCOPE_SMTP_PASSWORD": "from-env"}
+	set, err := resolveUserManagement(u, "meshcore.db", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.smtp.User != "mailer" || set.smtp.Password != "from-env" {
+		t.Fatalf("user=%q password-from-env=%v", set.smtp.User, set.smtp.Password == "from-env")
+	}
+	// env alone supplies the password
+	u.Mail.SMTPPassword = ""
+	if set, err = resolveUserManagement(u, "meshcore.db", func(k string) string { return env[k] }); err != nil || set.smtp.Password != "from-env" {
+		t.Fatalf("env only: %v", err)
+	}
+}
+
+func TestResolveUserManagementUnknownProviderListsAll(t *testing.T) {
+	u := validUM()
+	u.Mail.Provider = "bogus"
+	_, err := resolveUserManagement(u, "meshcore.db", noEnv)
+	if err == nil || !strings.Contains(err.Error(), `"brevo", "postal" or "smtp"`) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResolveUserManagementSMTPNoneIsExactLocalhost(t *testing.T) {
+	for _, h := range []string{"localhost.evil.com", "localhost.", "127.0.0.2"} {
+		u := validSMTPUM()
+		u.Mail.SMTPHost, u.Mail.SMTPTLS = h, "none"
+		if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), "localhost") {
+			t.Errorf("%s: err = %v", h, err)
+		}
+	}
+}
+
+func TestResolveUserManagementSMTPHostLowercased(t *testing.T) {
+	u := validSMTPUM()
+	u.Mail.SMTPHost, u.Mail.SMTPTLS = "LOCALHOST", "none"
+	u.Mail.SMTPUser, u.Mail.SMTPPassword = "mailer", "pw"
+	set, err := resolveUserManagement(u, "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// net/smtp PlainAuth compares the host exactly with "localhost".
+	if set.smtp.Host != "localhost" {
+		t.Errorf("host = %q, want localhost", set.smtp.Host)
+	}
+}
+
+func TestResolveUserManagementSMTPFromNameCRLF(t *testing.T) {
+	for _, name := range []string{"Core\r\nBcc: x@example.org", "Core\nScope", "Core\rScope"} {
+		u := validSMTPUM()
+		u.Mail.FromName = name
+		if _, err := resolveUserManagement(u, "meshcore.db", noEnv); err == nil || !strings.Contains(err.Error(), "fromName") {
+			t.Errorf("%q: err = %v", name, err)
 		}
 	}
 }

@@ -58,6 +58,7 @@ function loadTab(files, hash, routes, extra) {
   const calls = [];
   const bodies = [];
   const timers = [];
+  const winListeners = {};
   const CSAuth = {
     request(method, p, body) { calls.push(p); bodies.push(body); return Promise.resolve().then(() => routes(p, body)); },
     say(id, text, ok) { const el = dom.document.getElementById(id); el.textContent = text; el.ok = !!ok; },
@@ -69,12 +70,14 @@ function loadTab(files, hash, routes, extra) {
     escapeHtml: loadEscapeHtml(),
     setInterval(fn, ms) { timers.push({ fn, ms, cleared: false }); return timers.length; },
     clearInterval(id) { if (timers[id - 1]) timers[id - 1].cleared = true; },
+    addEventListener(t, fn) { (winListeners[t] = winListeners[t] || []).push(fn); },
   }, extra || {});
   ctx.window = ctx;
   vm.createContext(ctx);
   loadApiBase(ctx);
   [].concat(files).forEach((f) => vm.runInContext(src(f), ctx));
-  return { ctx, dom, els: dom.els, loc, replaced, calls, bodies, timers };
+  const fire = (t, detail) => (winListeners[t] || []).forEach((fn) => fn({ type: t, detail }));
+  return { ctx, dom, els: dom.els, loc, replaced, calls, bodies, timers, fire };
 }
 
 const NOW = Date.UTC(2026, 9, 7, 12, 0, 0);
@@ -415,6 +418,184 @@ test('Refresh and Retry start no second full refresh while one is in flight; the
   await tick();
   assert.strictEqual(hz(), 2, 'two rapid clicks make one /api/healthz request');
   ov.unmount();
+});
+
+// A click on #aoMailTest: closest() matches only that selector.
+const mailTestClick = (env) => env.els.aoBody.handlers.click({ target: { closest: (sel) => (sel === '#aoMailTest' ? {} : null) } });
+const MAIL_TEST = '/api/admin/mail/test';
+
+test('overview: Send test mail posts once and shows the result', async () => {
+  const held = [];
+  const env = overviewEnv((p) => (p === MAIL_TEST ? new Promise((r) => { held.push(r); }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('id="aoMailTest"') !== -1, 'button in the System card');
+  assert(env.els.aoBody.innerHTML.indexOf('id="aoMailTestResult"') !== -1, 'result element in the System card');
+  const posts = () => env.calls.filter((p) => p === MAIL_TEST).length;
+  mailTestClick(env);
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(posts(), 1, 'two quick clicks make one POST');
+  assert.strictEqual(env.els.aoMailTest.disabled, true, 'disabled while pending');
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(/id="aoMailTest"[^>]* disabled/.test(env.els.aoBody.innerHTML), 'a rebuild while pending keeps it disabled');
+
+  held.shift()(OK({ ok: true, provider: 'brevo', messageId: 'm1' }));
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail sent to your address through brevo.');
+  assert.strictEqual(env.els.aoMailTest.disabled, false, 'enabled once it settles');
+
+  mailTestClick(env);
+  await tick();
+  held.shift()({ ok: false, status: 502, data: { ok: false, provider: 'smtp', error: '535 5.7.8 authentication failed' } });
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: 535 5.7.8 authentication failed');
+
+  mailTestClick(env);
+  await tick();
+  held.shift()({ ok: false, status: 502, data: { ok: false, provider: 'smtp', error: XSS } });
+  await tick();
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('<img') === -1, 'raw markup: ' + env.els.aoBody.innerHTML);
+  assert(env.els.aoBody.innerHTML.indexOf('Test mail failed: &lt;img src=x onerror=alert(1)&gt;') !== -1);
+
+  mailTestClick(env);
+  await tick();
+  held.shift()({ ok: false, status: 429, data: { error: 'too many requests' } });
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Too many test mails, try again later.');
+  assert.strictEqual(posts(), 4);
+  ov.unmount();
+});
+
+test('overview: test-mail result survives the 60 s refresh', async () => {
+  const env = overviewEnv((p) => (p === MAIL_TEST ? OK({ ok: true, provider: 'smtp', messageId: 'm2' }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  mailTestClick(env);
+  await tick();
+  const text = 'Test mail sent to your address through smtp.';
+  assert.strictEqual(env.els.aoMailTestResult.textContent, text);
+  env.timers[env.timers.length - 1].fn(); // refresh(false)
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf(text) !== -1, 'result kept after the rebuild: ' + env.els.aoBody.innerHTML);
+  ov.unmount();
+});
+
+test('overview: while sending, the old result is replaced by Sending...', async () => {
+  const held = [];
+  const env = overviewEnv((p) => (p === MAIL_TEST ? new Promise((r) => { held.push(r); }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Sending...');
+  held.shift()({ ok: false, status: 502, data: { ok: false, provider: 'smtp', error: 'old failure' } });
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: old failure');
+  assert(/\berr\b/.test(env.els.aoMailTestResult.className), env.els.aoMailTestResult.className);
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Sending...', 'the old error is gone during the retry');
+  assert(!/\b(ok|err)\b/.test(env.els.aoMailTestResult.className), env.els.aoMailTestResult.className);
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('>Sending...<') !== -1 && env.els.aoBody.innerHTML.indexOf('old failure') === -1,
+    'a rebuild while sending shows Sending...');
+  held.shift()(OK({ ok: true, provider: 'smtp', messageId: 'm3' }));
+  await tick();
+  ov.unmount();
+});
+
+test('overview: a rejected request and a 401/403 answer show their failure text', async () => {
+  let answer;
+  const env = overviewEnv((p) => (p === MAIL_TEST ? answer() : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  answer = () => Promise.reject(new Error('net'));
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: network error, try again.');
+  assert.strictEqual(env.els.aoMailTest.disabled, false);
+  answer = () => ({ ok: false, status: 401, data: { error: 'not logged in' } });
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: not logged in');
+  answer = () => ({ ok: false, status: 403, data: {} });
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: Request failed (HTTP 403)');
+  ov.unmount();
+});
+
+test('overview: another account in the same tab starts without the old result; a late answer is dropped', async () => {
+  const held = [];
+  const env = overviewEnv((p) => (p === MAIL_TEST ? new Promise((r) => { held.push(r); }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  env.ctx.CS_USER = { id: 1, role: 'admin' };
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  mailTestClick(env);
+  await tick();
+  held.shift()(OK({ ok: true, provider: 'brevo', messageId: 'a1' }));
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail sent to your address through brevo.');
+  // The same account again (a settings pull re-sets the user): the result stays.
+  env.fire('cs-auth-changed', { id: 1, role: 'admin' });
+  ov.unmount();
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('through brevo.') !== -1, 'same account keeps its result');
+  // Admin A starts another test mail, logs out, admin B logs in in the same tab.
+  mailTestClick(env);
+  await tick();
+  ov.unmount();
+  env.ctx.CS_USER = null;
+  env.fire('cs-auth-changed', null);
+  env.ctx.CS_USER = { id: 2, role: 'admin' };
+  env.fire('cs-auth-changed', { id: 2, role: 'admin' });
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('through brevo.') === -1 && env.els.aoBody.innerHTML.indexOf('Sending...') === -1,
+    'B sees no result of A: ' + env.els.aoBody.innerHTML);
+  assert(!/id="aoMailTest"[^>]* disabled/.test(env.els.aoBody.innerHTML), 'B can send');
+  env.els.aoMailTestResult.textContent = '';
+  held.shift()(OK({ ok: true, provider: 'brevo', messageId: 'a2' })); // A's answer arrives late
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, '', 'the late answer of A writes nothing');
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('through brevo.') === -1, 'nor does it reach B\'s state');
+  // Without an event (mount only), another account still gets a fresh result.
+  mailTestClick(env);
+  await tick();
+  held.shift()(OK({ ok: true, provider: 'brevo', messageId: 'b1' }));
+  await tick();
+  ov.unmount();
+  env.ctx.CS_USER = { id: 3, role: 'admin' };
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('through brevo.') === -1, 'mount as another account resets the result');
+  ov.unmount();
+});
+
+test('overview: SMTP shows one sent count', () => {
+  const t = ovT();
+  const smtp = Object.assign({}, STATS, { mailDeliveryStatus: false,
+    mail7d: { delivered: 0, bounced: 0, blocked: 0, spam: 0, pending: 2, other: 3 } });
+  const html = t.usersCardHtml({ data: smtp });
+  assert(html.indexOf('data-stat="mailSent">5<') !== -1, html);
+  assert(html.indexOf('No delivery status with SMTP.') !== -1);
+  assert(html.indexOf('data-stat="mailDelivered"') === -1 && html.indexOf('data-stat="mailBounced"') === -1, html);
+  const brevo = t.usersCardHtml({ data: Object.assign({}, STATS, { mailDeliveryStatus: true }) });
+  assert(brevo.indexOf('data-stat="mailDelivered">1<') !== -1 && brevo.indexOf('data-stat="mailSent"') === -1, brevo);
+  assert(brevo.indexOf('No delivery status with SMTP.') === -1);
 });
 
 console.log('admin.js');

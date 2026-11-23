@@ -1,6 +1,7 @@
 // Package mailer sends CoreScope's account mails and reads back delivery
-// events. Brevo is the default provider, Postal the self-hosted alternative;
-// Fake is the in-memory test double.
+// events. Brevo is the default provider, Postal the self-hosted alternative,
+// SMTP any mail server (no delivery events); Fake is the in-memory test
+// double.
 package mailer
 
 import (
