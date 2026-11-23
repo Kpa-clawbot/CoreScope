@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -81,7 +82,21 @@ func TestAdminMailTestRateLimited(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		expectStatus(t, f.do("POST", mailTestPath, nil, as(boss)), 200)
 	}
-	expectStatus(t, f.do("POST", mailTestPath, nil, as(boss)), 429)
+	sent := len(f.fake.Sent())
+	w := f.do("POST", mailTestPath, nil, as(boss))
+	expectStatus(t, w, 429)
+	if ra, err := strconv.Atoi(w.Header().Get("Retry-After")); err != nil || ra < 1 {
+		t.Fatalf("Retry-After = %q, want >= 1", w.Header().Get("Retry-After"))
+	}
+	if n := len(auditOf(t, f, boss.me.ID, "mail.test")); n != 3 {
+		t.Fatalf("mail.test audit rows = %d, want 3", n)
+	}
+	if n := testMailRows(t, f, boss.me.ID); n != 3 {
+		t.Fatalf("test mail log rows = %d, want 3", n)
+	}
+	if n := len(f.fake.Sent()); n != sent {
+		t.Fatalf("sent = %d after the 429, want %d", n, sent)
+	}
 }
 
 func TestAdminMailTestNonAdmin(t *testing.T) {
