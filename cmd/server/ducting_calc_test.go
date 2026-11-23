@@ -145,15 +145,17 @@ func TestDuctStandardAtmosphereIsNormal(t *testing.T) {
 		rhs = append(rhs, 40)
 	}
 	prof := DuctProfile(elev, ps, isaT(elev), 40, levels, temps, rhs, zs)
-	if len(prof) != 9 {
-		t.Fatalf("profile has %d levels, want 9", len(prof))
+	// 1000 hPa is 10.9 m above ground here: closer to the 2 m point than
+	// ductMinLevelGapM, ignored.
+	if len(prof) != 8 || prof[1].PressureHPa != 975 {
+		t.Fatalf("profile %+v, want 8 levels, the 2 m point then 975 hPa", prof)
 	}
 	r := AnalyzeDucting(prof)
 	if r.Class != DuctClassNormal {
 		t.Fatalf("Class = %d, want %d (%+v)", r.Class, DuctClassNormal, r)
 	}
 	ductApprox(t, "MinGradNkm (≈-40)", r.MinGradNkm, -40, 10)
-	ductApprox(t, "MinGradNkm (python)", r.MinGradNkm, -45.398, 0.01)
+	ductApprox(t, "MinGradNkm (python)", r.MinGradNkm, -36.813, 0.01)
 	if r.FminMHz != 0 {
 		t.Errorf("FminMHz = %v, want 0", r.FminMHz)
 	}
@@ -226,20 +228,15 @@ func TestDuctProfile(t *testing.T) {
 			t.Fatalf("got %+v, want surface, 1000@110, 950@540", p)
 		}
 	})
-	t.Run("bad surface point omitted", func(t *testing.T) {
+	t.Run("bad surface point: no profile", func(t *testing.T) {
 		levels := []float64{1000, 950}
 		temps := []float64{14, 11}
 		rhs := []float64{50, 50}
 		zs := []float64{110, 540}
-		for _, s := range []struct{ p, t, rh float64 }{{1013, nan, 50}, {1013, 15, nan}, {1013, 95, 50}, {1200, 15, 50}} {
-			p := DuctProfile(0, s.p, s.t, s.rh, levels, temps, rhs, zs)
-			if len(p) == 0 || p[0].HeightAGL == ductSurfaceHeightM {
-				t.Errorf("surface %+v: got %+v, want no surface point", s, p)
+		for _, s := range []struct{ p, t, rh float64 }{{1013, nan, 50}, {1013, 15, nan}, {1013, 95, 50}, {1200, 15, 50}, {nan, 15, 50}} {
+			if p := DuctProfile(0, s.p, s.t, s.rh, levels, temps, rhs, zs); len(p) != 0 {
+				t.Errorf("surface %+v: got %+v, want no profile", s, p)
 			}
-		}
-		// Surface pressure missing: levels still kept on the height check.
-		if p := DuctProfile(0, nan, 15, 50, levels, temps, rhs, zs); len(p) != 2 {
-			t.Errorf("NaN surface pressure: got %+v, want 2 levels", p)
 		}
 	})
 	t.Run("level at the surface point height dropped", func(t *testing.T) {
@@ -388,5 +385,83 @@ func TestDuctMeanGradientMexicoCityHasNoFieldValue(t *testing.T) {
 	den := col(1600, 840)
 	if den.MeanGradNkm >= 0 || den.MeanGradNkm < -100 {
 		t.Errorf("Denver: MeanGradNkm %v, want a plausible negative value", den.MeanGradNkm)
+	}
+}
+
+// A pressure level only a few metres above the 2 m point is not a second
+// measurement of the same column: over 6 m, the 2.3 N units between
+//
+//	N(2 m, 1001 hPa, 12 C, 95 %) = 333.55
+//	N(8 m, 1000 hPa, 13 C, 88 %) = 331.25
+//
+// would read as -385 N/km and a surface-based duct with fmin ~12.8 GHz.
+// The level is ignored; with N(540 m, 950 hPa, 9 C, 80 %) = 304.33 the
+// profile is an ordinary -54 N/km.
+func TestDuctLevelTooCloseToSurfaceIgnored(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		z    float64 // geopotential height of the 1000 hPa level; elevation 0
+	}{{"8 m", 8}, {"5 m", 5}, {"just under 30 m above the 2 m point", 31.9}} {
+		t.Run(c.name, func(t *testing.T) {
+			prof := DuctProfile(0, 1001, 12, 95,
+				[]float64{1000, 950}, []float64{13, 9}, []float64{88, 80}, []float64{c.z, 540})
+			if len(prof) != 2 || prof[0].HeightAGL != 2 || prof[1].HeightAGL != 540 {
+				t.Fatalf("profile %+v, want the 2 m point and the 540 m level only", prof)
+			}
+			r := AnalyzeDucting(prof)
+			if r.Class != DuctClassNormal || r.FminMHz != 0 {
+				t.Fatalf("Class = %d, FminMHz = %v; want normal, no duct (%+v)", r.Class, r.FminMHz, r)
+			}
+			ductApprox(t, "MinGradNkm", r.MinGradNkm, -54.3, 0.5)
+		})
+	}
+	// Alone, the close level leaves no usable profile.
+	if r := AnalyzeDucting(DuctProfile(0, 1001, 12, 95, []float64{1000}, []float64{13}, []float64{88}, []float64{8})); r.Class != DuctClassNoData {
+		t.Errorf("only a level at 8 m: Class = %d, want no data", r.Class)
+	}
+	// 30 m above the 2 m point is kept.
+	if prof := DuctProfile(0, 1001, 12, 95, []float64{997}, []float64{12}, []float64{90}, []float64{32}); len(prof) != 2 || prof[1].HeightAGL != 32 {
+		t.Errorf("level at 32 m: profile %+v, want it kept", prof)
+	}
+}
+
+// Without the 2 m point there is no surface to measure from: the first
+// pressure level must not stand in for it.
+func TestDuctMissingSurfacePointIsNoData(t *testing.T) {
+	nan := math.NaN()
+	// With a 2 m point this profile is a surface-based duct with a mean gradient.
+	levels := []float64{1000, 950, 850, 800}
+	temps := []float64{27, 24, 16, 12}
+	rhs := []float64{20, 20, 30, 30}
+	zs := []float64{100, 500, 1450, 1950}
+	if r := AnalyzeDucting(DuctProfile(0, 1013, 25, 90, levels, temps, rhs, zs)); r.Class != DuctClassSurface || r.MeanGradNkm == 0 {
+		t.Fatalf("with the 2 m point: %+v, want a surface duct and a mean gradient", r)
+	}
+	for _, s := range []struct {
+		name     string
+		p, t, rh float64
+	}{
+		{"temperature_2m null", 1013, nan, 90},
+		{"relative_humidity_2m null", 1013, 25, nan},
+		{"surface_pressure null", nan, 25, 90},
+		{"all null", nan, nan, nan},
+		{"temperature out of range", 1013, 95, 90},
+	} {
+		prof := DuctProfile(0, s.p, s.t, s.rh, levels, temps, rhs, zs)
+		if len(prof) != 0 {
+			t.Errorf("%s: profile %+v, want none", s.name, prof)
+		}
+		if r := AnalyzeDucting(prof); r != (DuctResult{Class: DuctClassNoData}) {
+			t.Errorf("%s: %+v, want no data and every field 0", s.name, r)
+		}
+	}
+	// A hand-built profile that does not start at the 2 m point is no data too.
+	r := AnalyzeDucting([]DuctLevel{
+		{HeightAGL: 100, PressureHPa: 1001.5, TempC: 27, RHPct: 20},
+		{HeightAGL: 500, PressureHPa: 956.5, TempC: 24, RHPct: 20},
+		{HeightAGL: 1600, PressureHPa: 840, TempC: 15, RHPct: 20},
+	})
+	if r != (DuctResult{Class: DuctClassNoData}) {
+		t.Errorf("profile without the 2 m point: %+v, want no data", r)
 	}
 }

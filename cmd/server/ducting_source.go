@@ -129,12 +129,14 @@ func ductingHourParam(unix int64) string {
 }
 
 // ductingFetch is the result of one fetch. Failed batches' cells have no
-// column; their errors are logged, not returned.
+// column and are listed in FailedCells; their errors are logged, not
+// returned.
 type ductingFetch struct {
-	Window  ductingWindow
-	Cols    []ductingColumn
-	Batches int
-	Failed  int
+	Window      ductingWindow
+	Cols        []ductingColumn
+	Batches     int
+	Failed      int
+	FailedCells [][2]float64 // [lat, lon] of the failed batches' cells
 }
 
 type ductingLedgerEntry struct {
@@ -235,7 +237,8 @@ func (s *ductingSource) record(calls float64) {
 // paced to ductingCallsPerMinute, a self-hosted instance is not paced.
 //
 // A failed batch (transport error, non-2xx other than 429, bad body) is
-// logged and its cells are left out; the other batches are kept. Once more
+// logged and its cells are left out (and listed in FailedCells); the other
+// batches are kept. Once more
 // than half of all batches have failed, the fetch stops and fails with the
 // first batch error. A 429, a spent budget or a cancelled ctx fail the
 // whole fetch at once.
@@ -280,6 +283,7 @@ func (s *ductingSource) fetch(ctx context.Context, cells [][2]float64, forecastH
 				return res, err
 			}
 			res.Failed++
+			res.FailedCells = append(res.FailedCells, batch...)
 			if firstErr == nil {
 				firstErr = err
 			}

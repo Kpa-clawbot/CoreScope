@@ -54,38 +54,43 @@ func ductClampRH(rh float64) float64 {
 
 // DuctProfile builds the ascending profile from a surface point (2 m values)
 // and pressure-level data. Slices may differ in length (the shortest wins)
-// and may hold NaN for missing values; unusable levels are skipped. Levels at
-// or below ground, at or below the surface point, or above ductMaxHeightAGL
-// are dropped. When surfPHPa is not finite the pressure-below-ground check is
-// skipped and only the height check applies.
+// and may hold NaN for missing values; unusable levels are skipped. Levels
+// below ground, less than ductMinLevelGapM above the surface point, or above
+// ductMaxHeightAGL are dropped.
+//
+// The profile starts at the 2 m point or is empty: when a 2 m value is
+// missing or out of range there is no surface to measure a gradient or a
+// duct from, and the lowest pressure level must not stand in for it (that
+// would call an elevated layer surface-based and take the mean gradient
+// from the wrong height). AnalyzeDucting reports an empty profile as no data.
 func DuctProfile(elevation, surfPHPa, t2mC, rh2mPct float64, levelsHPa, tempsC, rhsPct, geoHeightsM []float64) []DuctLevel {
+	if !ductSaneLevel(surfPHPa, t2mC, rh2mPct) {
+		return nil
+	}
 	n := ductShortest(len(levelsHPa), len(tempsC), len(rhsPct), len(geoHeightsM))
 	out := make([]DuctLevel, 0, n+1)
-	if ductSaneLevel(surfPHPa, t2mC, rh2mPct) {
-		out = append(out, DuctLevel{
-			HeightAGL:   ductSurfaceHeightM,
-			PressureHPa: surfPHPa,
-			TempC:       t2mC,
-			RHPct:       ductClampRH(rh2mPct),
-		})
-	}
-	surfOK := ductFinite(surfPHPa)
+	out = append(out, DuctLevel{
+		HeightAGL:   ductSurfaceHeightM,
+		PressureHPa: surfPHPa,
+		TempC:       t2mC,
+		RHPct:       ductClampRH(rh2mPct),
+	})
 	for i := 0; i < n; i++ {
 		p, t, rh, z := levelsHPa[i], tempsC[i], rhsPct[i], geoHeightsM[i]
 		if !ductSaneLevel(p, t, rh) || !ductFinite(z) || !ductFinite(elevation) {
 			continue
 		}
-		if surfOK && p >= surfPHPa {
+		if p >= surfPHPa {
 			continue
 		}
 		h := z - elevation
-		if h <= ductSurfaceHeightM || h > ductMaxHeightAGL {
+		if h < ductSurfaceHeightM+ductMinLevelGapM || h > ductMaxHeightAGL {
 			continue
 		}
 		out = append(out, DuctLevel{HeightAGL: h, PressureHPa: p, TempC: t, RHPct: ductClampRH(rh)})
 	}
-	// Stable so that, among equal heights, the surface point (appended first)
-	// is the one kept by the de-duplication below.
+	// Stable so that, among levels at one height, the first given is the one
+	// kept by the de-duplication below.
 	slices.SortStableFunc(out, func(a, b DuctLevel) int {
 		switch {
 		case a.HeightAGL < b.HeightAGL:
@@ -106,8 +111,13 @@ func DuctProfile(elevation, surfPHPa, t2mC, rh2mPct float64, levelsHPa, tempsC, 
 }
 
 // AnalyzeDucting computes N and M for each level of an ascending profile and
-// classifies it (see analyzeM).
+// classifies it (see analyzeM). A profile that does not start at the 2 m
+// surface point (DuctProfile's are empty then) is no data: every height and
+// gradient below is measured from that point.
 func AnalyzeDucting(profile []DuctLevel) DuctResult {
+	if len(profile) == 0 || profile[0].HeightAGL != ductSurfaceHeightM {
+		return DuctResult{Class: DuctClassNoData}
+	}
 	h := make([]float64, len(profile))
 	m := make([]float64, len(profile))
 	n := make([]float64, len(profile))

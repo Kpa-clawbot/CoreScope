@@ -664,6 +664,9 @@ func TestDuctingSourcePartialFailureKeepsOtherBatches(t *testing.T) {
 			t.Fatalf("column %d at %v,%v, want %v", i, c.Lat, c.Lon, want)
 		}
 	}
+	if len(res.FailedCells) != 50 || res.FailedCells[0] != cells[50] || res.FailedCells[49] != cells[99] {
+		t.Errorf("failed cells %v, want the second batch's 50", res.FailedCells)
+	}
 	// The failed batch was paid for, so the pace still waits after it.
 	if len(*waits) != 2 {
 		t.Errorf("waits %v, want 2", *waits)

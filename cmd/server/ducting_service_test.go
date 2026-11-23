@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -919,8 +921,9 @@ func TestDuctingServicePartialFailure(t *testing.T) {
 	}}
 	area := [4]float64{50, -5, 55, 0} // 100 cells: two batches
 	svc, _ := newTestDuctingService(t, f, DuctingConfig{Area: &area}, nil)
-	if err := svc.refreshOnce(context.Background()); err != nil {
-		t.Fatalf("one of two batches failed: %v", err)
+	// No previous forecast: nothing to carry over, the failed cells are blank.
+	if err := svc.refreshOnce(context.Background()); !errors.Is(err, errDuctingPartial) {
+		t.Fatalf("one of two batches failed: err %v, want errDuctingPartial", err)
 	}
 	resp, body := ductingServe(t, svc)
 	if resp.Status != "ok" || len(resp.Cells) != 50 {
@@ -933,7 +936,7 @@ func TestDuctingServicePartialFailure(t *testing.T) {
 	}
 	out := buf.String()
 	if !strings.Contains(out, "[ducting] batch 1 of 2 failed, its 50 cells have no data: open-meteo HTTP 500") ||
-		!strings.Contains(out, "50 cells (50 dropped, 1 of 2 batches failed)") {
+		!strings.Contains(out, "50 cells (50 dropped, 1 of 2 batches failed, 0 carried over from the previous forecast)") {
 		t.Errorf("log %q", out)
 	}
 
@@ -1082,5 +1085,300 @@ func TestDuctingServiceRunWaitsStartDelay(t *testing.T) {
 	<-svc2.run(ctx2)
 	if n := len(f2.requests()); n != 0 {
 		t.Errorf("%d requests after cancel during the start delay", n)
+	}
+}
+
+// ductingHourlyInversion is ductingInversion with a 1000 hPa humidity that
+// depends on the absolute forecast hour, so a cell's fmin changes from hour
+// to hour and a value copied to the wrong hour shows.
+func ductingHourlyInversion(i int, lat, lon float64, h map[string][]*float64) {
+	ductingInversion(i, lat, lon, h)
+	for k, ts := range h["time"] {
+		abs := (int64(*ts) - 1795046400) / 3600
+		h["relative_humidity_1000hPa"][k] = ductF(5 + float64(abs%25))
+	}
+}
+
+// A partial fetch must not blank cells a still-valid forecast has: the
+// failed batch's cells are carried over from the previous snapshot, hour by
+// absolute time.
+func TestDuctingServicePartialFetchCarriesPreviousCells(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	f := &fakeOpenMeteo{t: t, fill: ductingHourlyInversion, failReq: func(n int) int {
+		if n == 2 { // the second refresh's first batch
+			return http.StatusInternalServerError
+		}
+		return 0
+	}}
+	area := [4]float64{50, -5, 55, 0} // 100 cells: two batches
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{Area: &area}, nil)
+	if err := svc.refreshOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	prev, _ := ductingServe(t, svc)
+	if len(prev.Cells) != 100 || len(prev.Times) != 48 {
+		t.Fatalf("first refresh: %d cells, %d hours", len(prev.Cells), len(prev.Times))
+	}
+	for i := 0; i+2 < 48; i++ { // the shift used below
+		if c := prev.Cells[0]; c.F[i] == c.F[i+2] {
+			t.Fatalf("the fixture's hours %d and %d do not differ: %v", i, i+2, c.F)
+		}
+	}
+	type key [2]float64
+	prevAt := map[key]DuctingCell{}
+	for _, c := range prev.Cells {
+		prevAt[key{c.Lat, c.Lon}] = c
+	}
+
+	// Two hours later the first batch fails.
+	const shift = 2
+	later := time.Unix(1795046400+shift*3600, 0)
+	svc.now = func() time.Time { return later }
+	svc.source.now = func() time.Time { return later }
+	if err := svc.refreshOnce(context.Background()); !errors.Is(err, errDuctingPartial) {
+		t.Fatalf("partial refresh: err %v, want errDuctingPartial", err)
+	}
+	resp, _ := ductingServe(t, svc)
+	if resp.Status != "ok" || len(resp.Cells) != 100 {
+		t.Fatalf("status %s, %d cells; want ok with all 100", resp.Status, len(resp.Cells))
+	}
+	// A new snapshot: its own generatedAt (so a new ETag) and its own hours.
+	if resp.GeneratedAt != later.Unix() || ductingETag(resp) == ductingETag(prev) {
+		t.Errorf("generatedAt %d (ETag %s), want %d and a new ETag", resp.GeneratedAt, ductingETag(resp), later.Unix())
+	}
+	if len(resp.Times) != 48 || resp.Times[0] != later.Unix() {
+		t.Fatalf("times start %v, %d hours; want the new window", resp.Times[:1], len(resp.Times))
+	}
+	carried, fresh := 0, 0
+	seen := map[key]bool{}
+	for _, c := range resp.Cells {
+		k := key{c.Lat, c.Lon}
+		if seen[k] {
+			t.Fatalf("cell %v twice", k)
+		}
+		seen[k] = true
+		p, ok := prevAt[k]
+		if !ok {
+			t.Fatalf("cell %v not in the previous snapshot", k)
+		}
+		for name, a := range map[string][2][]int{
+			"c": {c.C, p.C}, "f": {c.F, p.F}, "b": {c.B, p.B}, "t": {c.T, p.T}, "dm": {c.DM, p.DM}, "g": {c.G, p.G}, "n": {c.N, p.N},
+		} {
+			got, old := a[0], a[1]
+			if len(got) != len(resp.Times) {
+				t.Fatalf("cell %v %s has %d hours, want %d", k, name, len(got), len(resp.Times))
+			}
+			if c.Lat >= 52.5 {
+				continue // fetched: checked below
+			}
+			for i := range got {
+				want := 0 // an hour the previous snapshot does not cover: no data
+				if i+shift < len(old) {
+					want = old[i+shift]
+				}
+				if got[i] != want {
+					t.Fatalf("carried cell %v %s[%d] = %d, want %d", k, name, i, got[i], want)
+				}
+			}
+		}
+		if c.Lat < 52.5 { // the first batch (sorted by lat) failed
+			carried++
+			if c.C[0] != int(DuctClassSurface) || c.F[0] == 0 {
+				t.Fatalf("carried cell %v hour 0: class %d fmin %d", k, c.C[0], c.F[0])
+			}
+			if c.C[46] != int(DuctClassNoData) || c.C[47] != int(DuctClassNoData) {
+				t.Fatalf("carried cell %v: classes %v beyond the previous forecast, want no data", k, c.C[46:])
+			}
+		} else {
+			fresh++
+			if c.C[47] != int(DuctClassSurface) {
+				t.Fatalf("fetched cell %v last hour: class %d", k, c.C[47])
+			}
+		}
+	}
+	if carried != 50 || fresh != 50 {
+		t.Errorf("%d carried, %d fetched; want 50 and 50", carried, fresh)
+	}
+	if out := buf.String(); !strings.Contains(out, "100 cells (0 dropped, 1 of 2 batches failed, 50 carried over from the previous forecast)") {
+		t.Errorf("log %q", out)
+	}
+	// The previous snapshot's cells were copied, not shared or changed.
+	if again := svc.snap.Load().resp.Cells; len(again) != 100 {
+		t.Fatalf("%d cells", len(again))
+	}
+	for _, c := range prev.Cells {
+		if len(c.C) != 48 {
+			t.Fatalf("previous cell changed: %d hours", len(c.C))
+		}
+	}
+
+	// Expiry follows the new snapshot's hours: its last hour plus the grace
+	// is past the previous snapshot's.
+	svc.now = func() time.Time { return time.Unix(resp.Times[47]+ductingExpiryGrace, 0) }
+	if r, _ := ductingServe(t, svc); r.Status != "ok" {
+		t.Errorf("at the new last hour + grace: status %s, want ok", r.Status)
+	}
+	svc.now = func() time.Time { return time.Unix(resp.Times[47]+ductingExpiryGrace+1, 0) }
+	if r, _ := ductingServe(t, svc); r.Status != "error" || r.Error != "forecast expired" {
+		t.Errorf("past the new last hour + grace: %s %q", r.Status, r.Error)
+	}
+}
+
+// Nothing is carried over from a snapshot that shares no hour with the new
+// one, has another grid step, or is not a forecast.
+func TestDuctingCarryOverGuards(t *testing.T) {
+	hours := func(start int64, n int) []int64 {
+		out := make([]int64, n)
+		for i := range out {
+			out[i] = start + int64(i)*3600
+		}
+		return out
+	}
+	cell := func(lat, lon float64, n, v int) DuctingCell {
+		c := DuctingCell{Lat: lat, Lon: lon}
+		for _, a := range []*[]int{&c.C, &c.F, &c.B, &c.T, &c.DM, &c.G, &c.N} {
+			*a = make([]int, n)
+			for i := range *a {
+				(*a)[i] = v + i
+			}
+		}
+		return c
+	}
+	prev := func(status string, step float64, start int64) *ductingSnapshot {
+		return &ductingSnapshot{resp: DuctingResponse{Status: status, Model: "gfs", StepDeg: step, Times: hours(start, 4),
+			Cells: []DuctingCell{cell(50, 1, 4, 10), cell(51, 1, 4, 20)}}}
+	}
+	next := DuctingResponse{Status: "ok", Model: "gfs", StepDeg: 0.5, Times: hours(7200, 4), Cells: []DuctingCell{cell(52, 1, 4, 30)}}
+	missing := [][2]float64{{50, 1}, {49, 1}} // 49,1 was never forecast
+
+	cells, n := ductingCarryOver(next, missing, prev("ok", 0.5, 0))
+	if n != 1 || len(cells) != 2 || cells[1].Lat != 50 {
+		t.Fatalf("carried %d, cells %+v; want the cell at 50,1 added", n, cells)
+	}
+	if got, want := fmt.Sprint(cells[1].F), "[12 13 0 0]"; got != want {
+		t.Errorf("carried hours %s, want %s", got, want)
+	}
+	if got, want := fmt.Sprint(cells[1].C), "[12 13 0 0]"; got != want {
+		t.Errorf("carried classes %s, want %s", got, want)
+	}
+	for name, p := range map[string]*ductingSnapshot{
+		"no snapshot":      nil,
+		"pending":          prev("pending", 0.5, 0),
+		"error":            prev("error", 0.5, 0),
+		"other step":       prev("ok", 1, 0),
+		"no shared hour":   prev("ok", 0.5, -4*3600),
+		"later, no shared": prev("ok", 0.5, 7200+4*3600),
+		"off the hour":     prev("ok", 0.5, 1800),
+	} {
+		if cells, n := ductingCarryOver(next, missing, p); n != 0 || len(cells) != 1 {
+			t.Errorf("%s: carried %d, %d cells; want nothing carried", name, n, len(cells))
+		}
+	}
+	other := prev("ok", 0.5, 0)
+	other.resp.Model = "icon"
+	if _, n := ductingCarryOver(next, missing, other); n != 0 {
+		t.Errorf("other model: carried %d", n)
+	}
+	if _, n := ductingCarryOver(next, nil, prev("ok", 0.5, 0)); n != 0 {
+		t.Errorf("no failed cells: carried %d", n)
+	}
+}
+
+// After a partial fetch the next refresh comes on the failure backoff, not
+// a whole refresh interval later; a complete fetch resets it.
+func TestDuctingServiceRunRetriesPartialFetchSoon(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+	f := &fakeOpenMeteo{t: t, hours: 1, fill: ductingInversion, failReq: func(n int) int {
+		if n == 0 || n == 2 || n == 6 { // the first batch of refreshes 1, 2 and 4
+			return http.StatusInternalServerError
+		}
+		return 0
+	}}
+	area := [4]float64{50, -5, 55, 0} // 100 cells: two batches
+	svc, _ := newTestDuctingService(t, f, DuctingConfig{Area: &area}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var waits []time.Duration
+	var cellsAtWait []int
+	svc.sleep = func(ctx context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		cellsAtWait = append(cellsAtWait, len(svc.snap.Load().resp.Cells))
+		if len(waits) == 4 {
+			cancel()
+		}
+		return ctx.Err()
+	}
+	select {
+	case <-svc.run(ctx):
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not exit")
+	}
+	want := []time.Duration{5 * time.Minute, 10 * time.Minute, 360 * time.Minute, 5 * time.Minute}
+	if fmt.Sprint(waits) != fmt.Sprint(want) {
+		t.Errorf("waits %v, want %v", waits, want)
+	}
+	// The same batch fails in refreshes 1 and 2, so there is nothing to carry
+	// over; refresh 3 is complete; refresh 4 carries its 50 failed cells.
+	if fmt.Sprint(cellsAtWait) != "[50 50 100 100]" {
+		t.Errorf("cells at each wait %v, want [50 50 100 100]", cellsAtWait)
+	}
+	if n := len(f.requests()); n != 8 {
+		t.Errorf("%d requests, want 8 (every refresh asks for the whole grid)", n)
+	}
+}
+
+func TestDuctingServiceNextDelayPartial(t *testing.T) {
+	svc := newDuctingService(&DuctingConfig{Enabled: true}, nil) // refresh 360 min
+	for i, w := range []time.Duration{5, 10, 20, 40, 80, 160, 320, 360, 360} {
+		if d := svc.nextDelay(errDuctingPartial, i+1); d != w*time.Minute {
+			t.Errorf("partial fetch %d: %v, want %v", i+1, d, w*time.Minute)
+		}
+	}
+	hourly := newDuctingService(&DuctingConfig{Enabled: true, RefreshMinutes: 60}, nil)
+	if d := hourly.nextDelay(errDuctingPartial, 9); d != 60*time.Minute {
+		t.Errorf("hourly, many partial fetches: %v, want the refresh interval", d)
+	}
+}
+
+// A cell whose 2 m values are null comes out as no data, with the mean
+// gradient field at its no-data value, whatever the levels say.
+func TestDuctingAnalyzeColumnMissingSurfaceIsNoData(t *testing.T) {
+	svc := newDuctingService(&DuctingConfig{Enabled: true}, nil)
+	nl := len(svc.model.LevelsHPa)
+	nan := math.NaN()
+	// Warm, dry air at the 1000 and 950 hPa levels (100 and 540 m), the
+	// rest null: two usable levels even without the 2 m point.
+	level := func(v1000, v950 float64) []float64 {
+		out := make([]float64, nl)
+		for i, p := range svc.model.LevelsHPa {
+			switch p {
+			case 1000:
+				out[i] = v1000
+			case 950:
+				out[i] = v950
+			default:
+				out[i] = nan
+			}
+		}
+		return out
+	}
+	hour := func(p, t2, rh float64) ductingHour {
+		return ductingHour{SurfP: p, T2m: t2, RH2m: rh, Temp: level(25, 22), RH: level(20, 20), Geo: level(100, 540)}
+	}
+	cell := svc.analyzeColumn(ductingColumn{Lat: 51, Lon: 0, Elevation: 0, Hours: []ductingHour{
+		hour(1013, 20, 95), hour(1013, nan, 95), hour(1013, 20, nan), hour(nan, 20, 95), hour(nan, nan, nan),
+	}})
+	if cell.C[0] != int(DuctClassSurface) || cell.F[0] == 0 {
+		t.Fatalf("hour with 2 m values: class %d fmin %d, want a surface duct", cell.C[0], cell.F[0])
+	}
+	for i := 1; i < 5; i++ {
+		for name, a := range map[string][]int{"c": cell.C, "f": cell.F, "b": cell.B, "t": cell.T, "dm": cell.DM, "g": cell.G, "n": cell.N} {
+			if a[i] != 0 {
+				t.Errorf("hour %d without 2 m values: %s = %d, want 0 (no data)", i, name, a[i])
+			}
+		}
 	}
 }

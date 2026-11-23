@@ -21,7 +21,7 @@ package main
 
 // Duct classes (DuctResult.Class, DuctingCell.C values).
 const (
-	DuctClassNoData  uint8 = 0 // fewer than 2 usable levels, or no forecast
+	DuctClassNoData  uint8 = 0 // no 2 m surface point, fewer than 2 usable levels, or no forecast
 	DuctClassNormal  uint8 = 1 // min dN/dh > -79 N/km
 	DuctClassSuper   uint8 = 2 // super-refractive: min dN/dh <= -79 N/km, no trapping layer
 	DuctClassElev    uint8 = 3 // elevated duct (duct bottom above the surface point)
@@ -33,6 +33,17 @@ const (
 	ductMaxHeightAGL    = 3000.0 // m: only the lowest 3 km are analysed
 	ductSuperGradientNk = -79.0  // N/km: super-refraction threshold
 	ductSurfaceHeightM  = 2.0    // m AGL of the 2 m surface point
+	// ductMinLevelGapM: a pressure level less than this far above the 2 m
+	// point is ignored. The 2 m values and a pressure level are two
+	// different model products, and the level's height above ground is its
+	// geopotential height minus the API's terrain elevation, neither exact
+	// to a few metres. They differ by a couple of N units whatever the
+	// weather, which over a few metres reads as hundreds of N/km: surface
+	// 1001 hPa, 12 °C, 95 % under 1000 hPa at 8 m, 13 °C, 88 % is 2.3 N
+	// units over 6 m, -385 N/km, a "surface-based duct" trapping only above
+	// ~12.8 GHz. Over 30 m the same difference is about -77 N/km and no
+	// longer makes a duct on its own.
+	ductMinLevelGapM = 30.0
 	// ductFminConstMHz: fmin = ductFminConstMHz / (d * sqrt(ΔM)) MHz, the
 	// same constant for surface-based and elevated ducts, on purpose. There
 	// is no single ratio between the two: ITU-R P.834-4 (2003) section 7.2
@@ -49,7 +60,8 @@ const (
 	ductMeanLayerM   = 1500.0 // m: depth of the layer MeanGradNkm averages over
 )
 
-// DuctLevel is one point of a vertical profile, ascending by HeightAGL.
+// DuctLevel is one point of a vertical profile, ascending by HeightAGL. The
+// first level of a profile is always the 2 m surface point.
 type DuctLevel struct {
 	HeightAGL   float64 // metres above ground
 	PressureHPa float64

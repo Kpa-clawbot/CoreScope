@@ -45,6 +45,12 @@ var errDuctingBusy = errors.New("ducting refresh already running")
 // it is not a failure of the weather source.
 var errDuctingNoCells = errors.New("no grid cells")
 
+// errDuctingPartial: the refresh stored a new snapshot, but some batches of
+// its fetch failed (at most half, or the fetch itself fails). The cells of
+// those batches are the previous forecast's or missing, so the next refresh
+// comes on the failure backoff instead of a whole refresh interval later.
+var errDuctingPartial = errors.New("ducting forecast incomplete: some batches failed")
+
 // ductingSnapshot is what the handler serves: the response and its JSON.
 type ductingSnapshot struct {
 	resp DuctingResponse
@@ -141,6 +147,9 @@ func ductingPublicError(err error) string {
 
 // refreshOnce runs one full refresh. On success the snapshot is replaced;
 // on failure a good snapshot is kept, otherwise the status becomes "error".
+// A fetch with failed batches also replaces the snapshot, with the failed
+// cells carried over from the one before (ductingCarryOver), and returns
+// errDuctingPartial.
 func (s *ductingService) refreshOnce(ctx context.Context) error {
 	if !s.refreshMu.TryLock() {
 		return errDuctingBusy
@@ -171,15 +180,91 @@ func (s *ductingService) refreshOnce(ctx context.Context) error {
 		}
 		return err
 	}
-	s.snap.Store(encodeDuctingSnapshot(resp))
 	failed := ""
 	if fetched.Failed > 0 {
-		failed = ", " + strconv.Itoa(fetched.Failed) + " of " + strconv.Itoa(fetched.Batches) + " batches failed"
+		// The previous snapshot is immutable once stored, and resp is not
+		// shared yet: no lock is involved (refreshMu only keeps a second
+		// refresh out).
+		var carried int
+		resp.Cells, carried = ductingCarryOver(resp, fetched.FailedCells, s.snap.Load())
+		failed = ", " + strconv.Itoa(fetched.Failed) + " of " + strconv.Itoa(fetched.Batches) + " batches failed, " +
+			strconv.Itoa(carried) + " carried over from the previous forecast"
 	}
+	s.snap.Store(encodeDuctingSnapshot(resp))
 	log.Printf("[ducting] refreshed: %d cells (%d dropped%s), %d hours, ~%.0f calls, %s",
 		len(resp.Cells), queried-len(resp.Cells), failed, len(resp.Times),
 		float64(queried)*ductingCallsPerPoint(s.model), time.Since(started).Round(time.Millisecond))
+	if fetched.Failed > 0 {
+		return errDuctingPartial
+	}
 	return nil
+}
+
+// ductingCellKey identifies a cell by its centre at the precision it is
+// requested with (4 decimals, see ductingSource.query).
+func ductingCellKey(lat, lon float64) [2]int64 {
+	return [2]int64{int64(math.Round(lat * 1e4)), int64(math.Round(lon * 1e4))}
+}
+
+// ductingCarryOver returns resp.Cells plus, for each of the missing cells
+// (the failed batches of resp's fetch) that prev has, a copy of prev's cell
+// moved onto resp.Times, and how many were added. An hour is matched by its
+// absolute time; hours prev does not cover are no data (class 0, all zero).
+// Nothing is carried over unless prev is an "ok" snapshot of the same model
+// and grid step that shares at least one hour with resp. prev is only read.
+//
+// A carried cell can itself have been carried into prev, but never past
+// its forecast: each time it loses the hours that have gone by, and once
+// none is shared it is dropped.
+func ductingCarryOver(resp DuctingResponse, missing [][2]float64, prev *ductingSnapshot) ([]DuctingCell, int) {
+	if prev == nil || len(missing) == 0 || prev.resp.Status != "ok" ||
+		prev.resp.Model != resp.Model || prev.resp.StepDeg != resp.StepDeg {
+		return resp.Cells, 0
+	}
+	// from[i] is the index in prev's hours of resp.Times[i], or -1.
+	prevAt := make(map[int64]int, len(prev.resp.Times))
+	for j, t := range prev.resp.Times {
+		prevAt[t] = j
+	}
+	from := make([]int, len(resp.Times))
+	shared := false
+	for i, t := range resp.Times {
+		from[i] = -1
+		if j, ok := prevAt[t]; ok {
+			from[i], shared = j, true
+		}
+	}
+	if !shared {
+		return resp.Cells, 0
+	}
+	want := make(map[[2]int64]struct{}, len(missing))
+	for _, c := range missing {
+		want[ductingCellKey(c[0], c[1])] = struct{}{}
+	}
+	hours := func(src []int) []int {
+		dst := make([]int, len(from))
+		for i, j := range from {
+			if j >= 0 && j < len(src) {
+				dst[i] = src[j]
+			}
+		}
+		return dst
+	}
+	cells, carried := resp.Cells, 0
+	for _, c := range prev.resp.Cells {
+		k := ductingCellKey(c.Lat, c.Lon)
+		if _, ok := want[k]; !ok {
+			continue
+		}
+		delete(want, k) // once, whatever prev holds
+		cells = append(cells, DuctingCell{
+			Lat: c.Lat, Lon: c.Lon,
+			C: hours(c.C), F: hours(c.F), B: hours(c.B), T: hours(c.T),
+			DM: hours(c.DM), G: hours(c.G), N: hours(c.N),
+		})
+		carried++
+	}
+	return cells, carried
 }
 
 // build fetches and analyses the grid. queried is the number of cells sent
@@ -286,8 +371,11 @@ func (s *ductingService) analyzeColumn(col ductingColumn) DuctingCell {
 
 // nextDelay is the wait before the next refresh: RefreshMinutes after a
 // success; 5, 10, 20... minutes (capped at RefreshMinutes) after
-// consecutive failures; at least an hour after a 429 or a spent budget;
-// always 5 minutes (ductingBackoffBase) while the grid is empty.
+// consecutive failures, a fetch with failed batches (errDuctingPartial)
+// counting as one; at least an hour after a 429 or a spent budget; always
+// 5 minutes (ductingBackoffBase) while the grid is empty. Every retry asks
+// for the whole grid again and is counted by the source's call budget,
+// which answers errDuctingBudget before sending anything once it is spent.
 func (s *ductingService) nextDelay(err error, failures int) time.Duration {
 	refresh := time.Duration(s.cfg.RefreshMinutes) * time.Minute
 	if err == nil {
