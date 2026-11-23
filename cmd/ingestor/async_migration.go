@@ -81,8 +81,8 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 		// pending_async, cancelled, or failed → reset and retry.
 		if _, err := s.db.Exec(`
 			UPDATE _async_migrations
-			SET status = 'pending_async', started_at = datetime('now'), ended_at = NULL, error = NULL
-			WHERE name = ?`, name); err != nil {
+			SET status = 'pending_async', started_at = ?, ended_at = NULL, error = NULL
+			WHERE name = ?`, sqliteDatetimeNow(), name); err != nil {
 			return fmt.Errorf("reset async migration %q: %w", name, err)
 		}
 	case sql.ErrNoRows:
@@ -111,8 +111,8 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 				}
 				if _, err := s.db.Exec(`
 					UPDATE _async_migrations
-					SET status = ?, ended_at = datetime('now'), error = ?
-					WHERE name = ?`, status, runErr.Error(), name); err != nil {
+					SET status = ?, ended_at = ?, error = ?
+					WHERE name = ?`, status, sqliteDatetimeNow(), runErr.Error(), name); err != nil {
 					log.Printf("[async-migration] failed to record %s for %q: %v", status, name, err)
 				}
 				log.Printf("[async-migration] %q %s: %v", name, label, runErr)
@@ -120,8 +120,8 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 			}
 			if _, err := s.db.Exec(`
 				UPDATE _async_migrations
-				SET status = 'done', ended_at = datetime('now'), error = NULL
-				WHERE name = ?`, name); err != nil {
+				SET status = 'done', ended_at = ?, error = NULL
+				WHERE name = ?`, sqliteDatetimeNow(), name); err != nil {
 				log.Printf("[async-migration] failed to mark %q done: %v", name, err)
 				return
 			}

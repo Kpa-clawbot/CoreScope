@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,16 +30,20 @@ var errUsersDBMissing = errors.New("users.db not found")
 
 // channelKeySet hands each message the current channel key map. Snapshots
 // are never mutated after they are stored, so decoders read them without a
-// lock. refresh is called from one goroutine only (startup, then the ticker).
+// lock. refresh is called from one goroutine only (startup, then the ticker);
+// mu serializes it with Close at shutdown.
 type channelKeySet struct {
 	configured map[string]string
 	path       string
 	max        int
 	cur        atomic.Pointer[map[string]string]
 
-	db       *sql.DB // opened lazily, read-only
-	failing  bool    // the last read failed; logged once per failure streak
-	approved int     // approved keys in the current snapshot
+	mu       sync.Mutex      // guards everything below
+	db       *sql.DB         // opened lazily, read-only
+	accounts *accountsReader // PostgreSQL: reads corescope_users while that schema exists
+	fromFile bool            // with accounts: the last read found no accounts schema and read users.db
+	failing  bool            // the last read failed; logged once per failure streak
+	approved int             // approved keys in the current snapshot
 }
 
 // newChannelKeySet starts with the configured keys (the very map
@@ -60,6 +66,8 @@ func (s *channelKeySet) current() *map[string]string { return s.cur.Load() }
 // A failed read keeps the current snapshot: only a successful read changes
 // the set, so a locked or missing users.db never drops a key.
 func (s *channelKeySet) refresh() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	names, err := s.readApproved()
 	if err != nil {
 		if !s.failing {
@@ -69,7 +77,7 @@ func (s *channelKeySet) refresh() {
 		return
 	}
 	if s.failing {
-		log.Printf("[channels] approved channels readable again from %s", s.path)
+		log.Printf("[channels] approved channels readable again from %s", s.source())
 		s.failing = false
 	}
 	next, added := mergeApprovedKeys(s.configured, names)
@@ -80,7 +88,26 @@ func (s *channelKeySet) refresh() {
 	s.cur.Store(&next)
 }
 
+// usePostgres reads the approved names from corescope_users.proposals
+// through r while that schema exists, else from users.db. The set owns r from
+// here on and closes it in Close.
+func (s *channelKeySet) usePostgres(r *accountsReader) { s.accounts = r }
+
+// approvedChannelsColumns are the proposals columns approvedChannelsQuery
+// references (plainAccountsTable checks their types).
+var approvedChannelsColumns = []string{"id", "kind", "subject", "status", "decided_at"}
+
 func (s *channelKeySet) readApproved() ([]string, error) {
+	if s.accounts != nil {
+		names, inPG, err := s.accounts.readAccounts("proposals", approvedChannelsColumns, pgUsersQuery(approvedChannelsQuery, "proposals"), s.max)
+		if err != nil {
+			return nil, err
+		}
+		s.fromFile = !inPG
+		if inPG {
+			return names, nil
+		}
+	}
 	if s.db == nil {
 		if _, err := os.Stat(s.path); err != nil {
 			if os.IsNotExist(err) {
@@ -88,7 +115,11 @@ func (s *channelKeySet) readApproved() ([]string, error) {
 			}
 			return nil, err
 		}
-		db, err := sql.Open("sqlite3", usersDBReadOnlyDSN(s.path))
+		dsn, err := usersDBReadOnlyDSN(s.path)
+		if err != nil {
+			return nil, err
+		}
+		db, err := sql.Open("sqlite3", dsn)
 		if err != nil {
 			return nil, err
 		}
@@ -112,9 +143,33 @@ func (s *channelKeySet) readApproved() ([]string, error) {
 }
 
 // usersDBReadOnlyDSN opens users.db read-only: this process must never
-// take a write lock on the server's file.
-func usersDBReadOnlyDSN(path string) string {
-	return "file:" + path + "?mode=ro&_busy_timeout=5000"
+// take a write lock on the server's file. The path comes from configuration
+// and is written into a SQLite URI, where "?" and "#" end the path and start
+// parameters, so a path holding either (or a NUL) is refused rather than
+// allowed to append its own mode=rwc. Everything else is percent-encoded as
+// SQLite's URI rules decode it ("%" most of all), so odd but legal paths
+// round-trip. mode=ro is always the one effective mode.
+func usersDBReadOnlyDSN(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("users.db path is empty")
+	}
+	if strings.ContainsAny(path, "?#\x00") {
+		return "", errors.New("users.db path must not contain '?', '#' or NUL characters")
+	}
+	// "file://x" would read x as a URI authority; collapse a leading "//".
+	if strings.HasPrefix(path, "//") {
+		path = filepath.Clean(path)
+	}
+	var b strings.Builder
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+		if c == '%' || c <= ' ' || c == 0x7f {
+			fmt.Fprintf(&b, "%%%02X", c)
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return "file:" + b.String() + "?mode=ro&_busy_timeout=5000", nil
 }
 
 // mergeApprovedKeys returns a new map: the configured keys plus a derived key
@@ -141,10 +196,23 @@ func mergeApprovedKeys(configured map[string]string, names []string) (map[string
 	return next, added
 }
 
-// Close closes the read-only handle, if any.
+func (s *channelKeySet) source() string {
+	if s.accounts != nil && !s.fromFile {
+		return usersPGSchema + ".proposals"
+	}
+	return s.path
+}
+
+// Close closes the read-only handles, if any.
 func (s *channelKeySet) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.db != nil {
 		s.db.Close()
+		s.db = nil
+	}
+	if s.accounts != nil {
+		s.accounts.Close()
 	}
 }
 

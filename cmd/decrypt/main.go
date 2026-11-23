@@ -1,11 +1,14 @@
-// corescope-decrypt decrypts and exports hashtag channel messages from a CoreScope SQLite database.
+// corescope-decrypt decrypts and exports hashtag channel messages from a CoreScope
+// database, either a SQLite file or a PostgreSQL server (read-only either way).
 //
 // Usage:
 //
 //	corescope-decrypt --channel "#wardriving" --db meshcore.db [--format json|html] [--output file]
+//	corescope-decrypt --channel "#wardriving" --db postgres://user@host/dbname [--format json|html]
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -13,13 +16,16 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/channel"
+	"github.com/meshcore-analyzer/dbx"
 )
 
 // Version info (set via ldflags).
@@ -47,7 +53,7 @@ type Observer struct {
 
 func main() {
 	channelName := flag.String("channel", "", "Channel name (e.g. \"#wardriving\")")
-	dbPath := flag.String("db", "", "Path to CoreScope SQLite database")
+	dbPath := flag.String("db", "", "CoreScope database: SQLite file path or postgres:// URL")
 	format := flag.String("format", "json", "Output format: json, html, irc (or log)")
 	output := flag.String("output", "", "Output file (default: stdout)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
@@ -56,12 +62,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, `corescope-decrypt — Decrypt and export MeshCore hashtag channel messages
 
 USAGE
-  corescope-decrypt --channel NAME --db PATH [--format FORMAT] [--output FILE]
+  corescope-decrypt --channel NAME --db PATH|URL [--format FORMAT] [--output FILE]
 
 FLAGS
   --channel NAME   Channel name to decrypt (e.g. "#wardriving", "wardriving")
                    The "#" prefix is added automatically if missing.
-  --db PATH        Path to a CoreScope SQLite database file (read-only access).
+  --db PATH|URL    Path to a CoreScope SQLite database file, or a PostgreSQL
+                   URL (postgres://user@host:5432/dbname). Read-only access.
+                   Do not put a password in the URL (it shows in ps); set
+                   PGPASSWORD or use ~/.pgpass.
   --format FORMAT  Output format (default: json):
                      json  — Machine-readable JSON array with full metadata
                      html  — Self-contained HTML viewer with search and sorting
@@ -80,6 +89,9 @@ EXAMPLES
   # Greppable IRC log
   corescope-decrypt --channel "#MeshCore" --db meshcore.db --format irc --output meshcore.log
   grep "KE6QR" meshcore.log
+
+  # From PostgreSQL
+  corescope-decrypt --channel "#wardriving" --db "postgres://corescope@db.example/corescope?sslmode=require"
 
   # From the Docker container
   docker exec corescope-prod /app/corescope-decrypt --channel "#wardriving" --db /app/data/meshcore.db
@@ -121,21 +133,113 @@ LIMITATIONS
 	key := channel.DeriveKey(ch)
 	chHash := channel.ChannelHash(key)
 
-	db, err := sql.Open("sqlite3", "file:"+*dbPath+"?mode=ro")
+	db, err := openDB(*dbPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
 
-	// Query all GRP_TXT packets
-	rows, err := db.Query(`SELECT id, hash, raw_hex, first_seen FROM transmissions WHERE payload_type = 5`)
+	messages, total, decrypted, err := decryptChannel(db, ch, key, chHash)
 	if err != nil {
 		log.Fatalf("Query failed: %v", err)
 	}
+
+	log.Printf("Scanned %d GRP_TXT packets, decrypted %d for channel %s", total, decrypted, ch)
+
+	// Generate output
+	var out []byte
+	switch *format {
+	case "json":
+		out, err = json.MarshalIndent(messages, "", "  ")
+		if err != nil {
+			log.Fatalf("JSON marshal: %v", err)
+		}
+		out = append(out, '\n')
+	case "html":
+		out = renderHTML(messages, ch)
+	case "irc", "log":
+		out = renderIRC(messages)
+	default:
+		log.Fatalf("Unknown format: %s (use json, html, irc, or log)", *format)
+	}
+
+	if *output != "" {
+		if err := os.WriteFile(*output, out, 0644); err != nil {
+			log.Fatalf("Write file: %v", err)
+		}
+		log.Printf("Written to %s", *output)
+	} else {
+		os.Stdout.Write(out)
+	}
+}
+
+// openDB opens the CoreScope database read-only. arg is a SQLite file path or a
+// postgres:// / postgresql:// URL. Errors never contain the URL's credentials.
+func openDB(arg string) (*sql.DB, error) {
+	if !dbx.IsPostgresURL(arg) {
+		return sql.Open("sqlite3", "file:"+arg+"?mode=ro")
+	}
+	u, err := url.Parse(arg)
+	if err != nil {
+		// url.Error embeds the whole URL (and so the password); drop it.
+		return nil, fmt.Errorf("invalid PostgreSQL URL (credentials redacted)")
+	}
+	q := u.Query()
+	q.Set("default_transaction_read_only", "on")
+	u.RawQuery = q.Encode()
+	db, err := sql.Open(dbx.PostgresDriverName, u.String())
+	if err != nil {
+		return nil, redactErr(err, u)
+	}
+	if err := dbx.PingFirst(context.Background(), db, log.Printf); err != nil {
+		db.Close()
+		return nil, redactErr(err, u)
+	}
+	return db, nil
+}
+
+// passwordKV matches a password=value pair (URL query or key=value DSN text).
+var passwordKV = regexp.MustCompile(`(?i)(password=)[^\s&]*`)
+
+// redactErr returns an error whose text has every password in u removed: the
+// userinfo password and any ?password= query parameter.
+func redactErr(err error, u *url.URL) error {
+	msg := err.Error()
+	var secrets []string
+	if u.User != nil {
+		if pw, ok := u.User.Password(); ok {
+			secrets = append(secrets, pw)
+		}
+	}
+	for k, vs := range u.Query() {
+		if strings.EqualFold(k, "password") {
+			secrets = append(secrets, vs...)
+		}
+	}
+	for _, pw := range secrets {
+		if pw == "" {
+			continue
+		}
+		for _, v := range []string{pw, url.QueryEscape(pw), url.PathEscape(pw)} {
+			msg = strings.ReplaceAll(msg, v, "xxxxx")
+		}
+	}
+	msg = passwordKV.ReplaceAllString(msg, "${1}xxxxx")
+	return fmt.Errorf("%s", msg)
+}
+
+// decryptChannel scans GRP_TXT packets and returns those that decrypt with key,
+// sorted by timestamp, plus the number of packets scanned and decrypted.
+func decryptChannel(db *sql.DB, ch string, key []byte, chHash byte) ([]ChannelMessage, int, int, error) {
+	// Query all GRP_TXT packets
+	rows, err := db.Query(`SELECT id, hash, raw_hex, first_seen FROM transmissions WHERE payload_type = 5`)
+	if err != nil {
+		return nil, 0, 0, err
+	}
 	defer rows.Close()
 
-	var messages []ChannelMessage
 	decrypted, total := 0, 0
+	var messages []ChannelMessage
 
 	for rows.Next() {
 		var id int
@@ -203,38 +307,14 @@ LIMITATIONS
 		})
 	}
 
-	// Sort by timestamp
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, err
+	}
+
 	sort.Slice(messages, func(i, j int) bool {
 		return messages[i].Timestamp < messages[j].Timestamp
 	})
-
-	log.Printf("Scanned %d GRP_TXT packets, decrypted %d for channel %s", total, decrypted, ch)
-
-	// Generate output
-	var out []byte
-	switch *format {
-	case "json":
-		out, err = json.MarshalIndent(messages, "", "  ")
-		if err != nil {
-			log.Fatalf("JSON marshal: %v", err)
-		}
-		out = append(out, '\n')
-	case "html":
-		out = renderHTML(messages, ch)
-	case "irc", "log":
-		out = renderIRC(messages)
-	default:
-		log.Fatalf("Unknown format: %s (use json, html, irc, or log)", *format)
-	}
-
-	if *output != "" {
-		if err := os.WriteFile(*output, out, 0644); err != nil {
-			log.Fatalf("Write file: %v", err)
-		}
-		log.Printf("Written to %s", *output)
-	} else {
-		os.Stdout.Write(out)
-	}
+	return messages, total, decrypted, nil
 }
 
 // extractGRPPayload parses a raw hex packet and returns the GRP_TXT payload bytes.
@@ -298,7 +378,7 @@ func getObservers(db *sql.DB, txID int) []Observer {
 	rows, err := db.Query(`
 		SELECT o.name, obs.snr, obs.rssi, obs.timestamp
 		FROM observations obs
-		LEFT JOIN observers o ON o.id = CAST(obs.observer_idx AS TEXT)
+		LEFT JOIN observers o ON o.idx = obs.observer_idx
 		WHERE obs.transmission_id = ?
 		ORDER BY obs.timestamp
 	`, txID)

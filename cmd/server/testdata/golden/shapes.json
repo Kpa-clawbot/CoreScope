@@ -1441,6 +1441,9 @@
       "sqlite": {
         "type": "object",
         "keys": {
+          "engine": {
+            "type": "string"
+          },
           "dbSizeMB": {
             "type": "number"
           },

@@ -49,6 +49,11 @@ func scanCompanion(row rowScanner) (*CompanionLink, error) {
 // re-link by the same owner only updates the name. name is cleaned with
 // CleanLabel. The caller must have consumed a valid challenge and verified
 // the signature first.
+//
+// On Postgres an existing row is locked before it is read, and a first link
+// is an insert that does nothing when a concurrent call linked the pubkey
+// first; that row is then read (and locked) like any existing one. So of
+// concurrent links of one pubkey, each sees the owner the previous one left.
 func (s *Store) UpsertCompanionLink(userID int64, pubkey, name string) (*CompanionLink, int64, error) {
 	pk, err := NormalizePubkey(pubkey)
 	if err != nil {
@@ -59,25 +64,45 @@ func (s *Store) UpsertCompanionLink(userID int64, pubkey, name string) (*Compani
 	if err != nil {
 		return nil, 0, err
 	}
+	defer tx.Rollback()
 	var prev, linkedAt int64
-	err = tx.QueryRow(`SELECT user_id, linked_at FROM companion_links WHERE pubkey = ?`, pk).Scan(&prev, &linkedAt)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	for attempt := 0; ; attempt++ {
+		err = tx.QueryRow(`SELECT user_id, linked_at FROM companion_links WHERE pubkey = ?`+s.forUpdate(), pk).Scan(&prev, &linkedAt)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, fmt.Errorf("users: read companion link: %w", err)
+		}
+		if attempt > 0 {
+			return nil, 0, errors.New("users: companion link changed concurrently")
+		}
 		prev, linkedAt = 0, unix(s.now())
-	case err != nil:
-		tx.Rollback()
-		return nil, 0, fmt.Errorf("users: read companion link: %w", err)
-	case prev != userID:
+		res, err := tx.Exec(`INSERT INTO companion_links (pubkey, user_id, name, linked_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (pubkey) DO NOTHING`, pk, userID, name, linkedAt)
+		if err != nil {
+			return nil, 0, fmt.Errorf("users: insert companion link: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return nil, 0, fmt.Errorf("users: insert companion link: %w", err)
+		}
+		if n == 1 {
+			if err := tx.Commit(); err != nil {
+				return nil, 0, fmt.Errorf("users: insert companion link: %w", err)
+			}
+			return &CompanionLink{Pubkey: pk, UserID: userID, Name: name, LinkedAt: fromUnix(linkedAt)}, 0, nil
+		}
+	}
+	if prev != userID {
 		linkedAt = unix(s.now())
 	}
-	if _, err := tx.Exec(`INSERT INTO companion_links (pubkey, user_id, name, linked_at) VALUES (?, ?, ?, ?)
-		ON CONFLICT(pubkey) DO UPDATE SET user_id = excluded.user_id, name = excluded.name, linked_at = excluded.linked_at`,
-		pk, userID, name, linkedAt); err != nil {
-		tx.Rollback()
-		return nil, 0, fmt.Errorf("users: upsert companion link: %w", err)
+	if _, err := tx.Exec(`UPDATE companion_links SET user_id = ?, name = ?, linked_at = ? WHERE pubkey = ?`,
+		userID, name, linkedAt, pk); err != nil {
+		return nil, 0, fmt.Errorf("users: update companion link: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, 0, fmt.Errorf("users: upsert companion link: %w", err)
+		return nil, 0, fmt.Errorf("users: update companion link: %w", err)
 	}
 	if prev == userID {
 		prev = 0

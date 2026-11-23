@@ -205,6 +205,8 @@ No rebuild. No git pull. No source code needed.
 
 **Backup:** `cp ~/corescope-data/meshcore.db ~/backup/` — it's just a SQLite file.
 
+> Status note: this applies to SQLite. With the optional PostgreSQL backend, back up with `pg_dump` (see [docs/postgresql.md](../postgresql.md)).
+
 **Migration:** Existing `~/meshcore-data` directories work unchanged. Just point the volume at the same path.
 
 ## TLS/HTTPS

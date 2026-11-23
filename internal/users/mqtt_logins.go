@@ -63,7 +63,8 @@ func scanMQTTLogin(row rowScanner) (*MQTTLogin, error) {
 }
 
 // CreateMQTTLogin stores a user's first login. ErrMQTTLoginExists when the
-// user already has one; a username held by another user is a plain error.
+// user already has one, also when a concurrent call (Postgres) inserted it
+// first; a username held by another user is a plain error.
 func (s *Store) CreateMQTTLogin(l MQTTLogin) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -78,9 +79,15 @@ func (s *Store) CreateMQTTLogin(l MQTTLogin) error {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("users: check mqtt login: %w", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO mqtt_logins (user_id, username, password_hash, password_enc, created_at) VALUES (?, ?, ?, ?, ?)`,
-		l.UserID, l.Username, l.PasswordHash, l.PasswordEnc, unix(s.now())); err != nil {
+	res, err := tx.Exec(`INSERT INTO mqtt_logins (user_id, username, password_hash, password_enc, created_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (user_id) DO NOTHING`, l.UserID, l.Username, l.PasswordHash, l.PasswordEnc, unix(s.now()))
+	if err != nil {
 		return fmt.Errorf("users: create mqtt login: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("users: create mqtt login: %w", err)
+	} else if n == 0 {
+		return ErrMQTTLoginExists
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("users: create mqtt login: %w", err)

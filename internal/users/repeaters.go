@@ -262,7 +262,8 @@ func (s *Store) ClaimRepeater(userID int64, pubkey string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	res, err := s.db.Exec(`INSERT OR IGNORE INTO repeater_claims (pubkey, user_id, claimed_at) VALUES (?, ?, ?)`, pk, userID, unix(s.now()))
+	res, err := s.db.Exec(`INSERT INTO repeater_claims (pubkey, user_id, claimed_at) VALUES (?, ?, ?)
+		ON CONFLICT (pubkey, user_id) DO NOTHING`, pk, userID, unix(s.now()))
 	if err != nil {
 		return false, err
 	}

@@ -31,6 +31,11 @@ func TestStartupLoadPollerGap_SQLite(t *testing.T) {
 	runStartupLoadPollerGap(t, db, rw)
 }
 
+func TestStartupLoadPollerGap_Postgres(t *testing.T) {
+	db, rw := newPostgresTestDB(t) // skips without $CORESCOPE_TEST_PG_DSN
+	runStartupLoadPollerGap(t, db, rw)
+}
+
 func runStartupLoadPollerGap(t *testing.T, db *DB, rw *sql.DB) {
 	t.Helper()
 	base := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
@@ -52,7 +57,7 @@ func runStartupLoadPollerGap(t *testing.T, db *DB, rw *sql.DB) {
 			id, tx, observer, fmt.Sprintf(`["%02X"]`, id), base.Add(time.Duration(id)*time.Second).Unix())
 	}
 	for idx := 1; idx <= 3; idx++ {
-		mustExec(`INSERT INTO observers (rowid, id, name, iata, last_seen, first_seen) VALUES (?, ?, ?, 'SJC', ?, ?)`,
+		mustExec(`INSERT INTO observers (idx, id, name, iata, last_seen, first_seen) VALUES (?, ?, ?, 'SJC', ?, ?)`,
 			idx, fmt.Sprintf("%064X", idx), fmt.Sprintf("Obs-%d", idx), iso(0), iso(-time.Hour))
 	}
 	// Committed before the load.
@@ -144,6 +149,11 @@ func TestStartupLoadPollerGapMultiChunk_SQLite(t *testing.T) {
 	runStartupLoadPollerGapMultiChunk(t, db, rw)
 }
 
+func TestStartupLoadPollerGapMultiChunk_Postgres(t *testing.T) {
+	db, rw := newPostgresTestDB(t) // skips without $CORESCOPE_TEST_PG_DSN
+	runStartupLoadPollerGapMultiChunk(t, db, rw)
+}
+
 func openGapSQLite(t *testing.T) (*DB, *sql.DB) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "gap.db")
@@ -153,13 +163,8 @@ func openGapSQLite(t *testing.T) (*DB, *sql.DB) {
 	}
 	t.Cleanup(func() { rw.Close() })
 	rw.SetMaxOpenConns(1)
-	// The tables the load and the poller read, as the ingestor creates them
-	// (cmd/ingestor/db.go), then the server-side migrations it applies on top.
-	if _, err := rw.Exec(gapBaseSchema); err != nil {
-		t.Fatalf("create base schema: %v", err)
-	}
-	if err := dbschema.Apply(rw, nil); err != nil {
-		t.Fatalf("dbschema.Apply: %v", err)
+	if _, err := rw.Exec(dbschema.SQLiteEndState); err != nil {
+		t.Fatalf("apply SQLite end-state schema: %v", err)
 	}
 	db, err := OpenDB(path)
 	if err != nil {
@@ -168,42 +173,6 @@ func openGapSQLite(t *testing.T) (*DB, *sql.DB) {
 	t.Cleanup(func() { db.conn.Close() })
 	return db, rw
 }
-
-// gapBaseSchema is the ingestor's DDL for the tables these tests seed. Observers
-// are inserted by rowid: observations.observer_idx refers to it.
-const gapBaseSchema = `
-	CREATE TABLE nodes (
-		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
-		last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
-		battery_mv INTEGER, temperature_c REAL, foreign_advert INTEGER DEFAULT 0
-	);
-	CREATE TABLE observers (
-		id TEXT PRIMARY KEY, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT,
-		packet_count INTEGER DEFAULT 0, model TEXT, firmware TEXT, client_version TEXT,
-		radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL,
-		inactive INTEGER DEFAULT 0, last_packet_at TEXT DEFAULT NULL,
-		clock_skew_seconds INTEGER DEFAULT NULL, clock_skew_count_24h INTEGER DEFAULT 0,
-		clock_last_naive_at TEXT DEFAULT NULL, can_relay INTEGER DEFAULT 1,
-		can_relay_seen INTEGER DEFAULT 0
-	);
-	CREATE TABLE transmissions (
-		id INTEGER PRIMARY KEY AUTOINCREMENT, raw_hex TEXT NOT NULL,
-		hash TEXT NOT NULL UNIQUE, first_seen TEXT NOT NULL, route_type INTEGER,
-		payload_type INTEGER, payload_version INTEGER, decoded_json TEXT,
-		from_pubkey TEXT, last_seen INTEGER NOT NULL DEFAULT 0,
-		created_at TEXT DEFAULT (datetime('now')), code1 TEXT, code2 TEXT
-	);
-	CREATE TABLE observations (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
-		observer_idx INTEGER, direction TEXT, snr REAL, rssi REAL, score INTEGER,
-		path_json TEXT, timestamp INTEGER NOT NULL
-	);
-	CREATE INDEX idx_observations_transmission_id ON observations(transmission_id);
-	CREATE INDEX idx_observations_observer_idx ON observations(observer_idx);
-	CREATE INDEX idx_observations_timestamp ON observations(timestamp);
-	CREATE TABLE schema_version (version INTEGER);
-`
 
 func runStartupLoadPollerGapMultiChunk(t *testing.T, db *DB, rw *sql.DB) {
 	t.Helper()
@@ -228,7 +197,7 @@ func runStartupLoadPollerGapMultiChunk(t *testing.T, db *DB, rw *sql.DB) {
 			id, tx, observer, fmt.Sprintf(`["%02X"]`, id), base.Add(time.Duration(id)*time.Second).Unix())
 	}
 	for idx := 1; idx <= 3; idx++ {
-		mustExec(`INSERT INTO observers (rowid, id, name, iata, last_seen, first_seen) VALUES (?, ?, ?, 'SJC', ?, ?)`,
+		mustExec(`INSERT INTO observers (idx, id, name, iata, last_seen, first_seen) VALUES (?, ?, ?, 'SJC', ?, ?)`,
 			idx, fmt.Sprintf("%064X", idx), fmt.Sprintf("Obs-%d", idx), iso(0), iso(-time.Hour))
 	}
 	for id := 1; id <= 5; id++ {
@@ -467,7 +436,7 @@ type gapSeeder struct {
 func newGapSeeder(t *testing.T, rw *sql.DB) *gapSeeder {
 	g := &gapSeeder{t: t, rw: rw, base: time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)}
 	for idx := 1; idx <= 3; idx++ {
-		g.exec(`INSERT INTO observers (rowid, id, name, iata, last_seen, first_seen) VALUES (?, ?, ?, 'SJC', ?, ?)`,
+		g.exec(`INSERT INTO observers (idx, id, name, iata, last_seen, first_seen) VALUES (?, ?, ?, 'SJC', ?, ?)`,
 			idx, fmt.Sprintf("%064X", idx), fmt.Sprintf("Obs-%d", idx), g.iso(g.base), g.iso(g.base.Add(-time.Hour)))
 	}
 	return g
@@ -545,6 +514,11 @@ func TestStartupObsDuringChunkMerge_SQLite(t *testing.T) {
 	runStartupObsDuringChunkMerge(t, db, rw)
 }
 
+func TestStartupObsDuringChunkMerge_Postgres(t *testing.T) {
+	db, rw := newPostgresTestDB(t) // skips without $CORESCOPE_TEST_PG_DSN
+	runStartupObsDuringChunkMerge(t, db, rw)
+}
+
 func runStartupObsDuringChunkMerge(t *testing.T, db *DB, rw *sql.DB) {
 	g := newGapSeeder(t, rw)
 	for id := 1; id <= 4; id++ {
@@ -619,6 +593,11 @@ func runStartupObsDuringChunkMerge(t *testing.T, db *DB, rw *sql.DB) {
 
 func TestPollerRetriesFailedRead_SQLite(t *testing.T) {
 	db, rw := openGapSQLite(t)
+	runPollerRetriesFailedRead(t, db, rw)
+}
+
+func TestPollerRetriesFailedRead_Postgres(t *testing.T) {
+	db, rw := newPostgresTestDB(t) // skips without $CORESCOPE_TEST_PG_DSN
 	runPollerRetriesFailedRead(t, db, rw)
 }
 

@@ -36,8 +36,8 @@ type SourceStatusSnapshot struct {
 // Memory: one state per source (typically 1-5 in production). 300 int64
 // slots = 2.4KB/source — fine.
 type sourceStatusState struct {
-	name   string
-	broker string // raw broker URL — server-side handler masks the password
+	name   string // maskURLSecrets'd: the tag is the broker URL when the source has no name
+	broker string // maskURLSecrets'd broker URL
 
 	connected          atomic.Bool
 	lastConnectUnix    atomic.Int64
@@ -78,8 +78,9 @@ func (s *sourceStatusState) MarkDisconnect(now time.Time, err error) {
 	s.lastDisconnectUnix.Store(now.Unix())
 	s.disconnectCount.Add(1)
 	if err != nil {
+		msg := maskURLSecrets(err.Error()) // the broker's error may quote its URL
 		s.errMu.Lock()
-		s.lastError = err.Error()
+		s.lastError = msg
 		s.errMu.Unlock()
 	}
 }
@@ -147,14 +148,15 @@ var (
 // RegisterSourceStatus creates (or returns the existing) state for the
 // given source. Safe for cold-start use; idempotent — re-registering the
 // same tag returns the existing state so counters aren't reset across
-// reconnects.
+// reconnects. The published name and broker are masked (maskURLSecrets);
+// the registry stays keyed by the raw tag.
 func RegisterSourceStatus(tag, broker string) *sourceStatusState {
 	sourceStatusRegistryMu.Lock()
 	defer sourceStatusRegistryMu.Unlock()
 	if s, ok := sourceStatusRegistry[tag]; ok {
 		return s
 	}
-	s := &sourceStatusState{name: tag, broker: broker}
+	s := &sourceStatusState{name: maskURLSecrets(tag), broker: maskURLSecrets(broker)}
 	sourceStatusRegistry[tag] = s
 	return s
 }

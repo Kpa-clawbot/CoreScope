@@ -127,9 +127,14 @@ If `writeEnabled` is true (server has a write-capable `apiKey`), the GeoFilter t
 
 Nodes without GPS coordinates are always kept.
 
-### CLI alternative (Python script)
+### CLI alternative (Python script, SQLite only)
 
 **File:** `scripts/prune-nodes-outside-geo-filter.py`
+
+The script opens the database file directly with Python's `sqlite3` module, so it works on
+SQLite installs only. On a PostgreSQL install, use the Customizer prune above or
+`POST /api/admin/prune-geo-filter`: the server queues the request and the ingestor, which
+owns all writes, performs the deletion.
 
 ```bash
 # Dry run — shows what would be deleted without making changes

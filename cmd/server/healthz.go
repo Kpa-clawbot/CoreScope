@@ -65,7 +65,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	// from "everything stalled" (both stale). Additive — older
 	// ingestor builds simply produce no entry and the field is
 	// omitted. Schema-compatible with prior /healthz consumers.
-	if liveness := readIngestorSourceLiveness(); len(liveness) > 0 {
+	if liveness := readIngestorSourceLivenessFrom(s.db); len(liveness) > 0 {
 		resp["ingest_liveness"] = liveness
 	}
 	json.NewEncoder(w).Encode(resp)

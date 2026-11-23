@@ -41,8 +41,7 @@ type neighborSummary struct {
 }
 
 func (db *DB) hasNeighborReports() bool {
-	var n int
-	return db.conn.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='observer_neighbor_reports'`).Scan(&n) == nil
+	return db.tablePresent("observer_neighbor_reports")
 }
 
 // GetObserverNeighborSummaries returns observer id -> latest report summary.

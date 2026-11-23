@@ -1,8 +1,15 @@
 // Package users is CoreScope's optional account store (user management,
 // docs/specs/2026-10-06-user-management-design.md). It owns users.db, a
-// SQLite file separate from the measurement database. cmd/server never
-// writes measurement data (#1283); this package is the single, opt-in
-// exception, and Open refuses to touch the measurement database by path.
+// SQLite file separate from the measurement database, or on PostgreSQL the
+// schema corescope_users (OpenPostgres). cmd/server never writes
+// measurement data (#1283); this package is the single, opt-in exception,
+// and Open refuses to touch the measurement database by path.
+//
+// Both backends run the same SQL except where noted (forUpdate, lockTable,
+// the migrations). On SQLite the store has one connection, so every
+// read-modify-write is serial; on Postgres the pool is larger and several
+// server replicas may share the schema, so each such sequence is made
+// atomic in SQL: a conditional statement, or a transaction that locks first.
 package users
 
 import (
@@ -39,13 +46,18 @@ var (
 	ErrMQTTLoginExists = errors.New("users: observer login already exists")
 )
 
-// noLimit is SQLite's LIMIT value for "every row" (the account export).
-const noLimit = -1
+// noLimit asks a capped list for every row (the account export): the query
+// then has no LIMIT clause.
+const noLimit = 0
 
 // Store is the users.db handle. Safe for concurrent use.
 type Store struct {
 	db  *sql.DB
 	now func() time.Time
+	pg  bool
+	// closeHook runs after the database is closed (the Postgres store
+	// unregisters its connection config).
+	closeHook func()
 }
 
 // Open opens (creating if needed) the users database at path and applies
@@ -97,7 +109,57 @@ func samePath(abs, other string) bool {
 }
 
 // Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	err := s.db.Close()
+	if s.closeHook != nil {
+		s.closeHook()
+		s.closeHook = nil
+	}
+	return err
+}
+
+// IsPostgres reports whether the store was opened with OpenPostgres.
+func (s *Store) IsPostgres() bool { return s.pg }
+
+// forUpdate is appended to a SELECT inside a transaction that goes on to
+// write what it read: on Postgres it locks the selected rows until commit.
+// SQLite has no row locks and needs none (one connection, serial).
+func (s *Store) forUpdate() string {
+	if s.pg {
+		return ` FOR UPDATE`
+	}
+	return ``
+}
+
+// lockTable serializes the writers of table for the rest of tx on Postgres
+// (readers are not blocked). For checks that span rows, such as a count
+// against a limit, where no single row lock would do. A no-op on SQLite.
+func (s *Store) lockTable(tx *sql.Tx, table string) error {
+	if !s.pg {
+		return nil
+	}
+	_, err := tx.Exec(`LOCK TABLE ` + table + ` IN SHARE ROW EXCLUSIVE MODE`)
+	return err
+}
+
+// lockUser serializes, on Postgres, the transactions that read and then
+// rewrite rows belonging to one user (FOR NO KEY UPDATE, so inserts that
+// only reference the user through a foreign key are not blocked). A user
+// that does not exist locks nothing; the write that follows then fails on
+// its foreign key as it would on SQLite. A no-op on SQLite.
+func (s *Store) lockUser(tx *sql.Tx, userID int64) error {
+	if !s.pg {
+		return nil
+	}
+	rows, err := tx.Query(`SELECT id FROM users WHERE id = ? FOR NO KEY UPDATE`, userID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+	}
+	return rows.Err()
+}
 
 // SetClock replaces the time source. Tests only.
 func (s *Store) SetClock(now func() time.Time) { s.now = now }
@@ -136,6 +198,33 @@ func expectOne(res sql.Result, err error) error {
 	return nil
 }
 
+// pgUniqueViolation is Postgres' SQLSTATE unique_violation.
+const pgUniqueViolation = "23505"
+
+// isUniqueViolation recognises a unique-constraint failure on either
+// backend: SQLite's message, or a Postgres error (pgconn.PgError) carrying
+// SQLSTATE 23505.
 func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+	if err == nil {
+		return false
+	}
+	var pe interface{ SQLState() string }
+	if errors.As(err, &pe) {
+		return pe.SQLState() == pgUniqueViolation
+	}
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+// sqlMax2 is SQLite's two-argument max(a, b) in portable SQL: NULL when
+// either side is NULL (Postgres' GREATEST would ignore the NULL).
+func sqlMax2(a, b string) string {
+	return `(CASE WHEN (` + a + `) IS NULL OR (` + b + `) IS NULL THEN NULL WHEN (` + a + `) >= (` + b + `) THEN (` + a + `) ELSE (` + b + `) END)`
+}
+
+// limitClause returns " LIMIT ?" and its argument, or nothing for noLimit.
+func limitClause(limit int) (string, []any) {
+	if limit == noLimit {
+		return ``, nil
+	}
+	return ` LIMIT ?`, []any{limit}
 }

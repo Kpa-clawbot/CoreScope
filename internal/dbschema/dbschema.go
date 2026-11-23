@@ -21,7 +21,6 @@ package dbschema
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -153,13 +152,25 @@ func AssertReady(ro *sql.DB) error {
 			missing = append(missing, fmt.Sprintf("%s.%s", table, col))
 		}
 	}
+	// mustColAs reports a column that exists as present but wrong (what), and
+	// a missing one as missing.
+	mustColAs := func(table, col, what string) {
+		has, err := TableHasColumn(ro, table, col)
+		switch {
+		case err != nil:
+			missing = append(missing, fmt.Sprintf("%s.%s (probe error: %v)", table, col, err))
+		case has:
+			missing = append(missing, what)
+		default:
+			missing = append(missing, fmt.Sprintf("%s.%s", table, col))
+		}
+	}
 	mustTable := func(name string) {
-		var n int
-		err := ro.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n)
-		if errors.Is(err, sql.ErrNoRows) {
-			missing = append(missing, "table:"+name)
-		} else if err != nil {
+		has, err := TableExists(ro, name)
+		if err != nil {
 			missing = append(missing, fmt.Sprintf("table:%s (probe error: %v)", name, err))
+		} else if !has {
+			missing = append(missing, "table:"+name)
 		}
 	}
 
@@ -212,8 +223,15 @@ func AssertReady(ro *sql.DB) error {
 	// observations.observer_idx references observers.idx, an explicit
 	// INTEGER PRIMARY KEY (== rowid) that survives dump-and-reload. A plain
 	// column named idx is not that: require the key itself, by the same test
-	// the ingestor's rebuild uses to decide it is done.
-	if cols, idxIsPK, err := observersColumnsInfo(context.Background(), ro); err != nil {
+	// the ingestor's rebuild uses to decide it is done. On Postgres the key is
+	// the identity column the baseline migration creates.
+	if idxIsPK, isPG, err := pgObserversIdxIsPK(ro); isPG {
+		if err != nil {
+			missing = append(missing, fmt.Sprintf("observers.idx (probe error: %v)", err))
+		} else if !idxIsPK {
+			mustColAs("observers", "idx", "observers.idx (not the primary key)")
+		}
+	} else if cols, idxIsPK, err := observersColumnsInfo(context.Background(), ro); err != nil {
 		missing = append(missing, fmt.Sprintf("observers.idx (probe error: %v)", err))
 	} else if !idxIsPK && slices.Contains(cols, "idx") {
 		missing = append(missing, "observers.idx (not the primary key)")
@@ -249,6 +267,9 @@ type Querier interface {
 //
 // Pass the transaction, not the pool, when you are inside one. See Querier.
 func TableHasColumn(db Querier, table, column string) (bool, error) {
+	if found, ok, err := infoSchemaProbe(db, pgColumnProbe, table, column); ok {
+		return found, err
+	}
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
 		return false, err

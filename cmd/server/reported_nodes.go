@@ -204,9 +204,7 @@ func countEstimates(nodes []ReportedNode) int {
 // tablePresent reports whether a table exists. Used for inactive_nodes and
 // client_receptions, which an older or partial database may lack.
 func (db *DB) tablePresent(name string) bool {
-	var n int
-	err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n)
-	return err == nil && n > 0
+	return tableExists(db.conn, name)
 }
 
 // computeReportedNodes builds the list: every client_node_names target that
@@ -229,14 +227,28 @@ func (s *Server) computeReportedNodes() (*ReportedNodesResponse, error) {
 		advertised += ` OR EXISTS (SELECT 1 FROM inactive_nodes n WHERE n.public_key = c.target)`
 	}
 	// The bare name beside MAX(observed_at) is SQLite's bare-column rule: the
-	// name of the newest observation (same as lookupPrefixes).
-	rows, err := s.db.conn.Query(`
+	// name of the newest observation (same as lookupPrefixes, whose comment
+	// covers the Postgres DISTINCT ON form and its id tie-break). Both filters
+	// depend on the target alone, so every row of a kept target qualifies and
+	// the reporter count can be taken over all of them. target breaks ties at
+	// the LIMIT edge.
+	heard := s.db.clientNameHeard()
+	rows, err := s.db.conn.Query(s.db.sqlFor(`
 		SELECT target, name, MAX(observed_at), COUNT(DISTINCT rx_pubkey)
 		FROM client_node_names c
-		WHERE NOT (`+advertised+`) AND `+s.db.clientNameHeard()+`
+		WHERE NOT (`+advertised+`) AND `+heard+`
 		GROUP BY target
-		ORDER BY MAX(observed_at) DESC
-		LIMIT ?`, reportedNodesMax)
+		ORDER BY MAX(observed_at) DESC, target ASC
+		LIMIT ?`, `
+		SELECT latest.target, latest.name, latest.observed_at, rc.reporters
+		FROM (SELECT DISTINCT ON (target) target, name, observed_at
+			FROM client_node_names c
+			WHERE NOT (`+advertised+`) AND `+heard+`
+			ORDER BY target, observed_at DESC, id ASC) latest
+		CROSS JOIN LATERAL (SELECT COUNT(DISTINCT rx_pubkey) AS reporters
+			FROM client_node_names a WHERE a.target = latest.target) rc
+		ORDER BY latest.observed_at DESC, latest.target ASC
+		LIMIT ?`), reportedNodesMax)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +433,8 @@ func (s *Server) sharedEightBytePrefixes(targets []string) map[string]bool {
 		var args []interface{}
 		for _, p := range prefixes[i:end] {
 			for _, tc := range tables {
-				parts = append(parts, `SELECT * FROM (SELECT ? FROM `+tc[0]+` WHERE `+tc[1]+` >= ? AND `+tc[1]+` < ? AND `+tc[1]+` <> ? LIMIT 1)`)
+				// CAST: Postgres cannot type a bare parameter in a select list.
+				parts = append(parts, `SELECT * FROM (SELECT CAST(? AS TEXT) FROM `+tc[0]+` WHERE `+tc[1]+` >= ? AND `+tc[1]+` < ? AND `+tc[1]+` <> ? LIMIT 1)`)
 				args = append(args, p, p, p+"g", byPrefix[p])
 			}
 		}

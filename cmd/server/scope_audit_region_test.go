@@ -202,7 +202,7 @@ func TestScopeAudit_RegionScanKeepsTheTimeIndex(t *testing.T) {
 	if err != nil || clause == "" {
 		t.Fatalf("clause=%q err=%v", clause, err)
 	}
-	rows, err := srv.db.conn.Query("EXPLAIN QUERY PLAN "+scopeAuditForwarderScanQuery+clause,
+	rows, err := srv.db.conn.Query("EXPLAIN QUERY PLAN "+srv.db.scopeAuditForwarderScanQuery()+clause,
 		append([]interface{}{"2000-01-01T00:00:00Z"}, args...)...)
 	if err != nil {
 		t.Fatal(err)

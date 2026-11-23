@@ -393,7 +393,7 @@ func TestDeclaredRegionSourcesIgnoresWildcard(t *testing.T) {
 
 // insertDeclaredRegionsRow seeds one node_declared_regions answer, creating
 // the table first. That table is optional: this ingestor never creates it, and
-// declaredRegionSources probes sqlite_master before reading it. A test that
+// declaredRegionSources probes the catalogue before reading it. A test that
 // wants the optional source has to bring it.
 func insertDeclaredRegionsRow(t *testing.T, s *Store, target, observedAt, regionsCSV string) {
 	t.Helper()

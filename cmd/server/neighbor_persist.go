@@ -104,13 +104,15 @@ func loadNeighborEdgesFromDB(conn *sql.DB) *NeighborGraph {
 // neighborEdgesTableExists returns true when neighbor_edges contains at
 // least one row. Used by main.go to decide between "load snapshot" and
 // "start with empty graph and wait for the ingestor to populate it".
+// The table is probed first rather than read and the error taken as absence,
+// so a real read failure is not mistaken for a missing table on either
+// backend; one row answers "any rows?" without counting them all.
 func neighborEdgesTableExists(conn *sql.DB) bool {
-	var cnt int
-	err := conn.QueryRow("SELECT COUNT(*) FROM neighbor_edges").Scan(&cnt)
-	if err != nil {
+	if !tableExists(conn, "neighbor_edges") {
 		return false
 	}
-	return cnt > 0
+	var one int
+	return conn.QueryRow("SELECT 1 FROM neighbor_edges LIMIT 1").Scan(&one) == nil
 }
 
 // ─── resolved_path helpers (read-only / in-memory only) ────────────────────────

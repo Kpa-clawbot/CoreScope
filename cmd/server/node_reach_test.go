@@ -318,7 +318,7 @@ func TestReachScanStartsFromObservationsTimeIndex(t *testing.T) {
 		}
 	}
 	args := []interface{}{int64(0), `%"01FA"%`, `%"01FA00"%`, 10}
-	rows, err := db.conn.Query("EXPLAIN QUERY PLAN "+reachScanSQL(2), args...)
+	rows, err := db.conn.Query("EXPLAIN QUERY PLAN "+db.reachScanSQL(2), args...)
 	if err != nil {
 		t.Fatal(err)
 	}

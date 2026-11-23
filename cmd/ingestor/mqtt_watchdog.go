@@ -457,7 +457,9 @@ func SnapshotLivenessClocks() map[string]SourceLivenessSnapshot {
 	}
 	out := make(map[string]SourceLivenessSnapshot, len(livenessRegistry))
 	for tag, s := range livenessRegistry {
-		out[tag] = SourceLivenessSnapshot{
+		// Keyed by the published (masked) tag: an unnamed source's tag is
+		// its broker URL.
+		out[maskURLSecrets(tag)] = SourceLivenessSnapshot{
 			LastReceiptUnix: atomic.LoadInt64(&s.LastReceiptUnix),
 			LastMessageUnix: atomic.LoadInt64(&s.LastMessageUnix),
 		}
