@@ -14,6 +14,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 
 const fs = require('fs');
 const path = require('path');
@@ -109,6 +110,7 @@ console.log('\n=== #1446 Scenario 1: cold boot with empty localStorage → no pr
 {
   const env = makeSandbox({});
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
   // After cb-presets.js auto-init: with no stored preset, body must NOT carry
@@ -129,6 +131,7 @@ console.log('\n=== #1446 Scenario 2: server config.nodeColors → --mc-role-X (n
 {
   const env = makeSandbox({});
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
   vm.runInContext(cv2Src, env.sandbox);
@@ -143,6 +146,7 @@ console.log('\n=== #1446 Scenario 3: user override > active CB preset (body inli
 {
   const env = makeSandbox({});
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
   env.sandbox.window.MeshCorePresets.applyPreset('deut');
@@ -160,6 +164,7 @@ console.log('\n=== #1446 Scenario 4: clear override → reverts to active CB pre
 {
   const env = makeSandbox({});
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
   env.sandbox.window.MeshCorePresets.applyPreset('deut');
@@ -183,6 +188,7 @@ console.log('\n=== #1446 Scenario 5: clear preset → reverts to server config /
 {
   const env = makeSandbox({ 'meshcore-cb-preset': 'deut' });
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
   vm.runInContext(cv2Src, env.sandbox);
@@ -212,6 +218,7 @@ console.log('\n=== #1446 Scenario 6: backward compat — existing localStorage p
 {
   const env = makeSandbox({ 'meshcore-cb-preset': 'deut' });
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
   // cb-presets auto-init must have applied deut from storage.
@@ -247,6 +254,7 @@ console.log('\n=== #1446 Scenario 9: customize-v2 applyCSS writes user override 
 {
   const env = makeSandbox({ 'meshcore-cb-preset': 'deut' });
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
   vm.runInContext(cv2Src, env.sandbox);

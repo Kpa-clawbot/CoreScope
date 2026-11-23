@@ -4,7 +4,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/meshcore-analyzer/mailer"
@@ -233,20 +235,53 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleDeviceToken issues a CoreDrive RX device token. No Origin check:
-// the token is returned in the body and nothing is stored in a browser,
-// so login CSRF does not apply, and RX may run on another origin.
+// requestedDeviceScopes returns the scopes a device-token request asks for:
+// rx when it names none (CoreDrive RX, and every client from before scopes
+// could be requested), otherwise its list without repeats, in deviceScopes
+// order. An empty list or an unknown scope is a *users.ValidationError.
+func requestedDeviceScopes(req []string) ([]string, error) {
+	if req == nil {
+		return []string{deviceScopeRX}, nil
+	}
+	if len(req) == 0 {
+		return nil, &users.ValidationError{Msg: "scopes must name at least one scope"}
+	}
+	want := make(map[string]bool, len(req))
+	for _, sc := range req {
+		if !slices.Contains(deviceScopes, sc) {
+			return nil, &users.ValidationError{Msg: "unknown scope: " + sc}
+		}
+		want[sc] = true
+	}
+	out := make([]string, 0, len(want))
+	for _, sc := range deviceScopes {
+		if want[sc] {
+			out = append(out, sc)
+		}
+	}
+	return out, nil
+}
+
+// handleDeviceToken issues a device token (CoreDrive RX, or a client that
+// asks for repeater scopes). No Origin check: the token is returned in the
+// body and nothing is stored in a browser, so login CSRF does not apply,
+// and the client may run on another origin.
 func (s *Server) handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	a := s.auth
 	var req deviceTokenRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	// Checked before the password, so a malformed request costs no attempt.
+	scopes, err := requestedDeviceScopes(req.Scopes)
+	if writeValidation(w, err) {
+		return
+	}
 	u := a.verifyLogin(w, r, req.Email, req.Password)
 	if u == nil {
 		return
 	}
-	raw, sess, err := a.st.CreateDeviceSession(u.ID, req.DeviceName, []string{deviceScopeRX}, r.UserAgent())
+	raw, sess, err := a.st.CreateDeviceSession(u.ID, req.DeviceName, scopes, r.UserAgent())
 	if err != nil {
 		log.Printf("[users] device token for user #%d: %v", u.ID, err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -254,8 +289,9 @@ func (s *Server) handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.st.TouchLogin(u.ID)
 	writeJSON(w, deviceTokenResponse{Token: raw, ExpiresAt: rfc3339(sess.ExpiresAt),
-		User: deviceTokenUser{ID: u.ID, DisplayName: u.DisplayName}})
-	a.auditAsync(nil, "user.login", idPtr(u.ID), map[string]string{"via": "device", "device": sess.Label})
+		User: deviceTokenUser{ID: u.ID, DisplayName: u.DisplayName}, Scopes: sess.Scopes})
+	a.auditAsync(nil, "user.login", idPtr(u.ID), map[string]string{"via": "device", "device": sess.Label,
+		"scopes": strings.Join(sess.Scopes, ",")})
 }
 
 // handleLogout ends the caller's session: with a bearer header it revokes
@@ -289,11 +325,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMe answers the caller; a device token gets no CSRF token (it never
-// needs one).
+// needs one) and its scopes.
 func (s *Server) handleMe(w http.ResponseWriter, _ *http.Request, u *users.User, sess *users.Session) {
 	me := meFrom(u, sess)
 	if sess.Kind == users.SessionKindDevice {
 		me.CSRFToken = ""
+		me.Scopes = sess.Scopes
 	}
 	writeJSON(w, me)
 }

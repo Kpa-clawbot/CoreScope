@@ -1,0 +1,819 @@
+/* planner.css — Repeater planner page (planner.js): layout, mode tabs, the
+   point / relay lists, map pins, leg tones and the phone bottom sheet. The
+   terrain-profile panel, verdict chips and obstruction markers reuse the
+   mc-los-* classes in route-los.css. Colours come from style.css variables. */
+
+/* ─── Page shell ─────────────────────────────────────────────────────── */
+
+/* Full-height page: subtract the top nav and, on phones, the bottom nav. */
+#app:has(.mc-pl-page) {
+  height: calc(100vh - 52px - var(--bottom-nav-reserve, 0px));
+  height: calc(100dvh - 52px - var(--bottom-nav-reserve, 0px));
+  min-height: 0;
+  overflow: hidden;
+}
+.mc-pl-page {
+  position: relative;
+  display: flex;
+  height: calc(100vh - 52px - var(--bottom-nav-reserve, 0px));
+  height: calc(100dvh - 52px - var(--bottom-nav-reserve, 0px));
+  overflow: hidden;
+  background: var(--surface-0);
+  color: var(--text);
+  font: 14px/1.45 var(--font);
+}
+.mc-pl-page [hidden] { display: none !important; }
+.mc-pl-page p { margin: 0; }
+
+.mc-pl-map {
+  position: relative;
+  z-index: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface-0);
+}
+/* Placing points: a crosshair says "click to add". */
+.mc-pl-mode-chain .mc-pl-map.leaflet-container:not(.leaflet-dragging),
+.mc-pl-mode-relay.mc-pl-picking-map .mc-pl-map.leaflet-container:not(.leaflet-dragging) { cursor: crosshair; }
+
+/* ─── Side panel ─────────────────────────────────────────────────────── */
+
+.mc-pl-side {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 0 0 380px;
+  flex-direction: column;
+  width: 380px;
+  min-height: 0;
+  background: var(--surface-1);
+  border-left: 1px solid var(--border);
+}
+.mc-pl-side-head {
+  flex: none;
+  padding: 16px 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.mc-pl-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mc-pl-titlebar h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 24px;
+}
+.mc-pl-sheet-toggle { display: none; }
+/* app.js focuses the page heading for screen readers; it is not a control. */
+.mc-pl-titlebar h2[tabindex="-1"]:focus,
+.mc-pl-off-card h2[tabindex="-1"]:focus { outline: none; }
+
+.mc-pl-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+.mc-pl-tab {
+  flex: 1;
+  min-height: 40px;
+  margin-bottom: -1px;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mc-pl-tab:hover { background: var(--bg-hover); color: var(--text); }
+.mc-pl-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--link-color); }
+.mc-pl-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.mc-pl-side-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.mc-pl-panel:focus { outline: none; }
+.mc-pl-panel:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.mc-pl-panel > * + * { margin-top: 16px; }
+.mc-pl-panel > .mc-pl-hint,
+.mc-pl-panel > .mc-pl-field-err { margin-top: 4px; }
+.mc-pl-panel > .mc-pl-status:empty,
+.mc-pl-panel > .mc-pl-results:empty { display: none; }
+
+.mc-pl-lede { font-weight: 600; }
+.mc-pl-hint,
+.mc-pl-sub {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.mc-pl-sub { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.mc-pl-count {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.mc-pl-notice {
+  margin-bottom: 16px !important;
+  padding: 8px 12px;
+  border: 1px solid var(--status-amber);
+  border-radius: 8px;
+  background: var(--status-amber-light);
+  color: var(--status-amber-text);
+  font-size: 12px;
+}
+.mc-pl-loading-note { color: var(--text-muted); }
+
+.mc-pl-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.mc-pl-empty > .ph-icon { width: 24px; height: 24px; font-size: 24px; }
+.mc-pl-empty strong { color: var(--text); }
+
+/* ─── Buttons + inputs ───────────────────────────────────────────────── */
+
+.mc-pl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out;
+}
+.mc-pl-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.mc-pl-btn:active:not(:disabled) { border-color: var(--text-muted); }
+.mc-pl-btn:disabled { opacity: 0.5; cursor: default; }
+.mc-pl-btn-small { min-height: 32px; padding: 0 10px; font-size: 12px; }
+.mc-pl-btn-quiet { border-color: transparent; background: transparent; color: var(--text-muted); }
+.mc-pl-btn-quiet:hover:not(:disabled) { color: var(--text); }
+.mc-pl-btn[aria-pressed="true"] {
+  border-color: var(--link-color);
+  background: var(--accent-bg);
+  color: var(--link-color);
+}
+
+.mc-pl-icon-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.mc-pl-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+.mc-pl-icon-btn:active { border-color: var(--border); }
+
+.mc-pl-page input[type="number"],
+.mc-pl-page input[type="text"],
+.mc-pl-page select {
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: 13px/1.4 var(--font);
+  font-variant-numeric: tabular-nums;
+}
+.mc-pl-page input[type="number"]:focus-visible,
+.mc-pl-page input[type="text"]:focus-visible,
+.mc-pl-page select:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+.mc-pl-page input[aria-invalid="true"] { border-color: var(--status-red); }
+.mc-pl-field-err { color: var(--status-red-text); font-size: 12px; }
+.mc-pl-field-err:empty { display: none; }
+
+.mc-pl-ant-in {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.mc-pl-find label,
+.mc-pl-field label,
+.mc-pl-ant label {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.mc-pl-find label { display: block; margin-bottom: 4px; }
+.mc-pl-find-row { display: flex; gap: 8px; }
+.mc-pl-find-row input { flex: 1; min-width: 0; }
+.mc-pl-find .mc-pl-field-err { margin-top: 4px; }
+
+/* ─── Badges (match the map pins) ────────────────────────────────────── */
+
+.mc-pl-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  color: var(--text-on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+/* Snapped to a known node: a ring around the pin. */
+.mc-pl-badge-snapped { box-shadow: 0 0 0 2px var(--surface-1), 0 0 0 4px var(--accent-strong); }
+.mc-pl-badge-end { border-radius: 6px; }
+.mc-pl-badge-existing,
+.mc-pl-badge-open {
+  border: 2px solid var(--text-muted);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 11px;
+}
+.mc-pl-badge-open { border-radius: 6px; }
+.mc-pl-opt-on .mc-pl-badge-existing,
+.mc-pl-opt-on .mc-pl-badge-open {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--text-on-accent);
+}
+
+.mc-pl-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+.mc-pl-name {
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ─── Chain: points and their legs ───────────────────────────────────── */
+
+.mc-pl-pts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mc-pl-pt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.mc-pl-ant {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+}
+.mc-pl-ant label { font-size: 11px; }
+.mc-pl-ant input[type="number"] { width: 64px; min-height: 32px; }
+
+/* The leg to the next point hangs off a rail joining the two badges. */
+.mc-pl-leg-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding-left: 32px;
+}
+.mc-pl-leg-rail {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: 11px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border);
+}
+.mc-pl-leg-km {
+  min-width: 64px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-pl-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.mc-pl-actions:empty { display: none; }
+.mc-pl-actions .mc-pl-btn-quiet { margin-left: auto; }
+
+/* ─── Relay: ends, fields, results ───────────────────────────────────── */
+
+.mc-pl-ends {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mc-pl-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.mc-pl-end-unset .mc-pl-name { color: var(--text-muted); font-weight: 500; }
+.mc-pl-picking {
+  border-color: var(--link-color);
+  box-shadow: inset 0 0 0 1px var(--link-color);
+}
+
+.mc-pl-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.mc-pl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.mc-pl-field .mc-pl-ant-in input { flex: 1; width: 100%; min-width: 0; }
+.mc-pl-field select { width: 100%; }
+.mc-pl-fields .mc-pl-field-err { grid-column: 1 / -1; }
+
+.mc-pl-results > * + * { margin-top: 16px; }
+
+.mc-pl-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.mc-pl-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mc-pl-card-head h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+.mc-pl-card-head .mc-los-chip { margin-left: auto; }
+.mc-pl-card-head .mc-pl-count {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--hover-bg);
+  line-height: 20px;
+}
+.mc-pl-card > .mc-pl-sub,
+.mc-pl-opts-sec > .mc-pl-sub { margin-top: 4px; }
+.mc-pl-note { margin-top: 4px !important; font-size: 13px; }
+.mc-pl-card > .mc-pl-btn { margin-top: 8px; }
+
+/* Chips inside a row button are labels, not controls. */
+.mc-los-chip.mc-pl-chip-static { cursor: inherit; }
+
+.mc-pl-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.mc-pl-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out;
+}
+.mc-pl-opt:hover { background: var(--bg-hover); }
+.mc-pl-opt:active { border-color: var(--text-muted); }
+.mc-pl-opt-on,
+.mc-pl-opt-on:hover {
+  border-color: var(--link-color);
+  background: var(--selected-bg);
+}
+.mc-pl-opt .mc-pl-main { gap: 4px; }
+.mc-pl-opt-legs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.mc-pl-opt-leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mc-pl-opt-end {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.mc-pl-km {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.mc-pl-score {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+}
+.mc-pl-score b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.mc-pl-score span { color: var(--text-muted); font-size: 11px; }
+.mc-pl-none {
+  margin-top: 8px !important;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.mc-pl-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--status-amber-text, var(--warning, var(--text-muted)));
+  font-size: 12px;
+}
+.mc-pl-warnings li { display: flex; align-items: flex-start; gap: 6px; }
+.mc-pl-warnings .ph-icon { margin-top: 2px; flex: none; color: var(--status-amber, currentColor); }
+
+/* ─── Job progress + errors ──────────────────────────────────────────── */
+
+.mc-pl-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mc-pl-progress-text {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.mc-pl-bar {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+.mc-pl-bar > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  border-radius: inherit;
+  background: var(--link-color);
+  transition: width 250ms ease-out;
+}
+@keyframes mc-pl-indet {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+.mc-pl-bar-indet > span { width: 30%; animation: mc-pl-indet 1.2s ease-in-out infinite; }
+
+.mc-pl-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--status-red);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--status-red) 8%, transparent);
+  font-size: 13px;
+}
+.mc-pl-error > .ph-icon { margin-top: 2px; color: var(--status-red-text); }
+.mc-pl-error p + .mc-pl-btn { margin-top: 8px; }
+
+/* ─── Terrain-profile panel (route-los.css look; stacked legs) ───────── */
+
+.mc-pl-prof + .mc-pl-prof {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.mc-pl-prof-title {
+  margin: 8px 0 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.mc-pl-prof .mc-los-meta { margin-top: 4px !important; }
+
+/* Two or more legs: side by side when the map is wide enough, so the panel
+   stays short and the route above it stays in view; stacked otherwise. */
+.mc-los-panel.mc-pl-profile-multi {
+  width: min(1040px, calc(100% - 32px));
+  container-type: inline-size;
+}
+@container (min-width: 852px) {
+  .mc-pl-profs-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 24px;
+  }
+  .mc-pl-profs-grid > .mc-pl-prof + .mc-pl-prof {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+  .mc-pl-profs-grid > .mc-pl-prof:nth-child(2n) {
+    margin-left: -12px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
+  }
+  .mc-pl-profs-grid > .mc-pl-prof:nth-child(n + 3) {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  /* Each chart draws at about 0.65 of its 720-unit viewBox: keep the
+     labels readable (sizes are in viewBox units). */
+  .mc-pl-profs-grid .mc-los-tick { font-size: 16px; }
+  .mc-pl-profs-grid .mc-los-endlabel { font-size: 17px; }
+  /* Drop the distance labels so "0 m" and "0 km" do not collide. */
+  .mc-pl-profs-grid .mc-los-tick[text-anchor="middle"] { transform: translateY(5px); }
+  /* A reading wraps to two lines in a half-width column; reserve them so
+     hovering never resizes the panel. */
+  .mc-pl-profs-grid .mc-los-readout { min-height: 40px; }
+}
+.mc-pl-profile .mc-los-nav.mc-los-single .mc-los-close { margin-left: auto; }
+
+/* ─── Map: known nodes ───────────────────────────────────────────────── */
+
+.leaflet-pane > svg path.mc-pl-node {
+  stroke: var(--mc-marker-stroke-color);
+  fill-opacity: 0.9;
+}
+.leaflet-pane > svg path.mc-pl-node:not(.mc-pl-node-major) { fill-opacity: 0.6; stroke-opacity: 0.8; }
+.leaflet-pane > svg path.mc-pl-node-repeater { fill: var(--mc-role-repeater); }
+.leaflet-pane > svg path.mc-pl-node-room { fill: var(--mc-role-room); }
+.leaflet-pane > svg path.mc-pl-node-companion { fill: var(--mc-role-companion); }
+.leaflet-pane > svg path.mc-pl-node-sensor { fill: var(--mc-role-sensor); }
+.leaflet-pane > svg path.mc-pl-node-observer { fill: var(--mc-role-observer); }
+.leaflet-pane > svg path.mc-pl-node-other { fill: var(--text-muted); }
+/* The area module draws its own picture; nodes stay as faint context. */
+.mc-pl-page.mc-pl-mode-area .leaflet-pane > svg path.mc-pl-node { opacity: 0.45; pointer-events: none; }
+
+/* ─── Map: legs, coloured by verdict tone (pattern repeats the tone) ─── */
+
+.leaflet-overlay-pane path.mc-pl-leg {
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 1px var(--surface-1)) drop-shadow(0 0 1px var(--surface-1));
+}
+.leaflet-overlay-pane path.mc-pl-tone-good { stroke: var(--status-green-text); }
+.leaflet-overlay-pane path.mc-pl-tone-warn { stroke: var(--status-amber-text); stroke-dasharray: 12 8; }
+.leaflet-overlay-pane path.mc-pl-tone-bad { stroke: var(--status-red-text); stroke-dasharray: 2 9; }
+.leaflet-overlay-pane path.mc-pl-tone-muted { stroke: var(--text-muted); stroke-dasharray: 2 8; }
+.leaflet-overlay-pane path.mc-pl-direct { stroke-opacity: 0.75; }
+.leaflet-overlay-pane path.mc-pl-leg-hit { stroke: transparent; }
+
+/* ─── Map: pins ──────────────────────────────────────────────────────── */
+
+.mc-pl-pin-wrap,
+.mc-pl-cand-wrap { background: none; border: 0; }
+.mc-pl-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--surface-1);
+  border-radius: 50%;
+  background: var(--accent-strong);
+  color: var(--text-on-accent);
+  box-shadow: 0 1px 4px var(--shadow);
+  font: 700 12px/1 var(--font);
+  font-variant-numeric: tabular-nums;
+  cursor: grab;
+}
+.mc-pl-pin-end { border-radius: 8px; }
+.mc-pl-pin-snapped { box-shadow: 0 0 0 2px var(--accent-strong), 0 1px 4px var(--shadow); }
+.leaflet-dragging .mc-pl-pin { cursor: grabbing; }
+
+.mc-pl-cand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--text-muted);
+  border-radius: 50%;
+  background: var(--surface-1);
+  color: var(--text);
+  box-shadow: 0 1px 3px var(--shadow);
+  font: 700 11px/1 var(--font);
+  cursor: pointer;
+  transition: transform 150ms ease-out;
+}
+.mc-pl-cand-open { border-radius: 6px; }
+.mc-pl-cand-on {
+  border-color: var(--surface-1);
+  background: var(--accent-strong);
+  color: var(--text-on-accent);
+  transform: scale(1.25);
+}
+
+/* Tooltips on this page follow the theme. */
+.leaflet-tooltip.mc-pl-tip {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: 0 2px 8px var(--shadow);
+  font: 12px/1.4 var(--font);
+}
+.leaflet-tooltip-top.mc-pl-tip::before { border-top-color: var(--surface-2); }
+.leaflet-tooltip-bottom.mc-pl-tip::before { border-bottom-color: var(--surface-2); }
+.leaflet-tooltip-left.mc-pl-tip::before { border-left-color: var(--surface-2); }
+.leaflet-tooltip-right.mc-pl-tip::before { border-right-color: var(--surface-2); }
+.mc-pl-tip-role { color: var(--text-muted); }
+
+/* ─── Planner not enabled / not started ──────────────────────────────── */
+
+.mc-pl-off {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: calc(100vh - 52px - var(--bottom-nav-reserve, 0px));
+  min-height: calc(100dvh - 52px - var(--bottom-nav-reserve, 0px));
+  padding: 24px 16px;
+  color: var(--text);
+}
+.mc-pl-off-wait { color: var(--text-muted); }
+.mc-pl-off-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 440px;
+  padding: 32px 24px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-1);
+  text-align: center;
+}
+.mc-pl-off-card p { margin: 0; }
+.mc-pl-off-icon .ph-icon { width: 40px; height: 40px; font-size: 40px; color: var(--text-muted); }
+.mc-pl-off-card h2 { margin: 0; font-size: 20px; line-height: 28px; }
+.mc-pl-off-lede { font-weight: 600; }
+.mc-pl-off-detail { max-width: 36ch; color: var(--text-muted); }
+.mc-pl-off-detail code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--hover-bg);
+  color: var(--text);
+  font: 0.92em var(--mono);
+}
+.mc-pl-off-card .mc-pl-btn { margin-top: 4px; }
+
+/* ─── Phone: the side panel becomes a bottom sheet ───────────────────── */
+
+@media (max-width: 767px) {
+  .mc-pl-page { flex-direction: column; }
+  .mc-pl-side {
+    flex: 0 1 auto;
+    width: auto;
+    max-height: 50%;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+    padding-bottom: 4px; /* the bottom nav overlaps the page's last 2px */
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -4px 16px var(--shadow);
+  }
+  /* One row: the mode tabs and the show/hide toggle. The heading stays for
+     screen readers (the document title already names the page). */
+  .mc-pl-side-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    column-gap: 4px;
+    padding: 12px 8px 0 16px;
+  }
+  .mc-pl-side-head::before {
+    content: '';
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--border);
+  }
+  .mc-pl-titlebar { display: contents; }
+  .mc-pl-titlebar h2 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .mc-pl-tabs { grid-column: 1; grid-row: 1; margin-top: 0; }
+  .mc-pl-sheet-toggle { display: inline-flex; grid-column: 2; grid-row: 1; align-self: center; }
+  .mc-pl-sheet-toggle .ph-icon { transition: transform 150ms ease-out; }
+  .mc-pl-collapsed .mc-pl-sheet-toggle .ph-icon { transform: rotate(180deg); }
+  .mc-pl-collapsed .mc-pl-side-body { display: none; }
+
+  .mc-pl-tab,
+  .mc-pl-btn,
+  .mc-pl-btn-small { min-height: 44px; }
+  .mc-pl-icon-btn { width: 44px; height: 44px; }
+  .mc-pl-page input[type="number"],
+  .mc-pl-page input[type="text"],
+  .mc-pl-page select { min-height: 44px; font-size: 16px; }
+  .mc-pl-ant input[type="number"] { min-height: 44px; }
+
+  /* route-los puts the nav on its own row; with no prev/next the close
+     button shares the title's row instead. */
+  .mc-pl-profile .mc-los-head:has(.mc-los-single) { flex-wrap: nowrap; align-items: flex-start; }
+  .mc-pl-profile .mc-los-head:has(.mc-los-single) .mc-los-title { order: 0; flex: 1 1 auto; padding-top: 12px; }
+  .mc-pl-profile .mc-los-nav.mc-los-single { order: 1; flex: none; }
+}
+
+@media (pointer: coarse) {
+  .mc-pl-btn,
+  .mc-pl-btn-small { min-height: 44px; }
+  .mc-pl-icon-btn { width: 44px; height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-pl-btn,
+  .mc-pl-opt,
+  .mc-pl-cand,
+  .mc-pl-sheet-toggle .ph-icon,
+  .mc-pl-bar > span { transition: none; }
+  .mc-pl-bar-indet > span { width: 100%; opacity: 0.5; animation: none; }
+}

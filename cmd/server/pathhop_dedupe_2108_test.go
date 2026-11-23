@@ -66,7 +66,7 @@ func phdSeed(t testing.TB, db *DB, observers int) {
 			pk, fmt.Sprintf("phdRelay-%d", i), ts)
 	}
 	for i := 1; i <= observers; i++ {
-		phdExec(t, db, `INSERT INTO observers (rowid, id, name, iata) VALUES (?, ?, ?, 'TST')`,
+		phdExec(t, db, `INSERT INTO observers (idx, id, name, iata) VALUES (?, ?, ?, 'TST')`,
 			i, fmt.Sprintf("phdObs-%02d", i), fmt.Sprintf("Observer %d", i))
 	}
 }

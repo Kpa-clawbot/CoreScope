@@ -11,6 +11,7 @@
  */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const assert = require('assert');
 
@@ -54,6 +55,7 @@ function makeSandbox() {
     registerPage: (name, handler) => { registeredPages[name] = handler; },
   };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   return ctx;
 }
 

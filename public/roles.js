@@ -556,11 +556,16 @@
    * Carto key when /api/config/client hadn't landed yet. Callers that only
    * need the URL can keep calling this; callers that also want attribution /
    * maxZoom / refUrl / invertFilter should call window.MC_resolveTile()
-   * directly and read the whole descriptor. */
+   * directly and read the whole descriptor. A vector pick resolves to a style
+   * JSON url, so this returns its raster fallback instead (MC_rasterTileUrl):
+   * callers feed the result to L.tileLayer. */
   window.getTileUrl = function () {
     var isDark = (typeof window.MC_isDarkTheme === 'function') ? !!window.MC_isDarkTheme() : _tileThemeIsDark();
     if (window.MC_resolveTile) {
-      try { return window.MC_resolveTile(isDark).url; } catch (_e) {}
+      try {
+        var d = window.MC_resolveTile(isDark);
+        return (typeof window.MC_rasterTileUrl === 'function') ? window.MC_rasterTileUrl(d) : d.url;
+      } catch (_e) {}
     }
     // Legacy fallback for sandboxes that mock the registry without loading
     // map-tile-providers.js (mirrors #1614's function-URL contract).
@@ -576,6 +581,30 @@
       }
     } catch (_e) {}
     return TILE_DARK;
+  };
+
+  /* Tear down a Leaflet map that may still be animating. Leaflet 1.9.4's
+   * _animateZoom() schedules setTimeout(_onZoomTransitionEnd, 250) and keeps
+   * no handle, and map.remove() does not cancel it: removing the map inside
+   * that window left the callback to _move() the deleted _mapPane ("reading
+   * '_leaflet_pos'"). The callback is gated on _animatingZoom, so clearing the
+   * flag makes it a no-op. A queued _tryAnimatedZoom frame is already inert
+   * once remove() deletes _mapPane (_animateZoom checks it), and remove()
+   * itself cancels _flyToFrame, _panAnim and _resizeRequest via _stop().
+   * _sizeTimer (invalidateSize's debounced moveend) is the other unowned timer.
+   * Listeners are dropped only AFTER remove(): remove() fires 'unload', which
+   * Leaflet itself relies on (controls detach, the zoom-animation proxy and
+   * BoxZoom clean up) as do callers watching for disposal. Calling off()
+   * first skipped all of that.
+   * Idempotent and null-safe; a failing remove() is logged, not thrown, since
+   * the caller is leaving the page either way. */
+  window.MC_safeRemoveMap = function (map) {
+    if (!map || map._mcRemoved) return;
+    map._mcRemoved = true;
+    map._animatingZoom = false;
+    if (map._sizeTimer) { clearTimeout(map._sizeTimer); map._sizeTimer = null; }
+    try { map.remove(); } catch (e) { console.warn('[map] remove failed:', e); }
+    if (typeof map.off === 'function') { try { map.off(); } catch (_e) {} }
   };
 
 
@@ -622,7 +651,7 @@
   };
 
   // ─── Fetch server overrides ───
-  window.MeshConfigReady = fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
+  window.MeshConfigReady = CSApi.fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
     window.MC_CLIENT_RX_COVERAGE = cfg.clientRxCoverage === true;
     window.MC_CLIENT_RF_SAMPLES = cfg.clientRfSamples === true;
     window.MC_CLIENT_RX_APP_URL = typeof cfg.clientRxAppUrl === 'string' ? cfg.clientRxAppUrl : '';
@@ -671,7 +700,10 @@
       if (cfg.map.tiles.darkUrl) window.TILE_DARK = cfg.map.tiles.darkUrl;
       if (cfg.map.tiles.lightUrl) window.TILE_LIGHT = cfg.map.tiles.lightUrl;
     }
-    if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry(true);
+    // Rebuild the registry from the new config without notifying maps yet:
+    // MC_tileUrlById below needs it (keyed Carto URLs), but maps must not
+    // re-sync before the legacy override and keyed constants are set.
+    if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry();
     // CARTO raster needs an API key now, so the bare TILE_DARK/TILE_LIGHT
     // fallbacks pick it up here — code that still reads the constants directly
     // (screens without the registry) gets keyed URLs. Registry-driven surfaces
@@ -689,6 +721,8 @@
       if (!_tOv.dark && !_tOv.darkUrl)   window.TILE_DARK  = window.MC_tileUrlById('carto-dark',  window.TILE_DARK);
       if (!_tOv.light && !_tOv.lightUrl) window.TILE_LIGHT = window.MC_tileUrlById('carto-light', window.TILE_LIGHT);
     }
+    // Now notify every map (fromConfig) with the override and constants in place.
+    if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry(true);
     if (cfg.snrThresholds) Object.assign(SNR_THRESHOLDS, cfg.snrThresholds);
     if (cfg.distThresholds) Object.assign(DIST_THRESHOLDS, cfg.distThresholds);
     if (cfg.maxHopDist != null) window.MAX_HOP_DIST = cfg.maxHopDist;
@@ -705,7 +739,17 @@
       ? { disabledTabs: Array.isArray(cfg.customizer.disabledTabs) ? cfg.customizer.disabledTabs : [] }
       : { disabledTabs: [] };
     // Optional user management: present only when the server enables it.
-    window.MC_USER_MGMT = (cfg.userManagement && cfg.userManagement.enabled) ? { enabled: true, channelProposals: !!cfg.userManagement.channelProposals, notifications: !!cfg.userManagement.notifications, observerLogins: !!cfg.userManagement.observerLogins } : null;
+    // An anonymous static build (CSApi.anonymous) sends no cookies, so it
+    // cannot log anyone in: every account feature stays off there, and
+    // MC_ACCOUNTS_ON_CLASSIC tells the nav to link to classic instead.
+    var userMgmt = (cfg.userManagement && cfg.userManagement.enabled) ? { enabled: true, channelProposals: !!cfg.userManagement.channelProposals, notifications: !!cfg.userManagement.notifications, observerLogins: !!cfg.userManagement.observerLogins } : null;
+    window.MC_USER_MGMT = CSApi.anonymous ? null : userMgmt;
+    window.MC_ACCOUNTS_ON_CLASSIC = !!(CSApi.anonymous && userMgmt);
+    // Radio line-of-sight on the map route view: present only when the
+    // server enables los (route-los.js stays inert while this is null).
+    window.MC_LOS_CFG = (cfg.los && typeof cfg.los === 'object') ? cfg.los : null;
+    // Repeater planner: present only when the server enables planner.
+    window.MC_PLANNER_CFG = (cfg.planner && typeof cfg.planner === 'object') ? cfg.planner : null;
     // #1574 — operator-configurable cap on /live map node count.
     if (cfg.liveMapMaxNodes != null) window.LIVE_MAP_MAX_NODES = cfg.liveMapMaxNodes;
     // #1784 — path trust threshold: minimum hash bytes for mapping evidence.

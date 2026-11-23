@@ -25,6 +25,7 @@ type accountExport struct {
 	Companions       []exportCompanion       `json:"companions"`
 	ObserverLogin    *exportObserverLogin    `json:"observerLogin"`
 	ObserverBindings []exportObserverBinding `json:"observerBindings"`
+	RepeaterClaims   []repeaterClaimRefJSON  `json:"repeaterClaims"`
 	Settings         *exportSettings         `json:"settings"`
 	Proposals        []exportProposal        `json:"proposals"`
 	Notifications    exportNotifications     `json:"notifications"`
@@ -134,6 +135,7 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 		Sessions:         []exportSession{},
 		Companions:       []exportCompanion{},
 		ObserverBindings: []exportObserverBinding{},
+		RepeaterClaims:   []repeaterClaimRefJSON{},
 		Proposals:        []exportProposal{},
 		Notifications:    exportNotifications{Watches: []exportWatch{}},
 		Audit:            []exportAuditEntry{},
@@ -173,6 +175,11 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 	for _, b := range bindings {
 		x.ObserverBindings = append(x.ObserverBindings, exportObserverBinding{Pubkey: b.Pubkey, BoundAt: rfc3339(b.BoundAt), BoundBy: b.BoundBy})
 	}
+	claims, err := a.st.RepeaterClaimsByUser(u.ID)
+	if err != nil {
+		return nil, fmt.Errorf("repeater claims: %w", err)
+	}
+	x.RepeaterClaims = claimRefsJSON(claims)
 	rec, err := a.st.SettingsRecordFor(u.ID)
 	if err != nil {
 		return nil, fmt.Errorf("settings: %w", err)

@@ -4,7 +4,8 @@ Guide for AI agents working on this codebase. Read this before writing any code.
 
 ## Architecture
 
-Go backend + static frontend. No build step. No framework. No bundler.
+Go backend + static frontend. No build step: `public/` is what the browser runs. No framework. No bundler.
+`scripts/static/build.sh` is packaging, not a build: it copies `public/` for a static host or the web container, writes `deployment.js` and fills in `__BUST__`, and never transforms code.
 
 **⚠️ The Node.js server (server.js) is DEPRECATED and has been removed. All backend code is in Go.**
 **⚠️ DO NOT create or modify any Node.js server files. All backend changes go in `cmd/server/` or `cmd/ingestor/`.**
@@ -18,7 +19,9 @@ cmd/server/        — Go API server (REST + WebSocket broadcast + static file s
   decoder.go       — MeshCore packet decoder
 cmd/ingestor/      — Go MQTT ingestor (separate binary, writes to shared SQLite DB)
 public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT DEPRECATED
-  app.js           — SPA router, shared globals, theme loading
+  app.js           — SPA router, shared globals, theme loading, api() (cached GETs)
+  deployment.js    — where the API is (rewritten by scripts/static/build.sh for a static host)
+  api-base.js      — CSApi: the ONLY code that builds API URLs or opens connections (see "API calls")
   roles.js         — ROLE_COLORS, TYPE_COLORS, health thresholds, shared helpers
   nodes.js         — Nodes list + side pane + full detail page
   map.js           — Leaflet map with markers, legend, filters
@@ -33,9 +36,10 @@ public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT 
   style.css        — Main styles, CSS variables for theming
   live.css         — Live page styles
   home.css         — Home page styles
-  index.html       — SPA shell, script/style tags with __BUST__ placeholder (auto-replaced at server startup)
+  index.html       — SPA shell, script/style tags with __BUST__ placeholder (filled in automatically; see rule 3)
 test-fixtures/     — Real data SQLite fixture from staging (used for E2E tests)
-scripts/           — Tooling (coverage collector, fixture capture, frontend instrumentation)
+scripts/           — Tooling (coverage collector, fixture capture, frontend instrumentation;
+                     static/build.sh packages the UI for a static host or the web container)
 ```
 
 ### Data Flow
@@ -105,7 +109,7 @@ Every change must consider performance impact BEFORE implementation. This codeba
 No proof = no merge.
 
 ### 1. No commit without tests
-Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`, or `make test` for all 14 modules. For frontend: `node tests/unit/test-packet-filter.js && node tests/unit/test-aging.js && node tests/unit/test-frontend-helpers.js`. If you add new logic, add tests. No exceptions.
+Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`, or `make test` for all 14 modules. For frontend: `node tests/unit/test-packet-filter.js && node tests/unit/test-aging.js && node tests/unit/test-frontend-helpers.js`, and `npx eslint public/*.js` (CI fails on any error). If you add new logic, add tests. No exceptions.
 
 The SQLite driver (`github.com/mattn/go-sqlite3`) is cgo. **`CGO_ENABLED=0` still *builds*** — that is the trap. It links a stub, and the binary dies on the first query with `go-sqlite3 requires cgo to work. This is a stub`, so a green build proves nothing. A plain `GOOS=linux go build` likewise cannot cross-compile it. Use `make build` / `make crossbuild` — the latter needs [`zig`](https://ziglang.org/download/) as the cross C compiler and produces static musl binaries. Never re-add `CGO_ENABLED=0`.
 
@@ -113,7 +117,7 @@ The SQLite driver (`github.com/mattn/go-sqlite3`) is cgo. **`CGO_ENABLED=0` stil
 After pushing, verify the change works in an actual browser. Use `browser profile=openclaw` against the running instance. Take a screenshot if the change is visual. If you can't validate it, say so — don't claim it works.
 
 ### 3. Cache busters are automatic — do NOT manually edit them
-Cache busters are injected automatically by the Go server at startup. The `__BUST__` placeholder in `index.html` is replaced with a Unix timestamp when the server reads the file. No manual bumping needed — every server restart picks up new asset versions. Do NOT replace `__BUST__` with hardcoded timestamps.
+Cache busters are injected automatically. The Go server replaces the `__BUST__` placeholder in every top-level page (`index.html`, `area-map.html`, `geofilter-*.html`) with a Unix timestamp at startup, so every server restart picks up new asset versions. `scripts/static/build.sh` replaces it with the commit when it packages the UI. No manual bumping needed. Do NOT replace `__BUST__` with hardcoded timestamps, and give every local script or stylesheet a new page loads `?v=__BUST__`.
 
 ### 4. Verify API response shape before building UI
 Before writing client code that consumes an API endpoint, check what the endpoint ACTUALLY returns. Use `curl` or check the server code. Don't assume fields exist — grouped packets (`groupByHash=true`) have different fields than raw packets. This has caused multiple breakages.
@@ -195,6 +199,22 @@ The MeshCore firmware source is cloned at `firmware/` (gitignored — not part o
 If you need to know how something works — a flag, a field, a timing, a behavior — **open the file and read it.** Don't rely on comments in our code, don't rely on what someone told you, don't guess. The firmware C++ source is the only thing that matters.
 
 ## Frontend Conventions
+
+### API calls (api-base.js)
+The UI runs embedded in the server, in the web container, and from a static host or CDN on another origin (see "Deployment modes" in `docs/deployment.md`). `public/deployment.js` says where the API is, and `public/api-base.js` (`window.CSApi`) is the only code that turns a path into a URL or opens a connection. Everything else goes through it:
+
+| Need | Use |
+|------|-----|
+| GET JSON, cached | `api('/nodes?…')` (app.js) |
+| Any other request | `CSApi.fetch('/api/…', opts)` |
+| JSON POST | `CSApi.postJSON('/api/…', body)`: sends `text/plain`, so a cross-origin POST has no preflight (the server decodes JSON whatever the Content-Type; `cmd/server/simple_post_test.go`) |
+| Logged-in request | `CSAuth.request(method, '/api/…', body)` |
+| Link, download, `src` | `CSApi.url('/api/…')` |
+| WebSocket | `new WebSocket(CSApi.wsUrl('/ws'))` |
+
+- **Never** call `fetch`, `XMLHttpRequest`, `EventSource`, `navigator.sendBeacon` or `new WebSocket(url)` directly, or put a bare `/api/…` path in an `href`, `src` or `action` (assigned, set with `setAttribute` or written into markup) or in `window.open`, `location.assign`, `location.replace` or `location =`. It works embedded and breaks on a static host. The `no-restricted-syntax` rule in `.eslintrc.json` rejects all of these in `public/*.js` (only `api-base.js` is exempt) and CI fails on it: run `npx eslint public/*.js` before pushing. That command never sees the inline scripts and markup of `public/*.html`; `tests/e2e/test-lint-network-calls.js` applies the same rule to them, and pins what the rule reports: extend it when you extend the rule. The rule sees a path at the start of a string, a concatenation or a template; a URL assembled elsewhere and passed in a variable gets past it, so it does not replace review. Do not silence it with `eslint-disable`. The one exception is `area-map.html`, whose Server field can name another server.
+- **Logins and writes:** the anonymous static build (`CSApi.anonymous`) sends no cookies. A feature that needs a login or a write shows `CSBeta.classicOnlyHtml('…')` (or links with `CSApi.classicHref(hash)`) instead, as `account.js`, `admin.js` and `perf.js` do.
+- **Tests:** a test that runs a frontend file outside the browser must load `deployment.js` and `api-base.js` first, or `CSApi` is undefined and its fetches fail silently inside their `try` blocks. vm sandboxes: `tests/unit/api-base-sandbox.js`. jsdom: `w.eval` both files before the file under test (`tests/e2e/test-region-quick-picks.js`).
 
 ### Theming
 All colors MUST use CSS variables. Never hardcode `#hex` values outside of `:root` definitions. The customizer controls colors via `THEME_CSS_MAP` in customize.js. If you add a new color, add it as a CSS variable and map it in the customizer.
@@ -378,6 +398,7 @@ One logical change per commit. Each commit is deployable. Each commit has its te
 | Gave up testing locally | 2 | Basic tests work on ARM — only heavy coverage scripts crash |
 | Copy-pasted functions for "coverage" | 1 | Test the real code, not copies in a helper file |
 | Subagent timed out mid-work | 4 | Give clear scope, don't try to run slow pipelines locally |
+| Frontend file tested without api-base.js | 1 | Load `deployment.js` + `api-base.js` first (see "API calls") |
 
 ## File Naming
 - Tests: `test-{feature}.js` in `tests/unit/` (standalone, listed in `test-all.sh`) or `tests/e2e/` (browser, listed in `scripts/non-unit-tests.json`) — never in repo root
@@ -397,5 +418,6 @@ Existing patterns: `#/nodes/{pubkey}?section=node-neighbors`, `#/analytics?tab=c
 - Don't add framework abstractions (React, Vue, etc.)
 - Don't hardcode colors — use CSS variables
 - Don't make per-packet server API calls from the frontend
+- Don't call `fetch` / `WebSocket` / XHR directly from the frontend — go through `CSApi` (see "API calls")
 - Don't push without running tests
 - Don't start implementing without plan approval

@@ -2,6 +2,7 @@
  * loaded in a vm sandbox, same pattern as test-frontend-helpers.js. */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
@@ -80,6 +81,7 @@ function makeEnv(routes) {
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/auth.js'), 'utf8'), ctx);
   return { win, els, events, calls, loc };
 }
@@ -96,6 +98,7 @@ test('inert when the server does not advertise userManagement', async () => {
     console, Promise, JSON, String, Object, setTimeout, clearTimeout, CustomEvent: function () {},
     escapeHtml: loadEscapeHtml(), fetch() { calls.push(1); return Promise.reject(new Error('no')); } };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/auth.js'), 'utf8'), ctx);
   await win.CSAuth.ready();
   assert.strictEqual(win.CSAuth.isEnabled(), false);
@@ -310,6 +313,7 @@ function sliceBetween(file, from, to) {
 function loadNav(file, from, to, fn, win) {
   const sb = { window: Object.assign({ addEventListener() {} }, win), console };
   vm.createContext(sb);
+  loadApiBase(sb);
   vm.runInContext(sliceBetween(file, from, to) + '\nthis.fn = ' + fn + ';', sb);
   return sb.fn;
 }
@@ -378,6 +382,7 @@ function loadAccount(hash, routes, extraWin) {
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } },
     escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, viewGeneration: () => 0, console };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   Object.assign(CSAuth, loadAuthHelpers(ctx));
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/account.js'), 'utf8'), ctx);
   return { setRequest(f) { override = f; }, doc, t: ctx.window.CSAccount._test, els, calls, loc, user, pages, logouts, replaced,
@@ -419,6 +424,167 @@ test('device tokens render as CoreDrive RX with a marker and keep their logout b
   assert.strictEqual((h.match(/data-kind="device"/g) || []).length, 2);
   assert.strictEqual((h.match(/um-chip-device/g) || []).length, 2);
   assert(h.indexOf('data-sess="2"') !== -1 && h.indexOf('data-sess="3"') !== -1, 'device rows lost their logout button');
+});
+
+// getNodeStatus as the browser runs it: the real roles.js (default 72 h
+// repeater threshold), in a sandbox with the DOM bits it touches at load.
+function realGetNodeStatus() {
+  // window is the global object, as in a browser: roles.js sets
+  // window.HEALTH_THRESHOLDS and reads it bare.
+  const ctx = { addEventListener() {}, dispatchEvent() {}, console, Date, Math, JSON, Object, String, Number, Array, RegExp, isNaN, parseInt, parseFloat,
+    document: { readyState: 'complete', createElement: () => ({ style: {} }), head: { appendChild() {} },
+      getElementById: () => null, addEventListener() {}, querySelectorAll: () => [], querySelector: () => null,
+      documentElement: { style: { setProperty() {} }, dataset: {} } },
+    setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {},
+    fetch: () => new Promise(() => {}), localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    location: { hash: '' }, navigator: {} };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  loadApiBase(ctx);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/roles.js'), 'utf8'), ctx);
+  assert.strictEqual(typeof ctx.getNodeStatus, 'function', 'roles.js did not define getNodeStatus');
+  return ctx.getNodeStatus;
+}
+
+test('my repeaters: silent ones first, escaped, with status, co-maintainers and Unclaim', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const fns = { getNodeStatus: realGetNodeStatus(), timeAgo: () => 'AGO' };
+  const recent = new Date(Date.now() - 3600 * 1000).toISOString();
+  const old = new Date(Date.now() - 10 * 86400 * 1000).toISOString();
+  const relayedNow = new Date(Date.now() - 600 * 1000).toISOString();
+  const pkOk = 'aa'.repeat(32), pkOld = 'bb'.repeat(32), pkGone = 'cc'.repeat(32), pkNever = 'dd'.repeat(32);
+  const pkUnc = 'ee'.repeat(32), pkInact = 'ff'.repeat(32);
+  const h = env.t.myRepeatersHtml([
+    { pubkey: pkOk, name: 'Hill <b>', known: true, role: 'repeater', claimedAt: '2026-11-01T00:00:00Z', lastHeard: recent, status: 'active', comaintainers: ['Bob', '<i>Eve</i>'] },
+    { pubkey: pkUnc, name: 'Mesa', known: true, role: 'repeater', claimedAt: '2026-11-01T00:00:00Z', lastHeard: old, lastRelayed: relayedNow, status: null, comaintainers: [] },
+    { pubkey: pkOld, name: 'Tower', known: true, role: 'repeater', claimedAt: '2026-11-01T00:00:00Z', lastHeard: old, status: null, comaintainers: [] },
+    { pubkey: pkNever, name: '', known: true, role: 'repeater', claimedAt: '2026-11-01T00:00:00Z', lastHeard: null, status: null, comaintainers: [] },
+    { pubkey: pkInact, name: 'Old Tower', known: true, inactive: true, role: 'repeater', claimedAt: '2026-09-01T00:00:00Z', lastHeard: '2026-05-01T00:00:00Z', status: null, comaintainers: [] },
+    { pubkey: pkGone, name: '', known: false, role: '', claimedAt: '2026-11-01T00:00:00Z', lastHeard: null, status: null, comaintainers: [] }], fns);
+  assert(h.indexOf('<b>') === -1 && h.indexOf('<i>') === -1, 'raw tag: ' + h);
+  const order = (h.match(/data-pubkey="([0-9a-f]+)"/g) || []).map(x => x.slice(13, 15));
+  assert.deepStrictEqual(order, ['cc', 'bb', 'dd', 'ff', 'ee', 'aa'], 'gone, then silent (input order), then uncertain, then heard: ' + order);
+  assert(h.indexOf('data-pubkey="' + pkUnc + '" data-health="uncertain"') !== -1 &&
+    /<span class="um-chip um-status-pending">last heard AGO, its prefix still relays<\/span>/.test(h), 'uncertain row: ' + h);
+  assert(h.indexOf('data-pubkey="' + pkInact + '" data-health="stale"') !== -1 &&
+    h.indexOf('<span class="account-rep-name">Old Tower</span>') !== -1 &&
+    h.indexOf('silent, last heard AGO · no longer in the node list') !== -1, 'inactive row: plain name, marked as dropped: ' + h);
+  // The node page reads only nodes: inactive and unknown rows are not links.
+  for (const pk of [pkInact, pkGone]) {
+    assert(h.indexOf('href="#/nodes/' + pk + '"') === -1, 'row links to a missing node page: ' + pk);
+  }
+  assert(h.indexOf('href="#/nodes/' + pkOld + '"') !== -1, 'known row lost its link');
+  assert.strictEqual((h.match(/no longer in the node list/g) || []).length, 1, 'only the inactive row carries the note');
+  assert(h.indexOf('data-health="gone"') !== -1 && h.indexOf('no longer in the database') !== -1, 'departed row: ' + h);
+  assert(h.indexOf('data-pubkey="' + pkOld + '" data-health="stale"') !== -1 && h.indexOf('silent, last heard') !== -1, 'stale row: ' + h);
+  assert(h.indexOf('never heard') !== -1, 'never-heard row: ' + h);
+  assert(h.indexOf('data-pubkey="' + pkOk + '" data-health="active"') !== -1 && h.indexOf('um-status-active') !== -1, 'heard row: ' + h);
+  assert(h.indexOf('href="#/nodes/' + pkOk + '"') !== -1 && h.indexOf('Hill &lt;b&gt;') !== -1, 'node link: ' + h);
+  assert(h.indexOf('>' + pkNever.slice(0, 12) + '…</a>') !== -1, 'unnamed row does not fall back to the short pubkey: ' + h);
+  assert(h.indexOf('status active') !== -1 && (h.match(/no details yet/g) || []).length === 5, 'status lines: ' + h);
+  assert(h.indexOf('also maintained by Bob, &lt;i&gt;Eve&lt;/i&gt;') !== -1, 'co-maintainers: ' + h);
+  assert.strictEqual((h.match(/data-unclaim=/g) || []).length, 6, 'every row has Unclaim');
+});
+
+test('my repeaters: Unclaim is disabled while its DELETE runs, so a double click sends one', async () => {
+  const pk = 'ab'.repeat(32);
+  let release;
+  const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: { repeaters: [] } }), { confirm: () => true });
+  env.setRequest((method, p) => {
+    if (method === 'DELETE') return new Promise((r) => { release = () => r({ ok: true, status: 200, data: {} }); });
+    if (p === '/api/account/repeaters') return Promise.resolve({ ok: true, status: 200, data: { repeaters: [] } });
+    return Promise.resolve({ ok: true, status: 200, data: [] });
+  });
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.t.views.profile({ set innerHTML(v) {} });
+  await new Promise((r) => setTimeout(r, 5));
+  const btn = { getAttribute: (a) => (a === 'data-unclaim' ? pk : null) };
+  const first = env.els.myRepList.handlers.click({ target: btn });
+  assert.strictEqual(btn.disabled, true, 'button not disabled while the DELETE runs');
+  env.els.myRepList.handlers.click({ target: btn });
+  release();
+  await first;
+  await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(env.calls.filter((c) => c.method === 'DELETE').length, 1, 'second click sent another DELETE');
+  assert.strictEqual(env.els.myRepMsg.textContent, 'Repeater unclaimed.');
+  assert.strictEqual(btn.disabled, false, 'button stays disabled after the DELETE');
+});
+
+// Unclaim and Unlink keep their button disabled until the list GET after the
+// DELETE has answered: the old button is still on screen until then.
+for (const c of [
+  { name: 'Unclaim', list: 'myRepList', msg: 'myRepMsg', attr: 'data-unclaim', get: '/api/account/repeaters',
+    empty: { repeaters: [] }, done: 'Repeater unclaimed.' },
+  { name: 'Unlink', list: 'compList', msg: 'compMsg', attr: 'data-unlink', get: '/api/account/companions',
+    empty: [], done: 'Companion unlinked.' }]) {
+  test(c.name + ' stays disabled until the reloaded list is in', async () => {
+    const pk = 'ab'.repeat(32);
+    let releaseList = null;
+    let deleted = false;
+    const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: c.empty }), { confirm: () => true });
+    env.setRequest((method, p) => {
+      if (method === 'DELETE') { deleted = true; return Promise.resolve({ ok: true, status: 200, data: {} }); }
+      if (p === c.get && deleted) return new Promise((r) => { releaseList = () => r({ ok: true, status: 200, data: c.empty }); });
+      if (p === c.get) return Promise.resolve({ ok: true, status: 200, data: c.empty });
+      return Promise.resolve({ ok: true, status: 200, data: [] });
+    });
+    env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+    env.t.views.profile({ set innerHTML(v) {} });
+    await new Promise((r) => setTimeout(r, 5));
+    const btn = { getAttribute: (a) => (a === c.attr ? pk : null) };
+    const first = env.els[c.list].handlers.click({ target: btn });
+    await new Promise((r) => setTimeout(r, 5));
+    assert(releaseList, 'list not reloaded after the DELETE');
+    assert.strictEqual(env.els[c.msg].textContent, c.done);
+    assert.strictEqual(btn.disabled, true, 'button enabled again while the list GET runs');
+    env.els[c.list].handlers.click({ target: btn });
+    assert.strictEqual(env.calls.filter((x) => x.method === 'DELETE').length, 1, 'a click before the reload sent another DELETE');
+    releaseList();
+    await first;
+    assert.strictEqual(btn.disabled, false, 'button stays disabled after the reload');
+  });
+}
+
+test('an inactive repeater carries the dropped note in every health state', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const fns = { getNodeStatus: realGetNodeStatus(), timeAgo: () => 'AGO' };
+  const recent = new Date(Date.now() - 3600 * 1000).toISOString();
+  const old = new Date(Date.now() - 10 * 86400 * 1000).toISOString();
+  const base = { known: true, inactive: true, role: 'repeater', name: 'X', claimedAt: '2026-11-01T00:00:00Z', status: null, comaintainers: [] };
+  const h = env.t.myRepeatersHtml([
+    Object.assign({ pubkey: '11'.repeat(32), lastHeard: recent }, base),
+    Object.assign({ pubkey: '22'.repeat(32), lastHeard: old, lastRelayed: recent }, base),
+    Object.assign({ pubkey: '33'.repeat(32), lastHeard: old }, base),
+    Object.assign({ pubkey: '44'.repeat(32), lastHeard: null }, base)], fns);
+  for (const [pk, state] of [['11', 'active'], ['22', 'uncertain'], ['33', 'stale'], ['44', 'stale']]) {
+    assert(h.indexOf('data-pubkey="' + pk.repeat(32) + '" data-health="' + state + '"') !== -1, pk + ' not ' + state + ': ' + h);
+  }
+  assert.strictEqual((h.match(/no longer in the node list/g) || []).length, 4, 'note missing on a state: ' + h);
+  assert.strictEqual((h.match(/href="#\/nodes\//g) || []).length, 0, 'inactive row links to a node page');
+});
+
+test('my repeaters empty state explains how to claim', () => {
+  const env = loadAccount('#/account', () => ({}));
+  for (const list of [[], null, undefined]) {
+    const h = env.t.myRepeatersHtml(list);
+    assert(h.indexOf('id="myRepEmpty"') !== -1 && h.indexOf('Claim') !== -1 && h.indexOf('data-unclaim') === -1, h);
+  }
+});
+
+test('app tokens with repeater scopes show their own name and what they may do', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const h = env.t.sessionsHtml([
+    { id: 4, kind: 'device', label: 'NodeScope – iPhone', scopes: ['repeater:claim', 'repeater:edit'], lastSeenAt: '2026-01-01T00:00:00Z', current: false },
+    { id: 5, kind: 'device', label: '', scopes: ['repeater:edit'], lastSeenAt: '2026-01-01T00:00:00Z', current: false },
+    { id: 6, kind: 'device', label: '<b>x</b>', scopes: ['rx'], lastSeenAt: '2026-01-01T00:00:00Z', current: false },
+    { id: 7, kind: 'device', label: 'Pixel', scopes: ['rx', 'repeater:claim'], lastSeenAt: '2026-01-01T00:00:00Z', current: false }]);
+  assert(h.indexOf('<span>NodeScope – iPhone <span class="um-chip um-chip-device">') !== -1, 'no app name: ' + h);
+  assert(h.indexOf('can claim repeaters and edit repeater details · last seen') !== -1, 'no scope line: ' + h);
+  assert(h.indexOf('<span>App <span class="um-chip um-chip-device">') !== -1 && h.indexOf('can edit repeater details · last seen') !== -1,
+    'unlabelled app row: ' + h);
+  assert(h.indexOf('CoreDrive RX – &lt;b&gt;x&lt;/b&gt;') !== -1 && h.indexOf('<b>x</b>') === -1, 'rx row: ' + h);
+  assert(h.indexOf('CoreDrive RX – Pixel') !== -1 && h.indexOf('can claim repeaters · last seen') !== -1, 'rx token with a repeater scope: ' + h);
+  assert.strictEqual((h.match(/data-sess=/g) || []).length, 4, 'every app row keeps its logout button');
 });
 
 test('companions list escapes fields, shortens the pubkey and says never without a reception', () => {
@@ -892,9 +1058,10 @@ function loadAdmin(hash, routes, opts) {
   };
   const ctx = { window: { CSAuth }, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String,
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } },
-    confirm() { return true; }, debounce: (opts && opts.debounce) || function (fn) { return fn; },
+    confirm: (opts && opts.confirm) || function () { return true; }, debounce: (opts && opts.debounce) || function (fn) { return fn; },
     escapeHtml: loadEscapeHtml(), console };
   vm.createContext(ctx);
+  loadApiBase(ctx);
   Object.assign(CSAuth, loadAuthHelpers(ctx));
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/admin-users.js'), 'utf8'), ctx);
   const app = { innerHTML: '', querySelector() { return els.umPage || (els.umPage = mk('umPage')); } };
@@ -940,6 +1107,19 @@ test('row and detail rendering escape every dynamic field', () => {
     audit: [{ at: p, action: p, actorUserId: p }] });
   assert(det.indexOf('<img') === -1 && det.indexOf('<i>') === -1, 'raw markup in detail: ' + det);
   assert(det.indexOf('&lt;img src=x onerror=alert(1)&gt;') !== -1);
+});
+
+test('detail lists repeater claims escaped, with a Remove button, or an empty note', () => {
+  const env = adminEnv();
+  const p = '<img src=x onerror=alert(1)>';
+  const pk = 'aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11';
+  const det = env.t.detailHtml({ user: { id: 4, displayName: 'A', email: 'a@x' }, sessions: [], mail: [], audit: [],
+    repeaterClaims: [{ pubkey: pk, claimedAt: p }, { pubkey: p, claimedAt: p }] });
+  assert(det.indexOf('<img') === -1, 'raw markup in claims: ' + det);
+  assert(det.indexOf('href="#/nodes/' + pk + '"') !== -1);
+  assert(det.indexOf('data-act="unclaim" data-id="4" data-pubkey="' + pk + '"') !== -1);
+  const none = env.t.detailHtml({ user: { id: 4, displayName: 'A', email: 'a@x' }, sessions: [], mail: [], audit: [], repeaterClaims: [] });
+  assert(none.indexOf('No repeater claims.') !== -1 && none.indexOf('data-act="unclaim"') === -1);
 });
 
 test('deep link: filters, bouncing and detail id round-trip through the hash', () => {
@@ -1014,6 +1194,26 @@ test('demoting yourself refreshes the session and leaves the page', async () => 
   await tick();
   assert.strictEqual(env.refreshed(), 1);
   assert.strictEqual(env.loc.hash, '#/account');
+});
+
+test('removing a repeater claim asks for confirmation first', async () => {
+  const PKX = 'aa'.repeat(32);
+  const click = (env) => env.els.umPage.handlers.click({ target: { closest: () => ({ getAttribute: (a) => ({ 'data-act': 'unclaim', 'data-id': '7', 'data-pubkey': PKX })[a] }) } });
+  const asked = [];
+  const no = loadAdmin('#/admin?tab=users', () => OK([]), { confirm: (t) => { asked.push(t); return false; } });
+  no.um.mount(no.app);
+  await tick();
+  click(no);
+  await tick();
+  assert.strictEqual(asked.length, 1);
+  assert(/repeater claim/.test(asked[0]));
+  assert(!no.calls.some((c) => c.method === 'DELETE'), 'declined confirm must not delete');
+  const yes = loadAdmin('#/admin?tab=users', () => OK([]), { confirm: () => true });
+  yes.um.mount(yes.app);
+  await tick();
+  click(yes);
+  await tick();
+  assert(yes.calls.some((c) => c.method === 'DELETE' && c.p === '/api/admin/repeaters/' + PKX + '/claims/7'));
 });
 
 test('readHash accepts only numeric ids and known status and role values', () => {
@@ -1107,6 +1307,7 @@ function loadPerf() {
     performance: { now: () => 0 }, registerPage() {} };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/perf.js'), 'utf8'), ctx);
   return ctx;
 }

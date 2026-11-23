@@ -10,6 +10,7 @@
  */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const assert = require('assert');
 
@@ -64,6 +65,7 @@ function makeSandbox() {
   };
   ctx.window.L = ctx.L;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   // Load roles for ROLE_COLORS palette
   vm.runInContext(fs.readFileSync('public/roles.js','utf8'), ctx);
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];

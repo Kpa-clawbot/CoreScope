@@ -53,6 +53,10 @@ CoreScope uses URL hashes for deep linking. Copy the URL from your browser — i
 - `#/analytics?tab=collisions` — the hash issues tab
 - `#/nodes/pubkey123` — a specific node's detail page
 
+## 11. Can I see satellite imagery, terrain or a gray map?
+
+Yes. Use the layers button on the [Map](map.md#map-style-and-overlays) page (also on Live and the Repeater Planner) to pick a street, gray, topographic or satellite map, and tick **Hillshade** to add shaded relief on top. The choice is saved in your browser. Operators control which maps are offered: see [Map Tile Providers](../deployment.md#map-tile-providers).
+
 ### Where is the API documentation?
 
 CoreScope auto-generates an OpenAPI 3.0 specification from its route definitions:

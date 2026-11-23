@@ -118,12 +118,12 @@ function renderVersionCard(health) {
       // #1258: /api/health was awaited AFTER Promise.all, adding a full RTT
       // (~50-200ms) on every 5s refresh. Issue it in parallel with the rest.
       const [server, client, ioStats, sqliteStats, writeSources, health] = await Promise.all([
-        fetch('/api/perf').then(r => r.json()),
+        CSApi.fetch('/api/perf').then(r => r.json()),
         Promise.resolve(window.apiPerf ? window.apiPerf() : null),
-        fetch('/api/perf/io').then(r => r.json()).catch(() => null),
-        fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
-        fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null),
-        fetch('/api/health').then(r => r.json()).catch(() => null)
+        CSApi.fetch('/api/perf/io').then(r => r.json()).catch(() => null),
+        CSApi.fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
+        CSApi.fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null),
+        CSApi.fetch('/api/health').then(r => r.json()).catch(() => null)
       ]);
 
       let html = '';
@@ -359,11 +359,14 @@ function renderVersionCard(health) {
         html += '</tbody></table></div>';
       }
 
-      html += `<div style="margin-top:16px"><button id="perfReset" style="padding:8px 16px;cursor:pointer">Reset Stats</button> <button id="perfRefresh" style="padding:8px 16px;cursor:pointer">Refresh</button></div>`;
+      // Reset needs an admin; an anonymous static build cannot be one.
+      const resetHtml = CSApi.anonymous ? '' : '<button id="perfReset" style="padding:8px 16px;cursor:pointer">Reset Stats</button> ';
+      html += `<div style="margin-top:16px">${resetHtml}<button id="perfRefresh" style="padding:8px 16px;cursor:pointer">Refresh</button></div>`;
+      if (CSApi.anonymous) html += CSBeta.classicOnlyHtml('Resetting server stats');
       el.innerHTML = html;
 
       document.getElementById('perfReset')?.addEventListener('click', async () => {
-        if (!(await resetPerfStats(window, fetch, alert))) return;
+        if (!(await resetPerfStats(window, CSApi.fetch, alert))) return;
         if (window._apiPerf) { window._apiPerf = { calls: 0, totalMs: 0, log: [] }; }
         refresh();
       });

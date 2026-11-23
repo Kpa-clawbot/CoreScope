@@ -96,6 +96,7 @@ function runSteps(source, context, edge, mutateFails = false) {
     tar() { log tar "$@"; }
     go() { log go "$GOOS" "$GOARCH" "$CGO_ENABLED" "$CC" "$@"; }
     file() { log file "$@"; echo "$1: ELF 64-bit LSB executable, statically linked"; }
+    readelf() { log readelf "$@"; echo "  GNU_STACK      0x000000 0x0000000000000000 0x0000000000000000 0x000000 $GNU_STACK_MEMSZ RW  0x0"; }
     # Stand-in for the jq filters the release steps use. Each branch mirrors one
     # filter, so a filter that changes shape without the test knowing fails here
     # instead of silently returning nothing.
@@ -148,7 +149,8 @@ function runSteps(source, context, edge, mutateFails = false) {
             ]
           }),
           GH_API_SHA: edge === null ? 'a'.repeat(40) : edge,
-          MUTATE_FAILS: String(mutateFails)
+          MUTATE_FAILS: String(mutateFails),
+          GNU_STACK_MEMSZ: process.env.TEST_GNU_STACK_MEMSZ || '0x800000'
         }
       });
       if (mutateFails && result.status !== 0) return { commands: commands(), failed: true };
@@ -178,7 +180,7 @@ function context(ref = 'refs/tags/v9.8.7', event = 'workflow_dispatch', inputs =
 // That is what keeps a gate red rather than skipped, which branch protection
 // would count as passing.
 function route(ctx, failedJob, ingestor = 'true') {
-  for (const name of ['changes', 'go-test', 'race-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+  for (const name of ['changes', 'go-test', 'race-test', 'server-race-shard', 'server-race', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
     const job = block(deploy, name, 2);
     assert.ok(job, `missing ${name} job`);
     const needs = value(job, 'needs', 4).replace(/[\[\]\s]/g, '').split(',').filter(Boolean);
@@ -233,7 +235,8 @@ for (const [name, edge] of [['matching', 'a'.repeat(40)], ['missing', null], ['m
   const jobs = route(context(undefined, undefined, { images_published: matching }));
   assert.equal(jobs['release-artifacts'].result, 'success', `${name}: release artifacts must run`);
   assert.equal(jobs['go-test'].result, 'success', `${name}: release still requires Go validation`);
-  for (const job of ['e2e-shard', 'e2e-test', 'image-check', 'build-and-publish']) assert.equal(jobs[job].result, matching ? 'skipped' : 'success', `${name}: ${job}`);
+  assert.equal(jobs['server-race'].result, 'success', `${name}: the server race gate passes, so release artifacts can require it`);
+  for (const job of ['server-race-shard', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish']) assert.equal(jobs[job].result, matching ? 'skipped' : 'success', `${name}: ${job}`);
   assert.equal(jobs.deploy.result, 'skipped');
   assert.equal(jobs.publish.result, 'skipped');
   console.log(`PASS ${name} edge: one artifact dispatch, correct image route`);
@@ -270,12 +273,13 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   // Nothing publishes unless every test job and the image check passed, and
   // the required checks go red rather than skipped (a skipped required check
   // counts as passing in branch protection).
-  for (const failed of ['go-test', 'race-test', 'e2e-shard', 'e2e-test', 'image-check']) {
+  for (const failed of ['go-test', 'race-test', 'server-race-shard', 'server-race', 'e2e-shard', 'e2e-test', 'image-check']) {
     const failedJobs = route(context(ref, event), failed);
     assert.equal(failedJobs['build-and-publish'].result, 'failure', `${event}: failed ${failed} must fail build-and-publish, not skip it`);
     assert.equal(failedJobs.publish.result, 'skipped', `${event}: failed ${failed} must not publish badges`);
   }
   assert.equal(route(context(ref, event), 'e2e-shard')['e2e-test'].result, 'failure', `${event}: a failed shard must fail the E2E gate, not skip it`);
+  assert.equal(route(context(ref, event), 'server-race-shard')['server-race'].result, 'failure', `${event}: a failed race shard must fail the server race gate, not skip it`);
   assert.equal(route(context(ref, event))['build-and-publish'].result, 'success', `${event}: all green passes the gate`);
   // race-test only runs when ingestor Go files changed; skipped is fine there.
   const noRace = route(context(ref, event), undefined, 'false');
@@ -283,6 +287,8 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   assert.equal(noRace['build-and-publish'].result, 'success', `${event}: a skipped race-test must not block`);
 }
 assert.equal(route(context(), 'go-test')['release-artifacts'].result, 'skipped', 'failed Go validation must block release');
+assert.equal(route(context(), 'server-race-shard')['release-artifacts'].result, 'skipped', 'a failed server race shard must block release');
+assert.ok(value(block(deploy, 'release-artifacts', 2), 'needs', 4).includes('server-race'), 'release artifacts require the server race gate');
 const dispatchInput = block(deploy, 'images_published', 6);
 assert.equal(value(dispatchInput, 'type', 8), 'boolean', 'dispatch flag must retain boolean semantics');
 assert.equal(value(dispatchInput, 'default', 8), 'false', 'manual and fallback dispatches must build images by default');
@@ -313,8 +319,23 @@ assert.deepEqual(builds.map(command => command.slice(1, 5)), [
   ['linux', 'arm64', '1', 'zig cc -target aarch64-linux-musl'],
 ]);
 for (const command of builds) {
-  assert.ok(command.includes("-ldflags=-s -w -extldflags '-static -Wl,-s' -X main.version=v9.8.7"), 'binary version must come from tag, and the artifact must stay static');
+  // -Wl,-z,stack-size=8388608 pins musl thread stacks at 8 MiB, so deep SQLite
+  // queries do not depend on the linker's default PT_GNU_STACK size.
+  assert.ok(command.includes("-ldflags=-s -w -extldflags '-static -Wl,-s -Wl,-z,stack-size=8388608' -X main.version=v9.8.7"), 'binary version must come from tag, the artifact must stay static, and musl threads must get 8 MiB stacks');
   assert.ok(command.includes('-tags'), 'netgo/osusergo/sqlite_omit_load_extension must survive');
+}
+// The flag is only worth something if it reached the artifact: the verify step
+// must read PT_GNU_STACK of both binaries and fail on any other size (zig's own
+// default is 16 MiB, GNU ld's is 0).
+assert.deepEqual(runSteps(release, context(), null).commands.filter(command => command[0] === 'readelf').map(command => command[2]),
+  ['corescope-decrypt-linux-amd64', 'corescope-decrypt-linux-arm64'], 'both release binaries must have their thread-stack size checked');
+for (const memsz of ['0x000000', '0x1000000']) {
+  process.env.TEST_GNU_STACK_MEMSZ = memsz;
+  try {
+    assert.throws(() => runSteps(release, context(), null), /Verify release binaries/, `a ${memsz} PT_GNU_STACK must fail the release`);
+  } finally {
+    delete process.env.TEST_GNU_STACK_MEMSZ;
+  }
 }
 const upload = steps(release).filter(step => step.includes('uses: softprops/action-gh-release@v2'));
 assert.equal(upload.length, 1, 'publish both architectures together, before the release becomes immutable');
