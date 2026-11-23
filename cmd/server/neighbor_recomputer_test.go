@@ -102,7 +102,7 @@ func TestServerStartupRequiresMigratedSchema(t *testing.T) {
 	for _, s := range []string{
 		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, hash TEXT, payload_type INTEGER)`,
 		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER)`,
-		`CREATE TABLE observers (id TEXT PRIMARY KEY, name TEXT, inactive INTEGER)`,
+		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, inactive INTEGER)`,
 		`CREATE TABLE nodes (public_key TEXT PRIMARY KEY)`,
 		`CREATE TABLE inactive_nodes (public_key TEXT PRIMARY KEY)`,
 	} {

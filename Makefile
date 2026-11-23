@@ -41,6 +41,24 @@ GO_BUILD_TAGS     ?= netgo,osusergo,sqlite_omit_load_extension
 GO_BUILD_FLAGS    ?= -trimpath
 GO_LDFLAGS_OPTIMS ?= -s -w
 
+# musl sizes every non-main thread's stack from the ELF PT_GNU_STACK size
+# (floor 128 KiB, cap 8 MiB). cgo calls into SQLite run on the calling thread's
+# stack, and a deep query (multiSelect recursing ~850 B per UNION ALL term)
+# overflows 128 KiB and SIGSEGVs the process.
+#   - Native musl links (`make build` / `make test` on Alpine: gcc + GNU ld)
+#     write a zero PT_GNU_STACK and get the 128 KiB floor. The flag is the fix.
+#   - zig links (crossbuild, the Dockerfile, the release job) already write
+#     16 MiB, so those binaries had 8 MiB threads without it. There the flag
+#     pins the size instead of leaving it to a linker default.
+# Reserved address space, not resident memory. Go rejects this flag in
+# #cgo LDFLAGS, so it must go in -extldflags. Harmless on glibc; GNU ld/lld
+# only, so the host build and `make test` apply it on Linux only.
+STACK_LDFLAG      ?= -Wl,-z,stack-size=8388608
+ifeq ($(GOOS),linux)
+HOST_EXTLDFLAGS   := -extldflags '$(STACK_LDFLAG)'
+HOST_TEST_LDFLAGS := -ldflags=-extldflags=$(STACK_LDFLAG)
+endif
+
 CMDS              := server ingestor decrypt migrate
 DIST              := dist
 
@@ -77,7 +95,7 @@ build-%:
 	@mkdir -p $(DIST)
 	cd cmd/$* && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build \
 		-tags $(GO_BUILD_TAGS) $(GO_BUILD_FLAGS) \
-		-ldflags "$(GO_LDFLAGS_OPTIMS) $(LDFLAGS_$*)" \
+		-ldflags "$(GO_LDFLAGS_OPTIMS) $(HOST_EXTLDFLAGS) $(LDFLAGS_$*)" \
 		-o ../../$(DIST)/corescope-$* .
 
 # -- cross builds --------------------------------------------------------------
@@ -94,7 +112,7 @@ crossbuild-$(2)-$(3)-$(4):
 	@command -v zig >/dev/null || { echo "zig not found: needed to cross-compile cgo. See https://ziglang.org/download/"; exit 1; }
 	cd cmd/$(2) && CGO_ENABLED=1 GOOS=$(3) GOARCH=$(4) CC="zig cc -target $(1)" \
 		$$(GO) build -tags $$(GO_BUILD_TAGS) $$(GO_BUILD_FLAGS) \
-			-ldflags '$$(GO_LDFLAGS_OPTIMS) -extldflags "-static -Wl,-s" $$(LDFLAGS_$(2))' \
+			-ldflags '$$(GO_LDFLAGS_OPTIMS) -extldflags "-static -Wl,-s $$(STACK_LDFLAG)" $$(LDFLAGS_$(2))' \
 			-o ../../$$(DIST)/corescope-$(2)-$(3)-$(4) .
 endef
 
@@ -105,7 +123,7 @@ $(foreach c,$(CMDS),\
 # -- checks --------------------------------------------------------------------
 
 test:
-	bash scripts/allmod.sh test ./...
+	bash scripts/allmod.sh test $(HOST_TEST_LDFLAGS) ./...
 
 vet:
 	bash scripts/allmod.sh vet ./...

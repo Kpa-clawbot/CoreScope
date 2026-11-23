@@ -88,7 +88,7 @@
       get bounds() { return bounds; },
       destroy: function () {
         try { if (window.__mcNodeTileSyncUnregister) window.__mcNodeTileSyncUnregister(map); } catch (e) {}
-        try { map.remove(); } catch (e) {}
+        window.MC_safeRemoveMap(map);
       }
     };
   }

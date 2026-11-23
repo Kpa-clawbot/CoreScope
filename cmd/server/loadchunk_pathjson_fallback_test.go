@@ -56,7 +56,7 @@ func createTestDBPathJSONNoResolvedPath(t *testing.T, relayPubkey, hopPrefix, fi
 		resolved_path TEXT
 	)`)
 	// PREFLIGHT: async=true reason="test fixture, in-memory tmpdir DB"
-	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT, inactive INTEGER)`)
+	exec(`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT, inactive INTEGER)`)
 	// Production nodes schema uses public_key (not pubkey) — getAllNodes /
 	// buildPrefixMap reads public_key, role, advert_count, first_seen.
 	// PREFLIGHT: async=true reason="test fixture, in-memory tmpdir DB"

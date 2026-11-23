@@ -4,6 +4,7 @@
     "files": [
       "tests/e2e/test-1110-live-filter.js",
       "tests/e2e/test-a11y-axe-1668.js",
+      "tests/e2e/test-analytics-direct-snr-e2e.js",
       "tests/e2e/test-analytics-fluid-charts.js",
       "tests/e2e/test-audio-lab-1297-e2e.js",
       "tests/e2e/test-audio-live-1297-e2e.js",
@@ -73,6 +74,7 @@
       "tests/e2e/test-issue-1639-observers-sort-e2e.js",
       "tests/e2e/test-issue-748-node-analytics-coverage-e2e.js",
       "tests/e2e/test-issue-2218-node-analytics-stale-e2e.js",
+      "tests/e2e/test-node-analytics-heard-by-e2e.js",
       "tests/e2e/test-issue-661-airtime-e2e.js",
       "tests/e2e/test-issue-1640-compare-discovery-e2e.js",
       "tests/e2e/test-issue-1648-m1-icons-e2e.js",
@@ -133,7 +135,10 @@
       "tests/e2e/test-theme-url-param-2236-e2e.js",
       "tests/e2e/test-touch-gestures-coverage-e2e.js",
       "tests/e2e/test-touch-targets.js",
-      "tests/e2e/test-user-management-e2e.js"
+      "tests/e2e/test-user-management-e2e.js",
+      "tests/e2e/test-map-providers-harness-e2e.js",
+      "tests/e2e/test-map-providers-e2e.js",
+      "tests/e2e/test-map-race-stress-e2e.js"
     ]
   },
   "domIntegration": {
@@ -143,7 +148,9 @@
       "tests/e2e/test-lint-network-calls.js",
       "tests/e2e/test-radio-setting-1869-e2e.js",
       "tests/e2e/test-observer-neighbors-2270-e2e.js",
-      "tests/e2e/test-table-sort.js"
+      "tests/e2e/test-table-sort.js",
+      "tests/e2e/test-map-teardown-races.js",
+      "tests/e2e/test-map-vector-leaflet-zoom.js"
     ]
   },
   "playwrightRunner": {

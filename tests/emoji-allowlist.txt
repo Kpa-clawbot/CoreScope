@@ -34,6 +34,7 @@
 public/geofilter-docs.html              # prose docs describe historical button glyphs
 public/icons/README.md                  # describes the sprite — emoji in prose
 public/CHANGELOG.md
+public/vendor/maplibre-gl-5.24.0/**        # third-party bytes, must stay identical to the npm release (#2428)
 README.md
 
 # --- arrows used as inline text content (typography, not icons) ---

@@ -581,7 +581,7 @@ func (s *Server) clientUserManagement() *ClientUserManagement {
 	if s.auth == nil {
 		return nil
 	}
-	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled, Notifications: s.auth.notify != nil, CompanionLinking: true, ObserverLogins: s.auth.set.observerLogins.enabled}
+	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled, Notifications: s.auth.notify != nil, CompanionLinking: true, ObserverLogins: s.auth.set.observerLogins.enabled, RepeaterTokens: true}
 }
 
 func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {
@@ -974,7 +974,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 				Sensors:    counts["sensors"],
 			},
 			SignatureDrops:        s.db.GetSignatureDropCount(),
-			HashMigrationComplete: s.store != nil && s.store.hashMigrationComplete.Load(),
+			HashMigrationComplete: s.db.hashMigrationComplete(),
 
 			TrackedMB:     mem.StoreDataMB, // deprecated alias
 			StoreDataMB:   mem.StoreDataMB,
@@ -2412,6 +2412,12 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "Not found")
 			return
 		}
+		if s.cfg.ClientRxCoverageEnabled() {
+			// SQL, after GetNodeAnalytics has released s.mu (#2146).
+			_, pm := s.store.getCachedNodesAndPM()
+			lat, lon := nodePosition(result.Node)
+			result.MobileReceptions = s.mobileReceptionsSummary(pubkey, result.TimeRange.From, lat, lon, pm)
+		}
 		writeJSON(w, result)
 		return
 	}
@@ -2551,7 +2557,6 @@ func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request)
 		HopDistribution:  []TopologyHopDist{},
 		TopRepeaters:     []TopRepeater{},
 		TopPairs:         []TopPair{},
-		HopsVsSnr:        []HopsVsSnr{},
 		Observers:        []ObserverRef{},
 		PerObserverReach: map[string]*ObserverReach{},
 		MultiObsNodes:    []MultiObsNode{},

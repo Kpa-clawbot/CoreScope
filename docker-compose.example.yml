@@ -24,6 +24,10 @@ services:
     environment:
       - DISABLE_CADDY=${DISABLE_CADDY:-true}
       - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
+      # Public URL for link previews (og:image, og:url). Unset: the image uses
+      # the origin each request reached and og:url is left out.
+      # e.g. CORESCOPE_URL=https://analyzer.example.org
+      - CORESCOPE_URL=${CORESCOPE_URL:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]

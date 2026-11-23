@@ -543,6 +543,7 @@ async function main() {
         timers, fetch: fetchImpl,
         globals: Object.assign({
           L: stub(), document: stub(), MC_PLANNER_CFG: {},
+          MC_attachAutoTiles: () => ({ group: stub(), sync() {}, destroy() {} }),
           addEventListener() {}, removeEventListener() {},
           registerPage: (name, obj) => { pages[name] = obj; }
         }, globals)
@@ -586,7 +587,7 @@ async function main() {
     load({
       fetch: makeFetch([]),
       globals: {
-        L: stub(), document: stub(), MC_PLANNER_CFG: {}, fetchAllNodes: () => new Promise(() => {}),
+        L: stub(), document: stub(), MC_PLANNER_CFG: {}, MC_attachAutoTiles: () => ({ group: stub(), sync() {}, destroy() {} }), fetchAllNodes: () => new Promise(() => {}),
         addEventListener() {}, removeEventListener() {},
         registerPage: (name, obj) => { pages[name] = obj; }
       }

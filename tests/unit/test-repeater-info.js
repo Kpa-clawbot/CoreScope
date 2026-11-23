@@ -177,6 +177,84 @@ test('save PUTs the form body', async () => {
   assert.strictEqual(c.p, '/api/repeaters/' + PK + '/info');
   assert.deepStrictEqual(JSON.parse(JSON.stringify(c.body)), { heightM: 12.5, gainDbi: 3, status: 'active', power: 'solar', notes: 'hi' });
 });
+// Review on #2429: the browser sends the revision its form was loaded
+// from, so it cannot silently overwrite a save made meanwhile (by the app).
+test('save sends the loaded revision as baseRevision', async () => {
+  const form = { heightM: '12', gainDbi: '3', status: '', power: '', notes: '' };
+  const f = mountFlow({ info: INFO({ canEdit: true, revision: 4 }), form });
+  await f.l.R.mount(f.el, { public_key: PK, role: 'repeater' });
+  f.click('data-ri-edit');
+  f.click('data-ri-save');
+  await tick();
+  assert.strictEqual(f.l.calls[1].body.baseRevision, 4);
+});
+test('a 409 keeps the typed values, shows the stored ones under them, and the next save uses their revision', async () => {
+  const form = { heightM: '12', gainDbi: '3', status: '', power: '', notes: 'mine' };
+  const f = mountFlow({ info: INFO({ canEdit: true, revision: 4 }), form });
+  await f.l.R.mount(f.el, { public_key: PK, role: 'repeater' });
+  f.click('data-ri-edit');
+  const stored = INFO({ canEdit: true, revision: 5, heightM: 30, notes: 'from the app <b>', updatedBy: 'Bob <i>', updatedAt: '2026-11-20T00:00:00Z' });
+  const realRequest = f.l.auth.request;
+  f.l.auth.request = (m, p, b) => { f.l.calls.push({ method: m, p, body: b }); return Promise.resolve({ ok: false, status: 409, data: stored }); };
+  f.click('data-ri-save');
+  await tick();
+  assert(f.el.innerHTML.includes('data-ri-form'), 'form not kept open: ' + f.el.innerHTML);
+  const h = f.el.innerHTML;
+  assert(h.includes('value="12"') && h.includes('>mine</textarea>'), 'typed values lost: ' + h);
+  const theirs = h.slice(h.indexOf('data-ri-theirs'));
+  assert(h.indexOf('data-ri-theirs') !== -1 && theirs.includes('Saved meanwhile by Bob &lt;i&gt;:') &&
+    theirs.includes('30 m') && theirs.includes('from the app &lt;b&gt;'), 'stored values not shown under the form: ' + h);
+  assert(!h.includes('<b>') && !h.includes('<i>'), 'raw tag: ' + h);
+  assert(/Your changes are still in the form/.test(f.el.msg.textContent), f.el.msg.textContent);
+  f.l.auth.request = realRequest;
+  f.click('data-ri-save');
+  await tick();
+  assert.strictEqual(f.l.calls[f.l.calls.length - 1].body.baseRevision, 5, 'retry not based on the stored revision');
+});
+test('a 409 without edit rights any more shows the view', async () => {
+  const f = mountFlow({ info: INFO({ canEdit: true, revision: 1 }), form: { heightM: '', gainDbi: '', status: '', power: '', notes: '' } });
+  await f.l.R.mount(f.el, { public_key: PK, role: 'repeater' });
+  f.click('data-ri-edit');
+  f.l.auth.request = () => Promise.resolve({ ok: false, status: 409, data: INFO({ canEdit: false, revision: 2, heightM: 7 }) });
+  f.click('data-ri-save');
+  await tick();
+  assert(!f.el.innerHTML.includes('data-ri-form') && f.el.innerHTML.includes('7 m'), f.el.innerHTML);
+  assert(/can no longer edit this repeater/.test(f.el.msg.textContent), 'no explanation: ' + f.el.msg.textContent);
+});
+test('a re-mount after a 409 keeps the typed values, the stored revision and the saved-meanwhile block', async () => {
+  const opts = { info: INFO({ canEdit: true, revision: 4 }), form: { heightM: '12', gainDbi: '3', status: '', power: '', notes: 'mine' } };
+  const a = mountFlow(opts);
+  await a.l.R.mount(a.el, { public_key: PK, role: 'repeater' });
+  a.click('data-ri-edit');
+  a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: false, status: 409, data: INFO({ canEdit: true, revision: 6, heightM: 30, updatedBy: 'Bob' }) }); };
+  a.click('data-ri-save');
+  await tick();
+  a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: true, revision: 6 }) }); };
+  const b = mountFlow(opts, a.l);
+  await b.l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+  assert(b.el.innerHTML.includes('>mine</textarea>'), 'draft lost the typed notes: ' + b.el.innerHTML);
+  const restored = b.el.innerHTML.slice(b.el.innerHTML.indexOf('data-ri-theirs'));
+  assert(b.el.innerHTML.includes('data-ri-theirs') && restored.includes('Saved meanwhile by Bob:') && restored.includes('30 m'),
+    'draft lost the saved-meanwhile block: ' + b.el.innerHTML);
+  b.click('data-ri-save');
+  await tick();
+  assert.strictEqual(a.l.calls[a.l.calls.length - 1].body.baseRevision, 6, 'draft did not keep the stored revision');
+});
+test('a re-mounted draft keeps the revision it was opened at', async () => {
+  const opts = { info: INFO({ canEdit: true, revision: 3 }), form: { heightM: '25', gainDbi: '3', status: '', power: '', notes: '' } };
+  const a = mountFlow(opts);
+  await a.l.R.mount(a.el, { public_key: PK, role: 'repeater' });
+  a.click('data-ri-edit');
+  a.el.handlers.input({});
+  // The page re-renders; its GET now sees a newer revision from elsewhere.
+  a.l.auth.request = (m, p, body) => { a.l.calls.push({ method: m, p, body }); return Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: true, revision: 9 }) }); };
+  const b = mountFlow(opts, a.l);
+  await b.l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+  assert(!b.el.innerHTML.includes('data-ri-theirs'), 'a draft without a 409 shows a saved-meanwhile block');
+  b.click('data-ri-save');
+  await tick();
+  assert.strictEqual(a.l.calls[a.l.calls.length - 1].body.baseRevision, 3, 'the draft must not adopt the newer revision');
+});
 test('error response shows its text via textContent; clicks are ignored while busy', async () => {
   const f = mountFlow({ info: INFO({ canEdit: true, claimedByMe: true }) });
   await f.l.R.mount(f.el, { public_key: PK, role: 'repeater' });
@@ -263,6 +341,93 @@ test('no draft after Cancel, a save, a hashchange, another repeater or lost edit
   l = load(opts); await open(l);
   l.auth.request = () => Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: false }) });
   assert(!(await remountShowsForm(l)), 'draft shown without edit rights');
+});
+// A re-mount with an open draft shows the form at once: waiting for the GET
+// left the section empty for a round trip, the form vanished from under the
+// user and the E2E read a missing notes field.
+function remountWithPendingGet() {
+  const opts = { info: INFO({ canEdit: true }), form: { heightM: '25', gainDbi: '0', status: '', power: '', notes: 'typed' } };
+  const l = load(opts);
+  const a = mountFlow(opts, l);
+  return l.R.mount(a.el, { public_key: PK, role: 'repeater' }).then(() => {
+    a.click('data-ri-edit');
+    a.el.handlers.input({});
+    const pend = [];
+    l.auth.request = (method) => new Promise((ok, fail) => { pend.push({ method, ok, fail }); });
+    const b = mountFlow(opts, l);
+    const done = l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+    return tick().then(() => ({ b, done, pend, answer: (res) => { pend[0].ok(res); return done; } }));
+  });
+}
+test('a re-mount shows the draft form before the GET answers', async () => {
+  const { b, answer } = await remountWithPendingGet();
+  assert(b.el.innerHTML.includes('data-ri-form') && b.el.innerHTML.includes('typed'), 'no form while the GET is out: ' + b.el.innerHTML);
+  assert.strictEqual(b.el.hidden, false);
+  b.el.innerHTML += '<!--user state-->';
+  await answer({ ok: true, status: 200, data: INFO({ canEdit: true }) });
+  assert(b.el.innerHTML.includes('<!--user state-->'), 'the GET re-rendered the open form');
+});
+test('the early draft form gives way to the view when the GET says no edit rights', async () => {
+  const { b, answer } = await remountWithPendingGet();
+  await answer({ ok: true, status: 200, data: INFO({ canEdit: false }) });
+  assert(!b.el.innerHTML.includes('data-ri-form'), b.el.innerHTML);
+  assert(b.el.innerHTML.includes('No details yet.'), b.el.innerHTML);
+});
+test('Cancel on the early draft form before the GET answers, then the view', async () => {
+  const { b, answer } = await remountWithPendingGet();
+  b.click('data-ri-cancel');
+  assert(!b.el.innerHTML.includes('data-ri-form'), b.el.innerHTML);
+  await answer({ ok: true, status: 200, data: INFO({ canEdit: true, heightM: 9, updatedAt: 'x' }) });
+  assert(b.el.innerHTML.includes('9 m'), b.el.innerHTML);
+});
+test('a failed GET hides the section unless the draft form is open', async () => {
+  let r = await remountWithPendingGet();
+  await r.answer({ ok: false, status: 500, data: {} });
+  assert(r.b.el.innerHTML.includes('data-ri-form') && r.b.el.hidden === false, 'open form dropped on a failed GET');
+  r = await remountWithPendingGet();
+  r.b.click('data-ri-cancel');
+  await r.answer({ ok: false, status: 500, data: {} });
+  assert.strictEqual(r.b.el.hidden, true);
+});
+test('a save on the early form is not overwritten by the older GET answer', async () => {
+  const { b, pend, answer } = await remountWithPendingGet();
+  b.click('data-ri-save');
+  assert.strictEqual(pend[1].method, 'PUT');
+  pend[1].ok({ ok: true, status: 200, data: INFO({ canEdit: true, heightM: 30, updatedAt: 'x' }) });
+  await tick();
+  await answer({ ok: true, status: 200, data: INFO({ canEdit: true, heightM: 5, updatedAt: 'x' }) });
+  assert(b.el.innerHTML.includes('30 m') && !b.el.innerHTML.includes('5 m'), b.el.innerHTML);
+});
+test('a network error on the GET hides the section unless the draft form is open', async () => {
+  let r = await remountWithPendingGet();
+  r.pend[0].fail(new Error('net'));
+  await r.done;
+  assert(r.b.el.innerHTML.includes('data-ri-form') && r.b.el.hidden === false, 'open form dropped on a network error');
+  r = await remountWithPendingGet();
+  r.b.click('data-ri-cancel');
+  r.pend[0].fail(new Error('net'));
+  await r.done;
+  assert.strictEqual(r.b.el.hidden, true);
+});
+test('a late GET of a replaced section leaves the draft of its successor alone', async () => {
+  const opts = { info: INFO({ canEdit: true }), form: { heightM: '25', gainDbi: '0', status: '', power: '', notes: 'typed' } };
+  const l = load(opts);
+  let answerA;
+  l.auth.request = () => new Promise((r) => { answerA = r; });
+  const a = mountFlow(opts, l);
+  const doneA = l.R.mount(a.el, { public_key: PK, role: 'repeater' });
+  await tick();
+  a.el.isConnected = false;
+  l.auth.request = () => Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: true }) });
+  const b = mountFlow(opts, l);
+  await l.R.mount(b.el, { public_key: PK, role: 'repeater' });
+  b.click('data-ri-edit');
+  b.el.handlers.input({});
+  answerA({ ok: true, status: 200, data: INFO({ canEdit: true }) });
+  await doneA;
+  const c = mountFlow(opts, l);
+  await l.R.mount(c.el, { public_key: PK, role: 'repeater' });
+  assert(c.el.innerHTML.includes('data-ri-form'), 'the stale GET dropped the draft: ' + c.el.innerHTML);
 });
 test('anonymous visitor sees one login hint, a logged-in user does not', () => {
   const anon = load({ user: null }).R._test.viewHtml(INFO(), null);

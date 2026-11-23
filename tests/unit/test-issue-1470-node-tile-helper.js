@@ -228,5 +228,98 @@ test('_applyTilesToNodeMap: light mode → uses TILE_LIGHT (carto light_all), no
   assert.strictEqual(mock.tilePane.style.filter, '', 'no invert filter in light mode');
 });
 
+test('_applyTilesToNodeMap: builds through MC_buildTileLayer (one layer, incl. refUrl group) when present', () => {
+  const ctx = makeSandbox({ theme: 'light', prefersDark: false });
+  loadInto(ctx, 'public/map-tile-providers.js');
+  loadInto(ctx, 'public/roles.js');
+  const mock = makeLeafletMock();
+  ctx.L = mock.L;
+  ctx._fakeMap = mock.fakeMap;
+  const built = [];
+  const sat = { url: 'https://sat.example/{z}/{x}/{y}', refUrl: 'https://sat.example/labels/{z}/{x}/{y}', maxZoom: 19, invertFilter: null };
+  ctx.window.MC_resolveTile = () => sat;
+  ctx.window.MC_buildTileLayer = (d) => {
+    const l = { built: d, addTo(m) { m._tileLayers.push(this); return this; } };
+    built.push(l); return l;
+  };
+  vm.runInContext(extractApplyTilesHelper(), ctx, { filename: 'nodes.js#_applyTilesToNodeMap' });
+  vm.runInContext('_applyTilesToNodeMap(_fakeMap);', ctx);
+  assert.strictEqual(built.length, 1, 'MC_buildTileLayer called once');
+  assert.strictEqual(built[0].built, sat, 'given the resolved descriptor');
+  assert.strictEqual(mock.calls.length, 0, 'no direct L.tileLayer (the builder owns the refUrl layer)');
+  assert.deepStrictEqual(mock.fakeMap._tileLayers, [built[0]], 'exactly one layer on the map');
+});
+
+test('_applyTilesToNodeMap: MC_buildTileLayer absent → falls back to plain L.tileLayer', () => {
+  const ctx = makeSandbox({ theme: 'light', prefersDark: false });
+  loadInto(ctx, 'public/map-tile-providers.js');
+  loadInto(ctx, 'public/roles.js');
+  delete ctx.window.MC_buildTileLayer;
+  delete ctx.MC_buildTileLayer;
+  const mock = makeLeafletMock();
+  ctx.L = mock.L;
+  ctx._fakeMap = mock.fakeMap;
+  vm.runInContext(extractApplyTilesHelper(), ctx, { filename: 'nodes.js#_applyTilesToNodeMap' });
+  vm.runInContext('_applyTilesToNodeMap(_fakeMap);', ctx);
+  assert.ok(mock.calls.length >= 1, 'plain tileLayer used');
+  assert.ok(/light_all|openstreetmap/.test(mock.calls[0].url), 'light url — got ' + mock.calls[0].url);
+});
+
+function setupUnchangedHarness(descs) {
+  const ctx = makeSandbox({ theme: 'light', prefersDark: false });
+  loadInto(ctx, 'public/map-tile-providers.js');
+  loadInto(ctx, 'public/roles.js');
+  const mock = makeLeafletMock();
+  mock.fakeMap.removeLayer = function (l) { this._tileLayers = this._tileLayers.filter((x) => x !== l); mock.removed = (mock.removed || 0) + 1; };
+  ctx.L = mock.L;
+  ctx._fakeMap = mock.fakeMap;
+  const built = [];
+  let cur = descs[0];
+  ctx.window.MC_resolveTile = () => cur;
+  ctx.window.MC_buildTileLayer = (d, o) => {
+    const l = { built: d, opts: o, addTo(m) { m._tileLayers.push(this); return this; } };
+    built.push(l); return l;
+  };
+  vm.runInContext(extractApplyTilesHelper(), ctx, { filename: 'nodes.js#_applyTilesToNodeMap' });
+  return { ctx, mock, built, set(d) { cur = d; } };
+}
+const D1 = { id: 'a', url: 'https://a/{z}/{x}/{y}', refUrl: null, format: 'raster', invertFilter: null, maxZoom: 19, maxNativeZoom: 18, subdomains: 'abc', attribution: 'A' };
+
+test('_applyTilesToNodeMap: passes { raster: true } to MC_buildTileLayer', () => {
+  const h = setupUnchangedHarness([D1]);
+  vm.runInContext('_applyTilesToNodeMap(_fakeMap);', h.ctx);
+  assert.strictEqual(h.built.length, 1);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(h.built[0].opts)), { raster: true });
+});
+
+test('_applyTilesToNodeMap: identical resolve does not rebuild the layer (no flash)', () => {
+  const h = setupUnchangedHarness([D1]);
+  vm.runInContext('_applyTilesToNodeMap(_fakeMap);', h.ctx);
+  const ev = { detail: { auto: true } };
+  h.ctx.window.__mcNodeTileSync.onChange(ev);
+  h.ctx.window.__mcNodeTileSync.onChange(null);
+  assert.strictEqual(h.built.length, 1, 'built once — got ' + h.built.length);
+  assert.ok(!h.mock.removed, 'layer never removed');
+});
+
+test('_applyTilesToNodeMap: changed descriptor rebuilds and swaps the layer', () => {
+  const h = setupUnchangedHarness([D1]);
+  vm.runInContext('_applyTilesToNodeMap(_fakeMap);', h.ctx);
+  h.set(Object.assign({}, D1, { id: 'b', url: 'https://b/{z}/{x}/{y}' }));
+  h.ctx.window.__mcNodeTileSync.onChange(null);
+  assert.strictEqual(h.built.length, 2);
+  assert.strictEqual(h.mock.removed, 1);
+  assert.deepStrictEqual(h.mock.fakeMap._tileLayers, [h.built[1]]);
+});
+
+test('_applyTilesToNodeMap: unchanged tiles still re-apply the pane filter', () => {
+  const h = setupUnchangedHarness([D1]);
+  vm.runInContext('_applyTilesToNodeMap(_fakeMap);', h.ctx);
+  h.mock.tilePane.style.filter = 'stale';
+  h.ctx.window.__mcNodeTileSync.onChange(null);
+  assert.strictEqual(h.built.length, 1);
+  assert.strictEqual(h.mock.tilePane.style.filter, '', 'filter re-applied from descriptor');
+});
+
 console.log(`\n#1470 node-detail tile helper: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
