@@ -20,7 +20,10 @@ node tests/unit/test-admin-dashboard-ui.js
 node tests/unit/test-aging.js
 node tests/unit/test-analytics-channels-integration.js
 node tests/unit/test-anl1-tooltip-render.js
+node tests/unit/test-anonymous-mode.js
+node tests/unit/test-api-base.js
 node tests/unit/test-area-filter.js
+node tests/unit/test-beta-ui.js
 node tests/unit/test-channel-color-picker.js
 node tests/unit/test-channel-colors.js
 node tests/unit/test-channel-decrypt-ecb.js
@@ -48,15 +51,19 @@ node tests/unit/test-compare-overlap.js
 node tests/unit/test-confidence-indicator.js
 node tests/unit/test-coverage-gate.js
 node tests/unit/test-customizer-v2.js
+node tests/unit/test-dev-static.js
 node tests/unit/test-dockerfile-buildplatform.js
 node tests/unit/test-drag-manager.js
 node tests/unit/test-e2e-coverage.js
 node tests/unit/test-direct-rf-heard-by.js
 node tests/unit/test-embed-mode-1369.js
+node tests/unit/test-static-build.js
+node tests/unit/test-web-container.js
 node tests/unit/test-theme-url-param-2236.js
 node tests/unit/test-fetch-all-nodes-pagination.js
 node tests/unit/test-fluid-scaffolding.js
 node tests/unit/test-frontend-helpers.js
+node tests/unit/test-tools-landing-planner.js
 node tests/unit/test-geofilter-draft.js
 node tests/unit/test-hash-color.js
 node tests/unit/test-health-status.js
@@ -85,6 +92,14 @@ node tests/unit/test-issue-1415-packets-layout.js
 node tests/unit/test-issue-1418-cb-preset-ramp.js
 node tests/unit/test-issue-1418-deeplink-hops-channels.js
 node tests/unit/test-map-deeplink-path-params.js
+node tests/unit/test-los.js
+node tests/unit/test-los-panel.js
+node tests/unit/test-route-view-ux-hints.js
+node tests/unit/test-route-los.js
+node tests/unit/test-planner-los-vectors.js
+node tests/unit/test-planner-area.js
+node tests/unit/test-planner-coverage.js
+node tests/unit/test-planner.js
 node tests/unit/test-issue-1418-edge-weights.js
 node tests/unit/test-issue-1418-polish-review.js
 node tests/unit/test-issue-1418-raw-hex-extraction.js
@@ -111,7 +126,9 @@ node tests/unit/test-issue-1518-home-url.js
 node tests/unit/test-issue-1532-live-fullscreen.js
 node tests/unit/test-issue-1562-observers-summary.js
 node tests/unit/test-issue-748-node-analytics-coverage.js
+node tests/unit/test-node-analytics-timeline-gaps.js
 node tests/unit/test-node-analytics-certain-timeline.js
+node tests/unit/test-node-analytics-heard-by.js
 node tests/unit/test-issue-661-observer-airtime.js
 node tests/unit/test-issue-1268-rf-params.js
 node tests/unit/test-issue-1563-aggregate-and-inflight.js
@@ -189,6 +206,7 @@ node tests/unit/test-nav-drawer-version-footer.js
 node tests/unit/test-nodes-export.js
 node tests/unit/test-node-quick-actions.js
 node tests/unit/test-notifications-ui.js
+node tests/unit/test-repeater-info.js
 node tests/unit/test-observer-iata-1188.js
 node tests/unit/test-observer-menu-interactions.js
 node tests/unit/test-observer-naive-clock-1478.js
@@ -235,5 +253,13 @@ node tests/unit/test-observer-neighbors.js
 node tests/unit/test-warmup-banner.js
 node tests/unit/test-ws-stale-watchdog-1074.js
 node tests/unit/test-xss-escape-sinks.js
+node tests/unit/test-secondary-map-tile-builder.js
+node tests/unit/test-map-layer-builder.js
+node tests/unit/test-map-custom-providers.js
+node tests/unit/test-map-harness-png.js
+node tests/unit/test-map-hillshade.js
+node tests/unit/test-map-vector.js
+node tests/unit/test-map-overlays-vector.js
+node tests/unit/test-map-tile-pin.js
 
 echo "All standalone frontend suites passed"

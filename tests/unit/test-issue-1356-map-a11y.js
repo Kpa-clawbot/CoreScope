@@ -15,6 +15,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 
 const fs = require('fs');
 const path = require('path');
@@ -88,6 +89,7 @@ function loadMapInternals() {
   };
   ctx.window.L = ctx.L;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   for (const f of ['public/roles.js', 'public/map.js']) {
     vm.runInContext(fs.readFileSync(path.join(REPO_ROOT, f), 'utf8'), ctx, { filename: f });
     for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];

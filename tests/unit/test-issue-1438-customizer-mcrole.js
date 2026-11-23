@@ -27,6 +27,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 
 const fs = require('fs');
 const path = require('path');
@@ -121,6 +122,7 @@ console.log('\n=== #1438 FINAL B: user override → --mc-role-{role} reflects us
 {
   const env = makeSandbox();
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
   env.sandbox.window.MeshCorePresets.applyPreset('deut');
@@ -153,6 +155,7 @@ console.log('\n=== #1438 FINAL C: server-only key does NOT clobber --mc-role-* (
 {
   const env = makeSandbox();
   vm.createContext(env.sandbox);
+  loadApiBase(env.sandbox);
   vm.runInContext(rolesSrc, env.sandbox);
   vm.runInContext(presetsSrc, env.sandbox);
   env.sandbox.window.MeshCorePresets.applyPreset('deut');

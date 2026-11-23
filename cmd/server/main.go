@@ -383,7 +383,7 @@ func main() {
 	absPublic, _ := filepath.Abs(publicDir)
 	if _, err := os.Stat(absPublic); err == nil {
 		fs := http.FileServer(http.Dir(absPublic))
-		router.PathPrefix("/").Handler(wsOrStatic(hub, spaHandler(absPublic, fs)))
+		router.PathPrefix("/").Handler(wsOrStatic(hub, spaHandler(absPublic, fs, os.Getenv(siteURLEnv))))
 		log.Printf("[static] serving %s", absPublic)
 	} else {
 		log.Printf("[static] directory %s not found — API-only mode", absPublic)
@@ -463,6 +463,12 @@ func main() {
 		log.Printf("[rf-params] background fetch enabled (nodes=%s, presets=%s, refresh=%s, maxAge=%s)",
 			cfg.RfParams.NodesURL, cfg.RfParams.PresetsURL, cfg.RfParams.refresh(), cfg.RfParams.maxAge())
 	}
+
+	// Radio line-of-sight profiles and the repeater planner, over one shared
+	// SRTM terrain source. OPT-IN: without los.enabled /api/elevation/profile
+	// answers 404, without planner.enabled /api/planner/* does, and with
+	// neither no terrain tile is ever fetched.
+	srv.elevation, srv.planner = newTerrainServices(cfg, srv)
 
 	// Steady-state repeater-enrichment recomputer (issue #1262).
 	// Prewarms the bulk caches feeding handleNodes so the very first
@@ -580,6 +586,12 @@ func main() {
 		// 3b. Close users.db (user management, opt-in; no-op when off).
 		srv.closeUserManagement()
 
+		// 3c. Cancel planner jobs and wait for them: they read the store,
+		// so before dbClose.
+		if srv.planner != nil {
+			srv.planner.Close()
+		}
+
 		// 4. Close database (release SQLite WAL lock)
 		if err := dbClose(); err != nil {
 			log.Printf("[server] DB close error: %v", err)
@@ -594,9 +606,6 @@ func main() {
 	// process. The server reads the results via the periodic
 	// recompNeighborGraph / fetchResolvedPathForObs paths.
 
-	// Migrate old content hashes in background (one-time, idempotent).
-	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)
-
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("[server] %v", err)
 	}
@@ -605,17 +614,42 @@ func main() {
 // spaHandler serves static files, falling back to index.html for SPA routes.
 // It reads index.html once at creation time and replaces the __BUST__ placeholder
 // with a Unix timestamp so browsers fetch fresh JS/CSS after each server restart.
-func spaHandler(root string, fs http.Handler) http.Handler {
-	// Pre-process index.html: replace __BUST__ with a cache-bust timestamp
-	indexPath := filepath.Join(root, "index.html")
-	rawHTML, err := os.ReadFile(indexPath)
-	if err != nil {
-		log.Printf("[static] warning: could not read index.html for cache-bust: %v", err)
-		rawHTML = []byte("<!DOCTYPE html><html><body><h1>CoreScope</h1><p>index.html not found</p></body></html>")
-	}
+// siteURL is CORESCOPE_URL (see site_url.go): when valid, __CORESCOPE_URL__ is
+// replaced with it at the same time; otherwise og:url is dropped then and each
+// response fills in the rest with the origin the request reached.
+func spaHandler(root string, fs http.Handler, siteURL string) http.Handler {
+	// Pre-process every top-level page, index.html and the tool pages
+	// (area-map.html, geofilter-builder.html): replace __BUST__ with a
+	// cache-bust timestamp, so each loads the scripts of this start.
 	bustValue := fmt.Sprintf("%d", time.Now().Unix())
-	indexHTML := []byte(strings.ReplaceAll(string(rawHTML), "__BUST__", bustValue))
-	log.Printf("[static] cache-bust value: %s", bustValue)
+	pages := bustPages(root, bustValue)
+	if siteURL = resolveConfiguredSiteURL(siteURL); siteURL != "" {
+		for p, body := range pages {
+			pages[p] = []byte(strings.ReplaceAll(string(body), siteURLPlaceholder, siteURL))
+		}
+		log.Printf("[static] site URL: %s", siteURL)
+	} else {
+		for p, body := range pages {
+			pages[p] = withoutOGURL(body)
+		}
+		log.Printf("[static] site URL: %s unset or invalid, no og:url and using each request's origin", siteURLEnv)
+	}
+	indexHTML, ok := pages["/index.html"]
+	if !ok {
+		log.Printf("[static] warning: could not read index.html for cache-bust")
+		indexHTML = []byte("<!DOCTYPE html><html><body><h1>CoreScope</h1><p>index.html not found</p></body></html>")
+	}
+	log.Printf("[static] cache-bust value: %s (%d pages)", bustValue, len(pages))
+	// no-store also keeps a page filled in with one request's origin out of
+	// any shared cache.
+	servePage := func(w http.ResponseWriter, r *http.Request, body []byte) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		if siteURL == "" {
+			body = withSiteURL(body, r)
+		}
+		w.Write(body)
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Defense-in-depth: explicitly reject path-traversal attempts before
@@ -628,20 +662,21 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		// Serve pre-processed index.html for root and /index.html
-		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			w.Write(indexHTML)
+		// Serve the pre-processed index.html for the root, and each
+		// pre-processed page (/index.html included) at its own path
+		if r.URL.Path == "/" {
+			servePage(w, r, indexHTML)
+			return
+		}
+		if page, ok := pages[r.URL.Path]; ok {
+			servePage(w, r, page)
 			return
 		}
 
 		path := filepath.Join(root, r.URL.Path)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			// SPA fallback — serve pre-processed index.html
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			w.Write(indexHTML)
+			servePage(w, r, indexHTML)
 			return
 		}
 		// Disable caching for JS/CSS/HTML
@@ -650,6 +685,29 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 		}
 		fs.ServeHTTP(w, r)
 	})
+}
+
+// bustPages reads each .html file at the top of root, keyed by its URL path
+// ("/index.html"), with every __BUST__ replaced by bust.
+func bustPages(root, bust string) map[string][]byte {
+	pages := map[string][]byte{}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		log.Printf("[static] warning: could not list %s for cache-bust: %v", root, err)
+		return pages
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".html") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(root, e.Name()))
+		if err != nil {
+			log.Printf("[static] warning: could not read %s for cache-bust: %v", e.Name(), err)
+			continue
+		}
+		pages["/"+e.Name()] = []byte(strings.ReplaceAll(string(raw), "__BUST__", bust))
+	}
+	return pages
 }
 
 // isSafeStaticPath rejects request paths that contain traversal sequences

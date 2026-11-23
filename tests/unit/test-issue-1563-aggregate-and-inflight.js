@@ -14,6 +14,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 
 const fs = require('fs');
 const path = require('path');
@@ -65,6 +66,7 @@ function makeSandbox() {
   ctx.window.location = ctx.location;
   ctx.window.localStorage = ctx.localStorage;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   return ctx;
 }
 function load(ctx, file) {

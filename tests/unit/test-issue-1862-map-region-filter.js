@@ -10,6 +10,7 @@
  */
 'use strict';
 const vm = require('vm');
+const { loadApiBase } = require('./api-base-sandbox');
 const fs = require('fs');
 const assert = require('assert');
 
@@ -50,6 +51,7 @@ function makeSandbox(stored) {
   };
   ctx.window.L = ctx.L;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync('public/roles.js', 'utf8'), ctx);
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
   // map.js's render path (index.html order) uses the tile-provider module's
@@ -58,6 +60,7 @@ function makeSandbox(stored) {
   // (PR #2386 CI catch: map.js calls MC_isDarkTheme() during page render.)
   ctx.window.MC_isDarkTheme = () => false;
   ctx.window.MC_resolveTile = () => ({ type: 'light', id: null, url: 'https://tiles.example/{z}/{x}/{y}.png', attribution: 'test', maxZoom: 19, refUrl: null, invertFilter: null });
+  ctx.window.MC_attachAutoTiles = () => ({ group: {}, sync() {}, destroy() {} });
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
   vm.runInContext(fs.readFileSync('public/map.js', 'utf8'), ctx);
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
@@ -360,12 +363,14 @@ async function makePage(opts) {
   };
   ctx.window.L = L;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   vm.runInContext(fs.readFileSync('public/roles.js', 'utf8'), ctx);
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
   // Same tile-provider stubs as the first harness above — map.js page render
   // depends on them (index.html load order).
   ctx.window.MC_isDarkTheme = () => false;
   ctx.window.MC_resolveTile = () => ({ type: 'light', id: null, url: 'https://tiles.example/{z}/{x}/{y}.png', attribution: 'test', maxZoom: 19, refUrl: null, invertFilter: null });
+  ctx.window.MC_attachAutoTiles = () => ({ group: {}, sync() {}, destroy() {} });
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
   vm.runInContext(fs.readFileSync('public/map.js', 'utf8'), ctx);
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];

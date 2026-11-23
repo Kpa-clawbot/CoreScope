@@ -42,6 +42,7 @@ env:
 # push waits for all of them:
 #   changes ─┬─ go-test ─────────────────────────┐
 #            ├─ race-test (ingestor changes only) ─┤
+#            ├─ server-race-shard ×4 ── server-race (gate) ┤
 #            ├─ e2e-shard ×3 ── e2e-test (gate) ───┼─ build-and-publish → deploy, publish
 #            └─ image-check (two-arch build) ──────┘
 #   PRs stop after build-and-publish (no GHCR push). Master continues to deploy + badges.
@@ -112,8 +113,8 @@ jobs:
   # introduce a data race here, and paying for the check on every PR is what
   # gets a check switched off again.
   #
-  # The server has -race in its own step already; this closes the same gap for
-  # the ingestor, which carries an atomic.Pointer snapshot (the region key
+  # The server runs -race in the server-race-shard jobs; this closes the same
+  # gap for the ingestor, which carries an atomic.Pointer snapshot (the region key
   # set) whose safety is an argument until something checks it.
   race-test:
     name: "🏁 Race detector (ingestor)"
@@ -139,6 +140,70 @@ jobs:
           set -e -o pipefail
           cd cmd/ingestor
           go test -timeout 30m -race ./...
+
+  # ───────────────────────────────────────────────────────────────
+  # 1b. Race detector (server) — four shards and a gate
+  # ───────────────────────────────────────────────────────────────
+  # The server package has over 2,000 tests and none call t.Parallel(), so
+  # under -race on one runner they took about 18 minutes, the longest path of
+  # the pipeline. Each shard builds the race test binary once, lists the
+  # tests, and runs every fourth one. -race gates PR #1208's atomic.Pointer
+  # migration: the race detector is what makes path_inspect_atomic_race_test.go
+  # actually assert. Every test still runs under -race, in exactly one shard.
+  server-race-shard:
+    name: "🏁 Race detector (server) shard ${{ matrix.shard }}/4"
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      SHARD: ${{ matrix.shard }}
+      RACE_SHARDS: 4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go 1.27
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+          cache-dependency-path: "**/go.sum"
+
+      - name: go test -race (one shard)
+        run: |
+          set -euo pipefail
+          cd cmd/server
+          bin="$RUNNER_TEMP/server.race.test"
+          go test -race -c -o "$bin" .
+          # Top-level tests, examples and fuzz seeds: everything `go test` runs
+          # by default. Benchmarks are not run by `go test` either.
+          "$bin" -test.list '.*' | grep -E '^(Test|Example|Fuzz)' > "$RUNNER_TEMP/all-tests"
+          awk -v n="$RACE_SHARDS" -v k="$SHARD" 'NR % n == k % n' "$RUNNER_TEMP/all-tests" > "$RUNNER_TEMP/shard-tests"
+          echo "shard $SHARD/$RACE_SHARDS: $(wc -l < "$RUNNER_TEMP/shard-tests") of $(wc -l < "$RUNNER_TEMP/all-tests") tests"
+          [ -s "$RUNNER_TEMP/shard-tests" ] || { echo "::error::shard $SHARD has no tests"; exit 1; }
+          "$bin" -test.count=1 -test.timeout 20m -test.paniconexit0 -test.run "^($(paste -sd'|' "$RUNNER_TEMP/shard-tests"))\$"
+
+  # The gate also runs on a tag whose images were already published, where
+  # the shards skip because that :edge commit passed them on master. It then
+  # passes, so release-artifacts can require it on every tag run.
+  server-race:
+    name: "🏁 Race detector (server)"
+    needs: [server-race-shard, changes]
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' }}
+    steps:
+      - name: Require every shard to have passed
+        run: |
+          result="${{ needs['server-race-shard'].result }}"
+          published="${{ startsWith(github.ref, 'refs/tags/v') && inputs.images_published }}"
+          echo "server-race-shard: $result (tag with published images: $published)"
+          if [ "$result" = success ]; then exit 0; fi
+          if [ "$result" = skipped ] && [ "$published" = true ]; then exit 0; fi
+          echo "::error::server race shards did not all pass (result: $result)"
+          exit 1
 
   # ───────────────────────────────────────────────────────────────
   # 1. Go Build & Test
@@ -191,9 +256,10 @@ jobs:
           set -e -o pipefail
           cd cmd/server
           go build .
-          # -race gates PR #1208's atomic.Pointer migration: the race-detector
-          # is what makes path_inspect_atomic_race_test.go actually assert.
-          go test -timeout 20m -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
+          # No -race here: the race detector runs the same tests in the
+          # server-race-shard jobs, side by side. On one runner -race plus
+          # coverage took about 18 of the job's 24 minutes.
+          go test -timeout 20m -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
           # The e2etest build (fake mailer + /__e2e/last-mail) has its own tests.
           go test -tags e2etest -count=1 -run 'E2E' .
           echo "--- Go Server Coverage ---"
@@ -553,6 +619,25 @@ jobs:
             sleep 1
           done
 
+      - name: Start split frontend (static build + API-only server)
+        # The anonymous static build on :8788 against a stock server on :13591
+        # that lists that origin in CORS_ALLOWED_ORIGINS, the way a static
+        # frontend (Cloudflare Pages) calls the containers. -public on a missing
+        # directory is API-only mode, so nothing is served same-origin.
+        if: matrix.shard == 1
+        run: |
+          CHANNEL=dev COMMIT=e2e API_BASE=http://localhost:13591 AUTH=false CLASSIC_URL=http://localhost:13591 bash scripts/static/build.sh
+          fuser -k 13591/tcp 8788/tcp 2>/dev/null || true
+          CORS_ALLOWED_ORIGINS=http://localhost:8788 ./corescope-server -port 13591 -db test-fixtures/e2e-fixture.db -public /nonexistent &
+          echo $! > .server-split.pid
+          node scripts/dev-static.mjs --root dist/web --port 8788 &
+          echo $! > .static-split.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:13591/api/healthz > /dev/null 2>&1 && curl -sf -o /dev/null http://localhost:8788/; then echo "split frontend ready after ${i}s"; break; fi
+            if [ "$i" -eq 30 ]; then echo "split frontend failed to start within 30s"; exit 1; fi
+            sleep 1
+          done
+
       - name: Run Playwright E2E tests (fail-fast)
         env:
           # On master pushes every suite records the frontend coverage of the
@@ -587,6 +672,8 @@ jobs:
           # Allowlist: tests/a11y-allowlist.yaml (0 entries — hard pass policy).
           # Per-viewport summary printed at the end; any net>0 fails the build.
           suite 1 test-a11y-axe-1668.js BASE_URL=$B AXE_SCREENSHOT_DIR=/tmp/axe-1668
+          # The static build on another origin than the API (scripts/static/build.sh).
+          suite 1 test-split-anonymous-e2e.js SPLIT_URL=http://localhost:8788 API_URL=http://localhost:13591
           suite 2 test-filter-ux-e2e.js BASE_URL=$B
           suite 2 test-radio-setting-1869-e2e.js BASE_URL=$B
           suite 2 test-observer-neighbors-2270-e2e.js BASE_URL=$B
@@ -601,8 +688,9 @@ jobs:
           suite 2 test-issue-1639-observers-sort-e2e.js BASE_URL=$B
           suite 2 test-issue-748-node-analytics-coverage-e2e.js BASE_URL=$B
           suite 2 test-issue-2218-node-analytics-stale-e2e.js BASE_URL=$B
+          suite 2 test-node-analytics-heard-by-e2e.js BASE_URL=$B
           suite 2 test-issue-661-airtime-e2e.js BASE_URL=$B
-          suite 2 test-health-status-e2e.js BASE_URL=$B
+          suite 1 test-health-status-e2e.js BASE_URL=$B
           suite 2 test-issue-1268-rf-params-e2e.js BASE_URL=$B
           suite 2 test-issue-1758-ng-filter-rerenders-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-nav-fluid-1055-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
@@ -632,7 +720,7 @@ jobs:
           suite 3 test-issue-1150-404-state-e2e.js BASE_URL=$B
           suite 2 test-issue-1146-path-link-contrast-e2e.js BASE_URL=$B
           suite 1 test-issue-1705-subpath-contrast-e2e.js CHROMIUM_REQUIRE=1
-          suite 2 test-issue-1147-section-order-e2e.js BASE_URL=$B
+          suite 1 test-issue-1147-section-order-e2e.js BASE_URL=$B
           suite 3 test-issue-1151-orphan-separators-e2e.js BASE_URL=$B
           suite 3 test-issue-1486-collapse-reopens-detail-e2e.js BASE_URL=$B
           suite 3 test-map-deeplink-path-params-e2e.js BASE_URL=$B
@@ -663,7 +751,7 @@ jobs:
           suite 3 test-issue-1236-map-mobile-e2e.js BASE_URL=$B
           suite 3 test-issue-1329-map-controls-accordion-e2e.js BASE_URL=$B
           suite 1 test-issue-1273-qr-overlay-height-e2e.js BASE_URL=$B
-          suite 3 test-issue-1281-location-row-e2e.js BASE_URL=$B
+          suite 1 test-issue-1281-location-row-e2e.js BASE_URL=$B
           suite 1 test-issue-1279-legend-p2-e2e.js BASE_URL=$B
           suite 2 test-issue-1799-label-vocab-e2e.js BASE_URL=$B
           suite 2 test-home-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
@@ -693,7 +781,7 @@ jobs:
           suite 2 test-issue-1630-reach-mobile-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-node-reach-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-issue-1640-compare-discovery-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
-          suite 3 test-observer-detail-ownership-e2e.js BASE_URL=$B
+          suite 1 test-observer-detail-ownership-e2e.js BASE_URL=$B
           suite 2 test-neighbor-map-btn-clip-e2e.js CHROMIUM_REQUIRE=1
           suite 3 test-rx-coverage-viewport-e2e.js BASE_URL=$B
           suite 1 test-rx-coverage-noise-e2e.js BASE_URL=$B
@@ -709,6 +797,7 @@ jobs:
           suite 2 test-issue-1274-legend-coverage-e2e.js BASE_URL=$B
           suite 3 test-issue-1648-m5-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-issue-1997-distance-building-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-analytics-direct-snr-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-channel-modal-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-issue-1522-trace-url-sync-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-marker-outline-weight.js CHROMIUM_REQUIRE=1 BASE_URL=$B
@@ -719,7 +808,16 @@ jobs:
           suite 3 test-path-inspector-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-pr-1490-live-map-gpu-animations-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-region-quick-picks.js
+          # The lint rule that keeps network calls on CSApi (needs eslint).
+          suite 1 test-lint-network-calls.js
           suite 3 test-table-sort.js
+          # jsdom suites for the map teardown races and vector zoom limits (#2428).
+          suite 2 test-map-teardown-races.js
+          suite 2 test-map-vector-leaflet-zoom.js
+          # The #2428 tile providers and the harness that serves their tiles: every
+          # tile host is stubbed in the browser, so the fixture server is enough.
+          suite 3 test-map-providers-e2e.js BASE_URL=$B
+          suite 3 test-map-providers-harness-e2e.js BASE_URL=$B
           suite 1 test-touch-targets.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-live-dedup.js BASE_URL=$B
           suite 1 test-nodes-export-e2e.js BASE_URL=$B
@@ -784,6 +882,9 @@ jobs:
             kill $(cat .server-um.pid) 2>/dev/null || true
             rm -f .server-um.pid
           fi
+          for f in .server-split.pid .static-split.pid; do
+            if [ -f "$f" ]; then kill $(cat "$f") 2>/dev/null || true; rm -f "$f"; fi
+          done
 
       - name: Upload shard results
         if: success()
@@ -944,8 +1045,33 @@ jobs:
       - name: Validate staging compose file
         run: docker compose -f "$STAGING_COMPOSE_FILE" -p corescope-staging config --quiet
 
+      # Split containers: operators build the web image from their checkout and
+      # nothing publishes it, so without this a broken base image, package or
+      # Caddyfile would reach an operator first.
+      - name: Validate split compose file
+        run: CORESCOPE_IMAGE=corescope:check docker compose -f docker-compose.split.yml config --quiet
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Build and smoke the web image (Dockerfile.web)
+        env:
+          GIT_COMMIT: ${{ steps.meta.outputs.git_commit }}
+        run: |
+          set -euo pipefail
+          docker buildx build . -f Dockerfile.web --load -t corescope-web:check --build-arg GIT_COMMIT="$GIT_COMMIT"
+          # BACKEND is a closed port: /api must reach it (502), not the file server (404).
+          docker run -d --name web-check -p 8080:80 -e BACKEND=127.0.0.1:9 corescope-web:check
+          trap 'docker logs web-check 2>&1 | tail -20; docker rm -f web-check >/dev/null' EXIT
+          for i in $(seq 1 30); do curl -fs -o /dev/null http://localhost:8080/ && break; sleep 1; done
+          page=$(curl -fsS -D headers.txt http://localhost:8080/)
+          echo "$page" | grep -q "app.js?v=$GIT_COMMIT" || { echo "::error::index.html is not busted with the commit"; exit 1; }
+          if echo "$page" | grep -q __BUST__; then echo "::error::index.html still has __BUST__"; exit 1; fi
+          grep -qi '^cache-control: no-cache' headers.txt || { echo "::error::index.html may be cached"; exit 1; }
+          curl -fsS http://localhost:8080/deployment.js | grep -q "apiBase: ''" || { echo "::error::deployment.js is not same-origin"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/healthz)
+          [ "$code" = 502 ] || { echo "::error::/api/healthz answered $code, not 502 from the closed BACKEND"; exit 1; }
+          echo "web image serves the packaged UI and forwards /api ✅"
 
       - name: Set up QEMU (arm64 runtime stage + arm64 smoke)
         uses: docker/setup-qemu-action@v3
@@ -1013,7 +1139,7 @@ jobs:
   # Go file changed, so for it skipped is accepted; a master push always runs it.
   build-and-publish:
     name: "🏗️ Build & Publish Docker Image"
-    needs: [go-test, race-test, e2e-test, image-check, changes]
+    needs: [go-test, race-test, server-race, e2e-test, image-check, changes]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
     steps:
@@ -1029,6 +1155,7 @@ jobs:
           }
           require go-test "${{ needs['go-test'].result }}" "success"
           require race-test "${{ needs['race-test'].result }}" "success skipped"
+          require server-race "${{ needs['server-race'].result }}" "success"
           require e2e-test "${{ needs['e2e-test'].result }}" "success"
           require image-check "${{ needs['image-check'].result }}" "success"
           exit $fail
@@ -1088,7 +1215,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   release-artifacts:
     name: "📦 Release Artifacts"
-    needs: [go-test, changes]
+    needs: [go-test, server-race, changes]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -1116,18 +1243,21 @@ jobs:
       - name: Build corescope-decrypt (static, linux/amd64)
         run: |
           cd cmd/decrypt
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-amd64 .
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s -Wl,-z,stack-size=8388608' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-amd64 .
 
       - name: Build corescope-decrypt (static, linux/arm64)
         run: |
           cd cmd/decrypt
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-arm64 .
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s -Wl,-z,stack-size=8388608' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-arm64 .
 
       - name: Verify release binaries are static and runnable
         run: |
           set -e
           for f in corescope-decrypt-linux-amd64 corescope-decrypt-linux-arm64; do
             file "$f" | grep -q 'statically linked' || { echo "::error::$f is not statically linked"; exit 1; }
+            # musl sizes thread stacks from PT_GNU_STACK; the build's
+            # -Wl,-z,stack-size flag must have reached the artifact.
+            readelf -lW "$f" | grep -Eq 'GNU_STACK .* 0x0*800000 +RW' || { echo "::error::$f: PT_GNU_STACK is not 8 MiB, musl thread stacks are not pinned"; exit 1; }
           done
           # amd64 runs natively on the runner; arm64 is only checked structurally
           # here (the container image job exercises arm64 under QEMU).

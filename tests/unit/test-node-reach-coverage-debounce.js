@@ -1,5 +1,6 @@
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 // Unit test for #6: pan/zoom coverage redraws must be debounced so dragging the
 // map fires at most one /api/...rx-coverage request per settle, not one per
 // moveend. We load node-reach-coverage.js in a vm sandbox with controllable
@@ -54,6 +55,7 @@ const sandbox = {
   document: { documentElement: {} },
 };
 vm.createContext(sandbox);
+loadApiBase(sandbox);
 // Define debounce IN the context so it uses the controllable timers above.
 vm.runInContext('function debounce(fn, ms){var t; return function(){var a=arguments, c=this; clearTimeout(t); t=setTimeout(function(){fn.apply(c,a);}, ms);};}', sandbox);
 vm.runInContext(code, sandbox);

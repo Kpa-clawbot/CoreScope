@@ -183,6 +183,7 @@ func main() {
 		// registration across reconnects returns the same state so
 		// counters accumulate across the process lifetime.
 		status := RegisterSourceStatus(tag, source.Broker)
+		subs := &subscriptionManager{}
 
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("MQTT [%s] connected to %s as client %s", tag, source.Broker, opts.ClientID)
@@ -196,19 +197,15 @@ func main() {
 			if len(topics) == 0 {
 				topics = []string{"meshcore/#"}
 			}
-			for _, t := range topics {
-				token := c.Subscribe(t, 0, nil)
-				token.Wait()
-				if token.Error() != nil {
-					log.Printf("MQTT [%s] subscribe error for %s: %v", tag, t, token.Error())
-				} else {
-					log.Printf("MQTT [%s] subscribed to %s", tag, t)
-				}
-			}
+			// Checks SUBACK return codes and retries rejected
+			// subscriptions; supersedes retry loops from the previous
+			// connection (see subscribe_retry.go).
+			subs.start(c, tag, topics)
 		})
 
 		opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
 			log.Printf("MQTT [%s] disconnected from %s: %v", tag, source.Broker, err)
+			subs.stop()
 			status.MarkDisconnect(time.Now(), err)
 		})
 

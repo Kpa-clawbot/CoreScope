@@ -25,6 +25,7 @@ type authService struct {
 	hook        *rateLimiter
 	settingsPut *rateLimiter // PUT /api/account/settings, per user
 	companion   *rateLimiter // companion challenge + link, per IP and per user
+	repeater    *rateLimiter // repeater edit, claim and unclaim, per user
 
 	// approved is the snapshot of approved hashtag channel names, filled at
 	// construction and reloaded from users.db after every proposal decision.
@@ -62,6 +63,7 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 		hook:        newRateLimiter(600, time.Minute),
 		settingsPut: newRateLimiter(60, time.Hour),
 		companion:   newRateLimiter(60, time.Hour),
+		repeater:    newRateLimiter(120, time.Hour),
 		stop:        make(chan struct{}),
 		now:         time.Now,
 	}
@@ -202,6 +204,7 @@ func (a *authService) prune() {
 	a.hook.gc()
 	a.settingsPut.gc()
 	a.companion.gc()
+	a.repeater.gc()
 }
 
 func (a *authService) isConfigAdmin(email string) bool { return a.set.adminEmails[email] }

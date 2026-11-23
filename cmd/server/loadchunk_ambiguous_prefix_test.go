@@ -54,7 +54,7 @@ func createTestDBAmbiguousPrefix(t *testing.T, relayA, relayB, hop, firstSeen st
 		resolved_path TEXT
 	)`)
 	// PREFLIGHT: async=true reason="test fixture, in-memory tmpdir DB"
-	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT, inactive INTEGER)`)
+	exec(`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT, inactive INTEGER)`)
 	// PREFLIGHT: async=true reason="test fixture, in-memory tmpdir DB"
 	exec(`CREATE TABLE nodes (
 		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,

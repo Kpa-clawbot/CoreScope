@@ -172,54 +172,36 @@ type ClientReception struct {
 // deriveHeardKey applies the RX capture HARD RULE: record only what the
 // companion heard itself and directly.
 //   - direction must be "rx".
-//   - payload type must not repurpose the header path bytes (TRACE stores
-//     per-hop SNR there, not node hashes — packetpath.PathBytesAreHops).
-//   - hops present AND a FLOOD route → the directly-heard node is the LAST hop
-//     (path[len-1] = the forwarder that just transmitted; each FLOOD forwarder
-//     appends its hash to the end). 1-byte (2 hex char) prefixes are rejected.
-//   - hops present on a DIRECT route → NOT attributable: direct forwarders
-//     consume the next hop from the FRONT (firmware Mesh.cpp removeSelfFromPath),
-//     so path[len-1] is the route's destination-side end, not who was heard.
-//   - hops empty + isAdvert → the 0-hop advertiser, by its full pubkey.
-//   - hops empty + isDiscoverResp → the 0-hop responder, by its pubkey (8 or
-//     32 bytes — CTL_TYPE_NODE_DISCOVER_RESP always carries an 8-byte prefix
-//     or the full 32-byte key; anything else is rejected outright, not
-//     truncated). A node-discover reply is always a direct, zero-hop RX —
+//   - the path and advert part is the shared rule, packetpath.HeardKey: last
+//     hop of a flood route (at least 2 bytes), or the 0-hop advertiser; never
+//     a direct route with a path, never TRACE.
+//   - hops empty + isDiscoverResp: the 0-hop responder, by its pubkey (8 or
+//     32 bytes; CTL_TYPE_NODE_DISCOVER_RESP always carries an 8-byte prefix
+//     or the full 32-byte key, anything else is rejected outright, not
+//     truncated). A node-discover reply is always a direct, zero-hop RX,
 //     stronger identification than a path hash, since it carries the
 //     responder's own identity rather than an inferred forwarder.
-//   - otherwise → not attributable (ok=false).
+//   - otherwise: not attributable (ok=false).
 //
 // Returns (heardKey lowercased, keylenBytes, src, ok).
 func deriveHeardKey(direction string, routeType, payloadType int, hops []string, advertPubkey string, isAdvert bool, isDiscoverResp bool, discoverPubkey string) (string, int, string, bool) {
 	if !strings.EqualFold(direction, "rx") {
 		return "", 0, "", false
 	}
-	if !packetpath.PathBytesAreHops(byte(payloadType)) {
-		return "", 0, "", false
-	}
+	last, pk := "", ""
 	if len(hops) > 0 {
-		// FLOOD routes (TRANSPORT_FLOOD 0, FLOOD 1) APPEND each forwarder's hash to
-		// the END of the path, so path[last] is the immediate RF transmitter. DIRECT
-		// routes (2, 3) consume the next hop from the FRONT, so path[last] is the
-		// route's destination-side end, NOT who was heard.
-		if routeType != packetpath.RouteTransportFlood && routeType != packetpath.RouteFlood { // direct route: path[last] is not the transmitter
-			return "", 0, "", false
-		}
-		last := strings.ToLower(strings.TrimSpace(hops[len(hops)-1]))
-		keylen := len(last) / 2
-		if keylen < 2 { // exclude 1-byte (collision-prone), matching Reach
-			return "", 0, "", false
-		}
-		return last, keylen, "rxlog", true
+		last = hops[len(hops)-1]
 	}
-	if isAdvert && advertPubkey != "" {
-		pk := strings.ToLower(strings.TrimSpace(advertPubkey))
-		return pk, len(pk) / 2, "advert", true
+	if isAdvert {
+		pk = advertPubkey
 	}
-	if isDiscoverResp && discoverPubkey != "" {
+	if key, src, ok := packetpath.HeardKey(routeType, byte(payloadType), last, pk); ok {
+		return key, len(key) / 2, src, true
+	}
+	if len(hops) == 0 && isDiscoverResp && discoverPubkey != "" && packetpath.PathBytesAreHops(byte(payloadType)) {
 		pk := strings.ToLower(strings.TrimSpace(discoverPubkey))
 		keylen := len(pk) / 2
-		if keylen != 8 && keylen != 32 { // discover pubkeys are always 8B (prefix) or 32B (full) — no floor, an exact set
+		if keylen != 8 && keylen != 32 { // discover pubkeys are always 8B (prefix) or 32B (full), no floor, an exact set
 			return "", 0, "", false
 		}
 		return pk, keylen, "discover", true

@@ -134,6 +134,27 @@ See [Channels](channels.md) for details.
 
 Initial map center and zoom level.
 
+## Map tiles
+
+Which maps visitors can pick (street, gray, topographic, satellite, vector), the light and dark defaults, the Carto key, the hillshade overlay and your own tile servers are all set under `map.tiles`:
+
+```json
+"map": {
+  "tiles": {
+    "darkDefault": "carto-dark",
+    "lightDefault": "carto-light",
+    "providers": {
+      "carto": { "key": "YOUR_CARTO_KEY" },
+      "opentopomap": { "enabled": true },
+      "openfreemap": { "enabled": true }
+    },
+    "custom": []
+  }
+}
+```
+
+Everything under `map.tiles` is sent to every visitor's browser, so only put keys there that are meant to be public (domain-restricted). Of the built-in groups only `carto` and `esri` are on unless you say otherwise; every other group (including the newer `eox`, `osmfr`, `openfreemap`, `versatiles` and `hillshade`) needs `"enabled": true`. The full list of maps, their licences and examples for custom and self-hosted tile servers are in [Map Tile Providers](../deployment.md#map-tile-providers).
+
 ## Regions
 
 ```json

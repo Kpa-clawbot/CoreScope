@@ -6,6 +6,7 @@
  */
 'use strict';
 const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
+const { loadApiBase } = require('./api-base-sandbox');
 const vm = require('vm');
 const fs = require('fs');
 const assert = require('assert');
@@ -92,6 +93,7 @@ function makeSandbox() {
   ctx.makeColumnsResizable = () => {};
   ctx.debounce = (fn) => fn;
   vm.createContext(ctx);
+  loadApiBase(ctx);
   return ctx;
 }
 function loadInCtx(ctx, file) {

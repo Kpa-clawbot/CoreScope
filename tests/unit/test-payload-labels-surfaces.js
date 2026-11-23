@@ -84,7 +84,7 @@ async function renderNodeAnalytics(breakdown) {
   const charts = [];
   const calls = [];
   const els = {};
-  const mkEl = () => ({ style: {}, textContent: '', innerHTML: '', insertAdjacentText() {} });
+  const mkEl = () => ({ style: {}, textContent: '', innerHTML: '', insertAdjacentText() {}, addEventListener() {} });
   const ctx = {
     console, Math, JSON, Date, Number, String, Array, Object, Promise, isNaN, setTimeout,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),

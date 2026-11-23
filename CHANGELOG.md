@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Added
+- **More map providers** (#2428) - new groups, each off until the operator sets `map.tiles.providers.<group>.enabled: true` (an upgrade changes nothing in the picker): EOX (Sentinel-2 satellite 2025 and 2016, Terrain Light, place-label overlays), OSM France (Humanitarian, CyclOSM, OSM Gray, OSM Gray Dark), and the vector styles OpenFreeMap (Liberty, Bright, Positron, Dark, Fiord) and VersaTiles (Colorful, Muted, Gray, Colorful Dark, Gray Dark). Check each group's terms before turning it on: EOX 2025 imagery is non-commercial (CC BY-NC-SA 4.0), OSM France is volunteer-run fair use.
+- **Your own tile servers** - `map.tiles.custom` adds raster (XYZ), vector (MapLibre style) and raster overlay entries as `custom-<id>`, usable in `darkDefault` / `lightDefault`. Invalid entries are skipped with a console warning.
+- **Overlays** - a hillshade overlay shaded in the browser from Terrarium elevation tiles (`map.tiles.providers.hillshade.url` can point at a mirror) and EOX place labels, ticked from a new Overlays group in the picker (each with its group turned on).
+- **The picked map is saved** - a map pinned in the picker survives a reload and applies on every page (the small maps without a picker use it when it suits the current theme); **Auto** clears it.
+- **MapLibre GL vendored** in `public/vendor/` and lazy-loaded (about 380 KB gzipped) only when a vector map is picked; without WebGL the map falls back to the default raster map.
+
+### Changed
+- **Every map page follows the provider choice**, including the home page mini-map, with one shared picker (Auto, Street, Topographic, Satellite, Overlays).
+- `docs/deployment.md` Map Tile Providers rewritten to match the real config keys.
+
+Closes #2428.
+
+## [3.18.0] - 2026-11-17
+
+See [docs/release-notes/v3.18.0.md](docs/release-notes/v3.18.0.md) for the full notes. 11 commits since v3.17.0: 5 fix, 3 feat, 1 test, 1 refactor, 1 docs.
+
+### Highlights
+- **`users.db` migrates to schema v9 with user accounts on** (#2415) - a v3.17.x binary refuses it afterwards, so keep the pre-upgrade copy for a rollback.
+- **The UI's live feed connects to `/ws` instead of `/`** (#2383) - a reverse proxy that forwards WebSocket upgrades only on `/` must forward `/ws` too.
+- **Radio line of sight on packet routes and a repeater planner** (#2391) - SRTM terrain, in memory only. Opt-in (`los`, `planner`).
+- **Repeater info and claims** (#2415, #2416, #2417) - height, gain, power, status and notes per repeater, edited by registered users. Needs user accounts.
+- **Three ways to deploy the UI** (#2383) - all-in-one as today, a separate web container, or a static host against a server on another origin.
+- **Memory after eviction** (#2327) and **map tile overrides on every page** (#2386).
+
+No manual migration step.
+
 ## [3.17.0] - 2026-11-11
 
 See [docs/release-notes/v3.17.0.md](docs/release-notes/v3.17.0.md) for the full notes. 24 commits since v3.16.0: 11 fix, 5 docs, 4 feat, 2 test, 1 ui, 1 chore.

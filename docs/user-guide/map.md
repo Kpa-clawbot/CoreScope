@@ -4,6 +4,27 @@ The Map page shows all nodes on an interactive map, color-coded by role.
 
 [Screenshot: map with colored markers and controls panel]
 
+## Map style and overlays
+
+The layers button on the map (top-left) chooses what the map underneath the nodes looks like. The same picker is on the [Live](live.md) page (top-right) and the Repeater Planner.
+
+- **Auto** (the default) follows the site theme: a light map in light mode, a dark map in dark mode.
+- Or pick a specific map. They are grouped by kind:
+  - **Street**: road maps, including gray and dark styles that keep the node markers easy to read.
+  - **Topographic**: terrain and contour maps.
+  - **Satellite**: aerial imagery. Satellite maps look the same in light and dark mode.
+- **Overlays** are checkboxes drawn on top of whichever map you chose:
+  - **Hillshade**: shaded relief, so hills and valleys stand out. Useful with any map when you are judging radio line of sight.
+  - **Place labels**: town and road names, mainly for satellite imagery, which has none.
+
+Your choice is saved in your browser: the picker opens on it after a reload and on the Live and Repeater Planner pages too. The small maps on node pages, Analytics and Home show it whenever it suits the current theme (a satellite map always does; a light map is not used in dark mode), and otherwise the theme's map. It is not shared with other visitors and not stored on the server. Pick **Auto** to go back to following the theme.
+
+Which maps the picker lists is up to the site's operator: the newer providers are offered only once the operator turns them on.
+
+Some maps in the Street group are vector maps, drawn by your browser rather than downloaded as pictures. They stay sharp at every zoom level. If your browser can't draw them (no WebGL), or they fail to load within 15 seconds, the page shows the regular map for the current theme instead. The small maps on node pages, Analytics and Home always use a regular map: there, a vector choice shows the theme's default map.
+
+Which maps appear in the list is up to the site operator, who can turn groups of maps on and off and add their own tile server. See [Map Tile Providers](../deployment.md#map-tile-providers).
+
 ## Marker shapes and colors
 
 Each node role has a distinct shape and color:
@@ -69,3 +90,5 @@ Click any marker to see:
 - Use the role checkboxes to isolate repeaters and understand coverage
 - The neighbor filter is great for seeing which nodes can directly hear each other
 - Node colors are [customizable](customization.md) in the theme settings
+- Turn on the **Hillshade** overlay to see which nodes have high ground between them
+- A gray street map makes colored markers stand out on a busy mesh

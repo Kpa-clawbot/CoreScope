@@ -305,7 +305,8 @@ With user management on, a user logs in from the CoreDrive RX app with their ema
 RX then holds a **device token** instead of a cookie: it shows under *My account, Devices* as
 "CoreDrive RX – <device name>", lasts 90 days from its last use, and *Log out* there revokes it.
 The token is limited to the account routes RX needs (`/api/auth/me`, `/api/auth/logout`,
-`/api/account/settings`, `/api/account/companions*`); anything else answers 403.
+`/api/account/settings`, `/api/account/companions*`); anything else answers 403. Other apps can
+ask for other scopes instead (see *Repeater info, Mobile apps*).
 
 RX then links the companion it is connected to: the companion signs a server challenge with its
 own key, so only whoever holds the device can link it. The newest proof wins: a companion that
@@ -327,6 +328,44 @@ coverage counts as the owner's (*My coverage* on the coverage page). Links are p
   client data from companions nobody linked. It is a filter, not a security boundary, and it drops
   everything from RX builds without account support: upgrade the RX clients first. See
   [Client RX Coverage, Linked companions only](../client-rx-coverage.md#linked-companions-only-optional).
+
+### Repeater info
+
+With user management on, a repeater's node page has a *Repeater info* section: antenna height,
+antenna gain, status (active, maintenance, decommissioned), power (mains, battery, solar) and
+free notes (500 characters). There is no separate switch: it is on whenever `userManagement` is
+enabled.
+
+- **Who may edit:** a repeater nobody claimed can be edited by any logged-in active user. Once
+  it has claimers, only its active claimers can. Admins can always edit. An unchanged save
+  writes nothing.
+- **Public names:** the display names of the claimers, and of the user who made the last edit,
+  are shown to every visitor. Email addresses never are. Claims of a disabled user are kept
+  but hidden and do not count, so a repeater whose only claimer is disabled is open again.
+- **Audit log:** edits are recorded as `repeater.edit` (with the old and new value of each
+  changed field), claims as `repeater.claim` and `repeater.unclaim`.
+- **My repeaters:** *My account, My repeaters* lists the repeaters you claimed, silent ones
+  first: when each was last heard (by the same rule as the node pages), its saved status, who
+  else maintains it, and an *Unclaim* button. A repeater silent longer than
+  `retention.nodeDays`, which the analyzer moves to its inactive nodes, stays listed by name as
+  silent with its last advert. A repeater the analyzer has no record of at all is listed as no
+  longer in the database until you unclaim it. Deep link: `#/account?section=repeaters`.
+- **Removing a claim:** *Admin, Users*, open the user, *Remove* next to the claim. Admins use
+  this when a claimer left or claimed a repeater that is not theirs.
+- **Mobile apps:** an app logs in at `POST /api/auth/device-token` like CoreDrive RX, but asks
+  for the scopes it needs: `repeater:claim` to claim a repeater and remove its own claim,
+  `repeater:edit` to edit details (still only where the account may edit, as above). Either
+  scope also lets the app read the account's own *My repeaters* list
+  (`GET /api/account/repeaters`). The token shows under *My account, Devices*, and its claims and edits are recorded with `via: device`.
+  Admin claim removal stays in the browser. There is no separate switch. An admin's
+  `repeater:edit` token can edit the details of every repeater, as an admin can in the browser,
+  for as long as the token lives (90 days, renewed with use); log it out under *Devices* when the
+  device is lost or changes hands.
+- **Edits from two places:** each save of the details counts up a `revision`. The node page and
+  an app both send the revision they started from, and if someone saved in between, CoreScope
+  refuses the save and returns the current details instead of overwriting them. The node page
+  keeps what you typed and shows the saved values under the form: *Save* again replaces them,
+  *Cancel* keeps them.
 
 ### Observer MQTT logins (optional)
 
@@ -464,6 +503,11 @@ version N is newer than this binary supports"): run that version or newer. Delet
   not a node to monitor. The app shows
   under *Devices* as "CoreDrive RX – <device name>"; *Log out* there signs the app out.
   *Unlink* removes the link; the coverage it already collected stays on the map. On the coverage page, *My coverage* shows only what your linked companions heard.
+- **Repeater info:** on a repeater's page, *Repeater info* shows what the community knows
+  about it. *Claim this repeater* says you operate it; after that only you (and the other
+  claimers and admins) can edit it. An unclaimed repeater can be edited by any logged-in
+  user. Your display name is public next to your claims and edits, your email address is
+  not. *Unclaim* removes your claim.
 - **Never synced:** channel keys and decrypted messages, the API key, panel and column
   sizes, collapsed panels and map positions. They stay in the browser where you set them.
 - **Logging out** asks whether to keep your settings on this device (the default) or

@@ -50,6 +50,7 @@
     statusGreen: '--status-green', statusYellow: '--status-yellow', statusRed: '--status-red',
     statusYellowText: '--status-yellow-text', statusRedText: '--status-red-text',
     statusGreenTintText: '--status-green-tint-text',
+    betaBadgeBg: '--beta-badge-bg', betaBadgeText: '--beta-badge-text',
     surface1: '--surface-1', surface2: '--surface-2', surface3: '--surface-3',
     sectionBg: '--section-bg',
     cardBg: '--card-bg', contentBg: '--content-bg', detailBg: '--detail-bg',
@@ -1646,14 +1647,32 @@
   // Persists per-browser via MC_setDarkTileProvider; map.js / live.js
   // listen for `mc-tile-provider-changed` and swap tiles live.
   
+  // Light basemap for the geofilter preview maps (they preview marker colours
+  // on a light map): the operator's light provider via the shared builder,
+  // else the literal Carto light URL.
+  function _geoPreviewTiles() {
+    if (typeof window.MC_resolveTile === 'function' && typeof window.MC_buildTileLayer === 'function') {
+      return window.MC_buildTileLayer(window.MC_resolveTile(false), { raster: true });
+    }
+    return L.tileLayer(window.MC_tileUrlById
+      ? window.MC_tileUrlById('carto-light', 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png')
+      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
+    });
+  }
+
   function _renderTileProviderSelector() {
     var reg = (typeof window !== 'undefined') && window.MC_TILE_PROVIDERS;
     if (!reg) return '';
     var activeDark = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
     var activeLight = (typeof window.MC_getLightTileProvider === 'function') ? window.MC_getLightTileProvider() : 'carto-light';
     
-    var darkIds = Object.keys(reg).filter(function(id) { return reg[id].type === 'dark'; });
-    var lightIds = Object.keys(reg).filter(function(id) { return reg[id].type === 'light'; });
+    // 'any' (theme-neutral, e.g. satellite) entries are valid for both
+    // themes: listed after the theme's own entries.
+    var idsOfType = function(t) { return Object.keys(reg).filter(function(id) { return reg[id].type === t; }); };
+    var anyIds = idsOfType('any');
+    var darkIds = idsOfType('dark').concat(anyIds);
+    var lightIds = idsOfType('light').concat(anyIds);
     
     var hasMultipleDark = darkIds.length > 1;
     var hasMultipleLight = lightIds.length > 1;
@@ -1749,6 +1768,7 @@
         '<div style="position:absolute;top:7px;right:7px;background:rgba(255,255,255,0.88);border-radius:4px;padding:3px 8px;font-size:11px;color:#444;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,0.15)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> click to expand</div>' +
       '</div>' +
       '<div id="cv2-gf-status" style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Loading current filter…</div>' +
+      (window.CSApi && CSApi.anonymous ? CSBeta.classicOnlyHtml('Editing the geographic filter') : '') +
       // Edit controls — hidden until server confirms write access (writeEnabled=true)
       '<div id="cv2-gf-edit" style="display:none">' +
         '<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">' +
@@ -1847,11 +1867,7 @@
     var modalClosingLine = null;
 
     _gfModalMap = L.map(mapDiv, { zoomControl: true });
-    L.tileLayer(window.MC_tileUrlById
-      ? window.MC_tileUrlById('carto-light', 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png')
-      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
-    }).addTo(_gfModalMap);
+    _geoPreviewTiles().addTo(_gfModalMap);
 
     function renderModal() {
       if (modalPolygon) { _gfModalMap.removeLayer(modalPolygon); modalPolygon = null; }
@@ -1963,7 +1979,10 @@
 
   // The editor is usable with a write-capable API key (gf.writeEnabled) or an
   // admin session (server: requireAdmin accepts both).
+  // An anonymous static build cannot send the API key or the session in a
+  // way the server accepts cross-origin, so it never offers the editor.
   function _gfCanEdit(gf, csAuth) {
+    if (window.CSApi && CSApi.anonymous) return false;
     return !!((gf && gf.writeEnabled) || (csAuth && csAuth.isAdmin()));
   }
 
@@ -2004,7 +2023,7 @@
     var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' }, window.CSAuth);
     if (!headers) { _gfMsg(container, 'API key required to save.', false); return; }
     var bufferKm = parseFloat((container.querySelector('#cv2-gf-buffer') || {}).value) || 0;
-    fetch('/api/config/geo-filter', {
+    CSApi.fetch('/api/config/geo-filter', {
       method: 'PUT',
       headers: headers,
       body: JSON.stringify({ polygon: _gfPoints, bufferKm: bufferKm })
@@ -2020,7 +2039,7 @@
     var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' }, window.CSAuth);
     if (!headers) { _gfMsg(container, 'API key required.', false); return; }
     if (!confirm('Remove geo filter? All nodes will be allowed through.')) return;
-    fetch('/api/config/geo-filter', {
+    CSApi.fetch('/api/config/geo-filter', {
       method: 'PUT',
       headers: headers,
       body: JSON.stringify({ polygon: null })
@@ -2049,7 +2068,7 @@
     if (!headers) { _gfPruneMsg(container, 'API key required.', false); return; }
     var btn = container.querySelector('#cv2-gf-prune-preview');
     if (btn) btn.textContent = 'Loading…';
-    fetch('/api/admin/prune-geo-filter', {
+    CSApi.fetch('/api/admin/prune-geo-filter', {
       method: 'POST',
       headers: headers
     }).then(function (r) {
@@ -2088,7 +2107,7 @@
     var count = _gfPruneNodes.length;
     if (!confirm('Delete ' + count + ' node' + (count !== 1 ? 's' : '') + ' from the database? This cannot be undone.')) return;
     var pubkeys = _gfPruneNodes.map(function (n) { return n.pubkey; });
-    fetch('/api/admin/prune-geo-filter?confirm=true', {
+    CSApi.fetch('/api/admin/prune-geo-filter?confirm=true', {
       method: 'POST',
       headers: headers,
       body: JSON.stringify({ pubkeys: pubkeys })
@@ -2109,11 +2128,7 @@
     if (!mapEl || typeof L === 'undefined') return;
 
     _gfMap = L.map(mapEl, { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false });
-    L.tileLayer(window.MC_tileUrlById
-      ? window.MC_tileUrlById('carto-light', 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png')
-      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-      attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
-    }).addTo(_gfMap);
+    _geoPreviewTiles().addTo(_gfMap);
 
     if (!_gfLoaded) {
       api('/config/geo-filter', { ttl: 0 }).then(function (gf) {
@@ -2328,20 +2343,14 @@
     // #1420 Dark-tile provider dropdown — persists + fires mc-tile-provider-changed
     container.querySelectorAll('[data-cv2-dark-tile-provider]').forEach(function (sel) {
       sel.addEventListener('change', function () {
-        var id = sel.value;
-        if (typeof window.MC_setDarkTileProvider === 'function') {
-          window.MC_setDarkTileProvider(id);
-        }
+        _setThemeTile('dark', sel.value);
       });
     });
 
     // Light-tile provider dropdown — persists + fires mc-tile-provider-changed
     container.querySelectorAll('[data-cv2-light-tile-provider]').forEach(function (sel) {
       sel.addEventListener('change', function () {
-        var id = sel.value;
-        if (typeof window.MC_setLightTileProvider === 'function') {
-          window.MC_setLightTileProvider(id);
-        }
+        _setThemeTile('light', sel.value);
       });
     });
 
@@ -2847,6 +2856,14 @@
   // in try/catch because we run before/after page lifecycle in tests
   // and operators' browsers where any one surface (localStorage,
   // document, body) could be missing.
+  // The customizer's light/dark map choice. A map picked in a layer picker
+  // (mc-tile-pinned) would hide it, so the newer choice (this one) clears it.
+  function _setThemeTile(theme, id) {
+    if (typeof window.MC_setPinnedTileProvider === 'function') window.MC_setPinnedTileProvider(null);
+    var set = theme === 'light' ? window.MC_setLightTileProvider : window.MC_setDarkTileProvider;
+    return typeof set === 'function' ? set(id) : false;
+  }
+
   function _resetAll() {
     // 1. localStorage — customizer-owned keys ONLY. Theme / favorites /
     //    gesture hints / channel selection state are explicitly preserved
@@ -2860,6 +2877,11 @@
     ];
     for (var i = 0; i < CUSTOMIZER_LS_KEYS.length; i++) {
       try { localStorage.removeItem(CUSTOMIZER_LS_KEYS[i]); } catch (_e) { /* ignore */ }
+    }
+    // The map picked in a layer picker (mc-tile-pinned): through its setter,
+    // so every open map follows at once.
+    if (typeof window.MC_setPinnedTileProvider === 'function') {
+      try { window.MC_setPinnedTileProvider(null); } catch (_e) { /* ignore */ }
     }
 
     // 2. CB preset — body[data-cb-preset] + CSS var teardown lives in
@@ -2987,6 +3009,7 @@
     _gfReapply: _gfReapply,
     // #1496 — full reset (not just STORAGE_KEY). See _resetAll() above.
     resetAll: _resetAll,
+    setThemeTile: _setThemeTile,
     // Exposed for tests — see test-issue-1509-detect-preset.js.
     detectActivePreset: _detectActivePreset,
     // #1380 — exposed for unit tests; see test-issue-1380-*.

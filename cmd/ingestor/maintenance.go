@@ -45,16 +45,28 @@ const pruneBatchTransmissions = 250
 // pins the plan.
 const pruneAgedTransmissionIDs = `SELECT id FROM transmissions WHERE first_seen < ? ORDER BY first_seen, id LIMIT ?`
 
-// The two statements of one prune batch. Child observations go first (no
-// CASCADE in SQLite).
-const (
-	pruneObservationsBatch  = `DELETE FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `)`
-	pruneTransmissionsBatch = `DELETE FROM transmissions WHERE id IN (` + pruneAgedTransmissionIDs + `)`
-	// Sparse rx_radio_id rows of multi-radio observers (#1869), keyed by the
-	// observation, so they go before the observations they point at.
-	pruneObservationRadiosBatch = `DELETE FROM observation_radios WHERE observation_id IN (
-		SELECT id FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `))`
-)
+// The statements of one prune batch.
+var pruneObservationRadiosBatch, pruneObservationsBatch, pruneTransmissionsBatch = transmissionDeleteStatements(pruneAgedTransmissionIDs)
+
+// transmissionDeleteStatements returns the statements that delete the
+// transmissions selected by sel together with the rows that point at them, in
+// the order they must run. sel is the body of an IN (...) list: a subquery, or
+// "?" for a single id. Every path that deletes transmissions (retention prune,
+// content-hash merge) uses this so the child list lives in one place.
+//
+//   - observation_radios: sparse rx_radio_id rows of multi-radio observers
+//     (#1869), keyed by the observation, so they go before the observations.
+//   - observations: no CASCADE on transmission_id, and foreign keys are
+//     enforced, so they go before the transmissions.
+//   - advert_route_evidence and tx_rewrite_feed are ON DELETE CASCADE and
+//     need no statement of their own.
+func transmissionDeleteStatements(sel string) (radios, observations, transmissions string) {
+	radios = `DELETE FROM observation_radios WHERE observation_id IN (
+		SELECT id FROM observations WHERE transmission_id IN (` + sel + `))`
+	observations = `DELETE FROM observations WHERE transmission_id IN (` + sel + `)`
+	transmissions = `DELETE FROM transmissions WHERE id IN (` + sel + `)`
+	return radios, observations, transmissions
+}
 
 // PruneOldPackets deletes transmissions (and their child observations)
 // older than `days`. Returns count of transmissions deleted.
