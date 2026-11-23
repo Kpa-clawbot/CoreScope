@@ -1,0 +1,36 @@
+/* Repeater Planner — Coverage mode. Colours come from the --pl-cov-* variables in style.css. */
+
+/* The raster is a few hundred cells wide: keep cell edges sharp when Leaflet scales it up. */
+.mc-pl-cov-overlay { image-rendering: pixelated; image-rendering: crisp-edges; }
+
+.mc-pl-cov-legend, .mc-pl-cov-links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.mc-pl-cov-legend li, .mc-pl-cov-links li { display: flex; align-items: center; gap: 8px; }
+/* An outdated result: the list belongs to the previous inputs, like the dimmed overlay. */
+.mc-pl-cov [data-f="results"].is-outdated { opacity: 0.5; }
+.mc-pl-cov-sw { flex: none; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); }
+.mc-pl-cov-sw-user-2 { background: var(--pl-cov-user-2); }
+.mc-pl-cov-sw-user-3 { background: var(--pl-cov-user-3); }
+.mc-pl-cov-sw-user-4 { background: var(--pl-cov-user-4); }
+.mc-pl-cov-sw-user-5 { background: var(--pl-cov-user-5); }
+.mc-pl-cov-sw-rep-1 { background: var(--pl-cov-rep-1); }
+.mc-pl-cov-sw-rep-2 { background: var(--pl-cov-rep-2); }
+.mc-pl-cov-sw-rep-3 { background: var(--pl-cov-rep-3); }
+
+.leaflet-overlay-pane path.mc-pl-cov-site { stroke: var(--accent); stroke-width: 3; fill: var(--surface-2); fill-opacity: 1; }
+.leaflet-overlay-pane path.mc-pl-cov-link {
+  stroke-width: 3; stroke-linecap: round;
+  filter: drop-shadow(0 0 1px var(--surface-1)) drop-shadow(0 0 1px var(--surface-1));
+}
+.leaflet-overlay-pane path.mc-pl-cov-link-2 { stroke: var(--pl-cov-rep-2); stroke-dasharray: 12 8; }
+.leaflet-overlay-pane path.mc-pl-cov-link-3 { stroke: var(--pl-cov-rep-3); }
+.leaflet-overlay-pane path.mc-pl-cov-node { stroke: var(--surface-1); fill-opacity: 1; }
+.leaflet-overlay-pane path.mc-pl-cov-node-1 { fill: var(--pl-cov-rep-1); }
+.leaflet-overlay-pane path.mc-pl-cov-node-2 { fill: var(--pl-cov-rep-2); }
+.leaflet-overlay-pane path.mc-pl-cov-node-3 { fill: var(--pl-cov-rep-3); }
+
+.mc-pl-cov-actions { display: flex; flex-direction: column; gap: 12px; }
+/* The phone bottom sheet shows about 300 px of the panel: keep Compute and
+   the outdated note in view while the inputs above it are edited. */
+@media (max-width: 767px) {
+  .mc-pl-cov-actions { position: sticky; bottom: 0; z-index: 1; padding: 8px 0; background: var(--surface-1); }
+}

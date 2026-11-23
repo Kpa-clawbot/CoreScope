@@ -25,8 +25,10 @@
   'use strict';
 
   var BASE_HASH = '#/tools/planner';
-  var MODES = ['chain', 'relay', 'area'];
-  var MODE_LABELS = { chain: 'Chain', relay: 'Relay', area: 'Area' };
+  var MODES = ['chain', 'relay', 'area', 'coverage'];
+  var MODE_LABELS = { chain: 'Chain', relay: 'Relay', area: 'Area', coverage: 'Coverage' };
+  // Modes whose panel and map layer belong to a separate module (window global).
+  var MODULES = { area: 'MeshPlannerArea', coverage: 'MeshPlannerCoverage' };
   var DEBOUNCE_MS = 400;        // point-set / relay-input change → one request
   var INPUT_DEBOUNCE_MS = 150;  // antenna typing in chain mode → local re-analysis
   var POLL_MIN_S = 1;
@@ -838,6 +840,7 @@
             '<div class="mc-pl-actions" data-actions="relay"></div>' +
           '</section>' +
           '<section class="mc-pl-panel mc-pl-panel-area" role="tabpanel" id="mc-pl-panel-area" aria-labelledby="mc-pl-tab-area" tabindex="0" hidden></section>' +
+          '<section class="mc-pl-panel mc-pl-panel-coverage" role="tabpanel" id="mc-pl-panel-coverage" aria-labelledby="mc-pl-tab-coverage" tabindex="0" hidden></section>' +
           '<p class="sr-only" role="status" data-live></p>' +
         '</div>' +
         '<datalist id="mc-pl-nodes"></datalist>' +
@@ -868,7 +871,7 @@
       map: null, tiles: null, layers: {}, nodeRenderer: null,
       rawNodes: [], nodes: [], nodeByCoord: new Map(), nodesState: 'loading', nodesPromise: null,
       mode: null, modeParams: {}, userMoved: false, source: null,
-      unlisten: [], themeObs: null, ro: null, roRaf: 0, sheetAuto: false,
+      unlisten: [], ro: null, roRaf: 0, sheetAuto: false,
       els: {
         map: root.querySelector('.mc-pl-map'),
         side: root.querySelector('.mc-pl-side'),
@@ -877,7 +880,8 @@
         panels: {
           chain: root.querySelector('#mc-pl-panel-chain'),
           relay: root.querySelector('#mc-pl-panel-relay'),
-          area: root.querySelector('#mc-pl-panel-area')
+          area: root.querySelector('#mc-pl-panel-area'),
+          coverage: root.querySelector('#mc-pl-panel-coverage')
         },
         notice: root.querySelector('.mc-pl-notice'),
         live: root.querySelector('[data-live]'),
@@ -905,7 +909,10 @@
         pick: 'a', result: null, resultKey: null, status: null, sel: null, pendingSel: null,
         ctrl: null, ctrlKey: null, timer: 0, inputTimer: 0, liveState: '', haAuto: false, hbAuto: false
       },
-      area: { handle: null, layer: null, waiting: false },
+      modules: {
+        area: { handle: null, layer: null, waiting: false },
+        coverage: { handle: null, layer: null, waiting: false }
+      },
       panel: {
         el: null, legs: [], title: '', owner: null, nav: null, ctrl: null, opener: null,
         cursor: null, crosshair: null, layer: null, cursorMarker: null
@@ -931,13 +938,13 @@
       clearTimeout(s.relay.inputTimer);
       if (s.chain.ctrl) s.chain.ctrl.abort();
       if (s.relay.ctrl) s.relay.ctrl.abort();
-      leaveArea();
+      Object.keys(MODULES).forEach(leaveModule);
       closePanel({ restoreFocus: false });
       s.unlisten.forEach(function (fn) { try { fn(); } catch (e) { /* already gone */ } });
-      if (s.themeObs) s.themeObs.disconnect();
+      if (s.tiles) s.tiles.destroy();
       if (s.ro) s.ro.disconnect();
       if (s.roRaf) UI.caf(s.roRaf);
-      if (s.map) { s.map.off(); s.map.remove(); }
+      window.MC_safeRemoveMap(s.map);
     } catch (e) {
       console.warn('[planner] destroy:', e);
     }
@@ -946,56 +953,11 @@
 
   // ─── Map ────────────────────────────────────────────────────────────────
 
-  function isDark() {
-    return typeof window.MC_isDarkTheme === 'function' ? !!window.MC_isDarkTheme() : false;
-  }
-
-  // Same tile handling as map.js: a theme-synced "auto" group the layer
-  // control can swap out, resolved through map-tile-providers.js.
-  function syncTiles() {
-    if (!S || !S.tiles || typeof window.MC_resolveTile !== 'function') return;
-    var dark = isDark();
-    var r;
-    try { r = window.MC_resolveTile(dark); } catch (e) { return; }
-    var t = S.tiles;
-    var opts = { attribution: r.attribution, maxZoom: r.maxZoom || 19 };
-    if (!t.base) {
-      t.base = L.tileLayer(r.url, opts).addTo(t.auto);
-    } else {
-      t.base.setUrl(r.url);
-      if (t.base.options) { t.base.options.attribution = r.attribution; t.base.options.maxZoom = opts.maxZoom; }
-    }
-    if (dark && r.refUrl) {
-      if (!t.ref) t.ref = L.tileLayer(r.refUrl, opts).addTo(t.auto);
-      else t.ref.setUrl(r.refUrl);
-    } else if (t.ref) {
-      t.auto.removeLayer(t.ref);
-      t.ref = null;
-    }
-    if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
-    if (S.map && S.map.attributionControl && S.map.attributionControl._update) {
-      try { S.map.attributionControl._update(); } catch (e) { /* not ready */ }
-    }
-  }
-
   function createMap() {
     var map = L.map(S.els.map, { zoomControl: true, worldCopyJump: true });
     S.map = map;
     map.setView(FALLBACK_VIEW.center, FALLBACK_VIEW.zoom);
-    S.tiles = { auto: L.layerGroup().addTo(map), base: null, ref: null };
-    syncTiles();
-    if (typeof window.MC_createLayerControl === 'function') {
-      try { window.MC_createLayerControl(map, S.tiles.auto, 'topleft'); } catch (e) { console.warn('[planner] layer control:', e); }
-    }
-    if (typeof MutationObserver === 'function') {
-      S.themeObs = new MutationObserver(function () { syncTiles(); });
-      S.themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    }
-    listen(window, 'mc-tile-provider-changed', function (e) {
-      var dark = isDark();
-      if (e && e.detail && e.detail.type && e.detail.type !== (dark ? 'dark' : 'light')) return;
-      syncTiles();
-    });
+    S.tiles = window.MC_attachAutoTiles(map, { controlPosition: 'topleft' });
 
     // Nodes sit in their own pane under the overlay pane, so legs always draw on top.
     map.createPane('mc-pl-nodes');
@@ -1062,13 +1024,20 @@
     else if (S.mode === 'relay') {
       var which = S.relay.pick;
       if (which) setRelayEnd(which, { lat: ll.lat, lon: ll.lng, node: null });
-    }
+    } else moduleSetSite({ lat: ll.lat, lon: ll.lng, node: null });
   }
 
   function onNodeClick(n) {
     if (!S) return;
     if (S.mode === 'chain') addChainPoint({ lat: n.lat, lon: n.lon, node: n });
     else if (S.mode === 'relay' && S.relay.pick) setRelayEnd(S.relay.pick, { lat: n.lat, lon: n.lon, node: n });
+    else if (S.mode !== 'relay') moduleSetSite({ lat: n.lat, lon: n.lon, node: n });
+  }
+
+  // A module that places a site (Coverage) takes map clicks and node picks.
+  function moduleSetSite(pt) {
+    var m = S.modules[S.mode];
+    if (m && m.handle && typeof m.handle.setSite === 'function') m.handle.setSite(pt);
   }
 
   // Nearest node within SNAP_PX of a dropped marker, by screen distance.
@@ -1356,7 +1325,7 @@
     closePanel({ restoreFocus: false });
     S.mode = mode;
     if (opts.initial) setParams({ mode: mode });
-    else replaceHash(BASE_HASH + buildQuery(mode === 'area' ? Object.assign({ mode: mode }, S.modeParams.area || {}) : { mode: mode }));
+    else replaceHash(BASE_HASH + buildQuery(MODULES[mode] ? Object.assign({ mode: mode }, S.modeParams[mode] || {}) : { mode: mode }));
     MODES.forEach(function (m, i) {
       var on = m === mode;
       var tab = S.els.tabs[i];
@@ -1380,8 +1349,8 @@
       if (S.relay.ctrl) { S.relay.ctrl.abort(); S.relay.ctrl = null; }
       if (S.relay.status && S.relay.status.kind !== 'error') S.relay.status = null;
       S.layers.relay.clearLayers();
-    } else if (mode === 'area') {
-      leaveArea();
+    } else if (MODULES[mode]) {
+      leaveModule(mode);
     }
   }
 
@@ -1397,7 +1366,7 @@
       drawRelay();
       scheduleRelayFetch();
     } else {
-      enterArea();
+      enterModule(mode, MODULES[mode]);
     }
   }
 
@@ -2161,24 +2130,26 @@
     });
   }
 
-  // ─── Area mode (planner-area.js) ────────────────────────────────────────
+  // ─── Module modes (planner-area.js, planner-coverage.js) ───────────────
 
-  function enterArea() {
-    var panel = S.els.panels.area;
-    if (!window.MeshPlannerArea || typeof window.MeshPlannerArea.mount !== 'function') {
-      panel.innerHTML = '<p class="mc-pl-loading-note" role="status">Area planning is loading…</p>';
+  function enterModule(mode, global) {
+    var panel = S.els.panels[mode];
+    var mod = S.modules[mode];
+    var api = window[global];
+    if (!api || typeof api.mount !== 'function') {
+      panel.innerHTML = '<p class="mc-pl-loading-note" role="status">' + esc(MODE_LABELS[mode]) + ' planning is loading…</p>';
       return;
     }
     if (S.nodesState === 'loading' && S.nodesPromise) {
       // The module gets the node list we fetched; wait for it.
       panel.innerHTML = '<p class="mc-pl-loading-note" role="status">Loading known nodes…</p>';
-      if (S.area.waiting) return;
-      S.area.waiting = true;
+      if (mod.waiting) return;
+      mod.waiting = true;
       var gen = pageGen;
       S.nodesPromise.then(function () {
         if (gen !== pageGen || !S) return;
-        S.area.waiting = false;
-        if (S.mode === 'area' && !S.area.handle) enterArea();
+        mod.waiting = false;
+        if (S.mode === mode && !mod.handle) enterModule(mode, global);
       });
       return;
     }
@@ -2186,32 +2157,35 @@
     var layer = L.layerGroup().addTo(S.map);
     var h = null;
     try {
-      h = window.MeshPlannerArea.mount({
+      h = api.mount({
         map: S.map, layer: layer, panel: panel,
         cfg: S.rawCfg, params: params(), setParams: setParams,
         fetchJob: fetchJob, showProfiles: showProfiles, esc: esc,
-        nodes: S.rawNodes, fmtClearance: fmtClearance
+        nodes: S.rawNodes, fmtClearance: fmtClearance,
+        jobErrorText: jobErrorText, warningsHtml: warningsHtml,
+        errorHtml: function (msg) { return errorHtml(msg, null); },
+        progressHtml: function (state, frac) { return progressHtml(frac, JOB_STATES[state] || 'Working…'); }
       });
     } catch (e) {
-      console.error('[planner] area mount:', e);
+      console.error('[planner] ' + mode + ' mount:', e);
       layer.remove();
-      panel.innerHTML = errorHtml('Area planning couldn’t start. Reload the page to try again.', null);
+      panel.innerHTML = errorHtml(MODE_LABELS[mode] + ' planning couldn’t start. Reload the page to try again.', null);
       return;
     }
-    S.area.handle = h || null;
-    S.area.layer = layer;
+    mod.handle = h || null;
+    mod.layer = layer;
   }
 
-  function leaveArea() {
+  function leaveModule(mode) {
     if (!S) return;
-    var a = S.area;
-    if (a.handle && typeof a.handle.unmount === 'function') {
-      try { a.handle.unmount(); } catch (e) { console.warn('[planner] area unmount:', e); }
+    var m = S.modules[mode];
+    if (m.handle && typeof m.handle.unmount === 'function') {
+      try { m.handle.unmount(); } catch (e) { console.warn('[planner] ' + mode + ' unmount:', e); }
     }
-    if (a.layer) { try { a.layer.clearLayers(); a.layer.remove(); } catch (e) { /* map gone */ } }
-    a.handle = null;
-    a.layer = null;
-    if (S.els && S.els.panels.area) S.els.panels.area.innerHTML = '';
+    if (m.layer) { try { m.layer.clearLayers(); m.layer.remove(); } catch (e) { /* map gone */ } }
+    m.handle = null;
+    m.layer = null;
+    if (S.els && S.els.panels[mode]) S.els.panels[mode].innerHTML = '';
   }
 
   // ─── Profile panel ──────────────────────────────────────────────────────

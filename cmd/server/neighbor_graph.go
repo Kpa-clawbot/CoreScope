@@ -312,6 +312,20 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 	// Phase 1: Extract edges from every transmission + observation.
 	for _, p := range packets {
 		tx := p.tx
+		// Only a path that lists transmitted hops names a neighbour
+		// (packetpath.PathHopsTransmitted: flood, not TRACE), and an empty
+		// path only when it proves the originator was heard
+		// (packetpath.EmptyPathHeardOriginator). A missing route or payload
+		// type proves nothing.
+		if tx.RouteType == nil || tx.PayloadType == nil {
+			continue
+		}
+		rt, pt := *tx.RouteType, byte(*tx.PayloadType)
+		hopsTransmitted := packetpath.PathHopsTransmitted(rt, pt)
+		emptyHeardOrigin := packetpath.EmptyPathHeardOriginator(rt, pt)
+		if !hopsTransmitted && !emptyHeardOrigin {
+			continue
+		}
 		isAdvert := tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT
 		isAnonReq := tx.PayloadType != nil && *tx.PayloadType == PayloadANON_REQ
 		// #1777: ANON_REQ's ephemeralPubKey is a full Ed25519 pubkey — the
@@ -337,21 +351,26 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 
 			if len(path) == 0 {
 				// Zero-hop
-				if hasFullOriginator && fromLower != "" {
+				if emptyHeardOrigin && hasFullOriginator && fromLower != "" {
 					if fromLower != observerPK { // self-edge guard
 						g.upsertEdge(fromLower, observerPK, "", observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
 					}
 				}
 				continue
 			}
+			if !hopsTransmitted {
+				continue
+			}
 
-			// Edge 1: originator ↔ path[0] — ADVERT and ANON_REQ only (#1777)
+			// Edge 1: originator ↔ path[0] — ADVERT and ANON_REQ only (#1777).
+			// No SNR: the observer measured its reception of path[last], not
+			// the originator's link to path[0].
 			if hasFullOriginator && fromLower != "" {
 				firstHop := cachedToLower(lowerCache, path[0])
 				if fromLower != firstHop { // self-edge guard (shouldn't happen but spec says check)
 					if packetpath.MeetsPathTrust(len(path[0])/2, opts.PathTrust) {
 						candidates := pm.m[firstHop]
-						g.upsertEdgeWithCandidates(fromLower, firstHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp), lowerCache)
+						g.upsertEdgeWithCandidates(fromLower, firstHop, candidates, observerPK, nil, parseTimestamp(obs.Timestamp), lowerCache)
 					}
 				}
 			}

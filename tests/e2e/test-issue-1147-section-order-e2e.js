@@ -71,6 +71,8 @@ async function previewMetadata(browser) {
     { label: 'certain-room', role: 'room', last_certain_relay: relayed, last_heard: relayed, expectActive: true },
     { label: 'expired-certain', role: 'repeater', last_certain_relay: new Date(Date.now() - 3 * 3600000).toISOString(), relay_active: true },
     { label: 'invalid-certain', role: 'room', last_certain_relay: 'not-a-date', relay_active: true },
+    { label: 'large-counts', role: 'repeater', advert_count: '12345', relay_count_1h: 34255, relay_count_24h: '1234567' },
+    { label: 'unsafe-count', role: 'repeater', advert_count: null, relay_count_1h: Number.MAX_SAFE_INTEGER + 1, relay_count_24h: 0 },
   ].map((c, i) => ({ public_key: (i + 1).toString(16).repeat(64), name: 'Preview ' + c.label,
     advert_count: 1, first_seen: '2020-01-01T00:00:00Z', last_seen: '2020-01-02T00:00:00Z', hash_size: '2', ...c }));
   const byKey = new Map(cases.map(n => [n.public_key, n]));
@@ -80,7 +82,7 @@ async function previewMetadata(browser) {
     { name: 'tablet', width: 800, root: '.slide-over-content dl', ready: '.slide-over-content dl' },
   ];
   for (const theme of ['light', 'dark']) for (const layout of layouts) {
-    const ctx = await browser.newContext({ viewport: { width: layout.width, height: 1000 } });
+    const ctx = await browser.newContext({ locale: 'en-US', viewport: { width: layout.width, height: 1000 } });
     await ctx.addInitScript(theme => {
       localStorage.setItem('meshcore-theme', theme);
       localStorage.setItem('meshcore-user-level', 'experienced');
@@ -168,6 +170,18 @@ async function previewMetadata(browser) {
             } else if (n.last_certain_relay && Number.isFinite(Date.parse(n.last_certain_relay))) assert(relay.text.includes('no attributed non-advert relay'), 'certain forwarded adverts must not be called never observed');
             else assert(relay.text.includes('never observed as relay hop'), 'missing relay timestamp changed meaning');
           }
+          if (n.label === 'large-counts') {
+            assert(relay.text.includes('34,255 relays/hr, 1,234,567 relays/24h'), 'relay counts must retain exact grouped values');
+            if (layout.name === 'tablet') assert(fields.Adverts.text === '12,345', 'tablet Adverts must group numeric strings');
+            if (process.env.SCREENSHOT_DIR) {
+              fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+              await root.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `node-counts-${layout.name}-${theme}.png`) });
+            }
+          }
+          if (n.label === 'unsafe-count') {
+            assert(relay.text.includes('— relays/hr, 0 relays/24h'), 'unsafe relay count must remain missing and zero must remain zero');
+            if (layout.name === 'tablet') assert(fields.Adverts.text === '—', 'missing tablet Adverts must stay missing');
+          }
           if (n.label === 'escaped') {
             assert(hash.variation === 'Seen: 1, ' + bad + '-byte', 'hash tooltip must preserve escaped text');
             assert(await p.locator('img[src="x"]').count() === 0, 'metadata injected an image element');
@@ -220,6 +234,116 @@ async function previewMetadata(browser) {
         });
       }
       await step(`#2309 ${theme} ${layout.name}: no page errors`, async () => assert(errors.length === 0, errors.join(' | ')));
+    } finally { await ctx.close(); }
+  }
+}
+
+// Partial #1154 U11: the node offers navigation, while the existing tool owns
+// the lookup and its visible, filtered repeater population.
+async function prefixToolNavigation(browser) {
+  const nodes = [
+    { public_key: 'ab00' + '11'.repeat(30), name: 'Selected repeater', role: 'repeater' },
+    { public_key: 'ab11' + '22'.repeat(30), name: 'Other repeater', role: 'repeater' },
+    { public_key: 'ab22' + '33'.repeat(30), name: 'Room fixture', role: 'room' },
+    { public_key: 'ab33' + '44'.repeat(30), name: 'Companion fixture', role: 'companion' },
+    { public_key: 'ab44' + '55'.repeat(30), name: 'Outside selected area', role: 'repeater' },
+  ].map(n => ({ hash_size: 1, advert_count: 1, first_seen: '2020-01-01T00:00:00Z', last_seen: '2020-01-02T00:00:00Z', ...n }));
+  const selected = nodes[0];
+  const destination = '#/analytics?tab=prefix-tool&prefix=' + selected.public_key;
+  const layouts = [
+    { name: 'full', width: 1400, root: '#node-stats', direct: true },
+    { name: 'side', width: 1400, root: '#nodesRight .detail-meta' },
+    { name: 'tablet', width: 800, root: '.slide-over-content dl' },
+    { name: 'mobile', width: 390, root: '#node-stats' },
+    { name: 'filtered', width: 1400, root: '#node-stats', direct: true, filtered: true },
+  ];
+  for (const theme of ['light', 'dark']) for (const layout of layouts) {
+    const ctx = await browser.newContext({ viewport: { width: layout.width, height: 1000 } });
+    await ctx.addInitScript(({ theme, filtered }) => {
+      localStorage.setItem('meshcore-theme', theme);
+      localStorage.setItem('meshcore-user-level', 'experienced');
+      if (filtered) {
+        localStorage.setItem('meshcore-region-filter', JSON.stringify(['TEST']));
+        localStorage.setItem('meshcore-area-filter', 'prefix-fixture');
+      }
+      // Observe the actual initial theme application and debounced refresh.
+      window.addEventListener('theme-refresh', () => { window.prefixThemeReady = true; }, { once: true });
+    }, { theme, filtered: !!layout.filtered });
+    const p = await ctx.newPage();
+    p.setDefaultTimeout(10000);
+    const errors = [], requests = [];
+    p.on('pageerror', e => errors.push(e.message));
+    p.on('console', m => { if (m.type() === 'error') errors.push(m.text() + ' ' + m.location().url); });
+    p.on('request', r => { const u = new URL(r.url()); if (u.pathname.startsWith('/api/')) requests.push(u); });
+    await p.route(/\/api\/nodes(?:\?.*)?$/, r => {
+      const q = new URL(r.request().url()).searchParams;
+      const visible = q.get('region') === 'TEST' && q.get('area') === 'prefix-fixture' ? nodes.slice(0, 4) : nodes;
+      return r.fulfill({ json: { nodes: visible, total: visible.length, has_more: false, counts: {} } });
+    });
+    await p.route(/\/api\/nodes\/[0-9a-f]{64}(?:\/[^?]*)?(?:\?.*)?$/, r => {
+      const parts = new URL(r.request().url()).pathname.split('/');
+      const n = nodes.find(n => n.public_key === parts[3]);
+      if (!n) return r.continue();
+      return r.fulfill({ json: !parts[4] ? { node: n, recentAdverts: [] }
+        : parts[4] === 'health' ? { node: n, stats: {}, observers: [], recentPackets: [] }
+        : parts[4] === 'neighbors' ? { neighbors: [] } : parts[4] === 'paths' ? { paths: [] } : {} });
+    });
+    await p.route('**/api/config/regions', r => r.fulfill({ json: { TEST: 'Test region' } }));
+    await p.route('**/api/config/areas', r => r.fulfill({ json: [{ key: 'prefix-fixture', label: 'Fixture area' }] }));
+    await p.route('**/api/config/region-quick-picks', r => r.fulfill({ json: { quickPicks: [] } }));
+    await p.route('**/api/nodes/reported', r => r.fulfill({ json: { nodes: [] } }));
+    await p.route('**/api/rf-params', r => r.fulfill({ json: { enabled: false } }));
+    await p.route(/\/api\/analytics\//, r => r.fulfill({ json: {} }));
+    try {
+      await step(`#1154 ${theme} ${layout.name}: inspect full key in Prefix Tool`, async () => {
+        await p.goto(BASE + '/#/nodes' + (layout.direct ? '/' + selected.public_key : ''), { waitUntil: 'domcontentloaded' });
+        await p.waitForFunction(() => window.prefixThemeReady && window._customizerV2.initDone && _themeRefreshTimer === null);
+        await p.evaluate(() => document.fonts.ready);
+        if (!layout.direct) {
+          requests.length = 0;
+          await p.locator('#nodesTable tbody tr[data-key="' + selected.public_key + '"] td:visible').first().click();
+        }
+        const root = p.locator(layout.root);
+        await root.waitFor();
+        const link = root.getByRole('link', { name: 'Inspect in Prefix Tool', exact: true });
+        assert(await link.count() === 1, 'known one-byte repeater must offer Inspect in Prefix Tool');
+        assert(await link.getAttribute('href') === destination, 'inspection must carry the full public key');
+        assert(await link.isVisible(), 'inspection link must be visible');
+        assert((await link.getAttribute('style') || '').includes('color:var(--link-color)'), 'inspection must use the shared link color');
+        assert(await p.locator('html').getAttribute('data-theme') === theme, 'wrong theme');
+        assert(await root.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'metadata overflows its layout');
+        const prefix = '/api/nodes/' + selected.public_key;
+        const expected = ['', '/health', ...(layout.name === 'tablet' ? [] : ['/neighbors', '/paths', '/clock-skew'])].map(s => prefix + s).sort();
+        const actual = requests.map(u => u.pathname).filter(u => u === prefix || u.startsWith(prefix + '/')).sort();
+        assert(JSON.stringify(actual) === JSON.stringify(expected), 'detail requests changed: ' + JSON.stringify(actual));
+        assert(!requests.some(u => u.pathname.startsWith('/api/analytics/')), 'rendering the link must not fetch analytics');
+        if (process.env.SCREENSHOT_DIR) {
+          fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+          await root.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `prefix-link-${layout.name}-${theme}.png`) });
+        }
+        requests.length = 0;
+        if (theme === 'dark') {
+          await link.focus();
+          assert(await link.evaluate(el => document.activeElement === el), 'inspection link must accept keyboard focus');
+          await link.press('Enter');
+        } else await link.click();
+        await p.waitForURL(url => url.hash === destination);
+        await p.waitForFunction(() => document.getElementById('ptCheckerResults')?.textContent.includes('Derived prefixes:'));
+        assert(await p.locator('#analyticsTabs [data-tab="prefix-tool"]').evaluate(el => el.classList.contains('active')), 'Prefix Tool tab must be selected');
+        assert(await p.locator('#ptPrefixInput').inputValue() === selected.public_key, 'full key must be prefilled');
+        const resultKeys = await p.locator('#ptCheckerResults a').evaluateAll(links => links.map(a => a.getAttribute('href')));
+        const expectedKeys = [nodes[1], ...(layout.filtered ? [] : [nodes[4]])].map(n => '#/nodes/' + n.public_key);
+        assert(JSON.stringify(resultKeys.sort()) === JSON.stringify(expectedKeys.sort()), 'auto-results must exclude self, non-repeaters and filtered nodes: ' + JSON.stringify(resultKeys));
+        const bulk = requests.filter(u => u.pathname === '/api/nodes');
+        assert(bulk.length <= 1, 'Prefix Tool must reuse cached nodes or the existing bulk node loader');
+        for (const request of bulk) {
+          assert(request.searchParams.get('region') === (layout.filtered ? 'TEST' : null), 'region scope changed');
+          assert(request.searchParams.get('area') === (layout.filtered ? 'prefix-fixture' : null), 'area scope changed');
+        }
+        assert(await p.locator('#ptChecker').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'Prefix Tool checker overflows');
+        if (process.env.SCREENSHOT_DIR) await p.locator('#ptChecker').screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `prefix-result-${layout.name}-${theme}.png`) });
+      });
+      await step(`#1154 ${theme} ${layout.name}: no page or console errors`, async () => assert(errors.length === 0, errors.join(' | ')));
     } finally { await ctx.close(); }
   }
 }
@@ -339,6 +463,7 @@ async function previewMetadata(browser) {
   });
 
   await previewMetadata(browser);
+  await prefixToolNavigation(browser);
   await browser.close();
 
   console.log(`\n${passed}/${passed + failed} passed`);

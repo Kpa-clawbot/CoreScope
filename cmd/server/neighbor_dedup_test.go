@@ -227,6 +227,7 @@ func TestPhase1EdgeCollection_Unchanged(t *testing.T) {
 	}}
 	tx := &StoreTx{
 		ID:           1,
+		RouteType:    ngIntPtr(RouteFlood),
 		PayloadType:  &payloadType,
 		DecodedJSON:  `{"pubKey":"aaaa1111"}`,
 		Observations: obs,
@@ -317,11 +318,11 @@ func TestIntegration_DualPrefixSingleNeighbor(t *testing.T) {
 
 	// Observation 1: 1-byte prefix "b0" (ambiguous — matches both B and B2).
 	obs1 := []*StoreObs{{ObserverID: "cccc3333cccc3333", PathJSON: `["b0"]`, Timestamp: ts}}
-	tx1 := &StoreTx{ID: 1, PayloadType: &pt, DecodedJSON: `{"pubKey":"aaaa1111aaaa1111"}`, Observations: obs1}
+	tx1 := &StoreTx{ID: 1, RouteType: ngIntPtr(RouteFlood), PayloadType: &pt, DecodedJSON: `{"pubKey":"aaaa1111aaaa1111"}`, Observations: obs1}
 
 	// Observation 2: 4-byte prefix "b0b1" (unique — resolves to NodeB).
 	obs2 := []*StoreObs{{ObserverID: "cccc3333cccc3333", PathJSON: `["b0b1"]`, Timestamp: ts}}
-	tx2 := &StoreTx{ID: 2, PayloadType: &pt, DecodedJSON: `{"pubKey":"aaaa1111aaaa1111"}`, Observations: obs2}
+	tx2 := &StoreTx{ID: 2, RouteType: ngIntPtr(RouteFlood), PayloadType: &pt, DecodedJSON: `{"pubKey":"aaaa1111aaaa1111"}`, Observations: obs2}
 
 	store := ngTestStore([]nodeInfo{nodeA, nodeB, nodeB2, observer}, []*StoreTx{tx1, tx2})
 	graph := BuildFromStore(store)

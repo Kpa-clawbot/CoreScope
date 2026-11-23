@@ -47,7 +47,7 @@ func createTestDBWithResolvedPath(t *testing.T, numTx int, relayPubkeys []string
 		raw_hex TEXT,
 		resolved_path TEXT
 	)`)
-	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT, inactive INTEGER)`)
+	exec(`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT, inactive INTEGER)`)
 	exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, frequency REAL)`)
 	exec(`CREATE TABLE schema_version (version INTEGER)`)
 	exec(`INSERT INTO schema_version (version) VALUES (1)`)

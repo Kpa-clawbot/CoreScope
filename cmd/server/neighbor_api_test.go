@@ -476,7 +476,7 @@ func TestBuildNodeInfoMap_ObserverEnrichment(t *testing.T) {
 	// Create tables
 	for _, stmt := range []string{
 		"CREATE TABLE nodes (public_key TEXT, name TEXT, role TEXT, lat REAL, lon REAL)",
-		"CREATE TABLE observers (id TEXT, name TEXT, iata TEXT, inactive INTEGER)",
+		"CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT, inactive INTEGER)",
 		"INSERT INTO nodes VALUES ('AAAA1111', 'Repeater-1', 'repeater', 0, 0)",
 		"INSERT INTO observers (id, name, iata) VALUES ('BBBB2222', 'Observer-Alpha', '')",
 		"INSERT INTO observers (id, name, iata) VALUES ('AAAA1111', 'Obs-also-repeater', '')",
@@ -550,7 +550,7 @@ func TestBuildNodeInfoMap_FirstSeenIsCached(t *testing.T) {
 	defer rw.Close()
 	for _, stmt := range []string{
 		"CREATE TABLE nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, advert_count INTEGER)",
-		"CREATE TABLE observers (id TEXT, name TEXT, iata TEXT, inactive INTEGER)",
+		"CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT, inactive INTEGER)",
 		"INSERT INTO nodes VALUES ('AAAA1111', 'Repeater-1', 'repeater', 0, 0, '', '2024-01-01T00:00:00Z', 0)",
 	} {
 		if _, err := rw.Exec(stmt); err != nil {
@@ -617,7 +617,7 @@ func TestGetAllNodes_FirstSeenSchemaFallback(t *testing.T) {
 	defer rw.Close()
 	for _, stmt := range []string{
 		"CREATE TABLE nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, advert_count INTEGER)",
-		"CREATE TABLE observers (id TEXT, name TEXT, iata TEXT, inactive INTEGER)",
+		"CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, name TEXT, iata TEXT, inactive INTEGER)",
 		"INSERT INTO nodes VALUES ('BBBB2222', 'Repeater-2', 'repeater', 0, 0, '2024-02-02T00:00:00Z', 3)",
 	} {
 		if _, err := rw.Exec(stmt); err != nil {
