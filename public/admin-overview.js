@@ -17,8 +17,18 @@
     ['mqtt', '/api/mqtt/status'], ['observers', '/api/observers']
   ];
   // mailTest: the Send test mail button and its last result, kept here
-  // because the 60 s refresh rebuilds the whole body.
-  var state = { timer: null, seq: 0, healthz: null, busy: null, mailTest: { busy: false, ok: null, text: '' } };
+  // because the 60 s refresh rebuilds the whole body. userId is the account
+  // it belongs to: another account in the same tab gets a fresh one.
+  function newMailTest(userId) { return { busy: false, ok: null, text: '', userId: userId }; }
+  function currentUserId() { return window.CS_USER ? window.CS_USER.id : null; }
+  var state = { timer: null, seq: 0, healthz: null, busy: null, mailTest: newMailTest(null) };
+
+  // Logout and login change the hash without a reload: drop the result (and
+  // orphan an answer still in flight) as soon as the account changes.
+  function resetMailTestFor(userId) {
+    if (state.mailTest.userId !== userId) state.mailTest = newMailTest(userId);
+  }
+  window.addEventListener('cs-auth-changed', function (e) { resetMailTestFor(e.detail ? e.detail.id : null); });
 
   function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
 
@@ -131,22 +141,29 @@
     return 'Test mail failed: ' + CSAuth.errText(r);
   }
 
+  // Writes t into the live button and result element.
+  function showMailTest(t) {
+    var b = document.getElementById('aoMailTest');
+    if (b) b.disabled = t.busy;
+    var el = document.getElementById('aoMailTestResult');
+    if (el) { el.textContent = t.text; el.className = mailTestClass(t); }
+  }
+
   // One test mail at a time. The result goes into state.mailTest (the
-  // periodic rebuild renders it from there) and into the live element.
+  // periodic rebuild renders it from there) and into the live elements. An
+  // answer that arrives after the account changed writes nothing.
   function sendTestMail() {
     var t = state.mailTest;
     if (t.busy) return;
     t.busy = true;
-    var btn = document.getElementById('aoMailTest');
-    if (btn) btn.disabled = true;
+    t.ok = null;
+    t.text = 'Sending...';
+    showMailTest(t);
     var done = function (ok, text) {
       t.busy = false;
       t.ok = ok;
       t.text = text;
-      var b = document.getElementById('aoMailTest');
-      if (b) b.disabled = false;
-      var el = document.getElementById('aoMailTestResult');
-      if (el) { el.textContent = text; el.className = mailTestClass(t); }
+      if (state.mailTest === t) showMailTest(t);
     };
     CSAuth.request('POST', '/api/admin/mail/test').then(function (r) { done(!!r.ok, mailTestText(r)); },
       function () { done(false, 'Test mail failed: network error, try again.'); });
@@ -252,6 +269,7 @@
       if (e.target.closest('button[data-act="retry"]')) fullRefresh();
       else if (e.target.closest('#aoMailTest')) sendTestMail();
     });
+    resetMailTestFor(currentUserId());
     clearInterval(state.timer);
     state.timer = setInterval(function () {
       if (document.visibilityState === 'visible') refresh(false);
