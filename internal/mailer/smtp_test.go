@@ -3,10 +3,12 @@ package mailer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/mail"
+	"net/smtp"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +94,9 @@ func TestSMTPSendStartTLS(t *testing.T) {
 	}
 	if got.authPlain != "\x00user\x00"+testSMTPPassword {
 		t.Errorf("AUTH PLAIN payload = %q", got.authPlain)
+	}
+	if got.ehlo != "example.org" {
+		t.Errorf("EHLO name = %q, want the FromEmail domain", got.ehlo)
 	}
 	if !strings.HasSuffix(id, "@example.org>") || !strings.HasPrefix(id, "<") {
 		t.Errorf("id = %q", id)
@@ -191,11 +196,51 @@ func TestSMTPSendServerStallsHitsDeadline(t *testing.T) {
 	s.timeout = 300 * time.Millisecond
 	start := time.Now()
 	_, err := s.Send(context.Background(), testSMTPMessage)
-	if err == nil {
-		t.Fatal("want an error from a stalled server")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded in the chain", err)
 	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("Send took %v", d)
+	}
+}
+
+func TestSMTPSendCancelMidSession(t *testing.T) {
+	host, port, srv := newFakeSMTP(t, fakeSMTPOpts{mode: "starttls", offerStartTLS: true, stallAfter: "MAIL"})
+	s := newTestSMTP(host, port, "starttls", "user", srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := time.AfterFunc(100*time.Millisecond, cancel)
+	defer timer.Stop()
+	start := time.Now()
+	_, err := s.Send(ctx, testSMTPMessage)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled in the chain", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("Send took %v after cancel", d)
+	}
+}
+
+func TestSMTPCertificateNameMismatch(t *testing.T) {
+	host, port, srv := newFakeSMTP(t, fakeSMTPOpts{mode: "starttls", offerStartTLS: true, certDNSName: "other.example"})
+	s := newTestSMTP(host, port, "starttls", "user", srv)
+	_, err := s.Send(context.Background(), testSMTPMessage)
+	if err == nil || !strings.Contains(err.Error(), "certificate") || !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("err = %v, want a certificate name error for 127.0.0.1", err)
+	}
+	if hasCommand(srv.received().commands, "AUTH") {
+		t.Error("AUTH sent to a server whose certificate names another host")
+	}
+}
+
+// The plaintext-AUTH guard is net/smtp's: PlainAuth refuses an unencrypted
+// connection unless the server is localhost. Pin that contract.
+func TestSMTPPlainAuthRefusesUnencryptedRemote(t *testing.T) {
+	if _, _, err := smtp.PlainAuth("", "u", "p", "mail.example.org").Start(&smtp.ServerInfo{Name: "mail.example.org", TLS: false}); err == nil {
+		t.Error("PlainAuth allowed AUTH over plaintext to a remote host")
+	}
+	if _, _, err := smtp.PlainAuth("", "u", "p", "127.0.0.1").Start(&smtp.ServerInfo{Name: "127.0.0.1", TLS: false}); err != nil {
+		t.Errorf("PlainAuth refused localhost: %v", err)
 	}
 }
 

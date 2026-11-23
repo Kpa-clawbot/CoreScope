@@ -24,11 +24,13 @@ type fakeSMTPOpts struct {
 	offerStartTLS bool   // advertise STARTTLS in EHLO (mode "starttls" only)
 	authReply     string // reply to AUTH; default "235 2.7.0 accepted"
 	stallAfter    string // command verb after which the server stops answering
+	certDNSName   string // when set, the certificate names only this host, not 127.0.0.1
 }
 
 // fakeReceived is what the fake server saw on its connections.
 type fakeReceived struct {
 	commands  []string // command verbs in order, e.g. EHLO, STARTTLS, AUTH
+	ehlo      string   // argument of the last EHLO
 	mailFrom  string   // full MAIL line, e.g. "MAIL FROM:<x@y>"
 	rcptTo    string   // full RCPT line
 	authPlain string   // decoded AUTH PLAIN payload
@@ -54,7 +56,7 @@ func newFakeSMTP(t *testing.T, opts fakeSMTPOpts) (string, int, *fakeSMTP) {
 	if opts.authReply == "" {
 		opts.authReply = "235 2.7.0 accepted"
 	}
-	cert, pool := selfSignedCert(t)
+	cert, pool := selfSignedCert(t, opts.certDNSName)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -158,6 +160,7 @@ func (s *fakeSMTP) serve(raw net.Conn) {
 		}
 		switch verb {
 		case "EHLO":
+			s.record(func(g *fakeReceived) { g.ehlo = strings.TrimSpace(line[len("EHLO"):]) })
 			lines := []string{"250-fake.test"}
 			if s.opts.mode == "starttls" && s.opts.offerStartTLS && !tlsActive {
 				lines = append(lines, "250-STARTTLS")
@@ -238,7 +241,9 @@ func (s *fakeSMTP) serve(raw net.Conn) {
 	}
 }
 
-func selfSignedCert(t *testing.T) (tls.Certificate, *x509.CertPool) {
+// selfSignedCert returns a CA-flagged self-signed certificate for 127.0.0.1,
+// or for dnsName alone when it is set, and a pool trusting it.
+func selfSignedCert(t *testing.T, dnsName string) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -249,11 +254,16 @@ func selfSignedCert(t *testing.T) (tls.Certificate, *x509.CertPool) {
 		Subject:               pkix.Name{CommonName: "127.0.0.1"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  true,
+	}
+	if dnsName != "" {
+		tmpl.Subject.CommonName = dnsName
+		tmpl.DNSNames = []string{dnsName}
+	} else {
+		tmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {

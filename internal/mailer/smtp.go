@@ -47,30 +47,30 @@ func (s *SMTP) Send(ctx context.Context, m Message) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	c, release, err := s.open(ctx)
+	ss, err := s.open(ctx)
 	if err != nil {
 		return "", err
 	}
-	defer release()
-	if err := c.Mail(s.cfg.FromEmail); err != nil {
-		return "", fmt.Errorf("smtp mail from: %w", err)
+	defer ss.release()
+	if err := ss.c.Mail(s.cfg.FromEmail); err != nil {
+		return "", ss.fail("mail from", err)
 	}
-	if err := c.Rcpt(m.To); err != nil {
-		return "", fmt.Errorf("smtp rcpt to: %w", err)
+	if err := ss.c.Rcpt(m.To); err != nil {
+		return "", ss.fail("rcpt to", err)
 	}
-	w, err := c.Data()
+	w, err := ss.c.Data()
 	if err != nil {
-		return "", fmt.Errorf("smtp data: %w", err)
+		return "", ss.fail("data", err)
 	}
 	if _, err := w.Write(msg); err != nil {
-		return "", fmt.Errorf("smtp data: %w", err)
+		return "", ss.fail("data", err)
 	}
 	if err := w.Close(); err != nil {
-		return "", fmt.Errorf("smtp data: %w", err)
+		return "", ss.fail("data", err)
 	}
 	// The server accepted the message with the reply to DATA; a failed QUIT
 	// does not make it undelivered, so it is not reported as a send failure.
-	_ = c.Quit()
+	_ = ss.c.Quit()
 	return id, nil
 }
 
@@ -81,81 +81,106 @@ func (s *SMTP) Events(ctx context.Context, messageID string) ([]Event, error) {
 
 // Check connects, does TLS and AUTH as Send would, then QUIT. It sends no mail.
 func (s *SMTP) Check(ctx context.Context) error {
-	c, release, err := s.open(ctx)
+	ss, err := s.open(ctx)
 	if err != nil {
 		return err
 	}
-	defer release()
-	if err := c.Quit(); err != nil {
-		return fmt.Errorf("smtp quit: %w", err)
+	defer ss.release()
+	// Unlike Send, a failed QUIT is returned: a check should see a clean session end.
+	if err := ss.c.Quit(); err != nil {
+		return ss.fail("quit", err)
 	}
 	return nil
+}
+
+// smtpSession is one open connection, bounded by ctx (the timeout and the
+// caller's cancellation).
+type smtpSession struct {
+	c        *smtp.Client
+	ctx      context.Context
+	deadline time.Time
+	release  func()
+}
+
+// fail wraps err for step. When the session ran out of time or was
+// cancelled, the I/O error it caused (an i/o timeout or a closed
+// connection) is replaced by context.DeadlineExceeded or context.Canceled.
+func (ss *smtpSession) fail(step string, err error) error {
+	if cerr := ss.ctx.Err(); cerr != nil {
+		err = cerr
+	} else if !time.Now().Before(ss.deadline) {
+		// The connection deadline can fire just before the context's timer.
+		err = context.DeadlineExceeded
+	}
+	return fmt.Errorf("smtp %s: %w", step, err)
 }
 
 // open dials the server, sets up TLS for the configured mode and
 // authenticates when a user is set. The whole session, until release is
 // called, is bounded by the timeout and by ctx.
-func (s *SMTP) open(ctx context.Context) (*smtp.Client, func(), error) {
+func (s *SMTP) open(ctx context.Context) (*smtpSession, error) {
 	mode := s.cfg.TLS
 	if mode != "starttls" && mode != "tls" && mode != "none" {
-		return nil, nil, fmt.Errorf("smtp: unknown TLS mode %q", mode)
+		return nil, fmt.Errorf("smtp: unknown TLS mode %q", mode)
 	}
 	timeout := s.timeout
 	if timeout == 0 {
 		timeout = smtpTimeout
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
+	deadline, _ := ctx.Deadline()
+	ss := &smtpSession{ctx: ctx, deadline: deadline, release: cancel}
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(s.cfg.Host, strconv.Itoa(s.cfg.Port)))
 	if err != nil {
+		err = ss.fail("dial", err) // before cancel, which would make every dial error read as canceled
 		cancel()
-		return nil, nil, fmt.Errorf("smtp dial: %w", err)
+		return nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	release := func() {
+	ss.release = func() {
 		stop()
 		cancel()
 		conn.Close()
 	}
-	deadline, _ := ctx.Deadline()
 	conn.SetDeadline(deadline)
 
-	c, err := s.handshake(ctx, conn, mode)
-	if err != nil {
-		release()
-		return nil, nil, err
+	if err := s.handshake(ss, conn, mode); err != nil {
+		ss.release()
+		return nil, err
 	}
-	return c, release, nil
+	return ss, nil
 }
 
-func (s *SMTP) handshake(ctx context.Context, conn net.Conn, mode string) (*smtp.Client, error) {
+func (s *SMTP) handshake(ss *smtpSession, conn net.Conn, mode string) error {
 	tlsConfig := &tls.Config{ServerName: s.cfg.Host, RootCAs: s.rootCAs}
 	if mode == "tls" {
 		tc := tls.Client(conn, tlsConfig)
-		if err := tc.HandshakeContext(ctx); err != nil {
-			return nil, fmt.Errorf("smtp tls: %w", err)
+		if err := tc.HandshakeContext(ss.ctx); err != nil {
+			return ss.fail("tls", err)
 		}
 		conn = tc
 	}
 	c, err := smtp.NewClient(conn, s.cfg.Host)
 	if err != nil {
-		return nil, fmt.Errorf("smtp greeting: %w", err)
+		return ss.fail("greeting", err)
 	}
+	ss.c = c
 	if err := c.Hello(emailDomain(s.cfg.FromEmail)); err != nil {
-		return nil, fmt.Errorf("smtp ehlo: %w", err)
+		return ss.fail("ehlo", err)
 	}
 	if mode == "starttls" {
 		if ok, _ := c.Extension("STARTTLS"); !ok {
-			return nil, errors.New("smtp: server does not offer STARTTLS")
+			return errors.New("smtp: server does not offer STARTTLS")
 		}
 		if err := c.StartTLS(tlsConfig); err != nil {
-			return nil, fmt.Errorf("smtp starttls: %w", err)
+			return ss.fail("starttls", err)
 		}
 	}
 	if s.cfg.User != "" {
 		if err := c.Auth(smtp.PlainAuth("", s.cfg.User, s.cfg.Password, s.cfg.Host)); err != nil {
-			return nil, fmt.Errorf("smtp auth: %w", err)
+			return ss.fail("auth", err)
 		}
 	}
-	return c, nil
+	return nil
 }
