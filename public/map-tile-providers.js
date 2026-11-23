@@ -1731,9 +1731,16 @@
   // follows the pin (when it fits the theme); a map with a picker keeps its
   // layer and radio, its Auto ignoring the pin, until its next load (#2444).
   // Nothing is written back, so tabs never echo each other's picks.
+  // Only localStorage counts: sessionStorage events (a same-origin iframe
+  // clearing its own arrives with key null) must not drop an unsaved pick.
+  function _otherStorageArea(e) {
+    if (!e.storageArea) return false; // not reported: treat as localStorage
+    try { return e.storageArea !== window.localStorage; } catch (_) { return false; }
+  }
   try {
     window.addEventListener('storage', function (e) {
       if (!e) return;
+      if (_otherStorageArea(e)) return;
       if (e.key === PIN_KEY || e.key === null) {
         // Storage now holds the newest pick, which supersedes this tab's
         // copy of a write that failed. getPinnedId validates it as usual.

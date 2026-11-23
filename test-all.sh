@@ -261,5 +261,6 @@ node tests/unit/test-map-hillshade.js
 node tests/unit/test-map-vector.js
 node tests/unit/test-map-overlays-vector.js
 node tests/unit/test-map-tile-pin.js
+node tests/unit/test-issue-2444-secondary-map-tile-sync.js
 
 echo "All standalone frontend suites passed"

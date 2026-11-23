@@ -22,6 +22,14 @@
     return (v / 86400).toFixed(1) + 'd';
   }
   var _subpathMap = null; // subpath detail minimap; removed on re-render and page destroy (WebGL/Leaflet leak)
+  // Every path that drops the subpath map comes through here: the tile-sync
+  // record (nodes.js _applyTilesToNodeMap) goes first, then the Leaflet map.
+  function removeSubpathMap() {
+    if (!_subpathMap) return;
+    if (typeof window.__mcNodeTileSyncUnregister === 'function') window.__mcNodeTileSyncUnregister(_subpathMap);
+    window.MC_safeRemoveMap(_subpathMap);
+    _subpathMap = null;
+  }
   // #1085 — auto-refresh timer for the Roles tab. Started when the Roles
   // tab is rendered, cleared on tab switch and destroy.
   var _rolesRefreshTimer = null;
@@ -384,6 +392,7 @@
 
   async function renderTab(tab) {
     const el = document.getElementById('analyticsContent');
+    removeSubpathMap(); // every branch below replaces the content holding it
     const d = _analyticsData;
     // A tab click or refresh before the bulk load lands keeps the loading
     // (or error) state instead of drawing from missing data (#2200).
@@ -2360,6 +2369,7 @@
 
   async function loadSubpathDetail(hopsStr) {
     const panel = document.getElementById('subpathDetail');
+    removeSubpathMap(); // its container goes with the panel's content
     panel.classList.remove('collapsed');
     panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
     try {
@@ -2375,6 +2385,7 @@
     const hasMap = nodesWithLoc.length >= 2;
     const maxHour = Math.max(...data.hourDistribution, 1);
 
+    removeSubpathMap(); // a slower, earlier load may have drawn one meanwhile
     panel.innerHTML = `
       <div class="subpath-detail-inner">
         <h4>${data.nodes.map(n => esc(n.name)).join(' → ')}</h4>
@@ -2447,21 +2458,13 @@
 
     // Render minimap
     if (hasMap && typeof L !== 'undefined') {
-      if (_subpathMap) { try { _subpathMap.remove(); } catch (_e) {} _subpathMap = null; }
       const map = L.map('subpathMap', { zoomControl: false, attributionControl: false });
       _subpathMap = map;
-      // Shared resolver for attribution/maxZoom parity with the other maps
-      // (OpenTopoMap caps at 17, USGS at 16 — a hardcoded 18 404s above those).
-      const _tileR = (typeof window.MC_resolveTile === 'function')
-        ? window.MC_resolveTile(typeof window.MC_isDarkTheme === 'function' ? window.MC_isDarkTheme() : false)
-        : null;
-      (_tileR && typeof window.MC_buildTileLayer === 'function'
-        ? window.MC_buildTileLayer(_tileR, { raster: true })
-        : L.tileLayer((_tileR && _tileR.url) || getTileUrl(), { maxZoom: (_tileR && _tileR.maxZoom) || 18 })).addTo(map);
-      try { // dark-inverted providers need their CSS filter on this map too
-        const _pane = _tileR && _tileR.invertFilter && map.getPane('tilePane');
-        if (_pane) _pane.style.filter = _tileR.invertFilter;
-      } catch (_e) {}
+      // The shared helper (nodes.js) builds the pick for the current theme,
+      // with the provider's own maxZoom (OpenTopoMap 17, USGS 16) and filter,
+      // and keeps following it: a pick here or in another tab, a theme flip.
+      if (typeof window._applyTilesToNodeMap === 'function') window._applyTilesToNodeMap(map);
+      else L.tileLayer(getTileUrl(), { maxZoom: 18 }).addTo(map);
 
       const latlngs = [];
       nodesWithLoc.forEach((n, i) => {
@@ -3206,7 +3209,7 @@
     }
   }
 
-function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _subpathMap = null; } _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _loadError = null; if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; } if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; } _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { removeSubpathMap(); _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _loadError = null; if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; } if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; } _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {

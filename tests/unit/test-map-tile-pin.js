@@ -15,6 +15,8 @@
  *   - a pick saved in another tab ('storage' event on mc-tile-pinned, or
  *     storage cleared): one crossTab re-sync event, the same validation,
  *     no write-back, and a newer pick there replaces an unsaved one here
+ *   - 'storage' events from another storage area (sessionStorage) are
+ *     ignored; ones from localStorage, or naming no area, are handled
  *
  * Runs via: node tests/unit/test-map-tile-pin.js
  */
@@ -419,6 +421,60 @@ test('cross-tab pin: a newer pick from another tab replaces a pick this tab fail
   const b = makeSandbox(undefined, { throwGet: true, throwSet: true });
   b.w.dispatchEvent({ type: 'storage', key: 'mc-tile-pinned', newValue: 'osmfr-hot', oldValue: null });
   assert.strictEqual(b.w.MC_getPinnedTileProvider(), 'osmfr-hot', 'followed with reads blocked');
+});
+
+// A pick this tab could not save (quota), still followed from memory.
+function unsavedPick(s, id) {
+  s.storage.store['mc-tile-pinned'] = 'osmfr-hot'; // the older, stored pin
+  const set = s.storage.setItem, rm = s.storage.removeItem;
+  s.storage.setItem = () => { throw new Error('QuotaExceededError'); };
+  s.storage.removeItem = () => { throw new Error('QuotaExceededError'); };
+  s.w.MC_setPinnedTileProvider(id);
+  s.storage.setItem = set; s.storage.removeItem = rm;
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), id, 'unsaved pick kept');
+  s.events.length = 0;
+}
+const tileEvents = (s) => s.events.filter(e => e.type === 'mc-tile-provider-changed');
+
+test('storage event from another storage area (sessionStorage.clear() in an iframe) is ignored', () => {
+  const s = makeSandbox();
+  const session = makeStorage();
+  unsavedPick(s, 'eox-s2-2025');
+  s.pane.style.filter = 'untouched';
+  s.w.dispatchEvent({ type: 'storage', key: null, newValue: null, oldValue: null, storageArea: session });
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'eox-s2-2025', 'the unsaved pick was dropped');
+  assert.strictEqual(tileEvents(s).length, 0, 'maps were re-synced');
+  assert.strictEqual(s.pane.style.filter, 'untouched', 'the tile filter was re-applied');
+  // Its keys are not this module's keys either, whatever they are called.
+  s.w.dispatchEvent({ type: 'storage', key: 'mc-tile-pinned', newValue: 'osmfr-cyclosm', oldValue: null, storageArea: session });
+  s.w.dispatchEvent({ type: 'storage', key: 'mc-light-tile-provider', newValue: 'carto-voyager', oldValue: null, storageArea: session });
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'eox-s2-2025');
+  assert.strictEqual(tileEvents(s).length, 0, 'maps were re-synced');
+});
+
+test('storage cleared in localStorage (storageArea given, or absent) still resets an unsaved pick and re-syncs', () => {
+  for (const withArea of [true, false]) {
+    const s = makeSandbox();
+    unsavedPick(s, 'eox-s2-2025');
+    for (const k of Object.keys(s.storage.store)) delete s.storage.store[k];
+    const ev = { type: 'storage', key: null, newValue: null, oldValue: null };
+    if (withArea) ev.storageArea = s.storage;
+    s.w.dispatchEvent(ev);
+    assert.strictEqual(s.w.MC_getPinnedTileProvider(), null, 'storageArea ' + (withArea ? 'localStorage' : 'absent') + ': pick kept');
+    const got = tileEvents(s);
+    assert.strictEqual(got.length, 1, 'storageArea ' + (withArea ? 'localStorage' : 'absent') + ': ' + got.length + ' events');
+    assert.strictEqual(got[0].detail.crossTab, true);
+  }
+});
+
+test('storage event while reading window.localStorage throws: handled as localStorage, no error', () => {
+  const s = makeSandbox();
+  const area = s.storage;
+  Object.defineProperty(s.w, 'localStorage', { configurable: true, get() { throw new Error('SecurityError'); } });
+  s.events.length = 0;
+  s.w.dispatchEvent({ type: 'storage', key: 'mc-tile-pinned', newValue: 'osmfr-hot', oldValue: null, storageArea: area });
+  assert.strictEqual(s.w.MC_getPinnedTileProvider(), 'osmfr-hot', 'followed from the event value');
+  assert.strictEqual(tileEvents(s).length, 1);
 });
 
 console.log('map tile pin: ' + passed + ' passed, ' + failed + ' failed');

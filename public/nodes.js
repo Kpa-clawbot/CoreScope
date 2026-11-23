@@ -119,7 +119,7 @@
 
   // #1470 followup, node-map light-tiles refactor: the node detail inset map
   // (and every page reusing this helper via window._applyTilesToNodeMap —
-  // node-reach-map.js, rx-coverage.js) resolves tiles through the shared
+  // node-reach-map.js, rx-coverage.js, home.js, analytics.js) resolves tiles through the shared
   // MC_resolveTile() registry resolver, so light mode honours the same
   // provider pick / operator lightDefault as the main map, carries the Carto
   // key even when /api/config/client lands after the map is created, and
@@ -211,7 +211,8 @@
     // Bounded registry (AGENTS.md rule 0): records are dropped (a) when a new
     // map registers and theirs is disconnected, and (b) explicitly via
     // window.__mcNodeTileSyncUnregister(map) from the destroy paths of every
-    // consumer — removeDetailMap (nodes.js), node-reach-map.js, rx-coverage.js.
+    // consumer — removeDetailMap (nodes.js), node-reach-map.js, rx-coverage.js,
+    // removeMiniMap (home.js), removeSubpathMap (analytics.js).
     // Explicit unregister covers maps whose container stays attached after
     // map.remove(), which the isConnected check cannot see.
     function pruneStaleRecords() {

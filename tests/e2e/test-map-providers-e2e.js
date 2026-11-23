@@ -481,10 +481,11 @@ async function run() {
     }
 
     // ── 7e. A pick made in another tab reaches open maps ────────────────
-    // Three pages in one context (real 'storage' events): A picks on the map
+    // Pages in one context (real 'storage' events): A picks on the map
     // page; B shows a node detail map (no picker) and follows without a
     // reload; C is another map page with a picker, which keeps its own
-    // layer and radio. Nothing is written back.
+    // layer and radio. Nothing is written back. The Home mini-map and the
+    // Analytics route map (two more tabs) follow like B.
     {
       const a = await newPage(browser, { theme: 'light' });
       try {
@@ -528,9 +529,16 @@ async function run() {
           }, null, { timeout: 15000 });
         });
         await test('7e a map page with a picker in tab C keeps its layer and radio; no tab writes the pick back', async () => {
+          // Tab C's own 'storage' event for the pick, counted by a listener
+          // added after the page's, so the page has handled every one counted.
+          await c.page.evaluate(() => {
+            window.__pinEvents = 0;
+            window.addEventListener('storage', (e) => { if (e.key === 'mc-tile-pinned') window.__pinEvents++; });
+          });
           await pick(a.page, 'osmfr-hot');
-          await drawn(b.page, 'openstreetmap\\.fr/hot', '#nodeFullMap'); // the event has been handled
-          await c.page.evaluate(() => new Promise(r => setTimeout(r, 0)));
+          await drawn(b.page, 'openstreetmap\\.fr/hot', '#nodeFullMap');
+          await c.page.waitForFunction(() => window.__pinEvents >= 1, null, { timeout: 15000 });
+          await c.page.evaluate(() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)))); // and drew what it would
           assert(await radioOn(c.page, '__auto__'), 'tab C: Auto no longer selected');
           assert(!(await radioOn(c.page, 'osmfr-hot')), 'tab C: osmfr-hot selected');
           assert(await noOsmfr(c.page) === 0, 'tab C draws the other tab\'s pick');
@@ -539,6 +547,49 @@ async function run() {
           assert(w[0] === 0 && w[1] === 0, 'pin writes in tabs B, C: ' + w);
           assert(await pinned(c.page) === 'osmfr-hot', 'stored pin: ' + await pinned(c.page));
           for (const t of [a, b, c]) assert(t.errors.length === 0, 'page errors: ' + t.errors);
+        });
+        await test('7e the Home mini-map and the Analytics route map follow a pick in tab A, and its Auto', async () => {
+          await pick(a.page, '__auto__');
+          await drawn(a.page, 'cartocdn');
+          const d = await newTab(a.context, { theme: 'light' });
+          const e = await newTab(a.context, { theme: 'light' });
+          // Home: the located node as a claimed node, its card opened.
+          await d.page.addInitScript((k) => {
+            localStorage.setItem('meshcore-my-nodes', JSON.stringify([{ pubkey: k, name: 'e2e', addedAt: 0 }]));
+            localStorage.setItem('meshcore-user-level', 'experienced');
+          }, pk);
+          await d.page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+          await d.page.waitForSelector('.my-node-card');
+          await d.page.waitForLoadState('networkidle'); // Home re-renders while it loads; a card opened before that is lost
+          await d.page.locator('.my-node-card .mnc-btn[data-action="health"]').first().click();
+          await drawn(d.page, 'cartocdn', '#healthMap');
+          // Analytics: the first route whose detail has a map (two located nodes).
+          await e.page.goto(`${BASE}/#/analytics?tab=subpaths`, { waitUntil: 'domcontentloaded' });
+          await e.page.waitForSelector('tr[data-hops]');
+          const rows = await e.page.locator('tr[data-hops]').count();
+          let found = false;
+          for (let i = 0; i < Math.min(rows, 25) && !found; i++) {
+            await e.page.locator('tr[data-hops]').nth(i).click();
+            await e.page.waitForSelector('#subpathDetail .subpath-detail-inner');
+            found = await e.page.locator('#subpathMap').count() > 0;
+          }
+          assert(found, 'no route with a map among the first 25 of ' + rows);
+          await drawn(e.page, 'cartocdn', '#subpathMap');
+          for (const t of [d, e]) {
+            await t.page.waitForFunction(() => window.MC_MAP_CFG, null, { timeout: 15000 });
+            await t.page.waitForLoadState('networkidle');
+          }
+          await pick(a.page, 'osmfr-hot');
+          await drawn(d.page, 'openstreetmap\\.fr/hot', '#healthMap');
+          await drawn(e.page, 'openstreetmap\\.fr/hot', '#subpathMap');
+          await pick(a.page, '__auto__');
+          for (const [t, sel] of [[d, '#healthMap'], [e, '#subpathMap']]) {
+            await t.page.waitForFunction((scope) => {
+              const imgs = Array.from(document.querySelectorAll(scope + ' .leaflet-tile-pane img.leaflet-tile'));
+              return imgs.length > 0 && imgs.every(i => !/openstreetmap\.fr/.test(i.src)) && imgs.some(i => i.classList.contains('leaflet-tile-loaded') && /cartocdn/.test(i.src));
+            }, sel, { timeout: 15000 });
+            assert(t.errors.length === 0, 'page errors: ' + t.errors);
+          }
         });
       } finally { await a.context.close(); }
     }
