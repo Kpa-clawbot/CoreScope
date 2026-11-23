@@ -365,3 +365,48 @@ func TestMentionsIdentifier(t *testing.T) {
 		}
 	}
 }
+
+// A captured view whose name holds a double quote is written `"odd""name"`
+// in the SQL of whatever uses it, which is not the name sqlite_master stores
+// (review of #2445). Its INSTEAD OF trigger went down with the view and was
+// never recreated, and a view selecting from it was left behind to fail the
+// RENAME. Both come back with their exact definition.
+func TestObserversRebuildKeepsDependentsOfViewWithQuoteInName(t *testing.T) {
+	const (
+		oddView = `CREATE VIEW "odd""name" AS SELECT id, name FROM observers`
+		trigger = `CREATE TRIGGER trg_odd INSTEAD OF UPDATE ON "odd""name" BEGIN INSERT INTO audit VALUES (NEW.id, 'update'); END`
+		view    = `CREATE VIEW v2 AS SELECT id FROM "odd""name"`
+	)
+	for _, tc := range []struct {
+		name    string
+		objects []string
+		check   func(t *testing.T, db *sql.DB)
+	}{
+		{"trigger on the view", []string{oddView, trigger}, func(t *testing.T, db *sql.DB) {
+			mustExec(t, db, `UPDATE "odd""name" SET name = 'renamed' WHERE id = 'b'`)
+			if got, want := dumpRows(t, db, `SELECT id, what FROM audit`), []string{"[b update]"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("audit = %v, want %v from trg_odd", got, want)
+			}
+		}},
+		{"view on the view", []string{oddView, view}, func(t *testing.T, db *sql.DB) {
+			if got, want := dumpRows(t, db, `SELECT id FROM v2 ORDER BY id`), []string{"[a]", "[b]"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("v2 = %v, want %v", got, want)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := legacyApplyableDB(t)
+			mustExec(t, db, `CREATE TABLE audit (id TEXT, what TEXT)`)
+			mustExec(t, db, tc.objects...)
+			before := localObjectsSchema(t, db)
+			if len(before) != len(tc.objects) {
+				t.Fatalf("fixture: %d local objects, want %d: %v", len(before), len(tc.objects), before)
+			}
+			rebuildLogging(t, db)
+			if got := localObjectsSchema(t, db); !reflect.DeepEqual(before, got) {
+				t.Fatalf("local objects changed by the rebuild:\nbefore=%v\nafter=%v", before, got)
+			}
+			tc.check(t, db)
+		})
+	}
+}

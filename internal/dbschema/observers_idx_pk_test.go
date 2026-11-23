@@ -113,3 +113,32 @@ func TestObserversIdxRefusesPlainIdxColumn(t *testing.T) {
 		t.Errorf("observers after the rebuild = %v, want %v", got, want)
 	}
 }
+
+// SQLite refuses DROP COLUMN while an index, view or trigger uses the column,
+// so the refusal says to drop those first; with the index gone the statement
+// it gives runs and the rebuild completes (review of #2445).
+func TestObserversIdxPlainIdxRefusalCoversIndexedColumn(t *testing.T) {
+	db := legacyFullDB(t)
+	mustExec(t, db,
+		`ALTER TABLE observers ADD COLUMN idx INTEGER`,
+		`UPDATE observers SET idx = rowid + 100`,
+		`CREATE INDEX my_idx ON observers(idx)`,
+	)
+	assertRefusedUntouched(t, db, nonAliasIdxRefusal)
+	err := ensureObserversIdx(db, nil)
+	for _, want := range []string{"(" + dropPlainIdxSQL + ")", "first drop any index, view or trigger that uses the column", "recreate it after"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %v does not say %q", err, want)
+		}
+	}
+	if _, derr := db.Exec(dropPlainIdxSQL); derr == nil {
+		t.Fatalf("%s ran with my_idx on the column (fixture is not the case under test)", dropPlainIdxSQL)
+	}
+	mustExec(t, db, `DROP INDEX my_idx`, dropPlainIdxSQL)
+	if err := ensureObserversIdx(db, nil); err != nil {
+		t.Fatalf("rebuild after dropping my_idx and the suggested %s: %v", dropPlainIdxSQL, err)
+	}
+	if got, want := dumpRows(t, db, `SELECT idx, id FROM observers ORDER BY idx`), []string{"[1 a]", "[2 b]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("observers after the rebuild = %v, want %v", got, want)
+	}
+}

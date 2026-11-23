@@ -1,6 +1,7 @@
 package dbschema
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -371,6 +372,8 @@ func TestObserversIdxRefusesUnknownColumn(t *testing.T) {
 	if err := ensureObserversIdx(db, nil); err == nil || !strings.Contains(err.Error(), "ALTER TABLE observers DROP COLUMN <name>") ||
 		!strings.Contains(err.Error(), "previous CoreScope version") {
 		t.Errorf("refusal does not say how to continue: %v", err)
+	} else if !strings.Contains(err.Error(), "first drop any index, view or trigger that uses the column") {
+		t.Errorf("refusal does not say what blocks DROP COLUMN: %v", err)
 	}
 	// The statement it gives, with the column it named, runs and clears the way.
 	mustExec(t, db, `ALTER TABLE observers DROP COLUMN operator_note`)
@@ -388,6 +391,37 @@ func TestObserversIdxRefusesNullID(t *testing.T) {
 	if err := ensureObserversIdx(db, nil); err == nil || !strings.Contains(err.Error(), "WHERE id IS NULL") ||
 		!strings.Contains(err.Error(), "previous CoreScope version") {
 		t.Errorf("refusal does not say how to continue: %v", err)
+	}
+}
+
+// A child column declared `REFERENCES observers` with no column follows the
+// parent's primary key: id before the rebuild, idx after it. The rebuild
+// refuses (the child rows would all be orphans) and says what to change;
+// with the column named, the next start completes the rebuild (review of
+// #2445).
+func TestObserversIdxForeignKeyRefusalSaysHowToContinue(t *testing.T) {
+	db := legacyFullDB(t)
+	mustExec(t, db,
+		`CREATE TABLE observer_notes (observer_id TEXT REFERENCES observers, note TEXT)`,
+		`INSERT INTO observer_notes VALUES ('a', 'roof')`,
+	)
+	assertRefusedUntouched(t, db, "1 foreign key violation(s) in observer_notes")
+	err := ensureObserversIdx(db, nil)
+	for _, want := range []string{"`REFERENCES observers` with no column", "points at idx", "`REFERENCES observers(id)`", "previous CoreScope version"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %v does not say %q", err, want)
+		}
+	}
+	mustExec(t, db,
+		`DROP TABLE observer_notes`,
+		`CREATE TABLE observer_notes (observer_id TEXT REFERENCES observers(id), note TEXT)`,
+		`INSERT INTO observer_notes VALUES ('a', 'roof')`,
+	)
+	if err := ensureObserversIdx(db, nil); err != nil {
+		t.Fatalf("rebuild after the child column was declared REFERENCES observers(id): %v", err)
+	}
+	if !observersIdxIsPK(t, db) {
+		t.Fatal("observers.idx is not the primary key after the retry")
 	}
 }
 
@@ -511,5 +545,61 @@ func copyFixture(t *testing.T, src, dst string) {
 	}
 	if err := out.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A ROLLBACK that fails (here: no transaction is open) leaves the connection
+// in an unknown state, so rollbackOrDiscard reports the error and has the
+// pool close it. The next connection works and carries the DSN's
+// foreign_keys, not the OFF the rebuild had set on the discarded one.
+func TestRollbackOrDiscardDropsConnectionOnFailedRollback(t *testing.T) {
+	db := writerDB(t, filepath.Join(t.TempDir(), "rollback.db"))
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		t.Fatal(err)
+	}
+	discarded, err := rollbackOrDiscard(ctx, conn)
+	if !discarded {
+		t.Error("rollbackOrDiscard did not report the connection discarded")
+	}
+	if err == nil || !strings.Contains(err.Error(), "roll back observers rebuild") ||
+		!strings.Contains(err.Error(), "cannot rollback - no transaction is active") {
+		t.Errorf("rollbackOrDiscard err = %v, want the failed ROLLBACK", err)
+	}
+	// As ensureObserversIdx's deferred Close: a no-op on a discarded connection.
+	_ = conn.Close()
+	if n := db.Stats().OpenConnections; n != 0 {
+		t.Errorf("%d connection(s) still open after the discard, want 0", n)
+	}
+	var fk int
+	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
+		t.Errorf("foreign_keys on the pool's next connection = %d (%v), want 1 as the DSN sets it", fk, err)
+	}
+	mustExec(t, db, `CREATE TABLE after_discard (x INTEGER)`)
+}
+
+// A ROLLBACK that succeeds keeps the connection in the pool.
+func TestRollbackOrDiscardKeepsConnectionOnRollback(t *testing.T) {
+	db := writerDB(t, filepath.Join(t.TempDir(), "rollback.db"))
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	if discarded, err := rollbackOrDiscard(ctx, conn); discarded || err != nil {
+		t.Errorf("rollbackOrDiscard = %v, %v; want false, nil", discarded, err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := db.Stats().OpenConnections; n != 1 {
+		t.Errorf("%d open connection(s) after a clean rollback, want the 1 pooled", n)
 	}
 }

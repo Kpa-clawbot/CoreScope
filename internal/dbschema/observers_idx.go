@@ -243,14 +243,9 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 		if committed {
 			return
 		}
-		if _, rerr := conn.ExecContext(ctx, `ROLLBACK`); rerr != nil {
-			// The transaction may still be open. Have database/sql close
-			// the connection (which rolls back) instead of pooling it.
-			discarded = true
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-			if err == nil {
-				err = fmt.Errorf("roll back observers rebuild: %w", rerr)
-			}
+		var rerr error
+		if discarded, rerr = rollbackOrDiscard(ctx, conn); rerr != nil && err == nil {
+			err = rerr
 		}
 	}()
 
@@ -260,8 +255,10 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 	if err != nil {
 		return fmt.Errorf("inspect observers: %w", err)
 	}
-	if idxIsPK {
-		return nil // rebuilt by another process meanwhile; the deferred ROLLBACK ends the empty transaction
+	if idxIsPK || len(cols) == 0 {
+		// Rebuilt, or dropped, by another process meanwhile; the deferred
+		// ROLLBACK ends the empty transaction.
+		return nil
 	}
 	known := make(map[string]bool, len(observersColumns))
 	for _, c := range observersColumns {
@@ -282,8 +279,8 @@ func ensureObserversIdx(rw *sql.DB, logf Logger) (err error) {
 	}
 	if len(unknown) > 0 {
 		return fmt.Errorf("observers has columns outside the canonical shape (%s); refusing to rebuild it — they would be dropped. "+
-			"To continue, save their data and drop them (ALTER TABLE observers DROP COLUMN <name>), "+
-			"or run the previous CoreScope version", strings.Join(unknown, ", "))
+			"To continue, save their data and drop them (ALTER TABLE observers DROP COLUMN <name>) — %s — "+
+			"or run the previous CoreScope version", strings.Join(unknown, ", "), dropColumnDependentsHint)
 	}
 	if !hasCol["id"] {
 		return fmt.Errorf("observers has no id column; refusing to rebuild it")
@@ -396,6 +393,11 @@ func quoteIdent(name string) string {
 // that is in no key.
 const dropPlainIdxSQL = `ALTER TABLE observers DROP COLUMN idx`
 
+// dropColumnDependentsHint goes with every DROP COLUMN a refusal suggests:
+// SQLite rejects the statement while an index, view or trigger uses the
+// column ("error in index my_idx after drop column: no such column: idx").
+const dropColumnDependentsHint = "first drop any index, view or trigger that uses the column, and recreate it after if still wanted"
+
 // refuseNonAliasIdx is the refusal for an observers table whose idx column is
 // not the rowid alias. SQLite can drop a plain column, but not one in the
 // primary key ("cannot drop PRIMARY KEY column"), so the way out differs.
@@ -411,8 +413,20 @@ func refuseNonAliasIdx(ctx context.Context, q sqlRunner) error {
 			"to continue, recreate the observers table without an idx column (copy the rows to a new table, drop the old one, rename), " +
 			"or run the previous CoreScope version")
 	}
-	return fmt.Errorf(refusal+"To continue, save its data and drop it (%s), "+
-		"or run the previous CoreScope version", dropPlainIdxSQL)
+	return fmt.Errorf(refusal+"To continue, save its data and drop it (%s) — %s — "+
+		"or run the previous CoreScope version", dropPlainIdxSQL, dropColumnDependentsHint)
+}
+
+// rollbackOrDiscard ends the rebuild's transaction on conn. When ROLLBACK
+// fails the transaction may still be open, so it has database/sql close the
+// connection (which rolls back) instead of pooling it, and reports that:
+// whatever was set on the connection, foreign_keys included, went with it.
+func rollbackOrDiscard(ctx context.Context, conn *sql.Conn) (discarded bool, err error) {
+	if _, rerr := conn.ExecContext(ctx, `ROLLBACK`); rerr != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		return true, fmt.Errorf("roll back observers rebuild: %w", rerr)
+	}
+	return false, nil
 }
 
 // recreateRefusal is the error for a local object whose definition no longer
@@ -432,12 +446,14 @@ func recreateRefusal(o localObserver, cause error) error {
 //   - views, and triggers on other tables, whose SQL mentions observers,
 //     packets_v, or a view already captured: while one exists, ALTER TABLE
 //     RENAME fails ("error in view v: no such table: main.observers"), and
-//     a view on a dropped view breaks it the same way. A trigger on a
-//     captured view (INSTEAD OF) mentions the view, so it is captured too —
-//     DROP VIEW takes it with it.
+//     a view on a dropped view breaks it the same way;
+//   - triggers on a captured view (INSTEAD OF), by their tbl_name: DROP VIEW
+//     takes them with it.
 //
-// The mention test is a case-insensitive whole-word match; a false positive
-// only means an unrelated view or trigger is dropped and recreated as is.
+// The mention test is a case-insensitive whole-word match, on the name and
+// on the name as it is written inside double quotes (`odd"name` is
+// `"odd""name"` in SQL); a false positive only means an unrelated view or
+// trigger is dropped and recreated as is.
 // Indexes on other tables cannot reference observers and are never touched.
 // SQL is NULL for SQLite's own auto-indexes, which follow their table.
 func captureLocalObservers(ctx context.Context, tx sqlRunner) ([]localObserver, error) {
@@ -482,7 +498,9 @@ func captureLocalObservers(ctx context.Context, tx sqlRunner) ([]localObserver, 
 			hit := strings.EqualFold(o.table, "observers")
 			if !hit && o.kind != "index" {
 				for _, name := range referenced {
-					if mentionsIdentifier(o.sql, name) {
+					if (o.kind == "trigger" && strings.EqualFold(o.table, name)) ||
+						mentionsIdentifier(o.sql, name) ||
+						mentionsIdentifier(o.sql, strings.ReplaceAll(name, `"`, `""`)) {
 						hit = true
 						break
 					}
@@ -607,7 +625,10 @@ func checkObserversForeignKeys(ctx context.Context, tx sqlRunner) error {
 			return fmt.Errorf("foreign_key_check(%s): %w", table, err)
 		}
 		if violations > 0 {
-			return fmt.Errorf("observers rebuild left %d foreign key violation(s) in %s; rolled back", violations, table)
+			return fmt.Errorf("observers rebuild left %d foreign key violation(s) in %s; rolled back. "+
+				"A child column declared `REFERENCES observers` with no column follows the primary key, so it now points at idx: "+
+				"to continue, declare it `REFERENCES observers(id)`, "+
+				"or run the previous CoreScope version", violations, table)
 		}
 	}
 	return nil

@@ -16,7 +16,7 @@
 Closes #2428.
 
 ### Fixed
-- **The one-time `observers.idx` upgrade (#2407) keeps your own indexes, triggers and views** (#2443) - it dropped indexes and triggers on `observers` silently and stopped at any view on it; it now recreates them, or refuses with the object's name and how to continue. It also no longer takes an `idx` that is not the rowid alias (`idx TEXT PRIMARY KEY`, a composite key, `WITHOUT ROWID`) for the upgraded table, two ingestors upgrading one file at once no longer fail with "database is locked", and an ingestor that fails to start no longer leaves the database file open.
+- **The one-time `observers.idx` upgrade (#2407) keeps your own indexes, triggers and views** (#2443) - it dropped indexes and triggers on `observers` silently and stopped at any view on it; it now recreates them, or refuses with the object's name and how to continue. It also no longer takes an `idx` that is not the rowid alias (`idx TEXT PRIMARY KEY`, a composite key, `WITHOUT ROWID`) for the upgraded table, two rebuilds of the `observers` table running on one file at once now take turns (the later one finds it done) instead of failing with "database is locked", and an ingestor that fails to start no longer leaves the database file open.
 
 ## [3.18.0] - 2026-11-17
 
