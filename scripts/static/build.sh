@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Packages public/ for a static host (Cloudflare Pages, a CDN, the web
 # container) instead of the CoreScope server. This is a packaging step, not a
-# build step: the output is public/ byte for byte, except that index.html gets
-# a cache buster and deployment.js says where the API is.
+# build step: the output is public/ byte for byte, except that the top-level
+# pages get a cache buster and the site URL, and deployment.js says where the
+# API is.
 #
 # A static host runs it as the build command (output dir dist/web); the web
 # container (Dockerfile.web) runs it when the image is built. Locally:
@@ -23,6 +24,11 @@
 #                first 7 characters of CF_PAGES_COMMIT_SHA (set by Pages), else
 #                git rev-parse --short HEAD.
 #   CLASSIC_URL  optional. The embedded UI, for "Open in classic" links.
+#   CORESCOPE_URL optional. The public URL of this UI, http(s)://host[:port]
+#                with an optional path, for the absolute og:url, og:image and
+#                twitter:image link previews need. A static host has no
+#                request to take it from, so without one og:url is left out
+#                and the preview image is the project's copy on GitHub.
 #   OUT          output directory. Default dist/web.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -35,6 +41,7 @@ API_BASE="${API_BASE:-}"
 AUTH="${AUTH:-}"
 CLASSIC_URL="${CLASSIC_URL:-}"
 COMMIT="${COMMIT:-}"
+CORESCOPE_URL="${CORESCOPE_URL:-}"
 if [ -z "$COMMIT" ] && [ -n "${CF_PAGES_COMMIT_SHA:-}" ]; then COMMIT="${CF_PAGES_COMMIT_SHA:0:7}"; fi
 if [ -z "$COMMIT" ]; then COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)"; fi
 
@@ -69,6 +76,14 @@ case "$CHANNEL" in
   *) fail "CHANNEL must be beta, next, dev or static: $CHANNEL" ;;
 esac
 [[ "$COMMIT" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || fail "COMMIT must be 1-40 characters of [A-Za-z0-9._-]: '$COMMIT'"
+# CORESCOPE_URL lands in an HTML attribute and a sed replacement, so it is
+# held to the shape the server accepts (cmd/server/site_url.go): no quote,
+# &, | or backslash can reach either.
+if [ -n "$CORESCOPE_URL" ]; then
+  while [[ "$CORESCOPE_URL" == */ ]]; do CORESCOPE_URL="${CORESCOPE_URL%/}"; done
+  [[ "$CORESCOPE_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]] ||
+    fail "CORESCOPE_URL must be http(s)://host[:port] with an optional path: $CORESCOPE_URL"
+fi
 
 # OUT is replaced wholesale, so it must be new, empty or a previous build:
 # a typo in OUT must not wipe an unrelated folder.
@@ -84,11 +99,20 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 cp -R public/. "$OUT/"
 
-# The same substitution spaHandler makes at server start in every top-level
-# page, with the commit in place of a timestamp so a rebuild of one commit is
-# byte-identical.
+# The same substitutions spaHandler makes in every top-level page: the commit
+# in place of a timestamp, so a rebuild of one commit is byte-identical, and
+# CORESCOPE_URL, or without it no og:url and the GitHub copy of the image.
+OG_FALLBACK=https://raw.githubusercontent.com/Kpa-clawbot/corescope/master/public
+fill_page() {
+  if [ -n "$CORESCOPE_URL" ]; then
+    sed -e "s/__BUST__/$COMMIT/g" -e "s|__CORESCOPE_URL__|$CORESCOPE_URL|g" "$1"
+  else
+    sed -e "s/__BUST__/$COMMIT/g" -e '/property="og:url" content="__CORESCOPE_URL__/d' \
+      -e "s|__CORESCOPE_URL__|$OG_FALLBACK|g" "$1"
+  fi
+}
 for page in "$OUT"/*.html; do
-  sed -i.bak "s/__BUST__/$COMMIT/g" "$page" && rm -f "$page.bak"
+  fill_page "public/$(basename "$page")" > "$page"
 done
 
 classic_js=null
@@ -101,7 +125,9 @@ EOF
 cp deploy/static/_headers "$OUT/_headers"
 
 # -- checks ---------------------------------------------------------------------
-if grep -rl "__BUST__" "$OUT" >/dev/null; then fail "a __BUST__ placeholder is left in $(grep -rl "__BUST__" "$OUT" | head -1)"; fi
+for ph in __BUST__ __CORESCOPE_URL__; do
+  if grep -rl "$ph" "$OUT" >/dev/null; then fail "a $ph placeholder is left in $(grep -rl "$ph" "$OUT" | head -1)"; fi
+done
 [ ! -e "$OUT/functions" ] && [ ! -e "$OUT/_worker.js" ] || fail "functions/ and _worker.js are not allowed: the frontend is static only"
 count=$(find "$OUT" -type f | wc -l)
 [ "$count" -lt 20000 ] || fail "$count files; Cloudflare Pages allows fewer than 20000"
@@ -118,9 +144,9 @@ while IFS= read -r f; do
   case "$f" in
     ./deployment.js|./_headers) ;;
     ./*/*) cmp -s "public/$f" "$OUT/$f" || fail "$f differs from public/$f" ;;
-    ./*.html) sed "s/__BUST__/$COMMIT/g" "public/$f" | cmp -s - "$OUT/$f" || fail "$f is not public/$f with the cache buster" ;;
+    ./*.html) fill_page "public/$f" | cmp -s - "$OUT/$f" || fail "$f is not public/$f with the cache buster and site URL" ;;
     *) cmp -s "public/$f" "$OUT/$f" || fail "$f differs from public/$f" ;;
   esac
 done <<< "$actual"
 
-echo "build: $OUT ($count files) channel=$CHANNEL commit=$COMMIT apiBase=${API_BASE:-same-origin} auth=$AUTH"
+echo "build: $OUT ($count files) channel=$CHANNEL commit=$COMMIT apiBase=${API_BASE:-same-origin} auth=$AUTH siteUrl=${CORESCOPE_URL:-unset}"
