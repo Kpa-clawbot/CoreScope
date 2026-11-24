@@ -2326,11 +2326,12 @@
           </div>
         </div>`;
 
-      // Click handler for rows
-      el.addEventListener('click', e => {
+      // Bind to this render's list. The analytics container survives tab changes.
+      const list = el.querySelector('#subpathList');
+      list.addEventListener('click', e => {
         const tr = e.target.closest('tr[data-hops]');
         if (!tr) return;
-        el.querySelectorAll('tr.subpath-selected').forEach(r => r.classList.remove('subpath-selected'));
+        list.querySelectorAll('tr.subpath-selected').forEach(r => r.classList.remove('subpath-selected'));
         tr.classList.add('subpath-selected');
         loadSubpathDetail(tr.dataset.hops);
       });
