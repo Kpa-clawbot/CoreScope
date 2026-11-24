@@ -1160,6 +1160,7 @@
   let directPacketId = null;
   let directPacketHash = null;
   let initGeneration = 0;
+  let rowSelectionGeneration = 0;
   let detailGeneration = 0;
   let _docActionHandler = null;
   let _docMenuCloseHandler = null;
@@ -4437,28 +4438,33 @@
       renderTableRows();
       return;
     }
-    // The address can change before the router handles hashchange. A second row
-    // click can supersede this one while the address still points to the list.
-    const gen = ++detailGeneration;
+    // A pending click supersedes earlier clicks. The open detail can finish
+    // rendering until a replacement actually opens, including if this lookup fails.
+    const rowGen = ++rowSelectionGeneration;
+    const detailGen = detailGeneration;
     const route = location.hash;
-    const isCurrent = () => gen === detailGeneration && location.hash === route;
+    const group = toggleGroup ? hashIndex.get(hash) : null;
     try {
       const data = await api(`/packets/${hash}`);
-      if (!isCurrent() || !data?.packet) return;
+      if (!data?.packet) return;
       if (toggleGroup) {
-        const group = hashIndex.get(hash);
-        if (group && data.observations) {
+        // Other group arrows on this list expand independently of the preview.
+        if (!group || hashIndex.get(hash) !== group) return;
+        if (data.observations) {
           group._children = data.observations.map(o => clearParsedCache({...data.packet, ...o, _isObservation: true}));
           group._fetchedData = data;
           sortGroupChildren(group);
         }
-        await cacheResolvedPaths(group?._children || []);
-        await resolveHopsForPackets(group?._children || []);
-        if (!isCurrent()) return;
+        await cacheResolvedPaths(group._children || []);
+        await resolveHopsForPackets(group._children || []);
+        if (hashIndex.get(hash) !== group) return;
         expandedHashes.add(hash);
         renderTableRows();
       }
-      selectPacket(data.packet.id, hash, data);
+      // The hash can change before the router tears down the old page.
+      if (rowGen === rowSelectionGeneration && detailGen === detailGeneration && route === location.hash) {
+        selectPacket(data.packet.id, hash, data);
+      }
     } catch {}
   }
 
