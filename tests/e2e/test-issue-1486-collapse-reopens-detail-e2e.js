@@ -162,6 +162,25 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     assert(new URL(page.url()).hash.split('?')[0] === '#/packets/' + SEED_HASH, 'Back must reopen the linked packet');
   });
 
+  for (const query of ['?obs', '?obs=']) {
+    await step(`a packet link ending in ${query} opens the aggregate preview`, async () => {
+      const tab = await browser.newPage({ viewport: { width: 800, height: 800 } });
+      try {
+        const [response] = await Promise.all([
+          tab.waitForResponse(r => new URL(r.url()).pathname === '/api/packets/' + SEED_HASH),
+          tab.goto(BASE + '/#/packets/' + SEED_HASH + query, { waitUntil: 'networkidle' }),
+        ]);
+        assert((await response.json()).packet?.hash === SEED_HASH, 'the detail API must return the seeded packet');
+        const preview = tab.locator('.slide-over-panel[data-state="open"]');
+        const detail = await preview.isVisible() ? await preview.locator('.detail-hash:visible').innerText() : 'closed preview';
+        assert(detail.includes(SEED_HASH) && detail.includes('(observation 1 of 3)'),
+          `expected ${SEED_HASH} (observation 1 of 3), got ${detail}`);
+      } finally {
+        await tab.close();
+      }
+    });
+  }
+
   await browser.close();
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);
