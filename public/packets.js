@@ -248,6 +248,7 @@
  *   SlideOver.shouldUse()   → boolean (current viewport <= breakpoint)
  *   SlideOver.open(opts)    → returns the inner content element. opts:
  *     { title?: string, onClose?: function, restoreFocus?: () => Element|null }
+ *     `onClose` receives `'replace'` when a new preview takes over.
  *     `restoreFocus` (optional) overrides the auto-captured
  *     `document.activeElement` and is invoked at close time to look up the
  *     element to focus. Use this when the caller re-renders the originating
@@ -431,7 +432,7 @@
   function open(opts) {
     // If already open, properly close the prior caller first so its onClose
     // (which clears `selectedKey`/hash state) fires before we replace it.
-    if (isOpen()) close();
+    if (isOpen()) close('replace');
     ensureNodes();
     opts = opts || {};
     // #1168 Munger #1: bump open sequence so any pending rAF from a
@@ -475,7 +476,7 @@
     return content;
   }
 
-  function close() {
+  function close(reason) {
     if (!panel || !panelOpen) return;
     // #1168 Munger #3: release the ref-counted scroll-lock token.
     if (scrollLockToken != null) {
@@ -494,7 +495,7 @@
     // re-render the originating table inside cb() (e.g. clearing the
     // selected row state), which detaches the originating <tr>; we
     // intentionally re-look-up via the resolver below.
-    if (cb) try { cb(); } catch {}
+    if (cb) try { cb(reason); } catch {}
 
     // Resolve the focus target by DATA-VALUE LOOKUP AT RESTORE TIME.
     // #1616: no captured-element-ref path — if cb() re-rendered the
@@ -3485,15 +3486,15 @@
   let selectedObservationId = null;
 
   async function selectPacket(id, hash, prefetchedData, obsRowId) {
+    // Retire the outgoing overlay before installing the new packet's selection and route.
+    if (window.SlideOver) window.SlideOver.close('replace');
     if (window.setRouteTitle) window.setRouteTitle('packets', String(hash || id));
     selectedId = id;
     selectedObservationId = obsRowId || null;
     const obsParam = selectedObservationId ? `?obs=${selectedObservationId}` : '';
-    if (hash) {
-      history.replaceState(null, '', `#/packets/${hash}${obsParam}`);
-    } else {
-      history.replaceState(null, '', `#/packets/${id}${obsParam}`);
-    }
+    const openingRoute = `#/packets/${hash || id}`;
+    let canonicalRoute;
+    history.replaceState(null, '', openingRoute + obsParam);
     updatePacketsUrl();
     renderTableRows();
     const isMobileNow = window.innerWidth <= 640;
@@ -3524,11 +3525,15 @@
           return document.querySelector('#pktTable tbody tr[data-hash="' + esc + '"]')
               || document.querySelector('#pktTable tbody tr[data-id="' + esc + '"]');
         },
-        onClose: function () {
+        onClose: function (reason) {
+          // Observation links use the resolved packet hash even when opened by an alias.
+          const route = location.hash.split('?')[0];
+          if (reason !== 'replace' && (route === openingRoute || route === canonicalRoute)) {
+            history.replaceState(null, '', '#/packets');
+            if (window.setRouteTitle) window.setRouteTitle('packets');
+          }
           selectedId = null;
           selectedObservationId = null;
-          history.replaceState(null, '', '#/packets');
-          if (window.setRouteTitle) window.setRouteTitle('packets');
           renderTableRows();
         }
       });
@@ -3567,6 +3572,7 @@
       const data = prefetchedData || await api(hash ? `/packets/${hash}` : `/packets/${id}`);
       // Resolve path hops for detail view
       const pkt = data.packet;
+      canonicalRoute = `#/packets/${pkt.hash || pkt.id}`;
       try {
         await resolveHopsForPackets([pkt]);
       } catch {}
