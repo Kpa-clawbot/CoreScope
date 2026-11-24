@@ -168,6 +168,69 @@ async function assertHashView(page, bytes, collisionData) {
     assert(nodeLinks >= 2, 'Expanded collision panel should list >=2 node links, got ' + nodeLinks);
   });
 
+  // #1710: two controlled repeaters share AB; only the inspected key uses AB12.
+  {
+    const key = 'AB12' + '0'.repeat(60), otherKey = 'AB34' + '0'.repeat(60);
+    const nodes = [key, otherKey].map(public_key => ({ public_key, role: 'repeater' }));
+    const region = 'QZZ', regionsPattern = '**/api/config/regions', pattern = '**/api/nodes?*';
+    let empty = false, emptyRequests = 0;
+    try {
+      await page.route(regionsPattern, route => route.fulfill({ status: 200, json: { [region]: 'Fixture region' } }));
+      await page.route(pattern, route => {
+        if (new URL(route.request().url()).searchParams.get('region') !== region) return route.continue();
+        if (empty) emptyRequests++;
+        return route.fulfill({ status: 200, json: { nodes: empty ? [] : nodes, total: empty ? 0 : 2, counts: {}, has_more: false } });
+      });
+      for (const width of [1400, 390]) {
+        empty = false;
+        await page.setViewportSize({ width, height: width === 390 ? 844 : 1200 });
+        await page.goto('about:blank');
+        await page.goto(BASE + '/#/analytics?tab=prefix-tool&region=' + encodeURIComponent(region), { waitUntil: 'domcontentloaded' });
+        await page.waitForFunction(() => window.__collisionsThemeReady);
+        await page.waitForSelector('#ptPrefixInput');
+        const input = page.locator('#ptPrefixInput'), check = page.locator('#ptCheckBtn');
+        const messages = page.locator('#ptCheckerResults > div > div.text-muted');
+        await step(`#1710: ${width}px known key keeps its match and describes self-only tiers`, async () => {
+          await input.fill(key); await check.click();
+          const links = page.locator('#ptCheckerResults a.analytics-link');
+          assert(await links.count() === 1 && await links.getAttribute('href') === '#/nodes/' + otherKey,
+            'Full-key positive control must link only to the other AB repeater');
+          const text = await messages.allTextContents();
+          assert(text.length === 2 && text.every(t => t === 'The entered key is the only match among loaded repeaters.'),
+            'Self-only tiers must identify the actual match; got: ' + text.join(' | '));
+        });
+        for (const [label, value] of [['absent full key', 'CD' + '0'.repeat(62)], ['partial input', 'CD000000']]) {
+          await step(`#1710: ${width}px ${label} uses plain no-match wording`, async () => {
+            await input.fill(value); await check.click();
+            const text = await messages.allTextContents();
+            assert(text.length === 3 && text.every(t => t === 'No matches among loaded repeaters.'),
+              'Unmatched input must not imply an excluded key; got: ' + text.join(' | '));
+          });
+        }
+        await step(`#1710: ${width}px manual no-match prefix scopes its empty result`, async () => {
+          await input.fill('CD'); await check.click();
+          const text = await messages.textContent();
+          assert(text === 'No matches among loaded repeaters.', 'Manual empty result must name its population; got: ' + text);
+        });
+        await step(`#1710: ${width}px empty selected region makes no network-wide claim`, async () => {
+          empty = true; emptyRequests = 0;
+          await page.reload({ waitUntil: 'domcontentloaded' });
+          await page.waitForFunction(() => window.__collisionsThemeReady);
+          await page.waitForSelector('#analyticsContent > .analytics-card > p');
+          assert(emptyRequests > 0 && await page.evaluate(() => RegionFilter.getRegionParam()) === region,
+            'Empty result must use the actually selected region');
+          const text = (await page.locator('#analyticsContent').textContent()).trim();
+          assert(text === 'No repeaters loaded for the current view.', 'Empty view must name its loaded population; got: ' + text);
+        });
+      }
+    } finally {
+      await page.unroute(pattern);
+      await page.unroute(regionsPattern);
+      await page.evaluate(() => localStorage.removeItem('meshcore-region-filter'));
+      await page.setViewportSize({ width: 1400, height: 1200 });
+    }
+  }
+
   await step('Collisions tab includes reverse cross-reference to Prefix Tool', async () => {
     await openCollisions(page);
     // Look for a link back to the prefix-tool tab with "actually observed" framing nearby

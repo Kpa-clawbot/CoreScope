@@ -3786,7 +3786,7 @@ function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _s
     const nodes = allNodes.filter(n => n.role === 'repeater');
 
     if (nodes.length === 0) {
-      el.innerHTML = `<div class="analytics-card"><p class="text-muted">No repeaters in the network yet. Any prefix is available!</p></div>`;
+      el.innerHTML = `<div class="analytics-card"><p class="text-muted">No repeaters loaded for the current view.</p></div>`;
       return;
     }
 
@@ -4102,7 +4102,7 @@ function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _s
               ${severityBadge(count)}
             </div>
             ${count === 0
-              ? '<div class="text-muted" style="font-size:0.85em">No existing nodes use this prefix.</div>'
+              ? `<div class="text-muted" style="font-size:0.85em">${matches.length ? 'The entered key is the only match among loaded repeaters.' : 'No matches among loaded repeaters.'}</div>`
               : `<div style="font-size:0.85em;max-height:140px;overflow-y:auto">${colliders.map(nodeEntry).join('')}</div>`}
           </div>`;
       });
