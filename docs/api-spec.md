@@ -35,6 +35,7 @@
 - [GET /api/observers/:id/analytics](#get-apiobserversidanalytics)
 - [GET /api/channels](#get-apichannels)
 - [GET /api/channels/:hash/messages](#get-apichannelshashmessages)
+- [GET /api/known-channels](#get-apiknown-channels)
 - [GET /api/rf-noise](#get-apirf-noise)
 - [GET /api/elevation/profile](#get-apielevationprofile)
 - [GET /api/planner/profile](#get-apiplannerprofile)
@@ -1350,6 +1351,44 @@ Messages for a specific channel.
 | `"#name"` | The matched region name. |
 
 The same field is on the WebSocket `packet` broadcast, both top-level and inside `packet`.
+
+---
+
+## GET /api/known-channels
+
+This public endpoint returns the cached community channel catalogue. A channel can appear before CoreScope observes or decrypts any messages on it.
+
+### Query Parameters
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `region` | string | All entries | One catalogue label. Matching ignores case and surrounding whitespace. A blank value selects all entries. Commas are part of the label. |
+
+### Response `200`
+
+```json
+{
+  "generatedAt": "edition-7",
+  "license": "CC0-1.0",
+  "fetchedAt": "2026-01-02T03:04:05.123456789+02:00",
+  "source": "https://example.invalid/channels.json",
+  "entries": [
+    { "channel": "#example", "region": "test-region", "regionName": "Example region" }
+  ]
+}
+```
+
+`source` is the configured catalogue URL. `fetchedAt` is the server's last successful fetch time in RFC 3339 format, with optional fractional seconds and the server's UTC offset (`Z` for UTC).
+
+Each entry has a trimmed `channel` (including any `#` prefix) and a trimmed, lowercase `region`. The catalogue can use any region label, including an empty string. The optional fields `generatedAt` and `license` on the snapshot and `description`, `key`, and `regionName` on each entry are copied verbatim and omitted when empty. Entry order is unspecified.
+
+A cached snapshot uses `Cache-Control: public, max-age=300`. An empty catalogue or unmatched region returns the snapshot metadata with `"entries": []`. A failed refresh keeps the last successful snapshot.
+
+Before the first successful fetch, including when fetching is disabled, the response uses `Cache-Control: public, max-age=30` and has this body.
+
+```json
+{ "fetchedAt": "0001-01-01T00:00:00Z", "source": "", "entries": [] }
+```
 
 ---
 
