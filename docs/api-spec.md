@@ -3061,7 +3061,7 @@ Returns `[]` when no areas are configured.
 
 ## GET /api/config/areas/polygons
 
-Full area definitions including polygon/bounding-box coordinates. Intended for map rendering tools (e.g. the area-map debug tool).
+Returns polygon coordinates and bounds for every configured area, including entries with an empty label. The Area Map tool uses this endpoint.
 
 ### Response `200`
 
@@ -3070,14 +3070,18 @@ Full area definitions including polygon/bounding-box coordinates. Intended for m
   {
     "key":   string,
     "label": string,
-    "polygon": [[number, number]] | undefined,   // [lat, lon] pairs (if polygon-style)
-    "latMin":  number | undefined,               // bounding-box style
+    "polygon": [[number, number]] | undefined,   // [latitude, longitude] in degrees
+    "latMin":  number | undefined,               // each bound can appear independently or alongside a polygon
     "latMax":  number | undefined,
     "lonMin":  number | undefined,
     "lonMax":  number | undefined
   }
 ]
 ```
+
+CoreScope decodes each JSON vertex into a fixed pair, filling missing positions with zero and discarding elements after the second.
+For example, `[[10], [11, 20, 99]]` in the configuration yields `[[10, 0], [11, 20]]` in the response.
+The endpoint omits `polygon` when it has no vertices and returns nonempty polygons without validating their geometry.
 
 Returns `[]` when no areas are configured.
 
