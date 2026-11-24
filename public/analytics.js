@@ -3993,7 +3993,7 @@ function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _s
 
       <div class="analytics-card" id="ptChecker">
         <h3 style="margin-top:0">Check a Prefix</h3>
-        <p class="text-muted" style="margin-top:0;font-size:0.9em">Enter a 1-byte (2 hex chars), 2-byte (4 hex chars), or 3-byte (6 hex chars) prefix — or paste a full public key.</p>
+        <p class="text-muted" style="margin-top:0;font-size:0.9em">Enter a 1-byte (2 hex chars), 2-byte (4 hex chars), or 3-byte (6 hex chars) prefix — or paste a full public key. Results use only loaded repeaters, subject to active region and area filters and the node loading limit.</p>
         <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
           <input id="ptPrefixInput" type="text" placeholder="e.g. A3F1" maxlength="64"
             style="font-family:var(--mono);font-size:1em;padding:6px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;min-width:180px;flex:1"
@@ -4086,8 +4086,8 @@ function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _s
         </div>`;
       }
       if (isFullKey) {
-        const inNetwork = nodes.some(n => n.public_key.toUpperCase() === input);
-        html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">Derived prefixes: <code class="mono">${input.slice(0,2)}</code> / <code class="mono">${input.slice(0,4)}</code> / <code class="mono">${input.slice(0,6)}</code>${!inNetwork ? ' — <em>this node is not yet in the network</em>' : ''}</p>`;
+        const inLoadedRepeaters = nodes.some(n => n.public_key.toUpperCase() === input);
+        html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">Derived prefixes: <code class="mono">${input.slice(0,2)}</code> / <code class="mono">${input.slice(0,4)}</code> / <code class="mono">${input.slice(0,6)}</code>${!inLoadedRepeaters ? ' — <em>this node is not present among the loaded repeaters</em>' : ''}</p>`;
       }
 
       tiers.forEach(({ b, prefix }) => {
