@@ -85,10 +85,13 @@
     justify-content: space-between;
   }
 
-  /* The app grows with body-scroll content. Fixed pages and Planner
-   * already subtract the nav from their viewport height. */
-  #app:not(.app-fixed, :has(> .mc-pl-page)) {
+  /* Body-scroll pages need clearance even in browsers without :has(). */
+  #app:not(.app-fixed) {
     padding-bottom: var(--bottom-nav-reserve);
+  }
+  /* The active Planner already subtracts the nav from its height. */
+  #app:has(> .mc-pl-page) {
+    padding-bottom: 0;
   }
 }
 
