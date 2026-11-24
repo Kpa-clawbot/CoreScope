@@ -434,9 +434,9 @@ func TestEvaluateWatcherWithoutPrefsGetsDefaults(t *testing.T) {
 	}
 }
 
-// A disabled user keeps being evaluated: states follow the node, nothing is
-// mailed, and re-enabling does not mail what changed while off.
-func TestEvaluateDisabledUserUpdatesStatesSilently(t *testing.T) {
+// Email opt-out leaves transitions available to other destinations. States
+// still advance so re-enabling email cannot replay old transitions.
+func TestEvaluateReportsTransitionsWithEmailOff(t *testing.T) {
 	in := evInput()
 	in.Prefs[0].Enabled = false
 	in.Prefs = append(in.Prefs, users.NotifyPrefs{UserID: evAdmin, Enabled: false, Events: []string{users.NotifyForeignNew}})
@@ -448,8 +448,13 @@ func TestEvaluateDisabledUserUpdatesStatesSilently(t *testing.T) {
 	in.Nodes[evPkA] = notifyNode{Pubkey: evPkA, Name: "Alpha", Role: "companion", LastSeen: evAgo(48 * time.Hour)}
 	in.Nodes[evPkG] = notifyNode{Pubkey: evPkG, Name: "Golf", Foreign: true}
 	res := evaluateNotifications(in)
-	if len(res.Changes) != 0 {
-		t.Fatalf("disabled users mailed: %+v", res.Changes)
+	if changes := res.Changes[evUser]; len(changes) != 1 || changes[0].Event != users.NotifyNodeOffline ||
+		changes[0].Subject != evPkA || changes[0].To != users.NotifyBad {
+		t.Fatalf("offline changes with email off = %+v; want Alpha offline", changes)
+	}
+	if changes := res.Changes[evAdmin]; len(changes) != 1 || changes[0].Event != users.NotifyForeignNew ||
+		changes[0].Subject != evPkG || changes[0].To != users.NotifyTold {
+		t.Fatalf("foreign changes with email off = %+v; want Golf discovered", changes)
 	}
 	if s, ok := evState(res, evUser, users.NotifyNodeOffline, evPkA); !ok || s != users.NotifyBad {
 		t.Fatalf("disabled user's offline state = %q, %v; want bad stored", s, ok)
@@ -463,7 +468,7 @@ func TestEvaluateDisabledUserUpdatesStatesSilently(t *testing.T) {
 	in.Prefs[0].Enabled = true
 	in.Prefs[1].Enabled = true
 	if res := evaluateNotifications(in); len(res.Changes) != 0 || len(res.States) != 0 {
-		t.Fatalf("re-enabling mailed old changes: %+v", res)
+		t.Fatalf("re-enabling email replayed old changes: %+v", res)
 	}
 }
 

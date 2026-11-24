@@ -197,6 +197,66 @@ var migrations = [][]string{
 		`ALTER TABLE repeater_info ADD COLUMN revision INTEGER NOT NULL DEFAULT 0`,
 		`UPDATE repeater_info SET revision = 1`,
 	},
+	// v11: push relay bindings, pending link intents, and durable outbox.
+	{
+		`CREATE TABLE notification_push_bindings (
+			analyzer_id TEXT NOT NULL,
+			installation_id TEXT NOT NULL,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			binding_id TEXT NOT NULL,
+			proof_hash TEXT NOT NULL,
+			subscription_id TEXT NOT NULL,
+			expires_at INTEGER NOT NULL,
+			PRIMARY KEY (analyzer_id, installation_id),
+			UNIQUE (analyzer_id, subscription_id)
+		)`,
+		`CREATE INDEX notification_push_bindings_user ON notification_push_bindings(user_id, analyzer_id)`,
+		`CREATE INDEX notification_push_bindings_expiry ON notification_push_bindings(expires_at)`,
+		`CREATE TABLE notification_push_intents (
+			analyzer_id TEXT NOT NULL,
+			installation_id TEXT NOT NULL,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			binding_id TEXT NOT NULL,
+			proof_hash TEXT NOT NULL,
+			expires_at INTEGER NOT NULL,
+			PRIMARY KEY (analyzer_id, installation_id, user_id)
+		)`,
+		`CREATE INDEX notification_push_intents_user ON notification_push_intents(user_id, analyzer_id)`,
+		`CREATE INDEX notification_push_intents_expiry ON notification_push_intents(expires_at)`,
+		`CREATE TABLE notification_push_jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			analyzer_id TEXT NOT NULL,
+			operation TEXT NOT NULL CHECK (operation IN ('deliver','revoke')),
+			subscription_id TEXT NOT NULL,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			event_id TEXT NOT NULL DEFAULT '',
+			event TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			node_pubkey TEXT NOT NULL DEFAULT '',
+			occurred_at INTEGER NOT NULL DEFAULT 0,
+			expires_at INTEGER NOT NULL,
+			next_at INTEGER NOT NULL DEFAULT 0,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			node_name TEXT NOT NULL DEFAULT '',
+			UNIQUE (analyzer_id, subscription_id, event_id)
+		)`,
+		`CREATE INDEX notification_push_jobs_due ON notification_push_jobs(analyzer_id, next_at, id)`,
+		`CREATE INDEX notification_push_jobs_expiry ON notification_push_jobs(expires_at)`,
+		`CREATE INDEX notification_push_jobs_watch ON notification_push_jobs(user_id, node_pubkey, event)`,
+		`CREATE TRIGGER notification_push_bindings_revoke AFTER DELETE ON notification_push_bindings BEGIN
+			DELETE FROM notification_push_jobs
+				WHERE analyzer_id = OLD.analyzer_id AND subscription_id = OLD.subscription_id AND operation = 'deliver';
+			INSERT OR IGNORE INTO notification_push_jobs (analyzer_id, operation, subscription_id, expires_at)
+				VALUES (OLD.analyzer_id, 'revoke', OLD.subscription_id, OLD.expires_at);
+		END`,
+		`CREATE TRIGGER notification_push_watch_removed AFTER DELETE ON notification_watches BEGIN
+			DELETE FROM notification_push_jobs WHERE user_id = OLD.user_id AND node_pubkey = OLD.pubkey;
+		END`,
+		`CREATE TRIGGER notification_push_events_changed AFTER UPDATE OF events ON notification_prefs BEGIN
+			DELETE FROM notification_push_jobs WHERE user_id = OLD.user_id
+				AND instr(',' || NEW.events || ',', ',' || event || ',') = 0;
+		END`,
+	},
 }
 
 func (s *Store) migrate() error {

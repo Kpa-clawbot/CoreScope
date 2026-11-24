@@ -91,8 +91,17 @@ type exportProposal struct {
 }
 
 type exportNotifications struct {
-	Prefs   *exportNotifyPrefs `json:"prefs"`
-	Watches []exportWatch      `json:"watches"`
+	Prefs       *exportNotifyPrefs `json:"prefs"`
+	Watches     []exportWatch      `json:"watches"`
+	PushDevices []exportPushDevice `json:"pushDevices"`
+}
+
+// exportPushDevice is a push relay device link: the relay's analyzer
+// and installation IDs and when the link expires unless the app renews it.
+type exportPushDevice struct {
+	AnalyzerID     string `json:"analyzerId"`
+	InstallationID string `json:"installationId"`
+	ExpiresAt      string `json:"expiresAt"`
 }
 
 type exportNotifyPrefs struct {
@@ -137,7 +146,7 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 		ObserverBindings: []exportObserverBinding{},
 		RepeaterClaims:   []repeaterClaimRefJSON{},
 		Proposals:        []exportProposal{},
-		Notifications:    exportNotifications{Watches: []exportWatch{}},
+		Notifications:    exportNotifications{Watches: []exportWatch{}, PushDevices: []exportPushDevice{}},
 		Audit:            []exportAuditEntry{},
 		Mail:             []exportMail{},
 	}
@@ -212,6 +221,14 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 	}
 	for _, w := range watches {
 		x.Notifications.Watches = append(x.Notifications.Watches, exportWatch{Pubkey: w.Pubkey, CreatedAt: rfc3339(w.CreatedAt)})
+	}
+	devices, err := a.st.PushBindingsFor(u.ID)
+	if err != nil {
+		return nil, fmt.Errorf("push devices: %w", err)
+	}
+	for _, d := range devices {
+		x.Notifications.PushDevices = append(x.Notifications.PushDevices,
+			exportPushDevice{AnalyzerID: d.AnalyzerID, InstallationID: d.InstallationID, ExpiresAt: rfc3339(d.ExpiresAt)})
 	}
 	entries, err := a.st.AuditAllFor(u.ID)
 	if err != nil {

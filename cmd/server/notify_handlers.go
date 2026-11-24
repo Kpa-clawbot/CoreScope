@@ -40,12 +40,13 @@ type notifyLimitsJSON struct {
 // notifyAccountJSON is the caller's notification state: GET answers it, and
 // so does every change, so the client can replace its copy.
 type notifyAccountJSON struct {
-	Enabled         bool              `json:"enabled"`
-	Events          []string          `json:"events"`
-	AvailableEvents []string          `json:"availableEvents"`
-	ExternalLabel   string            `json:"externalLabel,omitempty"` // names node.external when offered
-	Watches         []notifyWatchJSON `json:"watches"`
-	Limits          notifyLimitsJSON  `json:"limits"`
+	Enabled         bool                      `json:"enabled"`
+	Events          []string                  `json:"events"`
+	AvailableEvents []string                  `json:"availableEvents"`
+	ExternalLabel   string                    `json:"externalLabel,omitempty"` // names node.external when offered
+	Watches         []notifyWatchJSON         `json:"watches"`
+	Limits          notifyLimitsJSON          `json:"limits"`
+	PushRelay       *notifyPushCapabilityJSON `json:"pushRelay,omitempty"`
 }
 
 type watchMyNodesJSON struct {
@@ -56,6 +57,7 @@ type watchMyNodesJSON struct {
 }
 
 func (s *Server) registerNotifyRoutes(r *mux.Router) {
+	s.registerNotifyPushRoutes(r)
 	r.HandleFunc("/api/account/notifications", s.withUser(s.handleNotifyGet)).Methods("GET")
 	r.HandleFunc("/api/account/notifications", s.withUser(s.handleNotifyPut)).Methods("PUT")
 	r.HandleFunc("/api/account/notifications/watches/{pubkey}", s.withUser(s.handleWatchPut)).Methods("PUT")
@@ -129,6 +131,14 @@ func (s *Server) notifyAccount(u *users.User) (notifyAccountJSON, error) {
 	if ext {
 		out.ExternalLabel = ns.external.label
 	}
+	s.auth.relayDelivery.mu.RLock()
+	push := s.auth.relaySettings()
+	if push.relay != nil && !s.auth.relayRevoked() {
+		out.PushRelay = &notifyPushCapabilityJSON{
+			RelayOrigin: push.relayOrigin, AnalyzerID: push.relayAnalyzerID, ContractVersion: notifyRelayContractVersion, Platforms: push.relayPlatforms,
+		}
+	}
+	s.auth.relayDelivery.mu.RUnlock()
 	for _, e := range p.Events {
 		if (u.Role == users.RoleAdmin || !users.IsAdminNotifyEvent(e)) && (ext || e != users.NotifyNodeExternal) {
 			out.Events = append(out.Events, e)

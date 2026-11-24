@@ -26,6 +26,51 @@
 .admin-observer-logins h3 { margin: 20px 0 8px; font-size: 1rem; }
 .admin-observer-logins select { min-height: 48px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); max-width: 16em; }
 @media (pointer: fine) { .admin-observer-logins select { min-height: 36px; } }
+
+/* Notification destination status and connection details. */
+.admin-notification-card { max-width: 54rem; }
+.admin-notification-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.admin-notification-heading h3 { margin: 0; }
+.admin-notification-status {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+.admin-notification-status.is-connected { color: var(--success); }
+.admin-notification-status.is-paused { color: var(--warning); }
+.admin-notification-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 16px; }
+.admin-notification-actions .admin-notification-disconnect { color: var(--danger); }
+.admin-notification-description { margin: 8px 0 0; color: var(--text-muted); }
+.admin-notification-relay { margin-block-start: 16px; max-inline-size: 28rem; }
+.admin-notification-relay select { padding: 8px 10px; min-height: 48px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--input-bg); color: var(--text); font: inherit; box-sizing: border-box; }
+.admin-notification-card .account-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.admin-notification-details { margin: 16px 0 0; border-block-start: 1px solid var(--border); }
+.admin-notification-details div {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 12px;
+  padding-block: 10px;
+}
+.admin-notification-details div + div { border-block-start: 1px solid var(--border); }
+.admin-notification-details dt { color: var(--text-muted); font-size: var(--fs-sm); }
+.admin-notification-details dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+@media (max-width: 540px) {
+  .admin-notification-details div { grid-template-columns: minmax(0, 1fr); }
+}
+@media (pointer: fine) {
+  .admin-notification-relay select { min-height: 36px; padding: 4px 10px; }
+}
 /* Send test mail (admin-overview.js): the result wraps next to the button, long provider errors included. */
 .admin-mailtest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; }
 .admin-mailtest .account-msg { min-width: 0; overflow-wrap: anywhere; }

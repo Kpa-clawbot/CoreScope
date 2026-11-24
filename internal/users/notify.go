@@ -398,11 +398,13 @@ func (s *Store) AllNotifyStates() ([]NotifyState, error) {
 // deleted since the caller read them are skipped instead of failing the
 // whole write on the foreign key.
 func (s *Store) WriteNotifyStates(list []NotifyState) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
+	return s.ApplyNotifyChanges(nil, list, NotifyOutbox{})
+}
+
+func writeNotifyStates(tx *sql.Tx, list []NotifyState) error {
+	if len(list) == 0 {
+		return nil
 	}
-	defer tx.Rollback()
 	stmt, err := tx.Prepare(`INSERT INTO notification_state (user_id, event, subject, state, changed_at)
 		SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)
 		ON CONFLICT (user_id, event, subject) DO UPDATE SET state = excluded.state, changed_at = excluded.changed_at`)
@@ -415,20 +417,19 @@ func (s *Store) WriteNotifyStates(list []NotifyState) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // DeleteNotifyStates deletes the rows of keys in one transaction; keys
 // without a row are ignored.
 func (s *Store) DeleteNotifyStates(keys []NotifyKey) error {
+	return s.ApplyNotifyChanges(keys, nil, NotifyOutbox{})
+}
+
+func deleteNotifyStates(tx *sql.Tx, keys []NotifyKey) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	stmt, err := tx.Prepare(`DELETE FROM notification_state WHERE user_id = ? AND event = ? AND subject = ?`)
 	if err != nil {
 		return err
@@ -439,7 +440,7 @@ func (s *Store) DeleteNotifyStates(keys []NotifyKey) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // NotifyMailCounts counts notification mails sent at or after since: in

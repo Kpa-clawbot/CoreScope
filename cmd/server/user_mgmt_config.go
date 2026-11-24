@@ -94,11 +94,12 @@ func resolveProposals(c *ChannelProposalsConfig) proposalSettings {
 // NotificationsConfig is userManagement.notifications
 // (docs/specs/2026-10-07-node-notifications-design.md). Off by default.
 type NotificationsConfig struct {
-	Enabled           bool `json:"enabled"`
-	IntervalMinutes   int  `json:"intervalMinutes,omitempty"`
-	PerUserPerDay     int  `json:"perUserPerDay,omitempty"`
-	MaxMailsPerDay    int  `json:"maxMailsPerDay,omitempty"`
-	MaxWatchesPerUser int  `json:"maxWatchesPerUser,omitempty"`
+	PushRelay         *NotifyRelayConfig `json:"pushRelay,omitempty"`
+	Enabled           bool               `json:"enabled"`
+	IntervalMinutes   int                `json:"intervalMinutes,omitempty"`
+	PerUserPerDay     int                `json:"perUserPerDay,omitempty"`
+	MaxMailsPerDay    int                `json:"maxMailsPerDay,omitempty"`
+	MaxWatchesPerUser int                `json:"maxWatchesPerUser,omitempty"`
 	// ExternalAlerts feeds the node.external event (#2177). Absent: the
 	// event is not offered.
 	ExternalAlerts *ExternalAlertsConfig `json:"externalAlerts,omitempty"`
@@ -125,6 +126,11 @@ type ExternalAlertsConfig struct {
 
 // notifySettings is the resolved form; the zero value means off.
 type notifySettings struct {
+	relay             *notifyRelayClient
+	relayOrigin       string
+	relayAnalyzerID   string
+	relayCredential   string
+	relayPlatforms    []string
 	enabled           bool
 	interval          time.Duration // between evaluations, at least a minute
 	perUserPerDay     int           // notification mails per user per 24 hours
@@ -363,8 +369,12 @@ type userMgmtSettings struct {
 	smtp           mailer.SMTPConfig // carries the password: never log or format it
 	proposals      proposalSettings
 	notify         notifySettings
-	backup         backupSettings
-	observerLogins observerLoginSettings
+	// selfEnrollOrigin locks self-service enrollment to one relay: a
+	// pushRelay block with an origin and no analyzerId.
+	selfEnrollOrigin    string
+	selfEnrollPlatforms []string
+	backup              backupSettings
+	observerLogins      observerLoginSettings
 }
 
 const defaultSessionDays = 30
@@ -471,6 +481,13 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 	set.proposals = resolveProposals(u.ChannelProposals)
 	set.notify = resolveNotifications(u.Notifications)
 	if set.notify.enabled {
+		if relay := u.Notifications.PushRelay; relay != nil && strings.TrimSpace(relay.AnalyzerID) == "" {
+			if set.selfEnrollOrigin, set.selfEnrollPlatforms, err = resolveSelfEnrollRelay(relay); err != nil {
+				return nil, err
+			}
+		} else if err = set.notify.configureRelay(relay, getenv); err != nil {
+			return nil, err
+		}
 		if set.notify.external, err = resolveExternalAlerts(u.Notifications.ExternalAlerts); err != nil {
 			return nil, err
 		}
