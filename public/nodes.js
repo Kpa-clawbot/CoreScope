@@ -331,13 +331,6 @@
     return renderTimestampHtml(isoString);
   }
 
-  function renderNodeTimestampText(isoString) {
-    if (typeof formatTimestamp !== 'function' || typeof getTimestampMode !== 'function') {
-      return typeof timeAgo === 'function' ? timeAgo(isoString) : '—';
-    }
-    return formatTimestamp(isoString, getTimestampMode());
-  }
-
   /* === Shared helper functions for node detail rendering === */
 
   function renderNodeMetric(label, value, table, title = '', attributes = '') {
@@ -2368,7 +2361,6 @@
   };
   window._nodesSyncClaimedToFavorites = syncClaimedToFavorites;
   window._nodesRenderNodeTimestampHtml = renderNodeTimestampHtml;
-  window._nodesRenderNodeTimestampText = renderNodeTimestampText;
   window._nodesGetStatusInfo = getStatusInfo;
   window._nodesGetStatusTooltip = getStatusTooltip;
 
