@@ -4515,11 +4515,12 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml ===');
     assert.strictEqual(ctx.window._nodesRenderNodeTimestampHtml(d), '5m ago');
   });
 
-  test('renderNodeTimestampHtml falls back to a dash when neither formatter is available', () => {
+  test('renderNodeTimestampHtml shows a dash for null and valid timestamps when both formatters are missing', () => {
     const ctx = makeNodesSandbox();
     ctx.renderTimestampHtml = undefined;
     ctx.timeAgo = undefined;
     assert.strictEqual(ctx.window._nodesRenderNodeTimestampHtml(null), '—');
+    assert.strictEqual(ctx.window._nodesRenderNodeTimestampHtml('2024-01-02T03:04:05.000Z'), '—');
   });
 }
 
