@@ -68,7 +68,7 @@ const PAGES = [
   // ---- Narrow viewport: slide-over MUST appear ----
   for (const p of PAGES) for (const width of p.name === 'observers' ? [800, 390] : [800]) for (const theme of ['light', 'dark']) {
     const touch = theme === 'dark';
-    const ctx = await browser.newContext({ viewport: { width, height: 800 }, hasTouch: touch, colorScheme: theme });
+    const ctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 }, hasTouch: touch, colorScheme: theme });
     const page = await ctx.newPage();
     page.setDefaultTimeout(8000);
     page.on('pageerror', (e) => console.error('[pageerror]', e.message));
@@ -82,6 +82,20 @@ const PAGES = [
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.locator(p.rowSel).first().locator('td').first().click();
       await page.waitForSelector('.slide-over-panel');
+      if (p.name === 'observers') {
+        await page.locator('#obsTitle').waitFor();
+        // Let the detail route's focus frame run while the preview is open.
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+      }
+    }
+
+    async function checkDismissal() {
+      await page.locator('.slide-over-panel').waitFor({ state: 'hidden' });
+      if (p.name !== 'observers') return;
+      // Sample after the close handler and its focus-restoration frame.
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      const focused = await page.evaluate(() => document.activeElement.id || document.activeElement.tagName);
+      assert(focused === 'obsTitle', 'observer dismissal must focus the detail heading, got ' + focused);
     }
 
     await step(`${tag}: page renders + first row exists`, async () => {
@@ -105,7 +119,37 @@ const PAGES = [
       }, p.rowSel, { timeout: 30000 });
     });
 
+    if (p.name === 'observers') await step(`${tag}: keyboard preview returns focus to its list row`, async () => {
+      const row = page.locator(p.rowSel).first();
+      await row.press('Enter');
+      await page.locator('.slide-over-panel .slide-over-close').waitFor();
+      await page.keyboard.press('Escape');
+      assert(await row.evaluate(el => document.activeElement === el), 'Escape must return focus to the list row');
+    });
+
     await step(`${tag}: clicking row opens slide-over with backdrop`, async () => {
+      if (p.name === 'observers') await page.evaluate(selector => {
+        // A virtual row click leaves DOM focus on the previous control.
+        const previous = document.querySelector(selector);
+        previous.focus();
+        if (document.activeElement !== previous) throw new Error('could not focus ' + selector);
+        const init = pages['observer-detail'].init;
+        const requestFrame = window.requestAnimationFrame;
+        pages['observer-detail'].init = function (...args) {
+          pages['observer-detail'].init = init;
+          init(...args);
+          // Hold the real route-focus frame queued immediately after init.
+          // Release it only once the observer preview is already open.
+          window.requestAnimationFrame = callback => {
+            window.requestAnimationFrame = requestFrame;
+            window.__releaseObserverFocus = () => new Promise(resolve => requestFrame(timestamp => {
+              callback(timestamp);
+              resolve();
+            }));
+            return 0;
+          };
+        };
+      }, width === 800 ? '#searchToggle' : '.nav-brand');
       // Click the first body row — prefer one with a data-action attribute
       // (packets) or any row otherwise.
       const diag = await page.evaluate(({sel, rowSel}) => {
@@ -164,6 +208,28 @@ const PAGES = [
       assert(info.backdropPresent, 'slide-over backdrop not in DOM');
       assert(info.backdropVisible, 'slide-over backdrop not visible');
       assert(info.hasCloseBtn, 'slide-over panel missing .slide-over-close X button');
+    });
+
+    if (p.name === 'observers') await step(`${tag}: late route focus and Tab stay inside observer preview`, async () => {
+      await page.locator('#obsTitle').waitFor({ state: 'attached' });
+      await page.waitForFunction(() => typeof window.__releaseObserverFocus === 'function');
+      await page.evaluate(() => window.__releaseObserverFocus());
+      const focused = await page.evaluate(() => {
+        const panel = document.querySelector('.slide-over-panel[data-state="open"]');
+        return { inside: !!panel && panel.contains(document.activeElement), activeId: document.activeElement.id };
+      });
+      assert(focused.inside, 'settled route focus must stay inside observer preview: ' + JSON.stringify(focused));
+      await page.keyboard.press('Shift+Tab');
+      const wrappedLast = await page.evaluate(() => {
+        const panel = document.querySelector('.slide-over-panel');
+        const links = panel.querySelectorAll('a[href]');
+        return document.activeElement === links[links.length - 1];
+      });
+      assert(wrappedLast, 'Shift+Tab must wrap to the last link inside observer preview');
+      await page.keyboard.press('Tab');
+      const wrappedFirst = await page.evaluate(() =>
+        document.activeElement === document.querySelector('.slide-over-panel .slide-over-close'));
+      assert(wrappedFirst, 'Tab must wrap back to the close button inside observer preview');
     });
 
     await step(`${tag}: panel anchored to right edge + a11y attrs + body scroll lock`, async () => {
@@ -232,7 +298,7 @@ const PAGES = [
 
     await step(`${tag}: Escape closes slide-over`, async () => {
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(200);
+      await checkDismissal();
       const info = await page.evaluate(() => {
         function isShown(el) {
           if (!el) return false;
@@ -256,7 +322,7 @@ const PAGES = [
       await reopenPanel();
       // Hit the scrim over the navigation, outside the right-anchored panel.
       await pointerClick(page, '.slide-over-backdrop', touch, { x: 10, y: 20 });
-      await page.waitForTimeout(200);
+      await checkDismissal();
       const gone = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
         if (!panel || panel.hidden) return true;
@@ -269,7 +335,7 @@ const PAGES = [
     await step(`${tag}: X button closes slide-over`, async () => {
       await reopenPanel();
       await pointerClick(page, '.slide-over-panel .slide-over-close', touch);
-      await page.waitForTimeout(200);
+      await checkDismissal();
       const gone = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
         if (!panel || panel.hidden) return true;
@@ -277,6 +343,48 @@ const PAGES = [
         return r.width === 0 || r.height === 0;
       });
       assert(gone, 'slide-over still visible after X click');
+    });
+
+    if (p.name === 'observers' && width === 800 && theme === 'light') {
+      await step(`${tag}: Back to the list then Escape focuses the remounted opener row`, async () => {
+        await reopenPanel();
+        const opener = await page.evaluate(() => location.hash);
+        await page.goBack();
+        await page.locator(p.rowSel).first().waitFor();
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        assert(await page.locator('.slide-over-panel').isVisible(), 'Back to the list must keep the preview open');
+        await page.keyboard.press('Escape');
+        await page.locator('.slide-over-panel').waitFor({ state: 'hidden' });
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        const focused = await page.evaluate(() => document.activeElement.matches('#obsTable tbody tr')
+          ? document.activeElement.dataset.value : document.activeElement.tagName);
+        assert(focused === opener, 'Back then Escape must focus the remounted observer row, got ' + focused);
+      });
+
+      await step(`${tag}: Escape focuses the current observer after a same-section route change`, async () => {
+        await reopenPanel();
+        const other = await page.locator('#obsCompareWithPicker option:not([value=""])').first().getAttribute('value');
+        await page.goto(BASE + '/#/observers/' + encodeURIComponent(other) + '?theme=' + theme);
+        await page.locator('.observer-detail-page a[href="#/nodes/' + encodeURIComponent(other.toLowerCase()) + '"]').waitFor();
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        assert(await page.locator('.slide-over-panel').isVisible(), 'changing observers must keep the preview open');
+        await page.keyboard.press('Escape');
+        await checkDismissal();
+      });
+    }
+
+    if (p.name === 'observers') await step(`${tag}: leaving preview focuses the new page heading`, async () => {
+      await reopenPanel();
+      await page.evaluate(() => { location.hash = '#/tools'; });
+      await page.locator('.tools-landing').waitFor();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const result = await page.evaluate(() => ({
+        closed: !window.SlideOver.isOpen() && !document.querySelector('.slide-over-panel'),
+        unlocked: !document.body.classList.contains('scroll-locked'),
+        headingFocused: document.activeElement === document.querySelector('.tools-landing h2'),
+      }));
+      assert(result.closed && result.unlocked, 'leaving preview must dismiss it: ' + JSON.stringify(result));
+      assert(result.headingFocused, 'ordinary navigation must focus the new page heading after preview closes');
     });
 
     await ctx.close();
@@ -707,6 +815,18 @@ const PAGES = [
         return r.width > 0 && r.height > 0;
       });
       assert(!slideOverShown, 'slide-over should NOT appear at 1440px width');
+    });
+
+    await step('wide@1440 observers: full detail receives normal route focus', async () => {
+      await page.goto(BASE + '/#/observers', { waitUntil: 'domcontentloaded' });
+      await page.locator('#obsTable tbody tr[data-action="navigate"]').first().locator('td').first().click();
+      await page.locator('#obsTitle').waitFor();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const result = await page.evaluate(() => ({
+        closed: !window.SlideOver.isOpen(),
+        headingFocused: document.activeElement === document.getElementById('obsTitle'),
+      }));
+      assert(result.closed && result.headingFocused, 'full observer route must keep heading focus: ' + JSON.stringify(result));
     });
 
     await ctx.close();
