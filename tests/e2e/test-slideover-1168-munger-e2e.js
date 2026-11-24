@@ -37,6 +37,59 @@ async function step(name, fn) {
 }
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
+async function holdPacketDetails(page, hashes) {
+  // Hold decoded responses at the same boundary the row handler awaits.
+  await page.evaluate(hashes => {
+    const read = window.api;
+    window.heldRows = new Map();
+    window.api = async function (path, options) {
+      const data = await read(path, options);
+      const hash = data?.packet?.hash;
+      if (hashes.includes(hash) && path === '/packets/' + hash) {
+        await new Promise(resolve => { window.heldRows.set(hash, resolve); });
+      }
+      return data;
+    };
+  }, hashes);
+  return {
+    held: hash => page.waitForFunction(hash => window.heldRows.has(hash), hash),
+    release: hash => page.evaluate(async hash => {
+      window.heldRows.get(hash)();
+      await new Promise(requestAnimationFrame);
+    }, hash),
+  };
+}
+
+const desktopHashes = ['aaaaaaaaaaaa0001', 'bbbbbbbbbbbb0002'];
+async function openDesktopRows(page, count) {
+  const now = new Date().toISOString();
+  const packets = desktopHashes.map((hash, i) => ({
+    hash, id: i + 1, count, observation_count: count, latest: now,
+    path_json: count === 1 ? '["FA"]' : '[]',
+  }));
+  await page.route(url => url.pathname === '/api/packets', route =>
+    route.fulfill({ json: { packets, total: packets.length } }));
+  for (const packet of packets) {
+    const observations = Array.from({ length: count }, (_, i) => ({
+      id: 10 * packet.id + i, hash: packet.hash, path_json: packet.path_json, timestamp: now,
+    }));
+    await page.route('**/api/packets/' + packet.hash, route =>
+      route.fulfill({ json: { packet, observations } }));
+  }
+  await page.goto(BASE + '/#/packets?timeWindow=0', { waitUntil: 'domcontentloaded' });
+  await page.locator('#pktBody tr[data-hash]').nth(1).waitFor();
+}
+
+async function assertDesktopPacket(page, hash) {
+  const panel = page.locator('#pktRight:not(.empty)');
+  try { await panel.locator('[data-packet-hash="' + hash + '"]').waitFor(); }
+  catch { throw new Error('expected rendered packet ' + hash + ', panel shows ' + await panel.innerText()); }
+  const route = new URL(page.url()).hash;
+  const title = await page.title();
+  assert(route === '#/packets/' + hash + '?timeWindow=0', 'wrong packet address: ' + route);
+  assert(title.includes(hash.slice(0, 12)), 'wrong packet title: ' + title);
+}
+
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -251,25 +304,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         const other = page.locator('#pktBody tr[data-hash]:not([data-hash="' + a + '"])').first();
         const b = await other.getAttribute('data-hash');
 
-        // Hold the real, decoded HTTP response at the boundary used by the row.
         const secondClick = destination === 'second row';
-        await page.evaluate(hashes => {
-          const read = window.api;
-          window.heldRows = new Map();
-          window.api = async function (path, options) {
-            const data = await read(path, options);
-            const hash = data?.packet?.hash;
-            if (hashes.includes(hash) && path === '/packets/' + hash) {
-              await new Promise(resolve => { window.heldRows.set(hash, resolve); });
-            }
-            return data;
-          };
-        }, secondClick ? [a, b] : [a]);
-        const held = hash => page.waitForFunction(hash => window.heldRows.has(hash), hash);
-        const release = hash => page.evaluate(async hash => {
-          window.heldRows.get(hash)();
-          await new Promise(requestAnimationFrame);
-        }, hash);
+        const { held, release } = await holdPacketDetails(page, secondClick ? [a, b] : [a]);
         await first.locator('.col-time').click();
         await held(a);
 
@@ -301,6 +337,51 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       } finally { await page.close(); }
     });
   }
+
+  const [a, b] = desktopHashes;
+  for (const order of [[a, b], [b, a]]) {
+    await step('both groups expand with B selected when ' + (order[0] === a ? 'A' : 'B') + ' responds first', async () => {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+      page.setDefaultTimeout(8000);
+      try {
+        await openDesktopRows(page, 2);
+        const { held, release } = await holdPacketDetails(page, desktopHashes);
+        for (const hash of desktopHashes) {
+          await page.locator('#pktBody tr[data-hash="' + hash + '"] .col-expand').click();
+          await held(hash);
+        }
+        for (const hash of order) await release(hash);
+        await assertDesktopPacket(page, b);
+        for (const [i, hash] of desktopHashes.entries()) {
+          const ids = await page.locator('#pktBody tr.group-child[data-parent-hash="' + hash + '"]')
+            .evaluateAll(rows => rows.map(row => Number(row.dataset.id)).sort((x, y) => x - y));
+          const first = 10 * (i + 1);
+          assert(ids.join(',') === [first, first + 1].join(','),
+            'expected both observations for ' + hash + ', got [' + ids + ']');
+        }
+      } finally { await page.close(); }
+    });
+  }
+
+  await step('a failed second row leaves the first packet able to finish rendering', async () => {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+    page.setDefaultTimeout(8000);
+    let releaseHops;
+    const hops = new Promise(resolve => { releaseHops = resolve; });
+    try {
+      // A's path needs the resolver. Hold its real lookup through the failed click.
+      await page.route('**/api/iata-coords', async route => { await hops; await route.continue(); });
+      await openDesktopRows(page, 1);
+      await page.route('**/api/packets/' + b, route => route.fulfill({ status: 404, json: {} }));
+      await page.locator('#pktBody tr[data-hash="' + a + '"] .col-time').click();
+      await page.locator('#pktRight').getByText('Loading…', { exact: true }).waitFor();
+      const failure = page.waitForResponse(res => res.url().endsWith('/api/packets/' + b) && res.status() === 404);
+      await page.locator('#pktBody tr[data-hash="' + b + '"] .col-time').click();
+      await (await failure).finished();
+      releaseHops();
+      await assertDesktopPacket(page, a);
+    } finally { releaseHops(); await page.close(); }
+  });
 
   await browser.close();
 
