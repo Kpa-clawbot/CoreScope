@@ -1299,6 +1299,7 @@
 
   async function init(app, routeParam) {
     const gen = ++initGeneration;
+    const routePath = location.hash.split('?')[0];
     // #1689 r1 (adv #4): subscribe to the customizer hide-1-byte-hops toggle
     // so the packets table re-renders LIVE when operators flip it (the
     // toggle promised "applies everywhere" — without a listener it only
@@ -1387,6 +1388,7 @@
     // them together rather than in series halves worst-case time-to-first-row
     // on slow links / loaded CI runners without changing render contracts.
     await Promise.all([loadObservers(), loadPackets()]);
+    if (gen !== initGeneration) return;
 
     // Auto-select packet detail when arriving via hash URL
     if (directPacketHash) {
@@ -1396,7 +1398,9 @@
       directObsId = null;
       try {
         const data = await api(`/packets/${h}`);
-        if (gen === initGeneration && data?.packet) {
+        // A new packet or observation can be requested before hashchange runs.
+        const sameLink = location.hash.split('?')[0] === routePath && getHashParams().get('obs') === obsTarget;
+        if (gen === initGeneration && sameLink && data?.packet) {
           if (obsTarget && data.observations) {
             // Find the matching observation by its unique id
             const obs = data.observations.find(o => String(o.id) === String(obsTarget));
@@ -1413,6 +1417,7 @@
           }
         }
       } catch {}
+      if (gen !== initGeneration) return;
     }
 
     // Event delegation for data-action buttons
@@ -1454,6 +1459,7 @@
           const hashInput = document.getElementById('fHash');
           if (hashInput) hashInput.value = filters.hash;
           await loadPackets();
+          if (gen !== initGeneration) return;
         }
         // Show detail in sidebar
         const panel = document.getElementById('pktRight');
@@ -1466,10 +1472,12 @@
           try {
             await resolveHopsForPackets([pkt]);
           } catch {}
+          if (gen !== initGeneration) return;
           await renderDetail(content, data, obsTarget);
-          initPanelResize();
+          if (gen === initGeneration) initPanelResize();
         }
       } catch {}
+      if (gen !== initGeneration) return;
     }
     wsHandler = debouncedOnWS(function (msgs) {
       if (packetsPaused) {
@@ -1621,6 +1629,7 @@
     totalCount = 0;
     observers = [];
     observerMap = new Map();
+    ++initGeneration;
     directPacketId = null;
     directPacketHash = null;
     groupByHash = true;
