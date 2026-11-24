@@ -437,6 +437,33 @@ async function main() {
   if (moreActiveOnPackets === false) pass('(n) More tab loses .active on primary route #/packets');
   else fail(`(n) More tab still .active on #/packets (got ${moreActiveOnPackets})`);
 
+  // #2475: scroll a real long page to the document's limit. Compare already
+  // cleared the bar before this fix, so also catch reserving its height twice.
+  for (const [route, width, height, lastContent] of [
+    ['observers', 390, 844, '#obsTable tbody tr:last-child'],
+    ['observers', 768, 844, '#obsTable tbody tr:last-child'],
+    ['compare', 390, 360, '#compareControls'],
+  ]) {
+    await page.setViewportSize({ width, height });
+    await page.goto(`${BASE}/#/${route}`, { waitUntil: 'domcontentloaded' });
+    if (route === 'compare') await page.waitForSelector('#compareObsA');
+    const last = page.locator(lastContent);
+    await last.waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    const { scroll, max, bottom, navTop, navHeight } = await last.evaluate(el => {
+      const doc = document.scrollingElement;
+      doc.scrollTop = doc.scrollHeight;
+      const nav = document.querySelector('[data-bottom-nav]').getBoundingClientRect();
+      return { scroll: doc.scrollTop, max: doc.scrollHeight - doc.clientHeight,
+        bottom: el.getBoundingClientRect().bottom, navTop: nav.top, navHeight: nav.height };
+    });
+    const gap = navTop - bottom;
+    const label = `${route} at ${width}x${height}: content bottom ${bottom}, nav top ${navTop}`;
+    if (max <= 0 || Math.abs(max - scroll) > 1) fail(`${label}: scroll ${scroll} of ${max}`);
+    else if (navHeight <= 0 || gap < 0 || gap >= navHeight) fail(`${label}: gap ${gap}px`);
+    else pass(label);
+  }
+
   await browser.close();
 
   console.log(`\ntest-bottom-nav-1061-e2e.js: ${passes} passed, ${failures} failed`);
