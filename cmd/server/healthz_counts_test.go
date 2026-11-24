@@ -186,20 +186,24 @@ func TestHealthzCountsConcurrentIngestAndEviction(t *testing.T) {
 	if err := store.RunStartupLoad(10); err != nil {
 		t.Fatal(err)
 	}
+	const readerCount = 4
 	var readers sync.WaitGroup
-	var samples atomic.Int64
-	started, stop := make(chan struct{}, 4), make(chan struct{})
-	for i := 0; i < cap(started); i++ {
+	var checkpoint atomic.Uint32
+	sampled := make(chan int, readerCount)
+	stop := make(chan struct{})
+	for i := 0; i < readerCount; i++ {
 		readers.Add(1)
 		go func() {
 			defer readers.Done()
-			started <- struct{}{}
+			var reported uint32
 			for {
 				select {
 				case <-stop:
 					return
 				default:
 				}
+				// Only report requests that start after the writer's checkpoint.
+				current := checkpoint.Load()
 				got := readHealthzCounts(t, store)
 				// Each real ingest publishes one transmission with two
 				// observations. Eviction removes whole transmissions.
@@ -207,29 +211,47 @@ func TestHealthzCountsConcurrentIngestAndEviction(t *testing.T) {
 					t.Errorf("torn snapshot: %d transmissions, %d observations", got.LoadedTx, got.LoadedObs)
 					return
 				}
-				samples.Add(1)
+				if current != reported {
+					sampled <- got.LoadedTx
+					reported = current
+				}
 			}
 		}()
 	}
 	t.Cleanup(func() { close(stop); readers.Wait() })
-	for i := 0; i < cap(started); i++ {
-		<-started
+	checkReaders := func(wantTx int) {
+		t.Helper()
+		checkpoint.Add(1)
+		timeout := time.After(5 * time.Second)
+		for i := 0; i < readerCount; i++ {
+			select {
+			case got := <-sampled:
+				if got != wantTx {
+					t.Fatalf("reader saw %d transmissions, want %d", got, wantTx)
+				}
+			case <-timeout:
+				t.Fatalf("%d of %d readers reported at %d transmissions", i, readerCount, wantTx)
+			}
+		}
 	}
 	old := time.Now().UTC().Add(-48 * time.Hour)
 	for id := 1; id <= 60; id++ {
 		mustExec(t, db, `INSERT INTO transmissions(id,raw_hex,hash,first_seen) VALUES (?,'AA',?,?)`, id, fmt.Sprintf("live-%d", id), old.Format(time.RFC3339))
 		mustExec(t, db, `INSERT INTO observations(transmission_id,observer_idx,path_json,timestamp) VALUES (?,1,'[]',?),(?,2,'[]',?)`, id, old.Unix(), id, old.Unix())
 		store.IngestNewFromDB(id-1, 10)
+		if id == 1 {
+			checkReaders(1)
+		}
 		if id%3 == 0 {
 			store.mu.Lock()
 			store.EvictStale()
 			store.mu.Unlock()
+			if id == 3 {
+				checkReaders(0)
+			}
 		}
 	}
 	assertHealthzCounts(t, store, 0, 0)
-	if samples.Load() <= int64(cap(started)) {
-		t.Fatal("readers did not sample during ingestion and eviction")
-	}
 }
 
 func TestHealthzCountsMemoryEviction(t *testing.T) {
