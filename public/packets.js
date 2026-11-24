@@ -1333,7 +1333,7 @@
 
     // Read URL params (router strips query from routeParam; read from location.hash)
     var _initUrlParams = getHashParams();
-    directObsId = _initUrlParams.get('obs');
+    directObsId = _initUrlParams.get('obs') || null;
     // Full Names is a view mode: a shared link carries it (fullNames=1/0).
     // It applies to this page only; the visitor's saved preference is theirs,
     // so opening somebody else's link does not overwrite it.
@@ -1399,7 +1399,7 @@
       try {
         const data = await api(`/packets/${h}`);
         // A new packet or observation can be requested before hashchange runs.
-        const sameLink = location.hash.split('?')[0] === routePath && getHashParams().get('obs') === obsTarget;
+        const sameLink = location.hash.split('?')[0] === routePath && (getHashParams().get('obs') || null) === obsTarget;
         if (gen === initGeneration && sameLink && data?.packet) {
           if (obsTarget && data.observations) {
             // Find the matching observation by its unique id
