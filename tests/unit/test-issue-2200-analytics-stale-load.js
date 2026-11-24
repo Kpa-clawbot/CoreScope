@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { EventEmitter } = require('events');
 
 const SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'public/analytics.js'), 'utf8');
 let passed = 0, failed = 0;
@@ -21,10 +22,16 @@ process.on('unhandledRejection', (e) => rejections.push(e));
 const flush = () => new Promise((r) => setTimeout(r, 10));
 
 function el() {
+  const events = new EventEmitter();
   const e = {
-    style: {}, dataset: {}, value: '', innerHTML: '', listeners: {},
+    style: {}, dataset: {}, value: '', innerHTML: '',
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    addEventListener(t, fn) { e.listeners[t] = fn; }, removeEventListener() {},
+    addEventListener(type, fn) { events.on(type, fn); },
+    removeEventListener(type, fn) { events.off(type, fn); },
+    dispatchEvent(event) {
+      events.emit(event.type, { ...event, currentTarget: e });
+      if (e.parentNode) e.parentNode.dispatchEvent(event);
+    },
     querySelector: () => null, querySelectorAll: () => [],
   };
   return e;
@@ -72,10 +79,10 @@ function load(hash) {
     }
   }
   function fail(k, msg) { batch(k)[0].reject(new Error(msg)); }
-  function changeWindow(v) { els.analyticsTimeWindow.value = v; els.analyticsTimeWindow.listeners.change(); }
+  function changeWindow(v) { els.analyticsTimeWindow.value = v; els.analyticsTimeWindow.dispatchEvent({ type: 'change' }); }
   function clickTab(tab) {
     const btn = { dataset: { tab }, classList: { add() {}, remove() {} } };
-    els.analyticsTabs.listeners.click({ target: { closest: () => btn } });
+    els.analyticsTabs.dispatchEvent({ type: 'click', target: { closest: () => btn } });
   }
   return { page, els, calls, nav, content, batch, answer, fail, changeWindow, clickTab };
 }
@@ -214,6 +221,33 @@ function load(hash) {
     answerBulk(t, 8);
     await flush();
     assert(!t.content().includes('8 packets'), 'switching to it while the bulk load is pending: the load does not draw Overview over it');
+  }
+
+  console.log('Analytics: one click after three Route Patterns renders (#2465)');
+  {
+    const t = load();
+    await t.page.init(el());
+    const content = t.els.analyticsContent;
+    content.querySelector = (selector) => selector === '#subpathList' ? t.els.subpathList : null;
+    for (const lastHop of ['b001', 'b002', 'b003']) {
+      // Replacing the contents gives each render a fresh list under the same tab container.
+      const list = t.els.subpathList = el();
+      list.parentNode = content;
+      t.clickTab('subpaths');
+      const pair = { path: 'Relay A → Relay B', rawHops: ['a001', lastHop], count: 1, pct: 100 };
+      const empty = { subpaths: [], totalPaths: 1 };
+      t.calls.at(-1).resolve({ results: [{ subpaths: [pair], totalPaths: 1 }, empty, empty, empty] });
+      await flush();
+      assert(t.content().includes(`data-hops="a001,${lastHop}"`), `rendered the route ending in ${lastHop}`);
+    }
+    const row = el();
+    row.parentNode = t.els.subpathList;
+    row.dataset.hops = 'a001,b003';
+    row.closest = (selector) => selector === 'tr[data-hops]' ? row : null;
+    row.dispatchEvent({ type: 'click', target: row });
+    const calls = t.calls.filter((c) => c.url.startsWith('/analytics/subpath-detail?'));
+    assert(calls.length === 1 && calls[0].url.endsWith('hops=a001%2Cb003'),
+      `one click loads the current route exactly once (got ${calls.length} detail calls)`);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
