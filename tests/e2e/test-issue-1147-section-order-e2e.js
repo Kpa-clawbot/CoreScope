@@ -399,6 +399,11 @@ async function prefixToolNavigation(browser) {
         assert(await link.count() === 1, 'known one-byte repeater must offer Inspect in Prefix Tool');
         assert(await link.getAttribute('href') === destination, 'inspection must carry the full public key');
         assert(await link.isVisible(), 'inspection link must be visible');
+        const panel = p.locator('.slide-over-panel');
+        const backdrop = p.locator('.slide-over-backdrop');
+        if (layout.name === 'tablet') {
+          assert(await panel.isVisible() && await backdrop.isVisible(), 'tablet preview and backdrop must be visible before inspection');
+        }
         assert((await link.getAttribute('style') || '').includes('color:var(--link-color)'), 'inspection must use the shared link color');
         assert(await p.locator('html').getAttribute('data-theme') === theme, 'wrong theme');
         assert(await root.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'metadata overflows its layout');
@@ -420,7 +425,13 @@ async function prefixToolNavigation(browser) {
         await p.waitForURL(url => url.hash === destination);
         await p.waitForFunction(() => document.getElementById('ptCheckerResults')?.textContent.includes('Derived prefixes:'));
         assert(await p.locator('#analyticsTabs [data-tab="prefix-tool"]').evaluate(el => el.classList.contains('active')), 'Prefix Tool tab must be selected');
-        assert(await p.locator('#ptPrefixInput').inputValue() === selected.public_key, 'full key must be prefilled');
+        const input = p.locator('#ptPrefixInput');
+        assert(await input.inputValue() === selected.public_key, 'full key must be prefilled');
+        if (layout.name === 'tablet') {
+          assert(await panel.isHidden(), 'tablet preview must close on the Prefix Tool');
+          assert(await backdrop.isHidden(), 'tablet preview backdrop must clear the Prefix Tool');
+          await input.click({ trial: true });
+        }
         const resultKeys = await p.locator('#ptCheckerResults a').evaluateAll(links => links.map(a => a.getAttribute('href')));
         const expectedKeys = [nodes[1], ...(layout.filtered ? [] : [nodes[4]])].map(n => '#/nodes/' + n.public_key);
         assert(JSON.stringify(resultKeys.sort()) === JSON.stringify(expectedKeys.sort()), 'auto-results must exclude self, non-repeaters and filtered nodes: ' + JSON.stringify(resultKeys));
