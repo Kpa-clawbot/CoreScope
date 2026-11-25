@@ -222,15 +222,8 @@ function mobileBlock(css) {
 }
 const MOBILE_CSS = mobileBlock(CSS);
 
-// ── 9) compare-page reserves room for the bottom-nav at mobile ────────
-test('mobile .compare-page reserves padding-bottom for the bottom-nav', () => {
-  // Either the rule lives inside a mobile @media block, OR an
-  // unconditional rule references var(--bottom-nav-reserve).
-  const inMobile = /\.compare-page[^{]*\{[^}]*padding-bottom[^;]*--bottom-nav-reserve/m.test(MOBILE_CSS);
-  const unconditional = /\.compare-page[^{]*\{[^}]*padding-bottom[^;]*--bottom-nav-reserve/m.test(CSS);
-  assert(inMobile || unconditional,
-    '.compare-page must add padding-bottom tied to var(--bottom-nav-reserve) so the last row is not eaten by the bottom-nav');
-});
+// 9) tests/e2e/test-bottom-nav-1061-e2e.js measures the clearance below
+// Compare's final control in the browser, including the shared page layout.
 
 // ── 10) diff-bar segments stay visible at narrow widths ───────────────
 test('.compare-bar-seg has a min-width so non-zero segments stay visible', () => {
