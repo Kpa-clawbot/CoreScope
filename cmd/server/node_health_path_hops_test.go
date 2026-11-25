@@ -42,6 +42,7 @@ func TestNodeHealthPathHops(t *testing.T) {
 		{"no transmissions", nil, 0, 0, 0},
 		{"empty paths", []int{0, 0}, 0, 0, 0},
 		{"single path", []int{0, 5}, 5, 5, 5},
+		{"long stored paths", []int{300, 63, 0, 1, 64}, 107, 63.5, 300},
 		{"odd sample", []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20}, 7, 6, 10},
 		// Ten nonempty paths. The ninth is 8 and the maximum is 30.
 		{"mixed paths", []int{30, 0, 1, 4, 1, 1, 8, 4, 1, 4, 1}, 6, 2.5, 8},
