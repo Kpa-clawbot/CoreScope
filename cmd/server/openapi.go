@@ -49,7 +49,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/config/map":                {Summary: "Get map configuration", Tag: "config"},
 		"GET /api/config/geo-filter":         {Summary: "Get geo-filter configuration", Tag: "config"},
 		"GET /api/config/areas":              {Summary: "List configured areas", Description: "Returns an array of configured area keys and labels with a non-empty label. Labels are not trimmed and keys are not filtered by prefix. Returns an empty array when no entries qualify. Result order is unspecified. Public endpoint with no query parameters.", Tag: "config", Response: schemaRef("ConfigAreasResponse")},
-		"GET /api/config/areas/polygons":     {Summary: "Get configured area geometry", Description: "Returns an array of all configured areas, including unlabeled entries, with their raw polygon and bounding-box fields. Empty polygons and unset bounds are omitted; zero bounds are included. Each bound is independently optional, and polygons may coexist with bounds. Returns an empty array when no areas are configured. Result order is unspecified. Public endpoint with no query parameters.", Tag: "config", Response: schemaRef("ConfigAreaPolygonsResponse")},
+		"GET /api/config/areas/polygons":     {Summary: "Get configured area geometry", Description: "Returns polygon coordinates and bounds for all configured areas, including unlabeled entries. Empty polygons and unset bounds are omitted. Each bound is independently optional and can appear alongside a polygon, even when set to zero. Returns an empty array when no areas are configured. Result order is unspecified. Public endpoint with no query parameters.", Tag: "config", Response: schemaRef("ConfigAreaPolygonsResponse")},
 
 		// Admin / system
 		"GET /api/health":      {Summary: "Health check", Description: "Returns server health, uptime, and memory stats.", Tag: "admin"},
@@ -344,9 +344,9 @@ func componentSchemas() map[string]interface{} {
 					"key":   {Type: "string", Description: "Area configuration map key, preserved verbatim."},
 					"label": {Type: "string", Description: "Configured display label; may be empty."},
 					"polygon": {
-						Type: "array", MinItems: 1, Description: "Configured coordinates, unchanged; omitted when empty. The endpoint does not validate polygon geometry.",
+						Type: "array", MinItems: 1, Description: "Vertices in configuration order. The endpoint omits empty polygons and returns nonempty polygons without validating their geometry.",
 						Items: &openAPISchema{
-							Type: "array", MinItems: 2, MaxItems: 2, Description: "[latitude, longitude] in degrees.",
+							Type: "array", MinItems: 2, MaxItems: 2, Description: "The configuration decoder reads each vertex as a fixed [latitude, longitude] pair in degrees. It fills missing positions with zero and discards elements after the second.",
 							Items: &openAPISchema{Type: "number"},
 						},
 					},
