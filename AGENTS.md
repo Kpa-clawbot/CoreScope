@@ -299,13 +299,28 @@ Tests that need live mesh data can use `https://analyzer.00id.net` — all API e
 
 These aren't optional. Every change must follow these principles.
 
-- **Search before writing.** `grep -rn` in `public/` and `cmd/` for an existing implementation first. The codebase once had 5 separate implementations of hash prefix disambiguation. Shared frontend helpers live in `roles.js` and `hop-resolver.js`. If two callers need slightly different behavior, add a parameter to the shared function instead of forking it.
-- **Pass dependencies in.** `resolveHops(hops, nodeList)`, not `resolveHops(hops)` secretly reading `window.allNodes`, so the function can be tested in isolation.
-- **Test the real code, not copies.** Require the actual module. If it is browser-only (IIFE), use `vm.createContext` as `tests/unit/test-frontend-helpers.js` does.
-- **Test first.** Write the failing test, then the code. Every bug fix starts with a test that reproduces the bug.
+### Reuse
+- **Search before writing.** `grep -rn` in `public/`, `cmd/` and `internal/` for an existing implementation first. The codebase once had 5 separate implementations of hash prefix disambiguation, a maintenance nightmare and a bug factory.
+- **One implementation, imported everywhere.** Logic needed in two places goes into a shared module: frontend `roles.js` and `hop-resolver.js`, Go code in `internal/`. If no shared module exists yet, create one. Never copy-paste between files.
+- **Parameterize, don't fork.** If two callers need slightly different behavior, add a parameter or an options object to the shared function, not `if (caller === 'live')` branches inside it.
+- **Every file follows the same patterns.** No file is someone else's problem. A page that drifts from the shared modules (`live.js` with its own reimplementation of everything) gets brought back in line.
+
+### Design
+- **Build only what was asked.** No code for hypothetical requirements or cases nobody asked for. The simplest solution that works is the correct one: first check whether it already exists, and whether an existing function plus a parameter solves it.
+- **One job per function.** A 200-line function that fetches, transforms, renders and caches gets split.
+- **Pass dependencies in.** `resolveHops(hops, nodeList)`, not `resolveHops(hops)` secretly reading `window.allNodes`. Prefer pure functions (input to output, no side effects), so tests can substitute fakes instead of mocking the DOM, the DB and localStorage.
 - **Cast at the boundary.** Values from the DB, API or localStorage can be strings. Cast early (`Number(val)`) and null-check before method calls: `val != null ? Number(val).toFixed(1) : '—'`, not `val.toFixed(1)`.
-- **Subagent output is reviewed before it is pushed.** The subagent writes the code, the parent agent runs the tests and checks the diff, then pushes. "The subagent said it works" is not verification.
-- **CI is the last gate, not the first.** Test locally (unit + E2E), review the diff, push, then CI confirms. If CI catches something local testing missed, fix that gap. Local tests must run in under 10 minutes: broken or flaky local tests are a P0 blocker.
+
+### Tests
+- **Test first.** Red (failing test), green (make it pass), refactor. Every bug fix starts with a test that reproduces the bug, so it stays fixed.
+- **Test the real code, not copies.** Require the actual module. If it is not importable (IIFE, browser-only), refactor it so it is, or use `vm.createContext` as `tests/unit/test-frontend-helpers.js` does.
+
+### Process
+- **Subagent output is never pushed unreviewed.** The subagent writes the code. The parent agent runs the tests, checks the diff, verifies the behavior, and fixes what is wrong before pushing, not after. "The subagent said it works" is not verification.
+- **CI must pass, and it is the last gate, not the first.** Test locally (unit + E2E), review the diff, push, then CI confirms. If CI catches something local testing missed, that is a process failure: find out why and fix the gap.
+- **10-minute build.** Everything must be testable locally in under 10 minutes. Broken, flaky or crashing local tests are a P0 blocker: fix the test infrastructure before shipping features.
+- **Small releases.** Each commit is one logical change, has its tests, and is deployable. Don't bundle fix A + feature B + cleanup C in one commit: if B breaks, A and C are reverted with it.
+- **Clean up what you touch, in its own commit.** Duplication, dead code or unclear names in a file you change get fixed now, not "later", as a separate commit next to the change.
 
 ## Common Pitfalls
 
