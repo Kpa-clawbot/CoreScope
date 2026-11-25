@@ -617,7 +617,14 @@ Detailed health information for a single node.
     // #2451 this averaged every transmission involving the node, relayed
     // copies included.
     "avgSnr":             number | null,
-    "avgHops":            number,    // rounded integer
+    // One sample per transmission involving this node in the packet store
+    // (sender, recipient or resolved relay). Take the hop count of its longest
+    // observed path and skip empty paths. Additional copies carry no extra weight.
+    "avgHops":            number,    // rounded mean, zero when there are no samples
+    "pathHops": {                    // omitted when there are no samples
+      "median": number,              // mean of the two middle lengths for an even sample
+      "p90":    integer              // length at rank ceil(0.9 * sample count), starting at 1
+    },
     "lastHeard":          string (ISO) | null
   },
   "recentPackets": [                 // last 20 packets, observations stripped
