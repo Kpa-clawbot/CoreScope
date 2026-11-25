@@ -1559,7 +1559,16 @@
 
     // Shared theme-synced basemap; the provider picker goes on the right,
     // after the zoom control.
-    _liveAutoTiles = window.MC_attachAutoTiles(map, { controlPosition: 'topright' });
+    _liveAutoTiles = window.MC_attachAutoTiles(map, {
+      controlPosition: 'topright',
+      // Keep the picker's list clear of what Live draws over the map's
+      // bottom right when it sits below the list: the replay bar, the
+      // legend or its toggle, the feed or its show button, a node detail.
+      bottomInset: function (list) {
+        return window.MC_layerListInset(list,
+          document.querySelectorAll('#vcrBar, .live-legend, .legend-toggle-btn, #feedShowBtn, .live-feed, .live-node-detail'));
+      },
+    });
 
     // Add custom Leaflet Control for Fullscreen
     const LiveFullscreenControl = L.Control.extend({
