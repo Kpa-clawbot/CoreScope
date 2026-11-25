@@ -57,10 +57,11 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   //   2. snr null only →  pre-fix: "55 pkts ·  · RSSI -50" (orphan between pkts and RSSI)
   //   3. rssi null only→  pre-fix: "22 pkts · SNR 5.5dB" (clean — control)
   //   4. both present  →  pre-fix: "11 pkts · SNR 7.0dB · RSSI -42" (clean — control)
+  let hopStats = { avgHops: 2 };
   await page.route('**/api/nodes/' + encodeURIComponent(pubkey) + '/health', async (route) => {
     const stubBody = {
       node: { public_key: pubkey, name: 'TEST-NODE', role: 'repeater' },
-      stats: { totalPackets: 200, packetsToday: 10, avgSnr: null, avgHops: 2, lastHeard: new Date().toISOString() },
+      stats: { totalPackets: 200, packetsToday: 10, avgSnr: null, ...hopStats, lastHeard: new Date().toISOString() },
       observers: [
         { observer_id: 'obs-both-null', observer_name: 'BothNull', avgSnr: null, avgRssi: null, packetCount: 110, can_relay: null },
         { observer_id: 'obs-snr-null',  observer_name: 'SnrNull', avgSnr: null, avgRssi: -50, packetCount: 55, can_relay: false },
@@ -165,6 +166,36 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         await page.screenshot({ fullPage: true, path: require('path').join(process.env.SCREENSHOT_DIR, 'issue-2062-heard-by-' + width + '.png') });
       }
     });
+  }
+
+  for (const [sample, stats, expected] of [
+    ['observed paths', { avgHops: 6, pathHops: { median: 2.5, p90: 8 } }, [['Observed path length (hops)', 'Median 2.5 · P90 8']]],
+    ['empty sample', { avgHops: 0 }, []],
+    ['older server', { avgHops: 6 }, [['Avg Hops', '6']]],
+  ]) {
+    hopStats = stats;
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('#nodeSearch').fill(pubkey);
+    await page.locator('#nodesBody tr[data-value="' + pubkey + '"]').click();
+    for (const full of [false, true]) {
+      const view = full ? 'full detail' : 'wide preview';
+      await step('#1154 hop metrics in ' + view + ' with ' + sample, async () => {
+        if (full) await page.locator('#nodesRight .node-detail-btn').click();
+        const panel = page.locator(full ? '#node-stats' : '#nodesRight .detail-meta');
+        await panel.getByText('Packets Today', { exact: true }).waitFor();
+        const labels = panel.locator(full ? 'tr > td:first-child' : 'dt').filter({ hasText: /path length|avg hops/i });
+        const rows = await labels.evaluateAll(els => els.map(el => [el.textContent.trim(), el.nextElementSibling.textContent.trim()]));
+        assert(JSON.stringify(rows) === JSON.stringify(expected),
+          'expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(rows));
+        if (stats.pathHops) {
+          const tip = await labels.getAttribute('title');
+          assert(/transmission/i.test(tip) && /nonempty/i.test(tip) && /90%/.test(tip),
+            'explain the sampled transmission paths and P90 in both views');
+        }
+      });
+    }
   }
 
   await page.unroute('**/api/nodes/' + encodeURIComponent(pubkey) + '/health');
