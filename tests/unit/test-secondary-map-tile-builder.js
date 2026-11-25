@@ -129,7 +129,7 @@ const DESC = { url: 'https://sat.example/{z}/{x}/{y}', maxZoom: 19, invertFilter
     };
     const ctx = {
       L, _log: log, Promise, Date, Math, Object, Array, String, JSON, encodeURIComponent,
-      setTimeout: () => 0, CLIENT_TTL: {},
+      setTimeout: () => 0, CLIENT_TTL: {}, _healthGen: 0,
       api: async () => ({ node: { lat: 10, lon: 20, name: 'n', role: 'repeater' }, stats: {}, recentPackets: [], observers: [] }),
       isMyNode: () => true, getHealthStatus: () => 'healthy', timeAgo: () => 'now', truncate: String, snrQuality: () => ({ label: 'n/a', color: 'var(--text-muted)' }),
       escapeHtml: String, escapeAttr: String, miniMap: null, addMyNode() {}, loadMyNodes() {}, showJourney() {},

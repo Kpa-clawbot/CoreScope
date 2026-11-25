@@ -4,6 +4,9 @@
 (function () {
   let searchTimeout = null;
   let miniMap = null;
+  // Bumped by every loadHealth and by whatever replaces or tears down the page,
+  // so an answer that is no longer the newest request draws nothing (#2461).
+  let _healthGen = 0;
   let searchAbort = null; // AbortController for document-level listeners
   let _themeRefreshHandler = null;
 
@@ -72,6 +75,7 @@
   }
 
   function showChooser(container) {
+    _healthGen++;
     container.innerHTML = `
       <section class="home-chooser">
         <h1>Welcome to ${escapeHtml(window.SITE_CONFIG?.branding?.siteName || 'CoreScope')}</h1>
@@ -94,6 +98,7 @@
   }
 
   function renderHome(container) {
+    _healthGen++;
     const exp = isExperienced();
     const myNodes = getMyNodes();
     const hasNodes = myNodes.length > 0;
@@ -269,6 +274,7 @@
   }
 
   function destroy() {
+    _healthGen++;
     clearTimeout(searchTimeout);
     if (searchAbort) { searchAbort.abort(); searchAbort = null; }
     if (miniMap) { window.MC_safeRemoveMap(miniMap); miniMap = null; }
@@ -449,12 +455,14 @@
     const card = document.getElementById('homeHealth');
     const journey = document.getElementById('homeJourney');
     if (!card) return;
+    const gen = ++_healthGen;
     card.innerHTML = '<p style="color:var(--text-muted);padding:12px">Loading…</p>';
     card.classList.add('visible');
     if (journey) journey.classList.remove('visible');
 
     try {
       const h = await api('/nodes/' + encodeURIComponent(pubkey) + '/health', { ttl: CLIENT_TTL.nodeHealth });
+      if (gen !== _healthGen) return;
       const node = h.node || {};
       const stats = h.stats || {};
       const packets = h.recentPackets || [];
@@ -550,6 +558,7 @@
         });
       });
     } catch (e) {
+      if (gen !== _healthGen) return;
       card.innerHTML = '<p style="color:var(--status-red, #ef4444);padding:12px">Failed to load node health.</p>';
     }
   }
