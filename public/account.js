@@ -321,6 +321,8 @@
         field('loginPassword', 'Password', 'password', 'current-password') +
         submitBtn('Log in') + msgBox() + '</form>' +
         '<p class="account-links"><a href="#/account/forgot">Forgot password?</a> · <a href="#/account/register">Create an account</a></p>');
+      var pushover = window.CSNotify && window.CSNotify.pushoverOutcome();
+      if (pushover) CSAuth.say('accountMsg', pushover[0], pushover[1]);
       onSubmit('loginForm', function () {
         return CSAuth.request('POST', '/api/auth/login', { email: val('loginEmail'), password: val('loginPassword') }).then(function (r) {
           if (!r.ok) { CSAuth.say('accountMsg', CSAuth.errText(r), false); return; }

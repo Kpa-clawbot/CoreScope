@@ -113,7 +113,7 @@ func TestAccountExportSections(t *testing.T) {
 		n.PushDevices[0].ExpiresAt == "" {
 		t.Fatalf("push devices = %+v", n.PushDevices)
 	}
-	if n.Pushover == nil || n.Pushover.UserKey != strings.Repeat("k", 30) || !n.Pushover.Enabled || n.Pushover.ValidatedAt == "" {
+	if n.Pushover == nil || n.Pushover.KeyHint != "kkkk" || !n.Pushover.Enabled || n.Pushover.ValidatedAt == "" {
 		t.Fatalf("pushover = %+v", n.Pushover)
 	}
 	var role *exportAuditEntry
@@ -153,6 +153,7 @@ func TestAccountExportSections(t *testing.T) {
 		"push proof hash":    "proof-hash",
 		"push binding id":    "bind_export",
 		"push subscription":  "sub_export",
+		"Pushover user key":  strings.Repeat("k", 30),
 	}
 	for name, v := range secrets {
 		if v == "" {

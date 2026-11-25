@@ -105,8 +105,11 @@ func newPushoverClient(base, token string, transport http.RoundTripper) *pushove
 type pushoverError struct {
 	Status      int
 	InvalidUser bool // the user key (or device) is not valid
-	Errors      []string
-	RetryAfter  time.Duration
+	// Unparsed: the body was not Pushover's JSON (a proxy's error page,
+	// say), so the status says nothing about the message.
+	Unparsed   bool
+	Errors     []string
+	RetryAfter time.Duration
 }
 
 func (e *pushoverError) Error() string {
@@ -142,11 +145,11 @@ func (c *pushoverClient) post(ctx context.Context, path string, form url.Values)
 	if resp.StatusCode == http.StatusOK && decodeErr == nil && body.Status == 1 {
 		return nil
 	}
-	e := &pushoverError{Status: resp.StatusCode, Errors: body.Errors}
+	e := &pushoverError{Status: resp.StatusCode, Errors: body.Errors, Unparsed: decodeErr != nil}
 	if resp.StatusCode == http.StatusOK {
 		e.Status = http.StatusBadGateway // a 200 without status 1 is not a success
 	}
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+	if !e.Unparsed && resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
 		e.InvalidUser = body.User == "invalid" || body.Device == "invalid"
 	}
 	if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
@@ -232,9 +235,10 @@ func fitPushoverLines(lines []string) string {
 type pushoverDestination struct {
 	a   *authService
 	now func() time.Time
-	// capReached keeps the monthly-cap log to one line per stretch. Only
-	// the run loop touches it.
+	// capReached keeps the monthly-cap log to one line per stretch, and
+	// prunedAt spaces out pruning. Only the run loop touches them.
 	capReached bool
+	prunedAt   time.Time
 }
 
 func (d *pushoverDestination) beginTick() {}
@@ -253,9 +257,11 @@ func (d *pushoverDestination) stage(c notifyChanges, out *users.NotifyOutbox) fu
 		if len(c.byUser[uid]) == 0 || c.accounts[uid].Status != users.StatusActive {
 			continue
 		}
-		// The store queues it only if the user has Pushover on.
+		// The store queues it only if the user has Pushover on and is under
+		// the daily limit.
 		out.PushoverMessages = append(out.PushoverMessages, d.a.pushoverMessage(uid, c.byUser[uid], now))
 	}
+	out.PushoverPerUserPerDay = d.a.set.notify.perUserPerDay
 	return nil
 }
 
@@ -289,36 +295,60 @@ func (d *pushoverDestination) run(stop <-chan struct{}) {
 	}
 }
 
-// pushoverCapReached reports whether the instance sent its monthly cap.
-func (a *authService) pushoverCapReached(now time.Time) (bool, error) {
-	ps := a.set.notify.pushover
+// pushoverRemaining is how many messages the instance may still send in
+// the 30-day window (0 at the cap).
+func (a *authService) pushoverRemaining(now time.Time) (int, error) {
 	sent, err := a.st.PushoverSentSince(now.Add(-30 * 24 * time.Hour))
-	return err == nil && sent >= ps.maxPerMonth, err
+	if err != nil {
+		return 0, err
+	}
+	return max(a.set.notify.pushover.maxPerMonth-sent, 0), nil
 }
 
+// pushoverCapReached reports whether the instance sent its monthly cap.
+func (a *authService) pushoverCapReached(now time.Time) (bool, error) {
+	n, err := a.pushoverRemaining(now)
+	return err == nil && n == 0, err
+}
+
+const (
+	pushoverBatch      = 25
+	pushoverPruneEvery = time.Minute
+)
+
+// dispatch sends a batch of due messages. An empty queue costs one indexed
+// SELECT: the cap is counted only when something is due, and expired
+// messages are pruned at most once a minute.
 func (d *pushoverDestination) dispatch(ctx context.Context) error {
 	ps := d.a.set.notify.pushover
 	if ps == nil {
 		return nil
 	}
 	st := d.a.st
-	capped, err := d.a.pushoverCapReached(d.now())
+	if now := d.now(); now.Sub(d.prunedAt) >= pushoverPruneEvery {
+		if err := st.PrunePushoverJobs(now); err != nil {
+			return err
+		}
+		d.prunedAt = now
+	}
+	jobs, err := st.DuePushoverJobs(d.now(), pushoverBatch)
+	if err != nil || len(jobs) == 0 {
+		return err
+	}
+	remaining, err := d.a.pushoverRemaining(d.now())
 	if err != nil {
 		return err
 	}
-	if capped {
+	if remaining == 0 {
 		if !d.capReached {
 			log.Printf("[notify] Pushover monthly cap of %d messages reached; queued messages expire unsent", ps.maxPerMonth)
 		}
 		d.capReached = true
-		// DuePushoverJobs prunes expired messages even while capped.
-		_, err := st.DuePushoverJobs(d.now(), 0)
-		return err
+		return nil
 	}
 	d.capReached = false
-	jobs, err := st.DuePushoverJobs(d.now(), 25)
-	if err != nil {
-		return err
+	if len(jobs) > remaining {
+		jobs = jobs[:remaining] // never past the cap, even within a batch
 	}
 	for _, job := range jobs {
 		if err := ctx.Err(); err != nil {
@@ -364,12 +394,12 @@ func (d *pushoverDestination) dispatch(ctx context.Context) error {
 }
 
 // pushoverRetry is the delay before another attempt, or 0 to drop: 429,
-// 5xx and network errors back off from 5 s to 5 min (or follow
-// Retry-After); any other 4xx is final.
+// 5xx, network errors and answers that aren't Pushover's JSON back off
+// from 5 s to 5 min (or follow Retry-After); any other 4xx is final.
 func pushoverRetry(err error, attempts int) time.Duration {
 	var pe *pushoverError
 	if errors.As(err, &pe) {
-		if pe.Status != http.StatusTooManyRequests && pe.Status < 500 {
+		if !pe.Unparsed && pe.Status != http.StatusTooManyRequests && pe.Status < 500 {
 			return 0
 		}
 		if pe.RetryAfter > 0 {

@@ -238,8 +238,11 @@ type NotifyOutbox struct {
 	PushAnalyzerID string
 	PushEvents     []PushEvent
 	// PushoverMessages: one rendered message per user, queued only for
-	// active users with Pushover on.
-	PushoverMessages []PushoverMessage
+	// active users with Pushover on, and only while the user's sends in the
+	// last 24 hours plus their queued messages stay under
+	// PushoverPerUserPerDay (0: no per-user limit).
+	PushoverMessages      []PushoverMessage
+	PushoverPerUserPerDay int
 }
 
 // ApplyNotifyChanges deletes drop, upserts states and queues out in one
@@ -265,7 +268,7 @@ func (s *Store) ApplyNotifyChanges(drop []NotifyKey, states []NotifyState, out N
 		}
 	}
 	if len(out.PushoverMessages) > 0 {
-		if err := queuePushoverMessages(tx, s.now(), out.PushoverMessages); err != nil {
+		if err := queuePushoverMessages(tx, s.now(), out.PushoverMessages, out.PushoverPerUserPerDay); err != nil {
 			return err
 		}
 	}

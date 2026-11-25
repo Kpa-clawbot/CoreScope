@@ -258,7 +258,8 @@ var migrations = [][]string{
 		END`,
 	},
 	// v12: Pushover, a per-user destination: the user's key, a queue of
-	// rendered messages, and a log of sends for the monthly cap.
+	// rendered messages, and a log of sends for the monthly cap and the
+	// per-user daily limit. A deleted user's sends still count toward the cap.
 	{
 		`CREATE TABLE notification_pushover (
 			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -281,8 +282,12 @@ var migrations = [][]string{
 		)`,
 		`CREATE INDEX notification_pushover_jobs_due ON notification_pushover_jobs(next_at, id)`,
 		`CREATE INDEX notification_pushover_jobs_user ON notification_pushover_jobs(user_id)`,
-		`CREATE TABLE notification_pushover_sent (sent_at INTEGER NOT NULL)`,
+		`CREATE TABLE notification_pushover_sent (
+			user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+			sent_at INTEGER NOT NULL
+		)`,
 		`CREATE INDEX notification_pushover_sent_at ON notification_pushover_sent(sent_at)`,
+		`CREATE INDEX notification_pushover_sent_user ON notification_pushover_sent(user_id, sent_at)`,
 		`CREATE TRIGGER notification_pushover_changed AFTER UPDATE OF enabled, user_key ON notification_pushover
 			WHEN NEW.enabled = 0 OR NEW.user_key != OLD.user_key BEGIN
 			DELETE FROM notification_pushover_jobs WHERE user_id = OLD.user_id;

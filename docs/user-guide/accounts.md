@@ -421,8 +421,15 @@ CoreScope checks every key with Pushover before saving it.
 - `maxPerMonth` (default 7,500) caps the messages the instance sends in 30 days, test
   messages included. Pushover's free tier allows 10,000 per application per month.
   Messages queued after the cap is reached expire unsent.
-- The key is personal data: the account export includes it, and deleting the account or
-  the key removes it and any queued messages.
+- Each user gets at most `notifications.perUserPerDay` (default 20) Pushover messages in
+  24 hours, test messages included, so one user can't use up the instance's cap. It is
+  the same number as the mail limit, counted separately: messages past it are not
+  queued.
+- The key is personal data. The API and the account export show only its last four
+  characters; the user has the full key on pushover.net. Deleting the account or the key
+  removes it and any queued messages.
+- The key is stored unencrypted in `users.db`, and so in its backups (see
+  [Backups](#backups)). Anyone holding the file could send that user Pushover messages.
 
 #### Mobile push (optional)
 
@@ -703,6 +710,9 @@ server's user only yourself (`chmod 700 <dir>`).
 A deleted account, including one the user deleted themselves, stays in the snapshots
 for up to `keep` days (one snapshot a day), and in every downloaded copy until you
 delete that copy.
+
+Snapshots and downloads also contain users' Pushover user keys in plain text, if
+Pushover is set up. Keep them as private as the database itself.
 
 ```json
 "userManagement": {

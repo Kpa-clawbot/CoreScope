@@ -27,6 +27,19 @@ type notifyPushoverJSON struct {
 	ValidatedAt string `json:"validatedAt,omitempty"`
 }
 
+// pushoverSubscribeJSON answers POST .../pushover/subscribe.
+type pushoverSubscribeJSON struct {
+	URL string `json:"url"` // the pushover.net subscription page
+}
+
+// pushoverKeyHint is the part of a key the API shows: its last 4 characters.
+func pushoverKeyHint(key string) string {
+	if len(key) < 4 {
+		return ""
+	}
+	return key[len(key)-4:]
+}
+
 type notifyPushoverRequest struct {
 	UserKey *string `json:"userKey"`
 	Enabled *bool   `json:"enabled"`
@@ -110,15 +123,20 @@ func (s *Server) handlePushoverSubscribe(w http.ResponseWriter, r *http.Request,
 		"success": {base + "/api/account/notifications/pushover/subscribed/" + token},
 		"failure": {base + "/api/account/notifications/pushover/subscribe-failed"},
 	}
-	writeJSON(w, map[string]string{"url": ps.subscribeBase + url.PathEscape(ps.subscriptionCode) + "?" + q.Encode()})
+	writeJSON(w, pushoverSubscribeJSON{URL: ps.subscribeBase + url.PathEscape(ps.subscriptionCode) + "?" + q.Encode()})
 }
 
 // pushoverAccountRedirect sends the browser back to the notification
-// settings with an outcome the account page reports.
+// settings with an outcome the account page reports. A signed-out browser
+// goes to the login page, which reports it there.
 func (s *Server) pushoverAccountRedirect(w http.ResponseWriter, r *http.Request, outcome string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer") // the URL carried a key
-	http.Redirect(w, r, s.auth.set.baseURL.String()+"/#/account?section=notifications&pushover="+outcome, http.StatusSeeOther)
+	page := "/#/account?section=notifications&pushover="
+	if outcome == "signin" {
+		page = "/#/account/login?pushover="
+	}
+	http.Redirect(w, r, s.auth.set.baseURL.String()+page+outcome, http.StatusSeeOther)
 }
 
 // handlePushoverSubscribed is where pushover.net returns the browser with
@@ -131,13 +149,27 @@ func (s *Server) handlePushoverSubscribed(w http.ResponseWriter, r *http.Request
 		s.pushoverAccountRedirect(w, r, "signin")
 		return
 	}
-	if !a.pushoverSubs.finish(mux.Vars(r)["token"], u.ID, a.notify.now()) {
+	token := mux.Vars(r)["token"]
+	q := r.URL.Query()
+	key := strings.TrimSpace(q.Get("pushover_user_key"))
+	subscribing := !(key == "" && q.Get("pushover_unsubscribed") == "1")
+	if subscribing {
+		if !pushoverKeyPattern.MatchString(key) {
+			s.pushoverAccountRedirect(w, r, "failed")
+			return
+		}
+		// Before the token is used up: when busy, the same link works
+		// again later.
+		if ok, _ := a.pushover.take("user:" + strconv.FormatInt(u.ID, 10)); !ok {
+			s.pushoverAccountRedirect(w, r, "busy")
+			return
+		}
+	}
+	if !a.pushoverSubs.finish(token, u.ID, a.notify.now()) {
 		s.pushoverAccountRedirect(w, r, "expired")
 		return
 	}
-	q := r.URL.Query()
-	key := strings.TrimSpace(q.Get("pushover_user_key"))
-	if key == "" && q.Get("pushover_unsubscribed") == "1" {
+	if !subscribing {
 		// The user unsubscribed on pushover.net: forget that key, unless
 		// another one has been saved since.
 		if p, ok, err := a.st.PushoverFor(u.ID); err == nil && ok && p.UserKey == strings.TrimSpace(q.Get("pushover_unsubscribed_user_key")) {
@@ -149,14 +181,6 @@ func (s *Server) handlePushoverSubscribed(w http.ResponseWriter, r *http.Request
 			a.audit(&u.ID, "notify.pushover.remove", nil, nil)
 		}
 		s.pushoverAccountRedirect(w, r, "disconnected")
-		return
-	}
-	if !pushoverKeyPattern.MatchString(key) {
-		s.pushoverAccountRedirect(w, r, "failed")
-		return
-	}
-	if ok, _ := a.pushover.take("user:" + strconv.FormatInt(u.ID, 10)); !ok {
-		s.pushoverAccountRedirect(w, r, "busy")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), pushoverClientTimeout)
@@ -189,11 +213,8 @@ func (s *Server) pushoverState(uid int64) (*notifyPushoverJSON, error) {
 	if err != nil || !ok {
 		return &notifyPushoverJSON{Subscribe: subscribe}, err
 	}
-	out := &notifyPushoverJSON{Subscribe: subscribe, Configured: true, Enabled: p.Enabled, ValidatedAt: rfc3339(p.ValidatedAt)}
-	if len(p.UserKey) >= 4 {
-		out.KeyHint = p.UserKey[len(p.UserKey)-4:]
-	}
-	return out, nil
+	return &notifyPushoverJSON{Subscribe: subscribe, Configured: true, Enabled: p.Enabled,
+		KeyHint: pushoverKeyHint(p.UserKey), ValidatedAt: rfc3339(p.ValidatedAt)}, nil
 }
 
 // handlePushoverPut saves a user key (checked with Pushover first), and/or
@@ -256,7 +277,7 @@ func (s *Server) handlePushoverDelete(w http.ResponseWriter, r *http.Request, u 
 }
 
 // handlePushoverTest sends one message to the saved key right away. It
-// counts toward the monthly cap.
+// counts toward the monthly cap and the user's daily limit.
 func (s *Server) handlePushoverTest(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
 	a := s.auth
 	p, ok, err := a.st.PushoverFor(u.ID)
@@ -279,6 +300,13 @@ func (s *Server) handlePushoverTest(w http.ResponseWriter, r *http.Request, u *u
 		writeError(w, http.StatusServiceUnavailable, "This instance reached its monthly Pushover limit.")
 		return
 	}
+	if sent, err := a.st.PushoverSentToUserSince(u.ID, now.Add(-24*time.Hour)); err != nil {
+		notifyInternal(w, "count Pushover messages", u.ID, err)
+		return
+	} else if sent >= a.set.notify.perUserPerDay {
+		writeError(w, http.StatusTooManyRequests, "You reached your daily Pushover limit. Try again tomorrow.")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), pushoverClientTimeout)
 	err = a.set.notify.pushover.client.Send(ctx, p.UserKey, pushoverMessage{
 		Title:   a.set.baseURL.Host,
@@ -287,7 +315,7 @@ func (s *Server) handlePushoverTest(w http.ResponseWriter, r *http.Request, u *u
 	})
 	cancel()
 	if err == nil {
-		if err := a.st.RecordPushoverSend(); err != nil {
+		if err := a.st.RecordPushoverSend(u.ID); err != nil {
 			log.Printf("[notify] count Pushover test for user #%d: %v", u.ID, err)
 		}
 		w.WriteHeader(http.StatusNoContent)

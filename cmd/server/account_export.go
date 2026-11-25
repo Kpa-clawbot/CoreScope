@@ -97,10 +97,11 @@ type exportNotifications struct {
 	Pushover    *exportPushover    `json:"pushover"` // null without a saved key
 }
 
-// exportPushover is the user's Pushover destination, key included: it is
-// the user's own data.
+// exportPushover is the user's Pushover destination. Like the API, it
+// shows only the key's last 4 characters: the key lets any Pushover
+// application message the user, and they have it on pushover.net.
 type exportPushover struct {
-	UserKey     string `json:"userKey"`
+	KeyHint     string `json:"keyHint"`
 	Enabled     bool   `json:"enabled"`
 	ValidatedAt string `json:"validatedAt"`
 }
@@ -242,7 +243,7 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 	if p, ok, err := a.st.PushoverFor(u.ID); err != nil {
 		return nil, fmt.Errorf("pushover: %w", err)
 	} else if ok {
-		x.Notifications.Pushover = &exportPushover{UserKey: p.UserKey, Enabled: p.Enabled, ValidatedAt: rfc3339(p.ValidatedAt)}
+		x.Notifications.Pushover = &exportPushover{KeyHint: pushoverKeyHint(p.UserKey), Enabled: p.Enabled, ValidatedAt: rfc3339(p.ValidatedAt)}
 	}
 	entries, err := a.st.AuditAllFor(u.ID)
 	if err != nil {

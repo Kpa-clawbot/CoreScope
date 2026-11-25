@@ -289,6 +289,9 @@
     busy: ['Too many Pushover attempts. Try again later.', false],
     failed: ['Pushover didn\'t confirm the subscription. Try again, or paste your user key.', false]
   };
+  // pushoverOutcome takes a return from pushover.net out of the address:
+  // [message, ok], or null. The notification section reports it; for a
+  // signed-out browser the server sends it to the login page instead.
   function pushoverOutcome() {
     var hash = (window.location && window.location.hash) || '';
     var m = /[?&]pushover=([a-z]+)/.exec(hash);
@@ -313,5 +316,5 @@
   window.addEventListener('cs-auth-changed', function () { cache.userId = null; cache.promise = null; });
 
   window.CSNotify = { enabled: enabled, load: load, store: store, toggleState: toggleState, toggleHtml: toggleHtml, mount: mount,
-    sectionHtml: sectionHtml, mountSection: mountSection };
+    sectionHtml: sectionHtml, mountSection: mountSection, pushoverOutcome: pushoverOutcome };
 })();

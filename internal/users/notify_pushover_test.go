@@ -108,7 +108,95 @@ func TestPushoverQueueOnlyForActiveUsersAndExpires(t *testing.T) {
 	}
 	clk.Advance(time.Hour)
 	if jobs, _ := st.DuePushoverJobs(clk.Now(), 10); len(jobs) != 0 {
-		t.Fatal("an expired message stayed queued")
+		t.Fatal("an expired message was due")
+	}
+	var queued int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM notification_pushover_jobs`).Scan(&queued); err != nil || queued != 1 {
+		t.Fatalf("before pruning: %d queued, %v", queued, err)
+	}
+	if err := st.PrunePushoverJobs(clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM notification_pushover_jobs`).Scan(&queued); err != nil || queued != 0 {
+		t.Fatalf("after pruning: %d queued, %v", queued, err)
+	}
+}
+
+// A user gets at most perUserPerDay messages in 24 hours: sent ones plus
+// queued ones count, so one user can't use up the instance's monthly cap.
+func TestPushoverPerUserDailyLimit(t *testing.T) {
+	st, clk := newTestStore(t)
+	a := activeUser(t, st, "a@example.org", "A")
+	b := activeUser(t, st, "b@example.org", "B")
+	for _, u := range []*User{a, b} {
+		if _, err := st.SetPushoverKey(u.ID, "key-"+u.Email); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queue := func(limit int, ids ...int64) {
+		t.Helper()
+		out := NotifyOutbox{PushoverPerUserPerDay: limit}
+		for _, id := range ids {
+			out.PushoverMessages = append(out.PushoverMessages, pushoverMessage(id, "m", clk.Now().Add(time.Hour)))
+		}
+		if err := st.ApplyNotifyChanges(nil, nil, out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(uid int64) int {
+		t.Helper()
+		var n int
+		if err := st.db.QueryRow(`SELECT COUNT(*) FROM notification_pushover_jobs WHERE user_id = ?`, uid).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	queue(3, a.ID, a.ID, a.ID, a.ID, b.ID)
+	if count(a.ID) != 3 || count(b.ID) != 1 {
+		t.Fatalf("queued a=%d b=%d; want 3 and 1", count(a.ID), count(b.ID))
+	}
+	// Two sent and one still queued: still 3 in the window.
+	jobs, _ := st.DuePushoverJobs(clk.Now(), 10)
+	sent := 0
+	for _, j := range jobs {
+		if j.UserID == a.ID && sent < 2 {
+			if err := st.CompletePushoverJob(j.ID, true); err != nil {
+				t.Fatal(err)
+			}
+			sent++
+		}
+	}
+	queue(3, a.ID)
+	if count(a.ID) != 1 {
+		t.Fatalf("queued past the limit: %d", count(a.ID))
+	}
+	if n, err := st.PushoverSentToUserSince(a.ID, clk.Now().Add(-time.Hour)); err != nil || n != 2 {
+		t.Fatalf("sent to a = %d, %v", n, err)
+	}
+	if err := st.RecordPushoverSend(a.ID); err != nil { // a test message counts too
+		t.Fatal(err)
+	}
+	clk.Advance(23 * time.Hour)
+	queue(3, a.ID) // the queued message expired: 2 sent + 1 test = 3
+	if count(a.ID) != 1 {
+		t.Fatal("a test message did not count toward the limit")
+	}
+	clk.Advance(2 * time.Hour) // the sends are now older than 24 hours
+	queue(3, a.ID)
+	if count(a.ID) != 2 {
+		t.Fatalf("after 24 hours: %d queued; want 2", count(a.ID))
+	}
+	queue(0, b.ID, b.ID, b.ID, b.ID) // 0: no per-user limit
+	if count(b.ID) != 5 {
+		t.Fatalf("without a limit: %d queued; want 5", count(b.ID))
+	}
+	// A deleted user's sends still count toward the instance's cap.
+	before, _ := st.PushoverSentSince(time.Unix(0, 0))
+	if err := st.Delete(a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := st.PushoverSentSince(time.Unix(0, 0)); after != before {
+		t.Fatalf("deleting a user changed the sent count: %d -> %d", before, after)
 	}
 }
 
@@ -126,14 +214,14 @@ func TestPushoverSendsCountAndInvalidKeyDisables(t *testing.T) {
 	if err := st.CompletePushoverJob(jobs[0].ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RecordPushoverSend(); err != nil {
+	if err := st.RecordPushoverSend(u.ID); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := st.PushoverSentSince(clk.Now().Add(-time.Hour)); err != nil || n != 2 {
 		t.Fatalf("sent = %d, %v; want 2", n, err)
 	}
 	clk.Advance(33 * 24 * time.Hour)
-	if err := st.RecordPushoverSend(); err != nil {
+	if err := st.RecordPushoverSend(u.ID); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := st.PushoverSentSince(time.Unix(0, 0)); n != 1 {

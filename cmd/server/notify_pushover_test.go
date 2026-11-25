@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +30,7 @@ var (
 // other key is unknown. mode changes how messages are answered.
 type fakePushover struct {
 	mu       sync.Mutex
-	mode     string // "", "500", "429", "400"
+	mode     string // "", "500", "429", "400", "html400" (a proxy's error page)
 	messages []map[string]string
 	srv      *httptest.Server
 }
@@ -62,6 +63,11 @@ func newFakePushover(t *testing.T) *fakePushover {
 			case "400":
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]any{"status": 0, "message": "invalid", "errors": []string{"message is too long"}})
+				return
+			case "html400":
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("<html><body>400 Bad Request</body></html>"))
 				return
 			}
 			msg := map[string]string{}
@@ -217,6 +223,25 @@ func TestPushoverRetryDropAndRejectedKey(t *testing.T) {
 		t.Fatalf("retry not sent: %v, %d", err, len(fake.sent()))
 	}
 
+	// A 4xx that isn't Pushover's JSON (a proxy's error page) says nothing
+	// about the message: retried, and the key stays on.
+	fake.setMode("html400")
+	queuePushoverJob(t, f, pat.me.ID)
+	if err := d.dispatch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if jobs, _ := f.st.DuePushoverJobs(f.clk.Now().Add(6*time.Second), 10); len(jobs) != 1 || jobs[0].Attempts != 1 {
+		t.Fatalf("a non-JSON 400 was not retried: %+v", jobs)
+	}
+	if p, _, _ := f.st.PushoverFor(pat.me.ID); !p.Enabled {
+		t.Fatal("a non-JSON 400 turned the key off")
+	}
+	fake.setMode("")
+	f.clk.Advance(6 * time.Second)
+	if err := d.dispatch(ctx); err != nil || len(fake.sent()) != 2 {
+		t.Fatalf("retry after a non-JSON 400 not sent: %v, %d", err, len(fake.sent()))
+	}
+
 	fake.setMode("400")
 	queuePushoverJob(t, f, pat.me.ID)
 	logs := captureLog(func() {
@@ -251,7 +276,7 @@ func TestPushoverMonthlyCapHoldsSends(t *testing.T) {
 	if _, err := f.st.SetPushoverKey(pat.me.ID, testPushoverKey); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.RecordPushoverSend(); err != nil {
+	if err := f.st.RecordPushoverSend(pat.me.ID); err != nil {
 		t.Fatal(err)
 	}
 	queuePushoverJob(t, f, pat.me.ID)
@@ -386,6 +411,9 @@ func TestPushoverConnectRoundTrip(t *testing.T) {
 		t.Helper()
 		w := f.do(http.MethodGet, "/api/account/notifications/pushover/subscribed/"+token+"?pushover_user_key="+key, nil, mods...)
 		loc := w.Header().Get("Location")
+		if login := testBase + "/#/account/login?pushover="; w.Code == http.StatusSeeOther && strings.HasPrefix(loc, login) {
+			return "login:" + strings.TrimPrefix(loc, login)
+		}
 		if w.Code != http.StatusSeeOther || !strings.HasPrefix(loc, testBase+"/#/account?section=notifications&pushover=") {
 			t.Fatalf("return: %d %q", w.Code, loc)
 		}
@@ -400,7 +428,7 @@ func TestPushoverConnectRoundTrip(t *testing.T) {
 		t.Fatal("a key was saved for the wrong user")
 	}
 	token = start(pat)
-	if got := back(token, testPushoverKey); got != "signin" {
+	if got := back(token, testPushoverKey); got != "login:signin" {
 		t.Fatalf("return without a session = %s", got)
 	}
 	if got := back(token, testPushoverOther, as(pat)); got != "failed" {
@@ -434,6 +462,24 @@ func TestPushoverConnectRoundTrip(t *testing.T) {
 		t.Fatalf("cancelled: %d %s", w.Code, w.Header().Get("Location"))
 	}
 
+	// Rate-limited: busy, and the token stays usable, so the same link
+	// works once the limit allows it.
+	lim, base, later := f.srv.auth.pushover, time.Now(), time.Duration(0)
+	lim.now = func() time.Time { return base.Add(later) }
+	token = start(quinn)
+	for {
+		if ok, _ := lim.take("user:" + strconv.FormatInt(quinn.me.ID, 10)); !ok {
+			break
+		}
+	}
+	if got := back(token, testPushoverKey, as(quinn)); got != "busy" {
+		t.Fatalf("rate-limited return = %s", got)
+	}
+	later = 10 * time.Minute
+	if got := back(token, testPushoverKey, as(quinn)); got != "connected" {
+		t.Fatalf("the same link after the limit = %s", got)
+	}
+
 	plain := newNotifyFixture(t, pushoverNotifySettings(fake, 100))
 	uma := plain.registerAndActivate(t, "uma@example.org", "Uma", pw)
 	if strings.Contains(plain.do(http.MethodGet, "/api/account/notifications", nil, as(uma)).Body.String(), `"subscribe"`) {
@@ -441,5 +487,84 @@ func TestPushoverConnectRoundTrip(t *testing.T) {
 	}
 	if w := plain.do(http.MethodPost, "/api/account/notifications/pushover/subscribe", nil, as(uma)); w.Code == http.StatusOK {
 		t.Fatal("subscribe route answered without a subscription code")
+	}
+}
+
+// The cap holds within a batch: with room for two messages, two of four
+// due ones are sent.
+func TestPushoverCapHoldsWithinABatch(t *testing.T) {
+	fake := newFakePushover(t)
+	f := newNotifyFixture(t, pushoverNotifySettings(fake, 3))
+	pat := f.registerAndActivate(t, "pat@example.org", "Pat", pw)
+	if _, err := f.st.SetPushoverKey(pat.me.ID, testPushoverKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.RecordPushoverSend(pat.me.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		queuePushoverJob(t, f, pat.me.ID)
+	}
+	if err := pushoverDest(f.n).dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fake.sent()); n != 2 {
+		t.Fatalf("sent %d with room for 2", n)
+	}
+	if n, _ := f.st.PushoverSentSince(f.clk.Now().Add(-time.Hour)); n != 3 {
+		t.Fatalf("sends counted = %d; want the cap, 3", n)
+	}
+}
+
+// One user's messages stop at notifications.perUserPerDay: queued alerts
+// and test messages.
+func TestPushoverPerUserDailyLimit(t *testing.T) {
+	fake := newFakePushover(t)
+	ns := pushoverNotifySettings(fake, 100)
+	ns.perUserPerDay = 2
+	f := newNotifyFixture(t, ns)
+	pat := f.registerAndActivate(t, "pat@example.org", "Pat", pw)
+	if _, err := f.st.SetPushoverKey(pat.me.ID, testPushoverKey); err != nil {
+		t.Fatal(err)
+	}
+	acct, err := f.st.GetByID(pat.me.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := pushoverDest(f.n)
+	stage := func() {
+		t.Helper()
+		var out users.NotifyOutbox
+		c := notifyChanges{
+			byUser:   map[int64][]notifyChange{pat.me.ID: {{Event: "node.offline", Subject: evPkA, Name: "Alpha", To: "bad", At: f.clk.Now()}}},
+			accounts: map[int64]users.User{pat.me.ID: *acct},
+		}
+		d.stage(c, &out)
+		if out.PushoverPerUserPerDay != 2 {
+			t.Fatalf("staged limit = %d", out.PushoverPerUserPerDay)
+		}
+		if err := f.st.ApplyNotifyChanges(nil, nil, out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const path = "/api/account/notifications/pushover/test"
+	if w := f.do(http.MethodPost, path, nil, as(pat)); w.Code != http.StatusNoContent {
+		t.Fatalf("test: %d %s", w.Code, w.Body.String())
+	}
+	for i := 0; i < 3; i++ {
+		stage()
+	}
+	if err := d.dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fake.sent()); n != 2 {
+		t.Fatalf("sent %d (test + alerts); want 2", n)
+	}
+	if w := f.do(http.MethodPost, path, nil, as(pat)); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("test past the limit: %d", w.Code)
+	}
+	f.clk.Advance(25 * time.Hour)
+	if w := f.do(http.MethodPost, path, nil, as(pat)); w.Code != http.StatusNoContent {
+		t.Fatalf("test a day later: %d", w.Code)
 	}
 }

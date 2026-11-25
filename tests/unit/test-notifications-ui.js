@@ -322,6 +322,21 @@ test('the return from pushover.net is reported once and dropped from the address
   assert.strictEqual(odd.document.getElementById('notifyMsg').textContent, '', 'an unknown outcome said something');
 });
 
+test('a signed-out return is taken from the login page address', () => {
+  const env = load({ hash: '#/account/login?pushover=signin' });
+  const outcome = env.N.pushoverOutcome();
+  assert(outcome && /Sign in, then try Connect Pushover again/.test(outcome[0]) && outcome[1] === false);
+  assert.deepStrictEqual(env.nav.replaced, ['#/account/login']);
+  assert.strictEqual(load({ hash: '#/account/login' }).N.pushoverOutcome(), null);
+});
+
+test('the login page reports a Pushover outcome', () => {
+  const account = src('public/account.js');
+  const login = account.slice(account.indexOf('login: function (app)'), account.indexOf('register: function (app)'));
+  assert(/CSNotify\.pushoverOutcome\(\)/.test(login) && /CSAuth\.say\('accountMsg', pushover\[0\], pushover\[1\]\)/.test(login),
+    'views.login does not show the outcome');
+});
+
 test('a second click while a request is in flight sends nothing', async () => {
   let release;
   const gate = new Promise((res) => { release = res; });
