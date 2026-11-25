@@ -4484,10 +4484,9 @@ console.log('\n=== nodes.js: syncClaimedToFavorites ===');
   });
 }
 
-// ===== NODES.JS: renderNodeTimestampHtml / renderNodeTimestampText =====
-console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText ===');
+// ===== NODES.JS: renderNodeTimestampHtml =====
+console.log('\n=== nodes.js: renderNodeTimestampHtml ===');
 {
-  
   test('renderNodeTimestampHtml returns HTML with tooltip', () => {
     const ctx = makeNodesSandbox();
     const d = new Date(Date.now() - 300000).toISOString();
@@ -4509,18 +4508,19 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
     assert.ok(html.includes('—'), 'null should produce dash');
   });
 
-  test('renderNodeTimestampText returns plain text', () => {
+  test('renderNodeTimestampHtml falls back to relative text without the shared renderer', () => {
     const ctx = makeNodesSandbox();
+    ctx.renderTimestampHtml = undefined;
     const d = new Date(Date.now() - 300000).toISOString();
-    const text = ctx.window._nodesRenderNodeTimestampText(d);
-    assert.ok(!text.includes('<'), 'should be plain text, not HTML');
-    assert.ok(text.includes('5m ago') || text.includes('ago') || /^\d{4}/.test(text), 'should be a readable timestamp');
+    assert.strictEqual(ctx.window._nodesRenderNodeTimestampHtml(d), '5m ago');
   });
 
-  test('renderNodeTimestampText handles null', () => {
+  test('renderNodeTimestampHtml shows a dash for null and valid timestamps when both formatters are missing', () => {
     const ctx = makeNodesSandbox();
-    const text = ctx.window._nodesRenderNodeTimestampText(null);
-    assert.strictEqual(text, '—');
+    ctx.renderTimestampHtml = undefined;
+    ctx.timeAgo = undefined;
+    assert.strictEqual(ctx.window._nodesRenderNodeTimestampHtml(null), '—');
+    assert.strictEqual(ctx.window._nodesRenderNodeTimestampHtml('2024-01-02T03:04:05.000Z'), '—');
   });
 }
 
