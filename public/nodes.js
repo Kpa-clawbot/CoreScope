@@ -376,6 +376,19 @@
     return renderNodeMetric('Last Relayed', value, table, "Last time this node was attributed as a relay hop in a non-advert packet observed by the network. This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: 'Last Heard' counts only packets that can be this node alone. The green actively relaying mark requires recent certain relay evidence, including forwarding another node's advert. No mark does not imply idle or offline.");
   }
 
+  function renderNodePathLength(stats, table) {
+    const paths = stats.pathHops;
+    const median = paths && nodeMetricNumber(paths.median);
+    const p90 = paths && nodeMetricNumber(paths.p90);
+    if (median > 0 && p90 >= median) {
+      return renderNodeMetric('Observed path length (hops)', 'Median ' + median.toLocaleString() + ' · P90 ' + p90.toLocaleString(), table,
+        'Each transmission involving this node contributes its longest observed nonempty path. For an even sample the median averages the two middle lengths. At least 90% of these paths have P90 hops or fewer.');
+    }
+    const avg = nodeMetricNumber(stats.avgHops);
+    return avg > 0 ? renderNodeMetric('Avg Hops', avg.toLocaleString(), table,
+      'Rounded average length of the nonempty transmission paths observed for this node.') : '';
+  }
+
   function renderTrafficShare(n, table) {
     if (n.role !== 'repeater' && n.role !== 'room') return '';
     // Older servers expose only usefulness_score; a measured zero is present.
@@ -1033,7 +1046,7 @@
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>${renderPacketCountLabel('fullNodePacketCountHelp')}</td><td>${formatNodeCount(stats.totalTransmissions || stats.totalPackets || n.advert_count || 0)}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + formatNodeCount(stats.totalObservations) + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${formatNodeCount(stats.packetsToday || 0)}</td></tr>
-          ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
+          ${renderNodePathLength(stats, true)}
           ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
           ${renderHashPrefix(n, true)}
           ${rfOn() ? `<tr><td title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</td><td data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</td></tr>` : ''}
@@ -2144,7 +2157,7 @@
             <dt>First Seen</dt><dd>${renderNodeTimestampHtml(n.first_seen)}</dd>
             <dt>${renderPacketCountLabel('nodePacketCountHelp')}</dt><dd>${formatNodeCount(totalPackets)}</dd>
             <dt>Packets Today</dt><dd>${formatNodeCount(stats.packetsToday || 0)}</dd>
-            ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
+            ${renderNodePathLength(stats)}
             ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
             ${renderHashPrefix(n)}
             ${rfOn() ? `<dt title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</dt><dd data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</dd>` : ''}
