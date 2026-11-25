@@ -33,7 +33,12 @@ const endIdx = src.indexOf(END, startIdx);
 assert.ok(endIdx > startIdx, 'could not find the end of the Heard By card');
 const block = src.slice(startIdx, endIdx).replace(/\s+$/, '');
 // Include the real count helpers used by the isolated card templates.
-const countHelpers = src.slice(src.indexOf('  function nodeMetricNumber('), src.indexOf('  function renderLastRelayed('));
+const countStart = src.indexOf('  function nodeMetricNumber(');
+assert.ok(countStart >= 0, 'could not find the nodeMetricNumber start marker in public/nodes.js');
+const countEnd = src.indexOf('  function renderLastRelayed(');
+assert.ok(countEnd >= 0, 'could not find the renderLastRelayed end marker in public/nodes.js');
+assert.ok(countEnd > countStart, 'expected nodeMetricNumber before renderLastRelayed in public/nodes.js');
+const countHelpers = src.slice(countStart, countEnd);
 
 // The block is one `${cond ? `...` : ''}` substitution, so wrapping it in
 // backticks turns it back into the markup the page renders.
