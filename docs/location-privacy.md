@@ -39,7 +39,7 @@ before relying on it.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `enabled` | `false` | Turns the feature on. |
-| `radiusM` | `1000` | Maximum distance in metres between a served position and the real one. Valid range 100 to 50000; `0` or omitted means 1000. |
+| `radiusM` | `1000` | Maximum distance in metres between a served position and the real one. Positions are grouped in cells 0.4 x `radiusM` on a side, which sets what one known position gives away (see [What it protects](#what-it-protects-and-what-it-does-not)). Valid range 100 to 50000; `0` or omitted means 1000. |
 | `secret` | empty | At least 32 bytes. Overridden by `CORESCOPE_LOCATION_SECRET` when that is set. Never written to API output or logs. |
 
 The server reads this block; the ingestor does not need it. See also the `locationPrivacy` block in
@@ -80,6 +80,21 @@ The server reads this block; the ingestor does not need it. See also the `locati
 
 Protects against: people using this CoreScope instance, through the web UI or the API including the
 live feed, learning the exact position of a node or where a companion was.
+
+How much it hides depends on what the viewer already knows:
+
+- **From the served point alone,** a node is somewhere within `radiusM` of it.
+- **Once one position in a cell is known,** the uncertainty for every node served the same point
+  shrinks to that cell. The served point depends on the cell only, and cells are 0.4 x `radiusM` on
+  a side (0.6 x `radiusM` at most for a node near a cell edge, which keeps its cell a little longer
+  so it does not flicker). Anyone who knows where one node in a cell is (their own node, a public
+  mast) can place every node that shares its served point inside that square: 400 m across at the
+  default `radiusM` of 1000.
+- **Nodes served the same point are close together.** Two nodes 300 m apart may share one point,
+  which tells a viewer they are within a cell of each other.
+
+So choose `radiusM` for the cell size you can accept, not only the radius: for cells about 1 km
+across, use a `radiusM` of 2500.
 
 Does not protect against:
 
@@ -132,9 +147,10 @@ Does not protect against:
 
 **Why not just round the coordinates?**
 Rounding to a fixed grid gives a public, predictable cell, and nodes near an edge flip between
-cells as they move or as GPS jitters. Here the grid origin and a per-node offset come from the
+cells as they move or as GPS jitters. Here the grid origin and the offset of each cell come from the
 secret, so the served point is not the cell centre or any public function of the position, and the
-distance to the real position is bounded by `radiusM`.
+distance to the real position is bounded by `radiusM`. The cell is still what one known position
+in it gives away (see [What it protects](#what-it-protects-and-what-it-does-not)).
 
 **Why do co-located nodes show at one point?**
 If each node had its own independent offset, the points of several nodes on one site could be

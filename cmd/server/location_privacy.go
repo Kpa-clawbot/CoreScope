@@ -21,7 +21,7 @@ import (
 // only consumer of exact coordinates. The database stays exact: the ingestor
 // is unchanged and the server stays read-only (#1283).
 //
-// CONTRACT (landed by the CTO; tickets implement the bodies, signatures stay):
+// Behaviour:
 //
 //   Config JSON:   "locationPrivacy": {"enabled": true, "radiusM": 1000, "secret": "<≥32 bytes>"}
 //                  The environment variable CORESCOPE_LOCATION_SECRET, when set,
@@ -54,12 +54,12 @@ import (
 //   Startup:       refuse to start when CORESCOPE_LOCATION_SECRET is set but the
 //                  block does not say "enabled": false explicitly; on a config.json
 //                  that fails to parse, refuse only when the env secret is set or
-//                  the raw file has a locationPrivacy block with "enabled": true.
+//                  the raw file may turn it on (rawLocationPrivacyMayEnable).
 //   Offsets:       the offset of a served point derives from the cell only
 //                  (row, col), so co-located nodes share one approximate point and
 //                  cannot be averaged.
 //
-// Geometry (B1): metre-based grid, cell side s = 0.4·R, origin offset derived
+// Geometry: metre-based grid, cell side s = 0.4·R, origin offset derived
 // from HMAC-SHA256(secret, "grid"); a node keeps its anchor cell while its
 // exact position stays inside that cell grown by 0.25·s on every side
 // (hysteresis, in memory, bounded); the served point is the anchor cell centre
