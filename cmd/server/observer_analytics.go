@@ -1,9 +1,8 @@
 // Package main — observer analytics helpers.
 //
 // #1828 Phase A: extracted from cmd/server/routes.go handleObserverAnalytics
-// (routes.go:2819-2953). Split the 5 aggregate builders into standalone
-// functions for readability + isolated tests. No behavior change relative to
-// the pre-#1828 handler; JSON output is byte-identical.
+// (routes.go:2819-2953). The packet activity aggregates use all reports.
+// The distinct-node and SNR charts use receptions.
 //
 // The `filtered` argument is the time-window-filtered, timestamp-desc sorted
 // slice of *StoreObs produced by the handler after snapshotting under RLock
@@ -116,6 +115,9 @@ func buildNodesTimeline(filtered []*StoreObs, days int, txByID map[int]*StoreTx)
 	bucketDur := observerAnalyticsBucketDur(days)
 	nodeBucketSets := map[int64]map[string]struct{}{}
 	for _, obs := range filtered {
+		if obs.isOwnTransmission() {
+			continue
+		}
 		ts, ok := obs.ParsedTime()
 		if !ok {
 			continue
@@ -153,7 +155,7 @@ func buildNodesTimeline(filtered []*StoreObs, days int, txByID map[int]*StoreTx)
 func buildSnrDistribution(filtered []*StoreObs) []SnrDistributionEntry {
 	snrBuckets := map[int]*SnrDistributionEntry{}
 	for _, obs := range filtered {
-		if obs.SNR == nil {
+		if obs.SNR == nil || obs.isOwnTransmission() {
 			continue
 		}
 		bucket := int(*obs.SNR) / 2 * 2

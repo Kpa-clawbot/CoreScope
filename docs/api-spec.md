@@ -1249,7 +1249,9 @@ Single observer detail.
 
 ## GET /api/observers/:id/analytics
 
-Per-observer analytics.
+The packet timeline, packet type counts and recent packets include the observer's
+TX and RX reports. The unique-node timeline and SNR distribution exclude reports
+marked `tx`. Reports without a recorded direction remain eligible for both charts.
 
 ### Query Parameters
 
