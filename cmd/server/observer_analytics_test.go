@@ -1,10 +1,65 @@
 package main
 
 import (
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestObserverAnalyticsReceptionCharts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.conn.Close()
+	mixed := time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
+	sent := mixed.Add(time.Hour)
+	legacy := mixed.Add(-21 * time.Hour)
+	old := mixed.Add(-25 * time.Hour)
+	mustExec(t, db, `INSERT INTO observers (idx, id) VALUES (1, 'observer'), (2, 'other')`)
+	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, payload_type, decoded_json) VALUES
+		(1, '00', 'mixed', ?1, 4, '{"pubKey":"a1"}'),
+		(2, '01', 'sent', ?2, 2, '{"srcHash":"c1"}'),
+		(3, '02', 'legacy', ?3, 5, '{}')`, mixed.Format(time.RFC3339), sent.Format(time.RFC3339), old.Format(time.RFC3339))
+	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, direction, snr, path_json, timestamp) VALUES
+		(1, 1, 'tx',  8,    '["ba","bb"]', ?1),
+		(1, 1, 'rx', -6,    '["aa"]', ?1 + 60),
+		(2, 1, 'tx', 14,    '["cc"]', ?2),
+		(2, 2, 'rx', 18,    '["cd"]', ?2),
+		(3, 1, NULL,  0,    '["dd"]', ?3),
+		(3, 1, '',    NULL, '["dd","ee","ff"]', ?3 + 60),
+		(3, 1, 'rx', 20,    '["ab"]', ?4)`, mixed.Unix(), sent.Unix(), legacy.Unix(), old.Unix())
+
+	srv := NewServer(db, &Config{}, NewHub())
+	srv.store = phdLoadedStore(t, db)
+	var got ObserverAnalyticsResponse
+	getJSON(t, setupTestRouter(srv), "/api/observers/observer/analytics?days=1", &got)
+
+	counts := func(series []TimeBucket) []int {
+		var out []int
+		for _, bucket := range series {
+			out = append(out, bucket.Count)
+		}
+		return out
+	}
+	if nodes := counts(got.NodesTimeline); !slices.Equal(nodes, []int{3, 2}) {
+		t.Errorf("nodesTimeline counts = %v, want [3 2] (legacy hops, then mixed RX hop and source)", nodes)
+	}
+	if want := []SnrDistributionEntry{{Range: "-6 to -4", Count: 1}, {Range: "0 to 2", Count: 1}}; !slices.Equal(got.SnrDistribution, want) {
+		t.Errorf("snrDistribution = %v, want %v", got.SnrDistribution, want)
+	}
+	if timeline := counts(got.Timeline); !slices.Equal(timeline, []int{2, 2, 1}) {
+		t.Errorf("timeline counts = %v, want [2 2 1] including TX", timeline)
+	}
+	if want := map[string]int{"2": 1, "4": 2, "5": 2}; !maps.Equal(got.PacketTypes, want) {
+		t.Errorf("packetTypes = %v, want %v", got.PacketTypes, want)
+	}
+	if recent := got.RecentPackets; len(recent) != 5 ||
+		recent[0]["hash"] != "sent" || recent[0]["direction"] != "tx" ||
+		recent[1]["hash"] != "mixed" || recent[1]["direction"] != "rx" ||
+		recent[2]["hash"] != "mixed" || recent[2]["direction"] != "tx" {
+		t.Errorf("recentPackets should retain the sent report and both mixed reports, got %v", recent)
+	}
+}
 
 // TestObserverAnalyticsBucketDur pins the bucket-size table copied from the
 // legacy handler (#1828 Phase A).
