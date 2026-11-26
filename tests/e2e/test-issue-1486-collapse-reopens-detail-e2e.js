@@ -124,6 +124,63 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     assert(state.panelEmpty, 'detail panel must NOT reopen after collapse');
   });
 
+  await step('#2471: leaving a pending direct link keeps Nodes visible and Back reopens the packet', async () => {
+    await page.setViewportSize({ width: 800, height: 800 });
+    const nodes = page.locator('#nodesTable');
+    const preview = page.locator('.slide-over-panel[data-state="open"]');
+    await page.goto(BASE + '/#/nodes');
+    await nodes.waitFor();
+    await page.evaluate(hash => {
+      const read = window.api;
+      window.api = async function (path, options) {
+        const data = await read(path, options);
+        if (path === '/packets/' + hash && data.packet) {
+          window.api = read;
+          await new Promise(resolve => { window.releaseDirectPacket = resolve; });
+        }
+        return data;
+      };
+      location.hash = '#/packets/' + hash;
+    }, SEED_HASH);
+    await page.waitForFunction(() => typeof window.releaseDirectPacket === 'function');
+    await page.goto(BASE + '/#/nodes');
+    await nodes.waitFor();
+    await page.evaluate(async () => {
+      window.releaseDirectPacket();
+      await new Promise(requestAnimationFrame);
+    });
+
+    const hash = new URL(page.url()).hash;
+    const title = await page.title();
+    const nodesVisible = await nodes.isVisible();
+    const previewOpen = await preview.isVisible();
+    assert(hash === '#/nodes' && title.startsWith('Nodes | ') && nodesVisible && !previewOpen,
+      'expected Nodes with its preview closed, got ' + JSON.stringify({ hash, title, nodesVisible, previewOpen }));
+
+    await page.goBack();
+    await preview.waitFor();
+    assert(new URL(page.url()).hash.split('?')[0] === '#/packets/' + SEED_HASH, 'Back must reopen the linked packet');
+  });
+
+  for (const query of ['?obs', '?obs=']) {
+    await step(`a packet link ending in ${query} opens the aggregate preview`, async () => {
+      const tab = await browser.newPage({ viewport: { width: 800, height: 800 } });
+      try {
+        const [response] = await Promise.all([
+          tab.waitForResponse(r => new URL(r.url()).pathname === '/api/packets/' + SEED_HASH),
+          tab.goto(BASE + '/#/packets/' + SEED_HASH + query, { waitUntil: 'networkidle' }),
+        ]);
+        assert((await response.json()).packet?.hash === SEED_HASH, 'the detail API must return the seeded packet');
+        const preview = tab.locator('.slide-over-panel[data-state="open"]');
+        const detail = await preview.isVisible() ? await preview.locator('.detail-hash:visible').innerText() : 'closed preview';
+        assert(detail.includes(SEED_HASH) && detail.includes('(observation 1 of 3)'),
+          `expected ${SEED_HASH} (observation 1 of 3), got ${detail}`);
+      } finally {
+        await tab.close();
+      }
+    });
+  }
+
   await browser.close();
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);

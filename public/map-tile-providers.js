@@ -1174,10 +1174,78 @@
     return lc ? lc.control() : null;
   };
 
+  // Px covered at the bottom of a viewport vh tall by the rects that start
+  // below the list's top and overlap its columns (0 when none do). Pure, so
+  // the map's own bottom corners and a page's bottomInset share one rule.
+  function _coveredBelow(listRect, rects, vh) {
+    var top = vh;
+    (rects || []).forEach(function (r) {
+      if (!r || !r.height || !r.width) return;
+      if (r.top <= listRect.top || r.right <= listRect.left || r.left >= listRect.right) return;
+      top = Math.min(top, r.top);
+    });
+    return Math.max(0, vh - top);
+  }
+
+  // Rects of the elements that are on screen: skips display:none,
+  // visibility:hidden and faded-out (opacity 0) panels, whose boxes keep a
+  // size while hidden.
+  function _shownRects(els) {
+    var out = [];
+    Array.prototype.forEach.call(els || [], function (el) {
+      if (!el || typeof el.getBoundingClientRect !== 'function') return;
+      try {
+        var cs = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(el) : null;
+        if (cs && (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0)) return;
+      } catch (_) {}
+      out.push(el.getBoundingClientRect());
+    });
+    return out;
+  }
+
+  // Shortest list height kept when the visible room is smaller still, so a
+  // very short viewport gets a small scrolling list rather than none.
+  var LAYER_LIST_MIN_HEIGHT = 60;
+
+  // Leaflet sizes the expanded list from the whole map's height, but the
+  // Live map runs under the nav, the replay bar and the legend, so on a
+  // short screen the end of the list was off screen or hidden, with no
+  // scrollbar. Fit it to what is visible: the viewport, the map's bottom
+  // edge, the map's own bottom-corner controls (attribution, scale) in the
+  // list's columns, and bottomInset(listRect) (px covered at the bottom of
+  // the viewport, from the page). Keeps the scroll position across a re-fit.
+  function _fitLayerList(control, map, bottomInset) {
+    var section = control && control._section;
+    var container = control && control._container;
+    if (!section || !container || !L.DomUtil.hasClass(container, 'leaflet-control-layers-expanded')) return;
+    var scrollTop = section.scrollTop || 0;
+    section.style.height = '';
+    L.DomUtil.removeClass(section, 'leaflet-control-layers-scrollbar');
+    var vh = window.innerHeight;
+    var listRect = section.getBoundingClientRect();
+    var limit = vh;
+    try { limit = Math.min(limit, map.getContainer().getBoundingClientRect().bottom); } catch (_) {}
+    var corners = map._controlCorners || {};
+    var cornerEls = [];
+    ['bottomleft', 'bottomright'].forEach(function (k) {
+      if (corners[k] && corners[k].children) Array.prototype.push.apply(cornerEls, corners[k].children);
+    });
+    limit = Math.min(limit, vh - _coveredBelow(listRect, _shownRects(cornerEls), vh));
+    var inset = 0;
+    if (typeof bottomInset === 'function') { try { inset = +bottomInset(listRect) || 0; } catch (_) {} }
+    limit = Math.min(limit, vh - inset);
+    var room = Math.max(LAYER_LIST_MIN_HEIGHT, Math.floor(limit - listRect.top - 12));
+    if (section.scrollHeight > room) {
+      L.DomUtil.addClass(section, 'leaflet-control-layers-scrollbar');
+      section.style.height = room + 'px';
+      section.scrollTop = scrollTop;
+    }
+  }
+
   // Implementation of MC_createLayerControl. Returns { control(), detach() } so
   // MC_attachAutoTiles can tear the control down with its map; the public
   // function keeps returning just the L.control.layers instance.
-  function _createLayerControl(map, autoLayerGroup, position, overlaySet) {
+  function _createLayerControl(map, autoLayerGroup, position, overlaySet, bottomInset) {
     if (typeof L === 'undefined') return null;
     
     // Set a default position just in case it isn't provided
@@ -1289,9 +1357,21 @@
         _control._update = function () {
           var r = leafletUpdate.apply(this, arguments);
           _decorateControl(this);
+          _fitLayerList(this, map, bottomInset);
           return r;
         };
       }
+      if (typeof _control.expand === 'function') {
+        var leafletExpand = _control.expand;
+        _control.expand = function () {
+          var r = leafletExpand.apply(this, arguments);
+          _fitLayerList(this, map, bottomInset);
+          return r;
+        };
+      }
+      _offFitHandler();
+      map._mcLayerFitHandler = function () { _fitLayerList(_control, map, bottomInset); };
+      map.on('resize', map._mcLayerFitHandler);
 
       // The pinned map, saved by a pick here or on another page, wins; a
       // pin that is gone (or none) means Auto.
@@ -1379,8 +1459,15 @@
       map._mcOverlayHandler = null;
     }
 
+    function _offFitHandler() {
+      if (!map._mcLayerFitHandler) return;
+      try { map.off('resize', map._mcLayerFitHandler); } catch (_) {}
+      map._mcLayerFitHandler = null;
+    }
+
     function _detach() {
       try { window.removeEventListener(EVENT_NAME, _onConfig); } catch (_) {}
+      _offFitHandler();
       if (map._mcBaselayerchangeHandler) {
         try { map.off('baselayerchange', map._mcBaselayerchangeHandler); } catch (_) {}
         map._mcBaselayerchangeHandler = null;
@@ -1605,6 +1692,21 @@
   }
 
   /**
+   * Px covered at the bottom of the viewport by the shown elements that sit
+   * below the picker's list and overlap its columns. For a page's
+   * MC_attachAutoTiles bottomInset: MC_layerListInset(list, els).
+   * @param {DOMRect} listRect
+   * @param {ArrayLike<Element>} els
+   * @param {number} [vh] viewport height (default window.innerHeight)
+   * @returns {number}
+   */
+  window.MC_layerListInset = function (listRect, els, vh) {
+    return _coveredBelow(listRect, _shownRects(els), vh == null ? window.innerHeight : vh);
+  };
+  /** Pure form of MC_layerListInset, over rects already measured. */
+  window.MC_coveredBelow = _coveredBelow;
+
+  /**
    * The theme-synced "Auto" basemap for one Leaflet map. Owns an L.layerGroup
    * on the map holding the layer MC_buildTileLayer made from
    * MC_resolveTile(MC_isDarkTheme()), and re-syncs it on
@@ -1613,8 +1715,11 @@
    * independent; the config arriving async re-syncs through the same event.
    *
    * @param {L.Map} map
-   * @param {{controlPosition?: string}} [opts] - controlPosition adds the
-   *   MC_createLayerControl provider picker at that corner.
+   * @param {{controlPosition?: string, bottomInset?: function(DOMRect): number}} [opts]
+   *   - controlPosition adds the MC_createLayerControl provider picker at that
+   *   corner; bottomInset(listRect) returns the px covered at the bottom of
+   *   the viewport in the list's columns (the Live replay bar and legend),
+   *   which the picker's list keeps clear of.
    * @returns {{group: L.LayerGroup, sync: function(), destroy: function()}}
    */
   window.MC_attachAutoTiles = function (map, opts) {
@@ -1694,7 +1799,7 @@
       } catch (_) { observer = null; }
     }
     if (overlays) overlays.sync(); // restore the ticked overlays
-    if (opts.controlPosition) lc = _createLayerControl(map, group, opts.controlPosition, overlays);
+    if (opts.controlPosition) lc = _createLayerControl(map, group, opts.controlPosition, overlays, opts.bottomInset);
 
     function destroy() {
       if (destroyed) return;

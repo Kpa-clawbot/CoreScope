@@ -57,6 +57,9 @@ type adminStatsJSON struct {
 	Mail7d          mailCountsJSON       `json:"mail7d"`
 	Guessing        []guessedAccountJSON `json:"guessing"`
 	Notify          *adminNotifyJSON     `json:"notify,omitempty"`
+	// MailDeliveryStatus is false when the provider cannot report what
+	// became of a mail after it was accepted (smtp).
+	MailDeliveryStatus bool `json:"mailDeliveryStatus"`
 }
 
 func adminStatsFrom(st users.Stats) adminStatsJSON {
@@ -83,6 +86,7 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, _ *http.Request, _ *use
 		return
 	}
 	out := adminStatsFrom(st)
+	out.MailDeliveryStatus = s.auth.deliveryStatus()
 	if s.auth.notify != nil {
 		total, _, err := s.auth.st.NotifyMailCounts(s.auth.notify.now().Add(-24 * time.Hour))
 		if err != nil {

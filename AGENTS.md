@@ -299,90 +299,28 @@ Tests that need live mesh data can use `https://analyzer.00id.net` — all API e
 
 These aren't optional. Every change must follow these principles.
 
-### DRY — Don't Repeat Yourself
-If the same logic exists in two places, it MUST be extracted into a shared function. We had **5 separate implementations** of hash prefix disambiguation across the codebase — that's a maintenance nightmare and a bug factory. One implementation, imported everywhere.
+### Reuse
+- **Search before writing.** `grep -rn` in `public/`, `cmd/` and `internal/` for an existing implementation first. The codebase once had 5 separate implementations of hash prefix disambiguation, a maintenance nightmare and a bug factory.
+- **One implementation, imported everywhere.** Logic needed in two places goes into a shared module: frontend `roles.js` and `hop-resolver.js`, Go code in `internal/`. If no shared module exists yet, create one. Never copy-paste between files.
+- **Parameterize, don't fork.** If two callers need slightly different behavior, add a parameter or an options object to the shared function, not `if (caller === 'live')` branches inside it.
+- **Every file follows the same patterns.** No file is someone else's problem. A page that drifts from the shared modules (`live.js` with its own reimplementation of everything) gets brought back in line.
 
-**Before writing new code, search the codebase for existing implementations.** `grep -rn 'functionName\|pattern' public/ server.js` takes 2 seconds and prevents duplication.
+### Design
+- **Build only what was asked.** No code for hypothetical requirements or cases nobody asked for. The simplest solution that works is the correct one: first check whether it already exists, and whether an existing function plus a parameter solves it.
+- **One job per function.** A 200-line function that fetches, transforms, renders and caches gets split.
+- **Pass dependencies in.** `resolveHops(hops, nodeList)`, not `resolveHops(hops)` secretly reading `window.allNodes`. Prefer pure functions (input to output, no side effects), so tests can substitute fakes instead of mocking the DOM, the DB and localStorage.
+- **Cast at the boundary.** Values from the DB, API or localStorage can be strings. Cast early (`Number(val)`) and null-check before method calls: `val != null ? Number(val).toFixed(1) : '—'`, not `val.toFixed(1)`.
 
-### SOLID Principles
-- **Single Responsibility**: Each function does ONE thing. A 200-line function that fetches, transforms, renders, and caches is wrong. Split it.
-- **Open/Closed**: Add behavior by extending, not modifying. Use callbacks, options objects, or configuration — not `if (caller === 'live')` branches inside shared code.
-- **Dependency Injection**: Functions should accept their dependencies as parameters, not reach into globals. `resolveHops(hops, nodeList)` — not `resolveHops(hops)` where it secretly reads `window.allNodes`. This makes functions testable in isolation.
-- **Interface Segregation**: Don't force callers to depend on things they don't need. If a function returns 20 fields but the caller uses 3, consider a simpler return shape or let the caller pick.
+### Tests
+- **Test first.** Red (failing test), green (make it pass), refactor. Every bug fix starts with a test that reproduces the bug, so it stays fixed.
+- **Test the real code, not copies.** Require the actual module. If it is not importable (IIFE, browser-only), refactor it so it is, or use `vm.createContext` as `tests/unit/test-frontend-helpers.js` does.
 
-### Code Reuse
-- **Shared helpers go in shared files.** Frontend: `roles.js`, `hop-resolver.js`. Backend: `server-helpers.js`, `decoder.js`.
-- **Don't copy-paste between files.** If `live.js` needs the same algorithm as `packets.js`, import it from a shared module. If the shared module doesn't exist yet, create one.
-- **Parameterize, don't duplicate.** If two callers need slightly different behavior, add a parameter — don't fork the function.
-
-### Testability
-- **Write functions that are easy to test.** Pure functions (input → output, no side effects) are ideal. If a function reads from the DOM, the DB, and localStorage, it's untestable without mocking everything.
-- **Dependency injection enables testing.** Pass the node list, the map reference, the API function as parameters. Tests can substitute fakes.
-- **Test the real code, not copies.** Don't paste a function into a test file and test the copy. Import/require the actual module. If the module isn't importable (IIFE, browser-only), refactor it so it is — or use `vm.createContext` like `tests/unit/test-frontend-helpers.js` does.
-- **Every bug fix gets a regression test.** If it broke once, it'll break again. The test proves it stays fixed.
-
-### Type Safety (without TypeScript)
-- **Cast at the boundary.** Data from the DB, API, or localStorage may be strings when you expect numbers. Cast early: `Number(val)`, `parseInt(val)`, `String(val)`. Don't let type mismatches propagate deep into logic where they cause cryptic `.toFixed is not a function` errors.
-- **Null-check before method calls.** `val != null ? Number(val).toFixed(1) : '—'` — not `val.toFixed(1)`.
-
-### Performance Awareness
-- **No per-item API calls.** Fetch bulk data once, filter/transform client-side.
-- **No O(n²) in hot paths.** The packets page has 30K+ rows. A nested loop over all packets × all nodes = 20 billion operations. Use Maps/Sets for lookups.
-- **Cache expensive computations.** If you compute the same thing on every render, cache it and invalidate on data change.
-
-## XP (Extreme Programming) Practices
-
-### Test-First Development
-Write the test BEFORE the code. Not after. Not "I'll add tests later." The test defines the expected behavior, then you write the minimum code to make it pass.
-
-**Flow:** Red (write failing test) → Green (make it pass) → Refactor (clean up).
-
-This prevents shipping bugs like `.toFixed on a string` — if the test existed first with string inputs, the bug could never have been introduced. Every bug fix starts by writing a test that reproduces the bug, THEN fixing it.
-
-### YAGNI — You Aren't Gonna Need It
-Don't build for hypothetical future requirements. Build the simplest thing that solves the current problem. The 5 separate disambiguation implementations happened because each page rolled its own "just in case" version instead of importing the one that already existed.
-
-If you're writing code that handles a case nobody asked for: stop. Delete it. Add it when there's a real need.
-
-### Refactor Mercilessly
-When you touch a file and see duplication, dead code, unclear names, or structural mess — clean it up in the same commit. Don't leave it for "later." Later never comes. Tech debt compounds.
-
-**The Boy Scout Rule:** Leave every file cleaner than you found it.
-
-### Simple Design
-The simplest solution that works is the correct one. Complexity is a bug. Before building something, ask:
-1. Does this already exist somewhere in the codebase?
-2. Can I solve this with an existing function + a parameter?
-3. Am I over-engineering for a case that doesn't exist yet?
-
-If the answer to any of these is yes, simplify.
-
-### Pair Programming (Human + AI Model)
-For this project, pair programming means: **subagent writes the code → parent agent reviews and tests locally → THEN pushes to master.** The subagent is the "driver," the parent is the "navigator."
-
-**What this means in practice:**
-- Subagent output is NEVER pushed directly without review
-- Parent agent runs the tests, checks the diff, verifies the behavior
-- If the subagent's work is wrong, parent fixes it before pushing — not after
-- "The subagent said it works" is not verification. Running the tests is.
-
-### Continuous Integration as a Gate
-CI must pass before code is considered shipped. But CI is the LAST line of defense, not the first. The process is:
-1. Test locally (unit + E2E)
-2. Review the diff
-3. Push
-4. CI confirms
-
-If CI catches something you missed locally, that's a process failure — figure out why your local testing didn't catch it and fix the gap.
-
-### 10-Minute Build
-Everything must be testable locally in under 10 minutes. If local tests are broken, flaky, or crashing — that's a P0 blocker. Fix the test infrastructure before shipping features. Broken tests = no tests = shipping blind.
-
-### Collective Code Ownership
-No file is "someone else's problem." Every file follows the same patterns, uses the same shared modules, meets the same quality bar. `live.js` doesn't get to be a special snowflake with its own reimplementation of everything. If it drifts from the shared patterns, bring it back in line.
-
-### Small Releases
-One logical change per commit. Each commit is deployable. Each commit has its tests. Don't bundle "fix A + feature B + cleanup C" into one push — if B breaks, you can't revert without losing A and C.
+### Process
+- **Subagent output is never pushed unreviewed.** The subagent writes the code. The parent agent runs the tests, checks the diff, verifies the behavior, and fixes what is wrong before pushing, not after. "The subagent said it works" is not verification.
+- **CI must pass, and it is the last gate, not the first.** Test locally (unit + E2E), review the diff, push, then CI confirms. If CI catches something local testing missed, that is a process failure: find out why and fix the gap.
+- **10-minute build.** Everything must be testable locally in under 10 minutes. Broken, flaky or crashing local tests are a P0 blocker: fix the test infrastructure before shipping features.
+- **Small releases.** Each commit is one logical change, has its tests, and is deployable. Don't bundle fix A + feature B + cleanup C in one commit: if B breaks, A and C are reverted with it.
+- **Clean up what you touch, in its own commit.** Duplication, dead code or unclear names in a file you change get fixed now, not "later", as a separate commit next to the change.
 
 ## Common Pitfalls
 

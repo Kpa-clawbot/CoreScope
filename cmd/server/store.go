@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/maphash"
 	"log"
+	"maps"
 	"math"
 	"runtime"
 	"slices"
@@ -9957,6 +9958,36 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 
 // --- Subpaths Analytics ---
 
+type nodePathHops struct {
+	Median float64 `json:"median"`
+	P90    int     `json:"p90"`
+}
+
+// summarizePathHops walks the common lengths in order and sorts only the
+// distinct longer lengths. Ranks in the nonempty sample are one-based.
+func summarizePathHops(common []int, longer map[int]int, n int) nodePathHops {
+	lengths := slices.Sorted(maps.Keys(longer))
+	atRank := func(rank int) int {
+		for length, count := range common {
+			rank -= count
+			if rank <= 0 {
+				return length
+			}
+		}
+		for _, length := range lengths {
+			rank -= longer[length]
+			if rank <= 0 {
+				return length
+			}
+		}
+		return 0
+	}
+	return nodePathHops{
+		Median: (float64(atRank((n+1)/2)) + float64(atRank(n/2+1))) / 2,
+		P90:    atRank(n - n/10), // ceil(0.9*n)
+	}
+}
+
 // GetNodeHealth returns health info for a single node using in-memory data.
 func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, error) {
 	// Fetch node info from DB (fast single-row lookup)
@@ -9993,6 +10024,9 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 
 	var packetsToday int
 	var totalHops, hopCount int
+	// Direct counters cover common lengths; longer stored paths keep their full lengths.
+	var commonHops [64]int
+	longerHops := make(map[int]int)
 	// Certain evidence only (#2260): see GetBulkHealth.
 	lastHeard := s.certainHeard[pubkey]
 	totalObservations := 0
@@ -10009,10 +10043,14 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		if pkt.FirstSeen > todayStart {
 			packetsToday++
 		}
-		// Hop counting
-		hops := txGetParsedPath(pkt)
-		if len(hops) > 0 {
-			totalHops += len(hops)
+		// One display path per transmission; additional observations do not reweight it.
+		if length := len(txGetParsedPath(pkt)); length > 0 {
+			if length < len(commonHops) {
+				commonHops[length]++
+			} else {
+				longerHops[length]++
+			}
+			totalHops += length
 			hopCount++
 		}
 		if pkt.ObserverID != "" {
@@ -10026,10 +10064,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 
 	// Direct receptions only, see direct_heard.go.
 	avgSnr := directAvgSNR(directByObs)
-	avgHops := 0
-	if hopCount > 0 {
-		avgHops = int(math.Round(float64(totalHops) / float64(hopCount)))
-	}
 	var lhVal interface{}
 	if lastHeard != "" {
 		lhVal = lastHeard
@@ -10051,6 +10085,19 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	s.mu.RUnlock()
 	s.applyResolvedPaths(rpJobs)
 
+	stats := map[string]interface{}{
+		"totalTransmissions": len(packets),
+		"totalObservations":  totalObservations,
+		"totalPackets":       len(packets),
+		"packetsToday":       packetsToday,
+		"avgSnr":             avgSnr,
+		"avgHops":            0,
+		"lastHeard":          lhVal,
+	}
+	if hopCount > 0 {
+		stats["avgHops"] = int(math.Round(float64(totalHops) / float64(hopCount)))
+		stats["pathHops"] = summarizePathHops(commonHops[:], longerHops, hopCount)
+	}
 	return map[string]interface{}{
 		"node": node,
 		// Direct-RF only: observers that received this node's own
@@ -10060,16 +10107,8 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		// The stats below count that relayed traffic too, so the card needs
 		// the number to stay consistent with them.
 		"relayObserverCount": relayObserverCount,
-		"stats": map[string]interface{}{
-			"totalTransmissions": len(packets),
-			"totalObservations":  totalObservations,
-			"totalPackets":       len(packets),
-			"packetsToday":       packetsToday,
-			"avgSnr":             avgSnr,
-			"avgHops":            avgHops,
-			"lastHeard":          lhVal,
-		},
-		"recentPackets": recentPackets,
+		"stats":              stats,
+		"recentPackets":      recentPackets,
 	}, nil
 }
 

@@ -211,7 +211,7 @@ func observerState(o notifyObserver, h HealthThresholds, now, resumed time.Time,
 // afterwards a new or returning alert is a bad change and a stored bad alert
 // missing from the feed is a good (resolved) change.
 func evalExternal(res *notifyResult, prev map[users.NotifyKey]string, bad []string, current map[string]externalAlert,
-	uid int64, pk, name string, mailing bool, now time.Time) {
+	uid int64, pk, name string, now time.Time) {
 	base := users.NotifyKey{UserID: uid, Event: users.NotifyNodeExternal, Subject: pk + "/" + externalBaselineKey}
 	_, baselined := prev[base]
 	if !baselined {
@@ -220,7 +220,7 @@ func evalExternal(res *notifyResult, prev map[users.NotifyKey]string, bad []stri
 	emit := func(key, state string, a externalAlert) {
 		k := users.NotifyKey{UserID: uid, Event: users.NotifyNodeExternal, Subject: pk + "/" + key}
 		res.States = append(res.States, users.NotifyState{NotifyKey: k, State: state, ChangedAt: now})
-		if baselined && mailing {
+		if baselined {
 			res.Changes[uid] = append(res.Changes[uid], notifyChange{Event: users.NotifyNodeExternal, Subject: k.Subject,
 				Name: name, To: state, Text: a.Text, URL: a.URL, At: now})
 		}
@@ -243,8 +243,8 @@ func evalExternal(res *notifyResult, prev map[users.NotifyKey]string, bad []stri
 // stored without a change (a restart or a new watch never mails); a stored
 // state that differs is a change. Users missing from Accounts are skipped.
 // A user with watches but no preferences row gets the defaults (enabled,
-// node events). A disabled user's states are kept current without changes,
-// so turning notifications on again never mails what happened while off.
+// node events). Changes are reported regardless of email preference so each
+// destination can decide whether to deliver them.
 // Admin events are evaluated only for admins; a non-admin's admin-event
 // rows are dropped, like opting out, so a re-promotion starts silently.
 func evaluateNotifications(in notifyInput) notifyResult {
@@ -298,7 +298,6 @@ func evaluateNotifications(in notifyInput) notifyResult {
 	for _, uid := range defaulted {
 		prefs = append(prefs, users.DefaultNotifyPrefs(uid))
 	}
-	mailing := false // Enabled of the user being evaluated
 	store := func(k users.NotifyKey, state string) {
 		res.States = append(res.States, users.NotifyState{NotifyKey: k, State: state, ChangedAt: in.Now})
 	}
@@ -308,7 +307,7 @@ func evaluateNotifications(in notifyInput) notifyResult {
 			return
 		}
 		store(k, state)
-		if had && mailing {
+		if had {
 			res.Changes[k.UserID] = append(res.Changes[k.UserID],
 				notifyChange{Event: k.Event, Subject: k.Subject, Name: name, To: state, BatteryMv: mv, At: in.Now})
 		}
@@ -319,7 +318,6 @@ func evaluateNotifications(in notifyInput) notifyResult {
 		if !ok {
 			continue
 		}
-		mailing = p.Enabled
 		for _, pk := range watched[p.UserID] {
 			n, known := in.Nodes[pk]
 			name := nodeLabel(n, known, pk)
@@ -339,7 +337,7 @@ func evaluateNotifications(in notifyInput) notifyResult {
 				compare(k, name, batteryState(*n.BatteryMv, in.LowMv, prev[k]), n.BatteryMv)
 			}
 			if p.Has(users.NotifyNodeExternal) && in.External != nil {
-				evalExternal(&res, prev, extBad[p.UserID][pk], in.External.Alerts[pk], p.UserID, pk, name, mailing, in.Now)
+				evalExternal(&res, prev, extBad[p.UserID][pk], in.External.Alerts[pk], p.UserID, pk, name, in.Now)
 			}
 		}
 		if p.Has(users.NotifyObserverOfflineOwn) && !p.Has(users.NotifyObserverOffline) && !in.IngestStale {
@@ -370,7 +368,7 @@ func evaluateNotifications(in notifyInput) notifyResult {
 					continue
 				}
 				store(k, users.NotifyTold)
-				if baselined && mailing {
+				if baselined {
 					res.Changes[p.UserID] = append(res.Changes[p.UserID], notifyChange{Event: users.NotifyForeignNew, Subject: pk,
 						Name: nodeLabel(in.Nodes[pk], true, pk), To: users.NotifyTold, At: in.Now})
 				}

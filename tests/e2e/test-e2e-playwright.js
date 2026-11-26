@@ -1200,6 +1200,48 @@ async function run() {
     assert(hasContent || text.length > 20, 'Hash Issues tab should render content');
   });
 
+  await test('Route Patterns opens one detail per row click after repeated renders (#2465)', async () => {
+    const tab = page.locator('#analyticsTabs [data-tab="subpaths"]');
+    const rows = page.locator('#subpathList tr[data-hops]:visible');
+    for (let i = 0; i < 2; i++) {
+      await tab.click();
+      await rows.first().waitFor();
+    }
+    await page.click('#analyticsTabs [data-tab="hashsizes"]');
+    await page.locator('#subpathList').waitFor({ state: 'detached' });
+    await tab.click();
+    await rows.first().waitFor();
+
+    // Count calls before api() combines in-flight requests for the same route.
+    const probe = await page.evaluateHandle(() => {
+      const get = window.api;
+      let calls = 0;
+      window.api = (path, options) => {
+        if (path.startsWith('/analytics/subpath-detail?')) calls++;
+        return get(path, options);
+      };
+      return { count: () => calls, restore: () => { window.api = get; } };
+    });
+    try {
+      for (const index of [0, 1]) {
+        const row = rows.nth(index);
+        const hops = await row.getAttribute('data-hops');
+        await row.locator('.hop-prefix').click();
+        await page.waitForFunction(
+          expected => document.querySelector('#subpathDetail .subpath-meta .hop-prefix')?.textContent === expected,
+          hops.split(',').join(' → '));
+        const selected = page.locator('#subpathList tr.subpath-selected');
+        assert(await selected.count() === 1 && await row.evaluate(tr => tr.classList.contains('subpath-selected')),
+          'only the clicked route is selected');
+        const calls = await probe.evaluate(p => p.count());
+        assert(calls === index + 1, `expected one detail load per click, got ${calls} loads after click ${index + 1}`);
+      }
+    } finally {
+      await probe.evaluate(p => p.restore());
+      await probe.dispose();
+    }
+  });
+
   await test('Analytics Route Patterns tab renders content', async () => {
     await page.click('[data-tab="subpaths"]');
     await page.waitForFunction(() => {

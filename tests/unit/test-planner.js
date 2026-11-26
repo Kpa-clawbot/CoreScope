@@ -108,6 +108,15 @@ async function main() {
   assert(MP.fmtPct(62.4) === '62%' && MP.fmtPct(-45.2) === '−45%' && MP.fmtPct(5000) === '>999%', 'fmtPct: rounds, true minus, caps');
   assert(MP.fmtPct(null) === '—' && MP.fmtPct(NaN) === '—', 'fmtPct: unknown → —');
 
+  {
+    const row = (lat, lon) => I.optionRowHtml({ kind: 'open', lat, lon }, 'open', 0, false);
+    assert(row(0, -12.345678).includes('0.00000, -12.34568'), 'equatorial site keeps zero latitude and signed longitude');
+    assert(row(-12.345678, 0).includes('-12.34568, 0.00000'), 'prime-meridian site keeps signed latitude and zero longitude');
+    for (const [lat, lon] of [[null, 0], [0, undefined], [91, 0], [0, -181], [NaN, 0]]) {
+      assert(!/copy coordinates/i.test(row(lat, lon)), 'no copy action for invalid site ' + lat + ', ' + lon);
+    }
+  }
+
   console.log('\n=== fmtClearance ===');
   {
     const f = MP.fmtClearance;

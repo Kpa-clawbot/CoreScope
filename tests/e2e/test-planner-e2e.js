@@ -31,6 +31,12 @@ async function step(name, fn) {
 }
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
+async function checkSiteCoordinates(page, card, expected) {
+  assert(await card.getByText(expected, { exact: true }).isVisible(), 'Missing site coordinates: ' + expected);
+  await card.getByRole('button', { name: /copy coordinates/i }).click();
+  await page.waitForFunction(async (pair) => (await navigator.clipboard.readText()) === pair, expected);
+}
+
 // A valley between two 100 m ends is comfortably clear; a 900 m ridge blocks.
 function flat() { return Array.from({ length: 100 }, (_, i) => (i === 0 || i === 99 ? 100 : 0)); }
 function ridge() { const a = flat(); for (let i = 45; i <= 55; i++) a[i] = 900; return a; }
@@ -100,7 +106,7 @@ function relayBody() {
       opt('existing', 'Hilltop Relay', 37.75, -122.15, good(22), good(18)),
     ],
     open: [
-      opt('open', '', 37.78, -122.18, good(21), good(19)),
+      opt('open', '', 37.781236, -122.180006, good(21), good(19)),
       opt('open', '', 37.76, -122.12, good(23), good(17)),
     ],
     params: {}, warnings: ['terrain missing for 1 of 4 tiles (read as sea level)'],
@@ -124,7 +130,7 @@ function areaBody() {
     edges: [{ a: 0, b: 1, class: 'solid', distance_km: 10, clearance_pct: 90 }, { a: 6, b: 7, class: 'marginal', distance_km: 9, clearance_pct: 50 },
       { a: 1, b: 2, class: 'marginal', distance_km: 8, clearance_pct: 40 }, { a: 2, b: 3, class: 'marginal', distance_km: 8, clearance_pct: 30 }],
     sites: [{
-      step: 1, lat: 30.3, lon: -97.9, elev_m: 250, antenna_m: 10, reason: 'joins',
+      step: 1, lat: 30.302346, lon: -97.900006, elev_m: 250, antenna_m: 10, reason: 'joins',
       gain: { components_joined: 1, cut_vertices_removed: 0, repeaters_reached: 2 },
       after: sum(1, 8, 0, 1),
       links: [
@@ -166,6 +172,7 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
   });
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(BASE).origin });
   const errors = [];
   const dialogs = [];
 
@@ -293,6 +300,14 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
       assert(await page.locator('.mc-pl-cand').count() === 4, 'candidate markers');
     });
 
+    await step('relay: each new site shows and copies its coordinates without selecting a route', async () => {
+      const openSites = page.getByRole('region', { name: 'New sites' }).getByRole('listitem');
+      await checkSiteCoordinates(page, openSites.nth(0), '37.78124, -122.18001');
+      await checkSiteCoordinates(page, openSites.nth(1), '37.76000, -122.12000');
+      assert(await page.getByRole('region', { name: 'Existing nodes' }).getByRole('button', { name: /copy coordinates/i }).count() === 0, 'copy action on existing nodes');
+      assert(!/[?&]sel=/.test(await page.evaluate(() => location.hash)), 'copy selected a route');
+    });
+
     await step('relay: selecting an option draws the route, opens two profiles, writes sel= to the URL', async () => {
       await page.locator('[data-opt="o1"]').click();
       await page.waitForSelector('.mc-los-panel .mc-pl-prof');
@@ -334,6 +349,10 @@ const job202 = (gate) => ({ gate, fulfill: json(202, { state: 'loading_terrain',
       assert(/Joins/.test(reason), 'reason: ' + reason);
       assert(await page.locator('.leaflet-marker-icon.mc-pa-site').count() === 1, 'site marker');
       assert((await page.locator('.mc-pa-site span').textContent()).trim() === '1', 'site marker number');
+    });
+
+    await step('area: the suggested site shows and copies its coordinates', async () => {
+      await checkSiteCoordinates(page, page.locator('.mc-pa-card'), '30.30235, -97.90001');
     });
 
     await step('area: marginal links hidden by default, shown after toggling, marginal=1 in the hash', async () => {

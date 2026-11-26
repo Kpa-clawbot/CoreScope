@@ -5,10 +5,12 @@ import (
 	"testing"
 )
 
-// AssertReady must require observers.idx to be the primary key, not merely a
-// column of that name: observations.observer_idx relies on idx being the
-// rowid alias, and a plain idx column says nothing about which row it names.
-func TestAssertReadyRequiresObserversIdxPrimaryKey(t *testing.T) {
+// AssertReady must require observers.idx to be the rowid alias, not merely a
+// column or a primary key of that name: observations.observer_idx relies on
+// idx being the rowid, and any other idx says nothing about which row it
+// names. The message says "rowid alias" because in three of these shapes idx
+// IS the primary key.
+func TestAssertReadyRequiresObserversIdxRowidAlias(t *testing.T) {
 	cases := []struct {
 		name    string
 		reshape []string // applied to observers after a full Apply
@@ -20,7 +22,23 @@ func TestAssertReadyRequiresObserversIdxPrimaryKey(t *testing.T) {
 			legacyObserversDDL,
 			`ALTER TABLE observers ADD COLUMN idx INTEGER`,
 			`UPDATE observers SET idx = rowid`,
-		}, "observers.idx (not the primary key)"},
+		}, "observers.idx (not the rowid alias)"},
+		{"idx TEXT primary key", []string{
+			`DROP TABLE observers`,
+			idxTextPKObserversDDL,
+		}, "observers.idx (not the rowid alias)"},
+		{"composite primary key", []string{
+			`DROP TABLE observers`,
+			idxCompositePKObserversDDL,
+		}, "observers.idx (not the rowid alias)"},
+		{"INTEGER PRIMARY KEY DESC", []string{
+			`DROP TABLE observers`,
+			idxDescPKObserversDDL,
+		}, "observers.idx (not the rowid alias)"},
+		{"WITHOUT ROWID", []string{
+			`DROP TABLE observers`,
+			idxWithoutRowidObserversDDL,
+		}, "observers.idx (not the rowid alias)"},
 		{"no idx column", []string{
 			`DROP TABLE observers`,
 			legacyObserversDDL,

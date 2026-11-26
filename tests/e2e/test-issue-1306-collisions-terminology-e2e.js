@@ -17,6 +17,8 @@
  *     framed around "actually observed" / packet traffic wording.
  *  4. #1914: shared Hash Issues links restore the selected byte size and
  *     its server data; selection survives navigation and refreshes.
+ *  5. #1710: Prefix Tool results describe only loaded repeaters, including
+ *     when a real key is excluded by the selected region.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1306-collisions-terminology-e2e.js
  */
@@ -32,8 +34,8 @@ async function step(name, fn) {
 }
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
-async function openPrefixTool(page) {
-  await page.goto(BASE + '/#/analytics?tab=prefix-tool', { waitUntil: 'domcontentloaded' });
+async function openPrefixTool(page, query = '') {
+  await page.goto(BASE + '/#/analytics?tab=prefix-tool' + query, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__collisionsThemeReady);
   await page.waitForSelector('#ptOverview', { timeout: 15000 });
   // expand the overview body (collapsed by default)
@@ -41,6 +43,32 @@ async function openPrefixTool(page) {
     const body = document.getElementById('ptOverviewBody');
     if (body) body.style.display = '';
   });
+}
+
+async function prefixRepeaters(page, query = '') {
+  const response = await page.request.get(BASE + '/api/nodes?limit=500&offset=0&sortBy=lastSeen' + query);
+  assert(response.ok(), 'Local node API must respond successfully');
+  const data = await response.json();
+  assert(data.has_more === false, 'Prefix regression fixture must fit in one node page');
+  return data.nodes.filter(n => n.role === 'repeater' && /^[0-9a-f]{64}$/i.test(n.public_key));
+}
+
+async function assertPrefixMatches(page, input, nodes) {
+  const key = input.toUpperCase();
+  const fullKey = key.length === 64;
+  const lengths = fullKey ? [2, 4, 6] : [key.length];
+  const cards = page.locator('#ptCheckerResults > div:not([role="alert"])');
+  assert(await cards.count() === lengths.length, 'Checker must retain the expected prefix tiers');
+  for (const [i, length] of lengths.entries()) {
+    const expected = nodes.filter(n => n.public_key.toUpperCase().startsWith(key.slice(0, length)) &&
+      (!fullKey || n.public_key.toUpperCase() !== key));
+    const links = await cards.nth(i).locator('a.analytics-link').evaluateAll(els => els.map(el => el.getAttribute('href')).sort());
+    assert(JSON.stringify(links) === JSON.stringify(expected.map(n => '#/nodes/' + n.public_key).sort()),
+      'Matches must use loaded repeaters and exclude only the full key itself');
+    const badge = (await cards.nth(i).locator(':scope > div:first-child > span').last().textContent()).trim();
+    assert(badge === (expected.length ? expected.length + ' collision' + (expected.length === 1 ? '' : 's') : 'Unique'),
+      'Displayed match count must agree with the loaded repeater matches');
+  }
 }
 
 async function openCollisions(page, query = '') {
@@ -139,6 +167,69 @@ async function assertHashView(page, bytes, collisionData) {
     const nodeLinks = await panel.locator('a[href^="#/nodes/"]').count();
     assert(nodeLinks >= 2, 'Expanded collision panel should list >=2 node links, got ' + nodeLinks);
   });
+
+  // #1710: two controlled repeaters share AB; only the inspected key uses AB12.
+  {
+    const key = 'AB12' + '0'.repeat(60), otherKey = 'AB34' + '0'.repeat(60);
+    const nodes = [key, otherKey].map(public_key => ({ public_key, role: 'repeater' }));
+    const region = 'QZZ', regionsPattern = '**/api/config/regions', pattern = '**/api/nodes?*';
+    let empty = false, emptyRequests = 0;
+    try {
+      await page.route(regionsPattern, route => route.fulfill({ status: 200, json: { [region]: 'Fixture region' } }));
+      await page.route(pattern, route => {
+        if (new URL(route.request().url()).searchParams.get('region') !== region) return route.continue();
+        if (empty) emptyRequests++;
+        return route.fulfill({ status: 200, json: { nodes: empty ? [] : nodes, total: empty ? 0 : 2, counts: {}, has_more: false } });
+      });
+      for (const width of [1400, 390]) {
+        empty = false;
+        await page.setViewportSize({ width, height: width === 390 ? 844 : 1200 });
+        await page.goto('about:blank');
+        await page.goto(BASE + '/#/analytics?tab=prefix-tool&region=' + encodeURIComponent(region), { waitUntil: 'domcontentloaded' });
+        await page.waitForFunction(() => window.__collisionsThemeReady);
+        await page.waitForSelector('#ptPrefixInput');
+        const input = page.locator('#ptPrefixInput'), check = page.locator('#ptCheckBtn');
+        const messages = page.locator('#ptCheckerResults > div > div.text-muted');
+        await step(`#1710: ${width}px known key keeps its match and describes self-only tiers`, async () => {
+          await input.fill(key); await check.click();
+          const links = page.locator('#ptCheckerResults a.analytics-link');
+          assert(await links.count() === 1 && await links.getAttribute('href') === '#/nodes/' + otherKey,
+            'Full-key positive control must link only to the other AB repeater');
+          const text = await messages.allTextContents();
+          assert(text.length === 2 && text.every(t => t === 'The entered key is the only match among loaded repeaters.'),
+            'Self-only tiers must identify the actual match; got: ' + text.join(' | '));
+        });
+        for (const [label, value] of [['absent full key', 'CD' + '0'.repeat(62)], ['partial input', 'CD000000']]) {
+          await step(`#1710: ${width}px ${label} uses plain no-match wording`, async () => {
+            await input.fill(value); await check.click();
+            const text = await messages.allTextContents();
+            assert(text.length === 3 && text.every(t => t === 'No matches among loaded repeaters.'),
+              'Unmatched input must not imply an excluded key; got: ' + text.join(' | '));
+          });
+        }
+        await step(`#1710: ${width}px manual no-match prefix scopes its empty result`, async () => {
+          await input.fill('CD'); await check.click();
+          const text = await messages.textContent();
+          assert(text === 'No matches among loaded repeaters.', 'Manual empty result must name its population; got: ' + text);
+        });
+        await step(`#1710: ${width}px empty selected region makes no network-wide claim`, async () => {
+          empty = true; emptyRequests = 0;
+          await page.reload({ waitUntil: 'domcontentloaded' });
+          await page.waitForFunction(() => window.__collisionsThemeReady);
+          await page.waitForSelector('#analyticsContent > .analytics-card > p');
+          assert(emptyRequests > 0 && await page.evaluate(() => RegionFilter.getRegionParam()) === region,
+            'Empty result must use the actually selected region');
+          const text = (await page.locator('#analyticsContent').textContent()).trim();
+          assert(text === 'No repeaters loaded for the current view.', 'Empty view must name its loaded population; got: ' + text);
+        });
+      }
+    } finally {
+      await page.unroute(pattern);
+      await page.unroute(regionsPattern);
+      await page.evaluate(() => localStorage.removeItem('meshcore-region-filter'));
+      await page.setViewportSize({ width: 1400, height: 1200 });
+    }
+  }
 
   await step('Collisions tab includes reverse cross-reference to Prefix Tool', async () => {
     await openCollisions(page);
@@ -267,6 +358,69 @@ async function assertHashView(page, bytes, collisionData) {
       await page.unroute(routePattern);
     }
   });
+
+  // Use real fixture data: the missing key must exist outside the selected
+  // region, not be an invented identity or an intercepted API response.
+  const repeaters = await prefixRepeaters(page);
+  const regions = await (await page.request.get(BASE + '/api/config/regions')).json();
+  let population;
+  for (const region of Object.keys(regions)) {
+    const nodes = await prefixRepeaters(page, '&region=' + encodeURIComponent(region));
+    const keys = new Set(nodes.map(n => n.public_key.toUpperCase()));
+    const prefixes = new Set(nodes.map(n => n.public_key.slice(0, 2).toUpperCase()));
+    const excluded = repeaters.find(n => !keys.has(n.public_key.toUpperCase()) &&
+      prefixes.has(n.public_key.slice(0, 2).toUpperCase()));
+    if (nodes.length && excluded) { population = { region, nodes, excluded }; break; }
+  }
+  assert(population, 'Fixture needs an excluded real repeater sharing a one-byte prefix with a loaded repeater');
+  const missingKey = population.excluded.public_key.toLowerCase();
+  const presentKey = population.nodes[0].public_key.toLowerCase();
+  const regionQuery = '&region=' + encodeURIComponent(population.region);
+
+  for (const width of [1400, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1200 });
+    await page.goto('about:blank');
+    await openPrefixTool(page, regionQuery + '&prefix=' + missingKey);
+    await page.locator('#ptOverviewToggle').click();
+
+    await step(`#1710: ${width}px checker explains the loaded population before results`, async () => {
+      const help = page.locator('#ptChecker > p');
+      assert(await help.isVisible(), 'Population context must be visible without expanding Network Overview');
+      const text = await help.textContent();
+      assert(/loaded repeaters/i.test(text) && /region/i.test(text) && /area/i.test(text) && /node loading limit/i.test(text),
+        'Checker help must scope results to loaded repeaters, active region/area filters and the node loading limit; got: ' + text);
+    });
+
+    await step(`#1710: ${width}px excluded real key is absent only from loaded repeaters`, async () => {
+      assert(await page.locator('#ptPrefixInput').inputValue() === missingKey, 'Deep link must prefill the full key');
+      assert(hashParams(page).get('prefix') === missingKey, 'Deep link must retain the full key');
+      const derived = await page.locator('#ptCheckerResults > p code').allTextContents();
+      assert(JSON.stringify(derived) === JSON.stringify([2, 4, 6].map(n => missingKey.slice(0, n).toUpperCase())),
+        'Full key must retain all three derived prefixes');
+      const oneByteMatches = await page.locator('#ptCheckerResults > div:not([role="alert"])').first().locator('a.analytics-link').count();
+      assert(oneByteMatches > 0, 'Excluded full key must show a loaded one-byte match; got: ' + oneByteMatches);
+      console.log(`    ${width}px excluded full key: ${oneByteMatches} loaded one-byte match(es)`);
+      await assertPrefixMatches(page, missingKey, population.nodes);
+      const message = await page.locator('#ptCheckerResults > p').textContent();
+      assert(/not present among the loaded repeaters/i.test(message) && !/not yet in the network/i.test(message),
+        'Excluded key must not imply absence from the network; got: ' + message);
+    });
+
+    await step(`#1710: ${width}px present key and manual prefix retain their matching behavior`, async () => {
+      await page.goto('about:blank');
+      await openPrefixTool(page, regionQuery + '&prefix=' + presentKey);
+      assert(await page.locator('#ptCheckerResults > p em').count() === 0, 'Present key must not receive an absence message');
+      await assertPrefixMatches(page, presentKey, population.nodes);
+      const prefix = presentKey.slice(0, 4);
+      await page.locator('#ptPrefixInput').fill(prefix);
+      await page.locator('#ptCheckBtn').click();
+      assert(await page.locator('#ptCheckerResults > p').count() === 0, 'Manual prefix must not receive a full-key absence message');
+      await assertPrefixMatches(page, prefix, population.nodes);
+      await page.locator('#ptPrefixInput').fill(presentKey);
+      await page.locator('#ptPrefixInput').press('Enter');
+      await assertPrefixMatches(page, presentKey, population.nodes);
+    });
+  }
 
   await browser.close();
 

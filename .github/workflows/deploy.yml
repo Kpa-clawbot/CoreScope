@@ -709,6 +709,7 @@ jobs:
           suite 2 test-map-nodes-pagination-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-map-estimated-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-map-foreign-advert-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-planner-e2e.js BASE_URL=$B
           suite 3 test-reported-nodes-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-observer-iata-1188-e2e.js BASE_URL=$B
           suite 2 test-issue-1639-observers-sort-e2e.js BASE_URL=$B
@@ -1240,13 +1241,18 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   # 4. Release Artifacts (tags only)
   # ───────────────────────────────────────────────────────────────
+  # The results are checked here instead of through the implicit success(),
+  # which also requires every job further up. After the release fast path
+  # (images_published) the server-race shards skip and server-race passes on
+  # its own, and the implicit check then skipped this job: v3.19.0 got no
+  # GitHub release until a dispatch without images_published.
   release-artifacts:
     name: "📦 Release Artifacts"
     needs: [go-test, server-race, changes]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    if: startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true'
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true' && needs['go-test'].result == 'success' && needs['server-race'].result == 'success' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

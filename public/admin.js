@@ -3,6 +3,7 @@
  * is a module with mount(container) and unmount():
  *   overview  window.CSAdminOverview (admin-overview.js)
  *   users     window.CSAdminUsers    (admin-users.js)
+ *   notifications window.CSAdminNotifications (admin-notifications.js)
  *   audit     window.CSAdminAudit    (admin-audit.js)
  *   proposals window.CSAdminProposals (admin-proposals.js), only with channel proposals on
  *   observer-logins window.CSAdminObserverLogins (admin-observer-logins.js), only with observer logins on
@@ -15,6 +16,7 @@
   var TABS = [
     { id: 'overview', label: 'Overview', mod: 'CSAdminOverview' },
     { id: 'users', label: 'Users', mod: 'CSAdminUsers' },
+    { id: 'notifications', label: 'Notifications', mod: 'CSAdminNotifications' },
     { id: 'audit', label: 'Audit', mod: 'CSAdminAudit' },
     { id: 'proposals', label: 'Proposals', mod: 'CSAdminProposals', when: proposalsOn },
     { id: 'observer-logins', label: 'Observer logins', mod: 'CSAdminObserverLogins', when: observerLoginsOn }

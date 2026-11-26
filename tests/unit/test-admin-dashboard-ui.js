@@ -1,6 +1,5 @@
 /* Unit tests for the admin area (docs/specs/2026-10-07-admin-dashboard-design.md):
- * public/admin-audit.js, public/admin-overview.js and public/admin.js, each
- * loaded from disk into a vm sandbox (same pattern as
+ * Admin tab modules loaded from disk into a vm sandbox (same pattern as
  * test-user-management-ui.js). */
 'use strict';
 const vm = require('vm');
@@ -49,7 +48,7 @@ function makeDom() {
 }
 
 // loadTab runs the given public files with window === the sandbox global,
-// a fake CSAuth whose request() answers from routes(path), a recording
+// a fake CSAuth whose request() answers from routes(path, body, method), a recording
 // history.replaceState and recordable intervals.
 function loadTab(files, hash, routes, extra) {
   const dom = makeDom();
@@ -58,8 +57,9 @@ function loadTab(files, hash, routes, extra) {
   const calls = [];
   const bodies = [];
   const timers = [];
+  const winListeners = {};
   const CSAuth = {
-    request(method, p, body) { calls.push(p); bodies.push(body); return Promise.resolve().then(() => routes(p, body)); },
+    request(method, p, body) { calls.push(p); bodies.push(body); return Promise.resolve().then(() => routes(p, body, method)); },
     say(id, text, ok) { const el = dom.document.getElementById(id); el.textContent = text; el.ok = !!ok; },
     errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); },
   };
@@ -69,12 +69,14 @@ function loadTab(files, hash, routes, extra) {
     escapeHtml: loadEscapeHtml(),
     setInterval(fn, ms) { timers.push({ fn, ms, cleared: false }); return timers.length; },
     clearInterval(id) { if (timers[id - 1]) timers[id - 1].cleared = true; },
+    addEventListener(t, fn) { (winListeners[t] = winListeners[t] || []).push(fn); },
   }, extra || {});
   ctx.window = ctx;
   vm.createContext(ctx);
   loadApiBase(ctx);
   [].concat(files).forEach((f) => vm.runInContext(src(f), ctx));
-  return { ctx, dom, els: dom.els, loc, replaced, calls, bodies, timers };
+  const fire = (t, detail) => (winListeners[t] || []).forEach((fn) => fn({ type: t, detail }));
+  return { ctx, dom, els: dom.els, loc, replaced, calls, bodies, timers, fire };
 }
 
 const NOW = Date.UTC(2026, 9, 7, 12, 0, 0);
@@ -272,6 +274,205 @@ test('unmount drops a response that arrives later', async () => {
   assert.strictEqual(env.els.auditBody.innerHTML, '');
 });
 
+console.log('admin-notifications.js');
+
+const PRESETS = [{ id: 'nodescope', name: 'NodeScope', origin: 'https://push.nodescope.app', platforms: ['ios', 'android'], appUrl: 'https://nodescope.app' }];
+
+test('enrollment uses the admin API and only permits one in-flight Enable request', async () => {
+  const endpoint = '/api/admin/notifications/push-relay';
+  const calls = [];
+  let finish;
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    assert.strictEqual(p, endpoint);
+    calls.push([method, body]);
+    return method === 'GET' ? OK({ state: 'available', publicOrigin: XSS, presets: PRESETS })
+      : new Promise((resolve) => { finish = resolve; });
+  });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  assert(!container.innerHTML.includes('<img'), container.innerHTML);
+  assert(container.innerHTML.includes('>&lt;img '), container.innerHTML);
+  assert(container.innerHTML.includes('id="adminEnablePushRelay" disabled'), 'nothing is picked by default: ' + container.innerHTML);
+  assert(container.innerHTML.includes('<option value="https://push.nodescope.app">NodeScope</option>'), container.innerHTML);
+  container.querySelector('#adminPushRelayChoice').handlers.change({ target: { value: 'https://push.nodescope.app' } });
+  assert(container.innerHTML.includes('users of the NodeScope app'), container.innerHTML);
+  assert(container.innerHTML.includes('href="https://nodescope.app"'), container.innerHTML);
+  const click = container.querySelector('#adminEnablePushRelay').handlers.click;
+  click();
+  click();
+  await tick();
+  assert.strictEqual(JSON.stringify(calls), JSON.stringify([['GET', null], ['POST', { relayOrigin: 'https://push.nodescope.app' }]]));
+  assert(container.innerHTML.includes('id="adminEnablePushRelay" disabled'), container.innerHTML);
+  finish(OK({ state: 'connected', analyzerId: 'an_test', relayOrigin: 'https://push.nodescope.app', relayName: 'NodeScope' }));
+  await tick();
+  assert(container.innerHTML.includes('is-connected">Connected</span>'), container.innerHTML);
+  assert(container.innerHTML.includes('an_test'), container.innerHTML);
+  assert(container.innerHTML.includes('NodeScope · https://push.nodescope.app'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminEnablePushRelay'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminPushRelayChoice'), container.innerHTML);
+});
+
+test('a custom relay needs an origin and is sent trimmed', async () => {
+  const posts = [];
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    if (method === 'GET') return OK({ state: 'available', presets: PRESETS });
+    posts.push(body);
+    return { ok: false, status: 400, data: { error: 'nope' } };
+  });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  container.querySelector('#adminPushRelayChoice').handlers.change({ target: { value: 'custom' } });
+  assert(container.innerHTML.includes('id="adminPushRelayOrigin"'), container.innerHTML);
+  assert(container.innerHTML.includes('id="adminEnablePushRelay" disabled'), 'empty origin: ' + container.innerHTML);
+  const html = container.innerHTML;
+  const enable = container.querySelector('#adminEnablePushRelay');
+  container.querySelector('#adminPushRelayOrigin').handlers.input({ target: { value: ' https://relay.example.org "x ' } });
+  assert.strictEqual(container.innerHTML, html, 'typing must not re-render (the field would lose focus)');
+  assert.strictEqual(enable.disabled, false);
+  container.querySelector('#adminPushRelayOrigin').handlers.input({ target: { value: '  ' } });
+  assert.strictEqual(enable.disabled, true);
+  container.querySelector('#adminPushRelayOrigin').handlers.input({ target: { value: ' https://relay.example.org "x ' } });
+  enable.handlers.click();
+  await tick();
+  assert(container.innerHTML.includes('value=" https://relay.example.org &quot;x "'), 'the typed origin survives an error: ' + container.innerHTML);
+  assert.strictEqual(JSON.stringify(posts), JSON.stringify([{ relayOrigin: 'https://relay.example.org "x' }]));
+  assert(container.innerHTML.includes('<option value="custom" selected>'), 'the pick survives an error: ' + container.innerHTML);
+});
+
+test('an origin locked in the server configuration offers no picker', async () => {
+  const posts = [];
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    if (method === 'GET') return OK({ state: 'available', relayOrigin: 'https://relay.example.org', originLocked: true });
+    posts.push(body);
+    return OK({ state: 'connected', relayOrigin: 'https://relay.example.org' });
+  });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  assert(!container.innerHTML.includes('adminPushRelayChoice'), container.innerHTML);
+  assert(container.innerHTML.includes('<dd>https://relay.example.org</dd>'), container.innerHTML);
+  container.querySelector('#adminEnablePushRelay').handlers.click();
+  await tick();
+  assert.strictEqual(JSON.stringify(posts), JSON.stringify([{ relayOrigin: 'https://relay.example.org' }]));
+});
+
+test('preset names and origins are escaped', async () => {
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', () =>
+    OK({ state: 'available', presets: [{ name: XSS, origin: 'https://x.example.org/"><img src=x>' }] }));
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  assert(!container.innerHTML.includes('<img'), container.innerHTML);
+});
+
+test('an enrollment failure leaves Enable available and escapes the API error', async () => {
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) =>
+    method === 'GET' ? OK({ state: 'available', presets: PRESETS }) : { ok: false, status: 422, data: { error: XSS } });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  container.querySelector('#adminPushRelayChoice').handlers.change({ target: { value: 'https://push.nodescope.app' } });
+  container.querySelector('#adminEnablePushRelay').handlers.click();
+  await tick();
+  assert(container.innerHTML.includes('role="alert">&lt;img '), container.innerHTML);
+  assert(!container.innerHTML.includes('<img'), container.innerHTML);
+  assert(container.innerHTML.includes('id="adminEnablePushRelay">Enable'), container.innerHTML);
+});
+
+test('a disabled notifier offers no Enable button', async () => {
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', () => OK({ state: 'notifications_disabled' }));
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  assert(container.innerHTML.includes('Node notifications are disabled'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminEnablePushRelay'), container.innerHTML);
+});
+
+test('connected and manually configured destinations can pause and resume delivery', async () => {
+  for (const state of ['connected', 'manual']) {
+    const updates = [];
+    const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+      assert.strictEqual(p, '/api/admin/notifications/push-relay');
+      if (method === 'GET') return OK({ state, analyzerId: 'an_test' });
+      assert.strictEqual(method, 'PUT');
+      assert.deepStrictEqual(Object.keys(body), ['paused']);
+      updates.push(body.paused);
+      return OK({ state, paused: body.paused, analyzerId: 'an_test' });
+    });
+    const container = env.dom.mk('c');
+    env.ctx.CSAdminNotifications.mount(container);
+    await tick();
+    assert(container.innerHTML.includes('>Pause delivery</button>'), container.innerHTML);
+    assert.strictEqual(container.innerHTML.includes('>Disconnect relay</button>'), state === 'connected');
+    if (state === 'manual') assert(container.innerHTML.includes('remove its server configuration'));
+    container.querySelector('#adminPausePushRelay').handlers.click();
+    await tick();
+    assert(container.innerHTML.includes('is-paused">Paused</span>'), container.innerHTML);
+    assert(container.innerHTML.includes('an_test'), container.innerHTML);
+    assert(container.innerHTML.includes('>Resume delivery</button>'), container.innerHTML);
+    container.querySelector('#adminPausePushRelay').handlers.click();
+    await tick();
+    assert.deepStrictEqual(updates, [true, false]);
+    assert(container.innerHTML.includes('is-connected">Connected</span>'), container.innerHTML);
+  }
+});
+
+test('disconnect requires confirmation and returns a disconnected card', async () => {
+  const methods = [];
+  let accept = false;
+  let confirmation;
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    assert.strictEqual(p, '/api/admin/notifications/push-relay');
+    assert.strictEqual(body, undefined);
+    methods.push(method);
+    return method === 'GET' ? OK({ state: 'connected', analyzerId: 'an_test' }) : OK({ state: 'available' });
+  }, { confirm(text) { confirmation = text; return accept; } });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  const disconnect = container.querySelector('#adminDisconnectPushRelay').handlers.click;
+  disconnect();
+  await tick();
+  assert(confirmation.includes('enable alerts again'), confirmation);
+  assert.deepStrictEqual(methods, ['GET']);
+  accept = true;
+  disconnect();
+  disconnect();
+  await tick();
+  assert.deepStrictEqual(methods, ['GET', 'DELETE']);
+  assert(!container.innerHTML.includes('an_test'), container.innerHTML);
+  assert(container.innerHTML.includes('>Enable</button>'), container.innerHTML);
+});
+
+test('failed disconnect reloads the pending state and offers retry without Resume', async () => {
+  const methods = [];
+  let pending = false;
+  const env = loadTab('public/admin-notifications.js', '#/admin?tab=notifications', (p, body, method) => {
+    methods.push(method);
+    if (method === 'GET') return OK({ state: 'connected', paused: pending, disconnectPending: pending });
+    assert.strictEqual(method, 'DELETE');
+    if (pending) return OK({ state: 'available' });
+    pending = true;
+    return { ok: false, status: 502, data: { error: XSS } };
+  }, { confirm() { return true; } });
+  const container = env.dom.mk('c');
+  env.ctx.CSAdminNotifications.mount(container);
+  await tick();
+  container.querySelector('#adminDisconnectPushRelay').handlers.click();
+  await tick();
+  assert.deepStrictEqual(methods, ['GET', 'DELETE', 'GET']);
+  assert(container.innerHTML.includes('is-paused">Disconnect pending</span>'), container.innerHTML);
+  assert(container.innerHTML.includes('>Retry disconnect</button>'), container.innerHTML);
+  assert(!container.innerHTML.includes('adminPausePushRelay'), container.innerHTML);
+  assert(container.innerHTML.includes('role="alert">&lt;img '), container.innerHTML);
+  container.querySelector('#adminDisconnectPushRelay').handlers.click();
+  await tick();
+  assert.deepStrictEqual(methods, ['GET', 'DELETE', 'GET', 'DELETE']);
+  assert(container.innerHTML.includes('>Enable</button>'), container.innerHTML);
+});
+
 console.log('admin-overview.js');
 
 const STATS = { total: 3, active: 2, pending: 1, disabled: 0, admins: 1, stuckPending: 1, bouncing: 2, new7d: 3, new30d: 3,
@@ -417,6 +618,184 @@ test('Refresh and Retry start no second full refresh while one is in flight; the
   ov.unmount();
 });
 
+// A click on #aoMailTest: closest() matches only that selector.
+const mailTestClick = (env) => env.els.aoBody.handlers.click({ target: { closest: (sel) => (sel === '#aoMailTest' ? {} : null) } });
+const MAIL_TEST = '/api/admin/mail/test';
+
+test('overview: Send test mail posts once and shows the result', async () => {
+  const held = [];
+  const env = overviewEnv((p) => (p === MAIL_TEST ? new Promise((r) => { held.push(r); }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('id="aoMailTest"') !== -1, 'button in the System card');
+  assert(env.els.aoBody.innerHTML.indexOf('id="aoMailTestResult"') !== -1, 'result element in the System card');
+  const posts = () => env.calls.filter((p) => p === MAIL_TEST).length;
+  mailTestClick(env);
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(posts(), 1, 'two quick clicks make one POST');
+  assert.strictEqual(env.els.aoMailTest.disabled, true, 'disabled while pending');
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(/id="aoMailTest"[^>]* disabled/.test(env.els.aoBody.innerHTML), 'a rebuild while pending keeps it disabled');
+
+  held.shift()(OK({ ok: true, provider: 'brevo', messageId: 'm1' }));
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail sent to your address through brevo.');
+  assert.strictEqual(env.els.aoMailTest.disabled, false, 'enabled once it settles');
+
+  mailTestClick(env);
+  await tick();
+  held.shift()({ ok: false, status: 502, data: { ok: false, provider: 'smtp', error: '535 5.7.8 authentication failed' } });
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: 535 5.7.8 authentication failed');
+
+  mailTestClick(env);
+  await tick();
+  held.shift()({ ok: false, status: 502, data: { ok: false, provider: 'smtp', error: XSS } });
+  await tick();
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('<img') === -1, 'raw markup: ' + env.els.aoBody.innerHTML);
+  assert(env.els.aoBody.innerHTML.indexOf('Test mail failed: &lt;img src=x onerror=alert(1)&gt;') !== -1);
+
+  mailTestClick(env);
+  await tick();
+  held.shift()({ ok: false, status: 429, data: { error: 'too many requests' } });
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Too many test mails, try again later.');
+  assert.strictEqual(posts(), 4);
+  ov.unmount();
+});
+
+test('overview: test-mail result survives the 60 s refresh', async () => {
+  const env = overviewEnv((p) => (p === MAIL_TEST ? OK({ ok: true, provider: 'smtp', messageId: 'm2' }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  mailTestClick(env);
+  await tick();
+  const text = 'Test mail sent to your address through smtp.';
+  assert.strictEqual(env.els.aoMailTestResult.textContent, text);
+  env.timers[env.timers.length - 1].fn(); // refresh(false)
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf(text) !== -1, 'result kept after the rebuild: ' + env.els.aoBody.innerHTML);
+  ov.unmount();
+});
+
+test('overview: while sending, the old result is replaced by Sending...', async () => {
+  const held = [];
+  const env = overviewEnv((p) => (p === MAIL_TEST ? new Promise((r) => { held.push(r); }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Sending...');
+  held.shift()({ ok: false, status: 502, data: { ok: false, provider: 'smtp', error: 'old failure' } });
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: old failure');
+  assert(/\berr\b/.test(env.els.aoMailTestResult.className), env.els.aoMailTestResult.className);
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Sending...', 'the old error is gone during the retry');
+  assert(!/\b(ok|err)\b/.test(env.els.aoMailTestResult.className), env.els.aoMailTestResult.className);
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('>Sending...<') !== -1 && env.els.aoBody.innerHTML.indexOf('old failure') === -1,
+    'a rebuild while sending shows Sending...');
+  held.shift()(OK({ ok: true, provider: 'smtp', messageId: 'm3' }));
+  await tick();
+  ov.unmount();
+});
+
+test('overview: a rejected request and a 401/403 answer show their failure text', async () => {
+  let answer;
+  const env = overviewEnv((p) => (p === MAIL_TEST ? answer() : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  answer = () => Promise.reject(new Error('net'));
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: network error, try again.');
+  assert.strictEqual(env.els.aoMailTest.disabled, false);
+  answer = () => ({ ok: false, status: 401, data: { error: 'not logged in' } });
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: not logged in');
+  answer = () => ({ ok: false, status: 403, data: {} });
+  mailTestClick(env);
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail failed: Request failed (HTTP 403)');
+  ov.unmount();
+});
+
+test('overview: another account in the same tab starts without the old result; a late answer is dropped', async () => {
+  const held = [];
+  const env = overviewEnv((p) => (p === MAIL_TEST ? new Promise((r) => { held.push(r); }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  env.ctx.CS_USER = { id: 1, role: 'admin' };
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  mailTestClick(env);
+  await tick();
+  held.shift()(OK({ ok: true, provider: 'brevo', messageId: 'a1' }));
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, 'Test mail sent to your address through brevo.');
+  // The same account again (a settings pull re-sets the user): the result stays.
+  env.fire('cs-auth-changed', { id: 1, role: 'admin' });
+  ov.unmount();
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('through brevo.') !== -1, 'same account keeps its result');
+  // Admin A starts another test mail, logs out, admin B logs in in the same tab.
+  mailTestClick(env);
+  await tick();
+  ov.unmount();
+  env.ctx.CS_USER = null;
+  env.fire('cs-auth-changed', null);
+  env.ctx.CS_USER = { id: 2, role: 'admin' };
+  env.fire('cs-auth-changed', { id: 2, role: 'admin' });
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('through brevo.') === -1 && env.els.aoBody.innerHTML.indexOf('Sending...') === -1,
+    'B sees no result of A: ' + env.els.aoBody.innerHTML);
+  assert(!/id="aoMailTest"[^>]* disabled/.test(env.els.aoBody.innerHTML), 'B can send');
+  env.els.aoMailTestResult.textContent = '';
+  held.shift()(OK({ ok: true, provider: 'brevo', messageId: 'a2' })); // A's answer arrives late
+  await tick();
+  assert.strictEqual(env.els.aoMailTestResult.textContent, '', 'the late answer of A writes nothing');
+  env.timers[env.timers.length - 1].fn();
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('through brevo.') === -1, 'nor does it reach B\'s state');
+  // Without an event (mount only), another account still gets a fresh result.
+  mailTestClick(env);
+  await tick();
+  held.shift()(OK({ ok: true, provider: 'brevo', messageId: 'b1' }));
+  await tick();
+  ov.unmount();
+  env.ctx.CS_USER = { id: 3, role: 'admin' };
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert(env.els.aoBody.innerHTML.indexOf('through brevo.') === -1, 'mount as another account resets the result');
+  ov.unmount();
+});
+
+test('overview: SMTP shows one sent count', () => {
+  const t = ovT();
+  const smtp = Object.assign({}, STATS, { mailDeliveryStatus: false,
+    mail7d: { delivered: 0, bounced: 0, blocked: 0, spam: 0, pending: 2, other: 3 } });
+  const html = t.usersCardHtml({ data: smtp });
+  assert(html.indexOf('data-stat="mailSent">5<') !== -1, html);
+  assert(html.indexOf('No delivery status with SMTP.') !== -1);
+  assert(html.indexOf('data-stat="mailDelivered"') === -1 && html.indexOf('data-stat="mailBounced"') === -1, html);
+  const brevo = t.usersCardHtml({ data: Object.assign({}, STATS, { mailDeliveryStatus: true }) });
+  assert(brevo.indexOf('data-stat="mailDelivered">1<') !== -1 && brevo.indexOf('data-stat="mailSent"') === -1, brevo);
+  assert(brevo.indexOf('No delivery status with SMTP.') === -1);
+});
+
 console.log('admin.js');
 
 function loadShell(hash, opts) {
@@ -428,7 +807,7 @@ function loadShell(hash, opts) {
   const listeners = {};
   const me = { current: opts.me === undefined ? { id: 1, role: 'admin' } : opts.me };
   const mods = {};
-  ['CSAdminOverview', 'CSAdminUsers', 'CSAdminAudit', 'CSAdminProposals', 'CSAdminObserverLogins'].forEach((n) => {
+  ['CSAdminOverview', 'CSAdminUsers', 'CSAdminNotifications', 'CSAdminAudit', 'CSAdminProposals', 'CSAdminObserverLogins'].forEach((n) => {
     mods[n] = { mounted: 0, unmounted: 0, el: null, mount(el) { this.mounted++; this.el = el; }, unmount() { this.unmounted++; } };
   });
   const CSAuth = { ready: () => Promise.resolve(), isEnabled: () => opts.enabled !== false,
@@ -468,6 +847,16 @@ test('#/admin mounts the overview tab into #adminTab', async () => {
   assert.strictEqual(env.mods.CSAdminOverview.mounted, 1);
   assert.strictEqual(env.mods.CSAdminOverview.el, env.els.adminTab);
   assert(env.app.innerHTML.indexOf('<h2>Admin</h2>') !== -1);
+});
+
+test('the Notifications deep link mounts the tab loaded by index.html', async () => {
+  const env = loadShell('#/admin?tab=notifications');
+  await env.page.init(env.app, null);
+  assert.strictEqual(env.mods.CSAdminNotifications.el, env.els.adminTab);
+  assert(env.app.innerHTML.includes('href="#/admin?tab=notifications" aria-current="page"'));
+  const index = src('public/index.html');
+  const tabScript = index.indexOf('src="admin-notifications.js?v=__BUST__"');
+  assert(tabScript !== -1 && tabScript < index.indexOf('src="admin.js?v=__BUST__"'));
 });
 
 test('the old #/admin/users link is rewritten with replaceState and opens the Users tab with its detail id', async () => {

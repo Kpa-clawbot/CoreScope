@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -173,5 +174,49 @@ func TestOpenStoreRefusesUnconvertibleObservers(t *testing.T) {
 				t.Errorf("packets_v links changed:\nbefore=%v\nafter=%v", links, gotLinks)
 			}
 		})
+	}
+}
+
+// openFDsOn counts this process's open file descriptors on path or its
+// -wal/-shm siblings. ok is false where /proc/self/fd is unavailable.
+func openFDsOn(t *testing.T, path string) (n int, ok bool) {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return 0, false
+	}
+	for _, e := range entries {
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
+		if err != nil {
+			continue // the fd ReadDir itself used, closed by now
+		}
+		if target == path || target == path+"-wal" || target == path+"-shm" {
+			n++
+		}
+	}
+	return n, true
+}
+
+// A failed OpenStore closes the database it opened. A leaked handle keeps
+// the file open: on Windows the caller cannot even delete it (the temp dir
+// cleanup of TestOpenStoreRefusesUnconvertibleObservers failed there).
+func TestOpenStoreClosesDBOnFailure(t *testing.T) {
+	path := legacyStoreDB(t, `ALTER TABLE observers ADD COLUMN operator_note TEXT`)
+	// Descriptors are only countable where /proc/self/fd exists (Linux); the
+	// removal at the end observes the leak on Windows.
+	n, countable := openFDsOn(t, path)
+	if countable && n != 0 {
+		t.Fatalf("fixture left %d descriptor(s) open on the database", n)
+	}
+	s, err := OpenStore(path)
+	if err == nil {
+		s.Close()
+		t.Fatal("OpenStore accepted an observers table the rebuild must refuse")
+	}
+	if n, _ := openFDsOn(t, path); countable && n != 0 {
+		t.Fatalf("failed OpenStore left %d descriptor(s) open on the database (%v)", n, err)
+	}
+	if rerr := os.Remove(path); rerr != nil {
+		t.Fatalf("database file cannot be removed after the failed OpenStore, a handle is still open: %v", rerr)
 	}
 }

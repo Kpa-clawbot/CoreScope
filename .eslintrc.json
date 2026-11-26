@@ -171,7 +171,6 @@
     "_nodesIsAdvertMessage": "readonly",
     "_nodesMatchesSearch": "readonly",
     "_nodesRenderNodeTimestampHtml": "readonly",
-    "_nodesRenderNodeTimestampText": "readonly",
     "_nodesSetAllNodes": "readonly",
     "_nodesSetSortState": "readonly",
     "_nodesSortArrow": "readonly",

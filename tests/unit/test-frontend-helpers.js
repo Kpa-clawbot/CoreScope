@@ -4484,10 +4484,9 @@ console.log('\n=== nodes.js: syncClaimedToFavorites ===');
   });
 }
 
-// ===== NODES.JS: renderNodeTimestampHtml / renderNodeTimestampText =====
-console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText ===');
+// ===== NODES.JS: renderNodeTimestampHtml =====
+console.log('\n=== nodes.js: renderNodeTimestampHtml ===');
 {
-  
   test('renderNodeTimestampHtml returns HTML with tooltip', () => {
     const ctx = makeNodesSandbox();
     const d = new Date(Date.now() - 300000).toISOString();
@@ -4509,18 +4508,66 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
     assert.ok(html.includes('—'), 'null should produce dash');
   });
 
-  test('renderNodeTimestampText returns plain text', () => {
+  test('renderNodeTimestampHtml falls back to relative text without the shared renderer', () => {
     const ctx = makeNodesSandbox();
+    ctx.renderTimestampHtml = undefined;
     const d = new Date(Date.now() - 300000).toISOString();
-    const text = ctx.window._nodesRenderNodeTimestampText(d);
-    assert.ok(!text.includes('<'), 'should be plain text, not HTML');
-    assert.ok(text.includes('5m ago') || text.includes('ago') || /^\d{4}/.test(text), 'should be a readable timestamp');
+    assert.strictEqual(ctx.window._nodesRenderNodeTimestampHtml(d), '5m ago');
   });
 
-  test('renderNodeTimestampText handles null', () => {
+  test('renderNodeTimestampHtml shows a dash for null and valid timestamps when both formatters are missing', () => {
     const ctx = makeNodesSandbox();
-    const text = ctx.window._nodesRenderNodeTimestampText(null);
-    assert.strictEqual(text, '—');
+    ctx.renderTimestampHtml = undefined;
+    ctx.timeAgo = undefined;
+    assert.strictEqual(ctx.window._nodesRenderNodeTimestampHtml(null), '—');
+    assert.strictEqual(ctx.window._nodesRenderNodeTimestampHtml('2024-01-02T03:04:05.000Z'), '—');
+  });
+}
+
+// #2405: run the real tablet selection/fetch/render glue with divergent dates.
+console.log('\n=== nodes.js: tablet Last Heard (#2405) ===');
+{
+  const now = Date.parse('2025-06-10T12:00:00Z');
+  const old = '2025-06-06T12:00:00Z', recent = '2025-06-10T11:55:00Z';
+  const newer = '2025-06-10T11:58:00Z', future = '2025-06-10T12:02:00Z';
+  const cases = [
+    { name: 'newer health evidence wins', health: recent, expected: recent },
+    { name: 'newer node evidence wins', node: { last_heard: newer }, health: recent, expected: newer },
+    { name: 'newer advert wins', node: { last_seen: newer }, health: recent, expected: newer },
+    { name: 'missing health falls back to node', node: { last_heard: recent }, health: null, expected: recent },
+    { name: 'missing node dates use health', node: { last_heard: null, last_seen: null }, health: recent, expected: recent },
+    { name: 'invalid health falls back to node', node: { last_heard: recent }, health: 'not-a-date', expected: recent },
+    { name: 'invalid node date uses valid health', node: { last_heard: 'not-a-date' }, health: recent, expected: recent },
+    { name: 'all invalid dates stay unknown', node: { last_heard: 'not-a-date', last_seen: 'not-a-date' }, health: 'not-a-date', expected: null },
+    { name: 'future health preserves the clock warning', health: future, expected: future },
+    { name: 'ambiguous relay cannot refresh old certain evidence', node: { last_relayed: newer }, health: old, expected: old },
+    { name: 'ambiguous relay alone stays unknown', node: { last_heard: null, last_seen: null, last_relayed: newer }, health: null, expected: null },
+  ];
+  for (const c of cases) test('tablet Last Heard: ' + c.name, async () => {
+    const ctx = makeNodesSandbox();
+    ctx.Date = class extends Date { static now() { return now; } };
+    ctx.localStorage.setItem('meshcore-timestamp-mode', 'ago');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    ctx.window.innerWidth = 800;
+    ctx.history = { replaceState: () => {} };
+    const panel = { innerHTML: '', querySelector: () => ({ addEventListener: () => {} }) };
+    ctx.window.SlideOver = { shouldUse: () => true, open: () => panel };
+    const node = { public_key: 'ab'.repeat(32), role: 'repeater', last_seen: old, last_heard: old, ...c.node };
+    const calls = [];
+    ctx.api = async url => {
+      calls.push(url);
+      if (url === '/rf-params') return { enabled: false };
+      if (url.endsWith('/health')) return c.health === null ? null : { stats: { lastHeard: c.health } };
+      return { node, recentAdverts: [] };
+    };
+    const source = fs.readFileSync('public/nodes.js', 'utf8');
+    vm.runInContext(source.replace('  // Test hooks',
+      '  window.testSelectNode = selectNode;\n  // Test hooks'), ctx);
+    await ctx.window.testSelectNode(node.public_key);
+    assert.deepStrictEqual(calls.sort(), ['/nodes/' + node.public_key, '/nodes/' + node.public_key + '/health', '/rf-params'].sort(), 'reuse the existing detail requests');
+    const heard = panel.innerHTML.match(/<dt>Last Heard<\/dt><dd>([\s\S]*?)<\/dd>/);
+    assert.ok(heard, 'tablet must render Last Heard: ' + panel.innerHTML);
+    assert.strictEqual(heard[1], ctx.renderTimestampHtml(c.expected));
   });
 }
 
