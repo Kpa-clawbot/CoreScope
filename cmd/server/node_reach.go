@@ -787,7 +787,8 @@ func reachScanSQL(nTokens int) string {
 	      FROM observations o
 	      CROSS JOIN transmissions t ON t.id = o.transmission_id
 	      LEFT JOIN observers obs ON obs.idx = o.observer_idx
-	      WHERE o.timestamp >= ? AND (` + strings.Join(likes, " OR ") + `)
+	      WHERE o.timestamp >= ? AND o.direction IS NOT 'tx'
+	        AND (` + strings.Join(likes, " OR ") + `)
 	      LIMIT ?`
 }
 
@@ -915,6 +916,7 @@ func (s *Server) scanReachRowsIndexed(ctx context.Context, tokens map[string]boo
 	      JOIN transmissions t ON t.id = o.transmission_id
 	      LEFT JOIN observers obs ON obs.idx = o.observer_idx
 	      WHERE o.id IN (SELECT observation_id FROM observation_hops WHERE hop IN (` + strings.Join(marks, ",") + `) AND timestamp >= ?)
+	        AND o.direction IS NOT 'tx'
 	      LIMIT ?`
 	return s.readReachRows(ctx, q, args)
 }
