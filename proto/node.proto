@@ -64,6 +64,12 @@ message NodeObserverStats {
 
 // ─── Node Stats ────────────────────────────────────────────────────────────────
 
+// Lengths in hops of the nonempty display paths, one per transmission.
+message NodePathHops {
+  double median = 1;
+  int32 p90 = 2;
+}
+
 // Aggregate packet statistics for a node.
 // Used in bulk-health entries and node health responses.
 message NodeStats {
@@ -81,6 +87,8 @@ message NodeStats {
   optional string last_heard = 6 [json_name = "lastHeard"];
   // Average hop count (rounded integer, present in node health).
   optional double avg_hops = 7 [json_name = "avgHops"];
+  // Single-node health only, omitted when no nonempty path was observed.
+  optional NodePathHops path_hops = 8 [json_name = "pathHops"];
 }
 
 // ─── API Responses ─────────────────────────────────────────────────────────────

@@ -437,6 +437,80 @@ async function main() {
   if (moreActiveOnPackets === false) pass('(n) More tab loses .active on primary route #/packets');
   else fail(`(n) More tab still .active on #/packets (got ${moreActiveOnPackets})`);
 
+  // #2475: measure real content at maximum scroll and catch a double reserve.
+  async function checkClearance(view, lastContent, scenario) {
+    const last = view.locator(lastContent);
+    await last.waitFor();
+    await view.evaluate(() => document.fonts.ready);
+    const { scroll, max, bottom, navTop, navHeight } = await last.evaluate(el => {
+      const doc = document.scrollingElement;
+      doc.scrollTop = doc.scrollHeight;
+      const nav = document.querySelector('[data-bottom-nav]').getBoundingClientRect();
+      return { scroll: doc.scrollTop, max: doc.scrollHeight - doc.clientHeight,
+        bottom: el.getBoundingClientRect().bottom, navTop: nav.top, navHeight: nav.height };
+    });
+    const gap = navTop - bottom;
+    const label = `${scenario}: content bottom ${bottom}, nav top ${navTop}`;
+    if (max <= 0 || Math.abs(max - scroll) > 1) fail(`${label}: scroll ${scroll} of ${max}`);
+    else if (navHeight <= 0 || gap < 0 || gap >= navHeight) fail(`${label}: gap ${gap}px`);
+    else pass(label);
+  }
+
+  const lastObserver = '#obsTable tbody tr:last-child';
+  for (const [route, width, height, lastContent] of [
+    ['observers', 390, 844, lastObserver],
+    ['observers', 768, 844, lastObserver],
+    ['compare', 390, 360, '#compareControls'],
+  ]) {
+    await page.setViewportSize({ width, height });
+    await page.goto(`${BASE}/#/${route}`, { waitUntil: 'domcontentloaded' });
+    if (route === 'compare') await page.waitForSelector('#compareObsA');
+    await checkClearance(page, lastContent, `${route} at ${width}x${height}`);
+  }
+
+  // Chromium supports :has(). Let its CSS parser see an unknown pseudo-class
+  // instead so it discards unsupported selectors as an older browser would.
+  await page.route('**/*.css*', async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, body: (await response.text()).replaceAll(':has(', ':unsupported-has(') });
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('#compareObsA').waitFor();
+  await checkClearance(page, '#compareControls', 'compare without :has() at 390x360');
+
+  const live = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+  await live.clock.install();
+  async function enterLive() {
+    await live.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    // The VCR measurement appears when Live has wired its resize listeners.
+    await live.locator('.live-page[style*="--vcr-bar-height"]').waitFor({ state: 'attached' });
+  }
+  async function leaveLive(event) {
+    await live.evaluate(type => {
+      if (type) window.dispatchEvent(new Event(type));
+      location.hash = '#/observers';
+    }, event);
+    await live.locator(lastObserver).waitFor();
+  }
+  await enterLive();
+  await live.clock.pauseAt(new Date(Date.now() + 60000));
+  await leaveLive('resize');
+  await live.clock.runFor(50); // Live's resize debounce
+  await checkClearance(live, lastObserver, 'observers after leaving during Live resize');
+
+  await enterLive();
+  await live.evaluate(() => window.dispatchEvent(new Event('orientationchange')));
+  await live.clock.runFor(25);
+  await leaveLive('orientationchange');
+  await live.clock.runFor(2050); // last rotation retry plus the resize debounce
+  await checkClearance(live, lastObserver, 'observers after leaving during two Live rotations');
+
+  await enterLive();
+  await leaveLive();
+  await live.evaluate(() => window.dispatchEvent(new Event('orientationchange')));
+  await live.clock.runFor(2050);
+  await checkClearance(live, lastObserver, 'observers rotated after leaving Live');
+
   await browser.close();
 
   console.log(`\ntest-bottom-nav-1061-e2e.js: ${passes} passed, ${failures} failed`);

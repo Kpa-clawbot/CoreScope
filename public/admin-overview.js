@@ -16,7 +16,19 @@
     ['stats', '/api/admin/stats'], ['health', '/api/health'], ['healthz', '/api/healthz'],
     ['mqtt', '/api/mqtt/status'], ['observers', '/api/observers']
   ];
-  var state = { timer: null, seq: 0, healthz: null, busy: null };
+  // mailTest: the Send test mail button and its last result, kept here
+  // because the 60 s refresh rebuilds the whole body. userId is the account
+  // it belongs to: another account in the same tab gets a fresh one.
+  function newMailTest(userId) { return { busy: false, ok: null, text: '', userId: userId }; }
+  function currentUserId() { return window.CS_USER ? window.CS_USER.id : null; }
+  var state = { timer: null, seq: 0, healthz: null, busy: null, mailTest: newMailTest(null) };
+
+  // Logout and login change the hash without a reload: drop the result (and
+  // orphan an answer still in flight) as soon as the account changes.
+  function resetMailTestFor(userId) {
+    if (state.mailTest.userId !== userId) state.mailTest = newMailTest(userId);
+  }
+  window.addEventListener('cs-auth-changed', function (e) { resetMailTestFor(e.detail ? e.detail.id : null); });
 
   function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
 
@@ -90,19 +102,71 @@
   function usersCardHtml(r) {
     var head = '<section class="admin-card" id="aoUsers" aria-labelledby="aoUsersH"><h3 id="aoUsersH">Users</h3>';
     if (!r || r.error) return head + failedHtml('user figures') + '</section>';
-    var s = r.data, m = s.mail7d || {};
+    var s = r.data;
     return head + '<dl class="admin-stats">' +
       stat('total', 'Accounts', s.total) + stat('active', 'Active', s.active) + stat('pending', 'Pending', s.pending) +
       stat('disabled', 'Disabled', s.disabled) + stat('admins', 'Admins', s.admins) +
       stat('new7d', 'New, 7 days', s.new7d) + stat('new30d', 'New, 30 days', s.new30d) +
       stat('active7d', 'Active users, 7 days', s.active7d) + stat('active30d', 'Active users, 30 days', s.active30d) +
       stat('logins24h', 'Logins, 24 hours', s.logins24h) + stat('failedLogins24h', 'Failed logins, 24 hours', s.failedLogins24h) +
-      '</dl>' + barsHtml(s.newPerDay || []) +
-      '<h4>Mail, last 7 days</h4><dl class="admin-stats">' +
-      stat('mailDelivered', 'Delivered', m.delivered) + stat('mailBounced', 'Bounced', m.bounced) +
+      '</dl>' + barsHtml(s.newPerDay || []) + mailStatsHtml(s.mail7d || {}, s.mailDeliveryStatus !== false) +
+      notifyStatsHtml(s.notify) + '</section>';
+  }
+
+  // Without delivery status (smtp) mails have no event and land in pending
+  // or other, so the buckets would mislead: one Sent figure instead.
+  function mailStatsHtml(m, deliveryStatus) {
+    var html = '<h4>Mail, last 7 days</h4><dl class="admin-stats">';
+    if (!deliveryStatus) {
+      var sent = 0;
+      ['delivered', 'bounced', 'blocked', 'spam', 'pending', 'other'].forEach(function (k) { sent += Number(m[k]) || 0; });
+      return html + stat('mailSent', 'Sent', sent) + '</dl><p class="account-hint">No delivery status with SMTP.</p>';
+    }
+    return html + stat('mailDelivered', 'Delivered', m.delivered) + stat('mailBounced', 'Bounced', m.bounced) +
       stat('mailBlocked', 'Blocked', m.blocked) + stat('mailSpam', 'Spam', m.spam) +
-      stat('mailPending', 'Pending', m.pending) + stat('mailOther', 'Other', m.other) +
-      '</dl>' + notifyStatsHtml(s.notify) + '</section>';
+      stat('mailPending', 'Pending', m.pending) + stat('mailOther', 'Other', m.other) + '</dl>';
+  }
+
+  function mailTestClass(t) { return 'account-msg' + (t.ok === true ? ' ok' : t.ok === false ? ' err' : ''); }
+
+  function mailTestHtml(t) {
+    return '<h4>Mail</h4><div class="admin-mailtest"><button type="button" class="account-btn account-btn-secondary" id="aoMailTest"' +
+      (t.busy ? ' disabled' : '') + '>Send test mail</button><span id="aoMailTestResult" class="' + mailTestClass(t) +
+      '" role="status" aria-live="polite">' + escapeHtml(t.text) + '</span></div>';
+  }
+
+  function mailTestText(r) {
+    if (r.ok) return 'Test mail sent to your address through ' + r.data.provider + '.';
+    if (r.status === 429) return 'Too many test mails, try again later.';
+    return 'Test mail failed: ' + CSAuth.errText(r);
+  }
+
+  // Writes t into the live button and result element.
+  function showMailTest(t) {
+    var b = document.getElementById('aoMailTest');
+    if (b) b.disabled = t.busy;
+    var el = document.getElementById('aoMailTestResult');
+    if (el) { el.textContent = t.text; el.className = mailTestClass(t); }
+  }
+
+  // One test mail at a time. The result goes into state.mailTest (the
+  // periodic rebuild renders it from there) and into the live elements. An
+  // answer that arrives after the account changed writes nothing.
+  function sendTestMail() {
+    var t = state.mailTest;
+    if (t.busy) return;
+    t.busy = true;
+    t.ok = null;
+    t.text = 'Sending...';
+    showMailTest(t);
+    var done = function (ok, text) {
+      t.busy = false;
+      t.ok = ok;
+      t.text = text;
+      if (state.mailTest === t) showMailTest(t);
+    };
+    CSAuth.request('POST', '/api/admin/mail/test').then(function (r) { done(!!r.ok, mailTestText(r)); },
+      function () { done(false, 'Test mail failed: network error, try again.'); });
   }
 
   function systemCardHtml(res, nowMs) {
@@ -137,7 +201,7 @@
       var c = window.ObserversSummary.computeCounts(res.observers.data.observers || []);
       html += '<dl class="admin-stats">' + stat('observersOnline', 'Online', c.online) + stat('observersTotal', 'Total', c.total) + '</dl>';
     }
-    return html + '<p class="account-links"><a href="#/perf">Perf page</a> <a href="#/observers">MQTT status panel</a></p></section>';
+    return html + mailTestHtml(state.mailTest) + '<p class="account-links"><a href="#/perf">Perf page</a> <a href="#/observers">MQTT status panel</a></p></section>';
   }
 
   function render(res, nowMs) {
@@ -203,7 +267,9 @@
     document.getElementById('aoRefresh').addEventListener('click', function () { fullRefresh(); });
     document.getElementById('aoBody').addEventListener('click', function (e) {
       if (e.target.closest('button[data-act="retry"]')) fullRefresh();
+      else if (e.target.closest('#aoMailTest')) sendTestMail();
     });
+    resetMailTestFor(currentUserId());
     clearInterval(state.timer);
     state.timer = setInterval(function () {
       if (document.visibilityState === 'visible') refresh(false);

@@ -318,18 +318,18 @@
     history.replaceState(null, '', '#/nodes' + subpath + buildNodesQuery(activeTab, search));
   }
 
+  function effectiveLastHeardIso(n, stats) {
+    // Retain the health timestamp so status helpers use the same observations.
+    n._lastHeard = stats.lastHeard || n.last_seen;
+    const heardMs = window.getEffectiveHeardMs(n);
+    return isNaN(heardMs) ? null : new Date(heardMs).toISOString();
+  }
+
   function renderNodeTimestampHtml(isoString) {
     if (typeof renderTimestampHtml !== 'function') {
       return escapeHtml(typeof timeAgo === 'function' ? timeAgo(isoString) : '—');
     }
     return renderTimestampHtml(isoString);
-  }
-
-  function renderNodeTimestampText(isoString) {
-    if (typeof formatTimestamp !== 'function' || typeof getTimestampMode !== 'function') {
-      return typeof timeAgo === 'function' ? timeAgo(isoString) : '—';
-    }
-    return formatTimestamp(isoString, getTimestampMode());
   }
 
   /* === Shared helper functions for node detail rendering === */
@@ -368,6 +368,19 @@
       value += ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${formatNodeCount(n.relay_count_1h)} relays/hr, ${formatNodeCount(n.relay_count_24h)} relays/24h)</span>`;
     }
     return renderNodeMetric('Last Relayed', value, table, "Last time this node was attributed as a relay hop in a non-advert packet observed by the network. This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: 'Last Heard' counts only packets that can be this node alone. The green actively relaying mark requires recent certain relay evidence, including forwarding another node's advert. No mark does not imply idle or offline.");
+  }
+
+  function renderNodePathLength(stats, table) {
+    const paths = stats.pathHops;
+    const median = paths && nodeMetricNumber(paths.median);
+    const p90 = paths && nodeMetricNumber(paths.p90);
+    if (median > 0 && p90 >= median) {
+      return renderNodeMetric('Observed path length (hops)', 'Median ' + median.toLocaleString() + ' · P90 ' + p90.toLocaleString(), table,
+        'Each transmission involving this node contributes its longest observed nonempty path. For an even sample the median averages the two middle lengths. At least 90% of these paths have P90 hops or fewer.');
+    }
+    const avg = nodeMetricNumber(stats.avgHops);
+    return avg > 0 ? renderNodeMetric('Avg Hops', avg.toLocaleString(), table,
+      'Rounded average length of the nonempty transmission paths observed for this node.') : '';
   }
 
   function renderTrafficShare(n, table) {
@@ -961,12 +974,7 @@
       const observers = h.observers || [];
       const relayObserverCount = Number(h.relayObserverCount) || 0;
       const recent = h.recentPackets || [];
-      // Attach health lastHeard for shared helpers. Displayed: the newest of
-      // it, the node's last_heard and last_seen (#2260); either fetch may be
-      // the fresher one.
-      n._lastHeard = stats.lastHeard || n.last_seen;
-      const effMs = window.getEffectiveHeardMs(n);
-      const lastHeard = isNaN(effMs) ? null : new Date(effMs).toISOString();
+      const lastHeard = effectiveLastHeardIso(n, stats);
       const si = getStatusInfo(n);
       const roleColor = si.roleColor;
       const statusLabel = si.statusLabel;
@@ -1032,7 +1040,7 @@
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>${renderPacketCountLabel('fullNodePacketCountHelp')}</td><td>${formatNodeCount(stats.totalTransmissions || stats.totalPackets || n.advert_count || 0)}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + formatNodeCount(stats.totalObservations) + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${formatNodeCount(stats.packetsToday || 0)}</td></tr>
-          ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
+          ${renderNodePathLength(stats, true)}
           ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
           ${renderHashPrefix(n, true)}
           ${rfOn() ? `<tr><td title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</td><td data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</td></tr>` : ''}
@@ -2048,7 +2056,8 @@
         const name = n.name || n.advert_name;
         if (titleEl) titleEl.textContent = name || (n.public_key ? n.public_key.slice(0, 10) : 'Node');
         var role = (n.role || '').toString();
-        var lastHeard = n.last_heard || n.last_seen;
+        const stats = data?.healthData?.stats || {};
+        const lastHeard = effectiveLastHeardIso(n, stats);
         so.innerHTML =
           '<dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
             '<dt>Name</dt><dd>' + escapeHtml(name || '—') + '</dd>' +
@@ -2102,11 +2111,7 @@
     const hasLoc = n.lat != null && n.lon != null;
     const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
 
-    // Status calculation via shared helper. Displayed: the newest of the
-    // health lastHeard, the node's last_heard and last_seen (#2260).
-    n._lastHeard = stats.lastHeard || n.last_seen;
-    const effMs = window.getEffectiveHeardMs(n);
-    const lastHeard = isNaN(effMs) ? null : new Date(effMs).toISOString();
+    const lastHeard = effectiveLastHeardIso(n, stats);
     const si = getStatusInfo(n);
     const roleColor = si.roleColor;
     const totalPackets = stats.totalTransmissions || stats.totalPackets || n.advert_count || 0;
@@ -2146,7 +2151,7 @@
             <dt>First Seen</dt><dd>${renderNodeTimestampHtml(n.first_seen)}</dd>
             <dt>${renderPacketCountLabel('nodePacketCountHelp')}</dt><dd>${formatNodeCount(totalPackets)}</dd>
             <dt>Packets Today</dt><dd>${formatNodeCount(stats.packetsToday || 0)}</dd>
-            ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
+            ${renderNodePathLength(stats)}
             ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
             ${renderHashPrefix(n)}
             ${rfOn() ? `<dt title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</dt><dd data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now(), rfDev(n))}</dd>` : ''}
@@ -2370,7 +2375,6 @@
   };
   window._nodesSyncClaimedToFavorites = syncClaimedToFavorites;
   window._nodesRenderNodeTimestampHtml = renderNodeTimestampHtml;
-  window._nodesRenderNodeTimestampText = renderNodeTimestampText;
   window._nodesGetStatusInfo = getStatusInfo;
   window._nodesGetStatusTooltip = getStatusTooltip;
 

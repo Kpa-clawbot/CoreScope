@@ -35,6 +35,7 @@
 - [GET /api/observers/:id/analytics](#get-apiobserversidanalytics)
 - [GET /api/channels](#get-apichannels)
 - [GET /api/channels/:hash/messages](#get-apichannelshashmessages)
+- [GET /api/known-channels](#get-apiknown-channels)
 - [GET /api/rf-noise](#get-apirf-noise)
 - [GET /api/elevation/profile](#get-apielevationprofile)
 - [GET /api/planner/profile](#get-apiplannerprofile)
@@ -129,10 +130,10 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | `GET /api/account/settings` | session | -> `{revision, generation, doc, allowlist}`. `doc` is `{v: 1, keys: {<localStorage key>: <raw string>}}`, or `null` at revision 0. `generation` is a random id of the stored document (`""` at revision 0): revisions restart at 1 after a `DELETE`, the generation does not repeat. `allowlist` is `[{key, kind, id?}]`: `kind` is `set` (JSON array merged per item; `id` names the field that identifies an item, absent means the item itself) or `scalar` |
 | `PUT /api/account/settings` | session | `{baseRevision, baseGeneration, doc}` -> `{revision, generation}`. `409` `{revision, generation, doc}` when `baseRevision` is not the stored revision or, with a stored document, `baseGeneration` is not its generation; `baseRevision` 0 without a stored document starts a new generation; `400` for another shape, a key that is never synced (`corescope_channel_*`, `live-channel-colors`, `meshcore-api-key`) or a key not in the allowlist; `413` when `doc` is over 256 KiB (body cap 264 KiB); `429` above 60 PUT requests per hour per user |
 | `DELETE /api/account/settings` | session | -> `{ok}`. The next `PUT` with `baseRevision` 0 starts a new document in a new generation |
-| `GET /api/account/export` | session | -> attachment `corescope-account-<YYYY-MM-DD>.json`: `{formatVersion: 1, exportedAt, instance, profile, sessions, companions, settings, proposals, notifications, audit, mail}`. `profile` is `{id, email, displayName, role, status, createdAt, lastLoginAt, emailBouncing, activatedAt, activatedBy}` (`activatedBy` is the admin id, `null` for a link activation); `sessions` `[{kind, label?, createdAt, lastSeenAt, userAgent?}]` (`kind` is `web` or `device`, `label` the device name); `companions` `[{pubkey, name, linkedAt}]`; `settings` `{revision, updatedAt, doc}` or `null`; `proposals` `[{kind, subject, status, note, createdAt, decidedAt}]`; `notifications` `{prefs: {enabled, events} or null, watches: [{pubkey, createdAt}]}`; `audit` `[{at, action, actorUserId, targetUserId, detail}]` (other accounts by id only); `mail` `[{to, purpose, sentAt, status, statusAt, reason?, events}]`. No row caps. No password hash, no session, link or unsubscribe token and no companion link challenge. Writes a `user.export` audit row afterwards |
+| `GET /api/account/export` | session | -> attachment `corescope-account-<YYYY-MM-DD>.json`: `{formatVersion: 1, exportedAt, instance, profile, sessions, companions, settings, proposals, notifications, audit, mail}`. `profile` is `{id, email, displayName, role, status, createdAt, lastLoginAt, emailBouncing, activatedAt, activatedBy}` (`activatedBy` is the admin id, `null` for a link activation); `sessions` `[{kind, label?, createdAt, lastSeenAt, userAgent?}]` (`kind` is `web` or `device`, `label` the device name); `companions` `[{pubkey, name, linkedAt}]`; `settings` `{revision, updatedAt, doc}` or `null`; `proposals` `[{kind, subject, status, note, createdAt, decidedAt}]`; `notifications` `{prefs: {enabled, events} or null, watches: [{pubkey, createdAt}], pushDevices: [{analyzerId, installationId, expiresAt}]}` (`pushDevices` are mobile push device links); `audit` `[{at, action, actorUserId, targetUserId, detail}]` (other accounts by id only); `mail` `[{to, purpose, sentAt, status, statusAt, reason?, events}]`. No row caps. No password hash, no session, link or unsubscribe token and no companion link challenge. Writes a `user.export` audit row afterwards |
 | `DELETE /api/account` | session | `{currentPassword}` -> `{ok, message}`. `409` you are the last admin |
 | `GET /api/admin/users?status=&role=&q=&bouncing=` | admin | -> `[adminUser]`, at most 1000, newest first. `status` is `pending`, `active` or `disabled`; `role` is `user` or `admin`; `bouncing=1` keeps only addresses whose mail bounces (any other value is `400`) |
-| `GET /api/admin/users/{id}` | admin | -> `{user, sessions, mail, audit}` |
+| `GET /api/admin/users/{id}` | admin | -> `{user, sessions, mail, audit, mailDeliveryStatus}`. `mailDeliveryStatus` is `false` when the provider (`smtp`) cannot report delivery events: mail shows as sent and there is nothing to refresh |
 | `POST /api/admin/users/{id}/disable` | admin | -> adminUser. Active accounts only; ends the user's sessions and links |
 | `POST /api/admin/users/{id}/enable` | admin | -> adminUser. Disabled accounts only |
 | `DELETE /api/admin/users/{id}` | admin | -> `{ok}` |
@@ -141,7 +142,8 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | `POST /api/admin/users/{id}/activate` | admin | -> adminUser. Pending accounts only; the address stays unverified |
 | `POST /api/admin/users/{id}/mail/{mailId}/refresh` | admin | -> mail record with `events`, pulled from the provider. `502` provider unavailable |
 | `GET /api/admin/audit?action=&user=&from=&to=&before=&limit=` | admin | -> `{entries, next}`, newest first. `action` is one action or a group ending in `.*` (`user.login.*`); `user` matches actor or target; `from`/`to` are RFC 3339 and inclusive; pass `next` as `before` for the next page (`null` on the last page); `limit` defaults to 100, capped at 500. Entry: `{id, at, action, actor, target, detail}`, with actor and target `{id, displayName, email}`, `{id, deleted: true}` or `null` (system). Login rows are kept 90 days. `400` on an invalid parameter |
-| `GET /api/admin/stats` | admin | -> `{total, active, pending, disabled, admins, stuckPending, bouncing, new7d, new30d, newPerDay, active7d, active30d, logins24h, failedLogins24h, mail7d, guessing}`. `newPerDay` is `[{day, count}]` for 30 UTC days, oldest first; registrations count `user.register` audit rows. `stuckPending` counts pending accounts older than 24 hours. `mail7d` is `{delivered, bounced, blocked, spam, pending, other}` by latest delivery event. `guessing` is `[{userId, displayName, failed}]`: accounts with 5 or more failed logins in 24 hours |
+| `GET /api/admin/stats` | admin | -> `{total, active, pending, disabled, admins, stuckPending, bouncing, new7d, new30d, newPerDay, active7d, active30d, logins24h, failedLogins24h, mail7d, guessing, mailDeliveryStatus}`. `newPerDay` is `[{day, count}]` for 30 UTC days, oldest first; registrations count `user.register` audit rows. `stuckPending` counts pending accounts older than 24 hours. `mail7d` is `{delivered, bounced, blocked, spam, pending, other}` by latest delivery event. `guessing` is `[{userId, displayName, failed}]`: accounts with 5 or more failed logins in 24 hours. `mailDeliveryStatus` is `false` when the provider (`smtp`) cannot report delivery events, so mail counts only as sent |
+| `POST /api/admin/mail/test` | admin | any body ignored -> `{ok: true, provider, messageId}`: a fixed test mail to the calling admin's own address through the configured provider. `502` `{ok: false, provider, error}` with the provider's error text, addresses redacted. Mail log purpose `test`; audit row `mail.test` with detail `{provider, result}` (`ok` or `failed`). `429` above 3 test mails per admin and per IP address per 10 minutes |
 | `GET /api/admin/users-backup` | admin | -> `application/octet-stream`, attachment `corescope-users-<YYYYMMDD-HHMMSS>.db` (UTC): a fresh consistent copy of `users.db`. It holds every password hash and address, so store it encrypted. Writes a `user.backup` audit row. Restore: docs/user-guide/accounts.md, Backups |
 | `POST /api/mail/brevo/webhook` | `Authorization: Bearer <webhookSecret>` | Brevo transactional event payload -> `{ok}`. `401` on a wrong secret |
 | `POST /api/mail/postal/webhook` | HTTP Basic auth, password `<webhookSecret>` (any user name) | Postal webhook payload `{event, timestamp, payload, uuid}` -> `{ok}`, also for events that are not about a message. `401` on a wrong secret |
@@ -615,7 +617,14 @@ Detailed health information for a single node.
     // #2451 this averaged every transmission involving the node, relayed
     // copies included.
     "avgSnr":             number | null,
-    "avgHops":            number,    // rounded integer
+    // One sample per transmission involving this node in the packet store
+    // (sender, recipient or resolved relay). Take the hop count of its longest
+    // observed path and skip empty paths. Additional copies carry no extra weight.
+    "avgHops":            number,    // rounded mean, zero when there are no samples
+    "pathHops": {                    // omitted when there are no samples
+      "median": number,              // mean of the two middle lengths for an even sample
+      "p90":    integer              // length at rank ceil(0.9 * sample count), starting at 1
+    },
     "lastHeard":          string (ISO) | null
   },
   "recentPackets": [                 // last 20 packets, observations stripped
@@ -1349,6 +1358,44 @@ Messages for a specific channel.
 | `"#name"` | The matched region name. |
 
 The same field is on the WebSocket `packet` broadcast, both top-level and inside `packet`.
+
+---
+
+## GET /api/known-channels
+
+This public endpoint returns the cached community channel catalogue. A channel can appear before CoreScope observes or decrypts any messages on it.
+
+### Query Parameters
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `region` | string | All entries | One catalogue label. Matching ignores case and surrounding whitespace. A blank value selects all entries. Commas are part of the label. |
+
+### Response `200`
+
+```json
+{
+  "generatedAt": "edition-7",
+  "license": "CC0-1.0",
+  "fetchedAt": "2026-01-02T03:04:05.123456789+02:00",
+  "source": "https://example.invalid/channels.json",
+  "entries": [
+    { "channel": "#example", "region": "test-region", "regionName": "Example region" }
+  ]
+}
+```
+
+`source` is the configured catalogue URL. `fetchedAt` is the server's last successful fetch time in RFC 3339 format, with optional fractional seconds and the server's UTC offset (`Z` for UTC).
+
+Each entry has a trimmed `channel` (including any `#` prefix) and a trimmed, lowercase `region`. The catalogue can use any region label, including an empty string. The optional fields `generatedAt` and `license` on the snapshot and `description`, `key`, and `regionName` on each entry are copied verbatim and omitted when empty. Entry order is unspecified.
+
+A cached snapshot uses `Cache-Control: public, max-age=300`. An empty catalogue or unmatched region returns the snapshot metadata with `"entries": []`. A failed refresh keeps the last successful snapshot.
+
+Before the first successful fetch, including when fetching is disabled, the response uses `Cache-Control: public, max-age=30` and has this body.
+
+```json
+{ "fetchedAt": "0001-01-01T00:00:00Z", "source": "", "entries": [] }
+```
 
 ---
 
@@ -3021,7 +3068,7 @@ Returns `[]` when no areas are configured.
 
 ## GET /api/config/areas/polygons
 
-Full area definitions including polygon/bounding-box coordinates. Intended for map rendering tools (e.g. the area-map debug tool).
+Returns polygon coordinates and bounds for every configured area, including entries with an empty label. The Area Map tool uses this endpoint.
 
 ### Response `200`
 
@@ -3030,14 +3077,18 @@ Full area definitions including polygon/bounding-box coordinates. Intended for m
   {
     "key":   string,
     "label": string,
-    "polygon": [[number, number]] | undefined,   // [lat, lon] pairs (if polygon-style)
-    "latMin":  number | undefined,               // bounding-box style
+    "polygon": [[number, number]] | undefined,   // [latitude, longitude] in degrees
+    "latMin":  number | undefined,               // each bound can appear independently or alongside a polygon
     "latMax":  number | undefined,
     "lonMin":  number | undefined,
     "lonMax":  number | undefined
   }
 ]
 ```
+
+CoreScope decodes each JSON vertex into a fixed pair, filling missing positions with zero and discarding elements after the second.
+For example, `[[10], [11, 20, 99]]` in the configuration yields `[[10, 0], [11, 20]]` in the response.
+The endpoint omits `polygon` when it has no vertices and returns nonempty polygons without validating their geometry.
 
 Returns `[]` when no areas are configured.
 

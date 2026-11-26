@@ -263,7 +263,7 @@
       '</ul>';
   }
 
-  function resultsHtml(data, hp, esc, fmtC) {
+  function resultsHtml(data, hp, esc, fmtC, siteCoordinatesHtml) {
     var out = '', nodes = data.nodes || [], sites = data.sites || [];
     var he = hp && hp.he;
     fmtC = fmtC || fmtClearanceLocal;
@@ -298,6 +298,7 @@
         out += '<li class="mc-pa-card" data-step="' + Number(s.step) + '" tabindex="0">' +
           '<div class="mc-pa-card-head"><span class="mc-pa-badge" aria-hidden="true">' + Number(s.step) + '</span>' +
           '<span class="mc-pa-card-title">#' + Number(s.step) + ' · ' + Math.round(s.elev_m) + ' m elevation · ' + Math.round(s.antenna_m) + ' m mast</span></div>' +
+          (siteCoordinatesHtml ? siteCoordinatesHtml(s, s.step) : '') +
           '<p class="mc-pa-reason">' + esc(reasonText(s, nodes)) + '</p>';
         var legs = siteLegs(s, nodes, sites, he);
         if (legs.length) {
@@ -537,7 +538,7 @@
         setIdle();
         data = d;
         renderMap(d);
-        f('results').innerHTML = resultsHtml(d, { he: snapshot.he, marginal: state.marginal }, esc, fmtC);
+        f('results').innerHTML = resultsHtml(d, { he: snapshot.he, marginal: state.marginal }, esc, fmtC, ctx.siteCoordinatesHtml);
         fitResult(d);
       }, function (err) {
         if (myRun !== runId || dead) return;

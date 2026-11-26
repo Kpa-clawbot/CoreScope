@@ -341,7 +341,16 @@ func (s *Server) computeNeighborGraphResponse(minCount int, minScore float64, re
 	// Resolve region observers if filtering.
 	var regionObs map[string]bool
 	if region != "" && s.store != nil {
-		regionObs = s.store.resolveRegionObservers(region)
+		// Edges key observers by lower-case ID (buildFromStore lower-cases
+		// them, #562), while observers.id is stored as reported, usually
+		// upper case: compare like with like, or every region filter returns
+		// an empty graph.
+		if ids := s.store.resolveRegionObservers(region); ids != nil {
+			regionObs = make(map[string]bool, len(ids))
+			for id := range ids {
+				regionObs[strings.ToLower(id)] = true
+			}
+		}
 	}
 
 	nodeMap := s.buildNodeInfoMap()

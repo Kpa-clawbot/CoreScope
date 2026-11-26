@@ -167,7 +167,7 @@ func TestEvaluateExternalStaleFeedChangesNothing(t *testing.T) {
 	}
 }
 
-func TestEvaluateExternalOnlyWhenChosenAndQuietWhenOff(t *testing.T) {
+func TestEvaluateExternalOnlyWhenChosenRegardlessOfEmail(t *testing.T) {
 	se := map[string]map[string]externalAlert{evPkA: {"SE": {Text: "x"}}}
 	in := extInput(se)
 	in.Prefs[0].Events = []string{users.NotifyNodeBattery}
@@ -178,8 +178,9 @@ func TestEvaluateExternalOnlyWhenChosenAndQuietWhenOff(t *testing.T) {
 	in.Prefs[0].Enabled = false
 	in.States = []users.NotifyState{evStateRow(evUser, users.NotifyNodeExternal, evPkA+"/*", users.NotifyGood)}
 	res := evaluateNotifications(in)
-	if len(res.Changes) != 0 {
-		t.Fatalf("notifications off mailed: %+v", res.Changes)
+	if changes := res.Changes[evUser]; len(changes) != 1 || changes[0].Event != users.NotifyNodeExternal ||
+		changes[0].Subject != evPkA+"/SE" || changes[0].To != users.NotifyBad {
+		t.Fatalf("external changes with email off = %+v; want SE alert", changes)
 	}
 	if s, _ := evState(res, evUser, users.NotifyNodeExternal, evPkA+"/SE"); s != users.NotifyBad {
 		t.Fatal("state not kept current while notifications are off")

@@ -211,12 +211,13 @@ func AssertReady(ro *sql.DB) error {
 	mustCol("observers", "can_relay_seen")
 	// observations.observer_idx references observers.idx, an explicit
 	// INTEGER PRIMARY KEY (== rowid) that survives dump-and-reload. A plain
-	// column named idx is not that: require the key itself, by the same test
-	// the ingestor's rebuild uses to decide it is done.
+	// column named idx is not that, and neither is a primary key that is not
+	// the rowid: require the rowid alias, by the same test the ingestor's
+	// rebuild uses to decide it is done.
 	if cols, idxIsPK, err := observersColumnsInfo(context.Background(), ro); err != nil {
 		missing = append(missing, fmt.Sprintf("observers.idx (probe error: %v)", err))
 	} else if !idxIsPK && slices.Contains(cols, "idx") {
-		missing = append(missing, "observers.idx (not the primary key)")
+		missing = append(missing, "observers.idx (not the rowid alias)")
 	} else if !idxIsPK {
 		missing = append(missing, "observers.idx")
 	}

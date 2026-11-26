@@ -192,6 +192,9 @@ type adminUserDetailJSON struct {
 	RepeaterClaims []repeaterClaimRefJSON `json:"repeaterClaims"`
 	Mail           []mailJSON             `json:"mail"`
 	Audit          []auditJSON            `json:"audit"`
+	// MailDeliveryStatus is false when the provider cannot report delivery
+	// events (smtp): mail shows as sent and there is nothing to refresh.
+	MailDeliveryStatus bool `json:"mailDeliveryStatus"`
 }
 
 func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }

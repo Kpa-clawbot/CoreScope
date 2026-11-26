@@ -172,21 +172,29 @@ function context(ref = 'refs/tags/v9.8.7', event = 'workflow_dispatch', inputs =
   return { github: { ref, ref_name: ref.split('/').pop(), sha: 'a'.repeat(40), repository: 'example/corescope', event_name: event }, inputs, steps: {}, needs: {}, vars: {} };
 }
 
-// Honor the real job conditions AND implicit success() for needs. This catches
+// Honor the real job conditions AND implicit success(). This catches
 // release-artifacts accidentally depending on the skipped image or E2E jobs.
-// A job whose `if:` calls cancelled() drops the implicit success(): it runs
-// whatever its needs did, and its own "Require ..." step (the real shell from
-// the workflow, needs results expanded) decides between success and failure.
-// That is what keeps a gate red rather than skipped, which branch protection
-// would count as passing.
+// Implicit success() covers every job upstream, not only the direct needs:
+// v3.19.0's dispatched run skipped release-artifacts although go-test,
+// server-race and changes had all passed, because server-race-shard (needed by
+// server-race) was skipped.
+// A job whose `if:` calls cancelled() drops the implicit success(). A gate job
+// then runs whatever its needs did, and its own "Require ..." step (the real
+// shell from the workflow, needs results expanded) decides between success and
+// failure. That is what keeps a gate red rather than skipped, which branch
+// protection would count as passing. A job whose condition reads the needs
+// results itself needs no such step.
 function route(ctx, failedJob, ingestor = 'true') {
+  const upstream = {};
   for (const name of ['changes', 'go-test', 'race-test', 'server-race-shard', 'server-race', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
     const job = block(deploy, name, 2);
     assert.ok(job, `missing ${name} job`);
     const needs = value(job, 'needs', 4).replace(/[\[\]\s]/g, '').split(',').filter(Boolean);
+    upstream[name] = [...new Set(needs.flatMap(need => [need, ...upstream[need]]))];
     const condition = value(job, 'if', 4);
-    const gate = /cancelled\(\)/.test(condition);
-    const run = (gate || needs.every(need => ctx.needs[need].result === 'success')) && evaluate(condition, ctx);
+    const statusCheck = /cancelled\(\)/.test(condition);
+    const gate = statusCheck && !/needs\[[^\]]+\]\.result/.test(condition);
+    const run = (statusCheck || upstream[name].every(need => ctx.needs[need].result === 'success')) && evaluate(condition, ctx);
     let result = run ? 'success' : 'skipped';
     if (run && gate) {
       const require = steps(job).find(step => value(step, '- name', 6).startsWith('Require'));

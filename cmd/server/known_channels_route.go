@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-// handleKnownChannels — GET /api/known-channels?region=XX
+// handleKnownChannels — GET /api/known-channels?region=label
 //
 // Returns the cached community catalogue of hashtag channels (issue #1323),
-// optionally filtered to one region (ISO 3166-1 alpha-2, case-insensitive).
+// optionally filtered to one catalogue region label (trimmed, case-insensitive).
 // Empty/missing cache returns 200 with an empty Entries list so the UI
 // degrades gracefully (fail-soft). Never blocks on the upstream fetch:
 // the response is served straight off an atomic snapshot pointer.

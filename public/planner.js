@@ -82,8 +82,8 @@
     return v === 0 ? 0 : v; // no "-0"
   }
 
-  function fmtCoord(x) { return String(round(x)); }
-  function fmtLatLon(p) { return fmtCoord(p.lat) + ', ' + fmtCoord(p.lon); }
+  function fmtCoord(x, fixed) { return fixed ? Number(x).toFixed(COORD_DP) : String(round(x)); }
+  function fmtLatLon(p, fixed) { return fmtCoord(p.lat, fixed) + ', ' + fmtCoord(p.lon, fixed); }
 
   // x is already a percentage (clearance_pct = 100 × Fresnel clearance):
   // "62%", "−45%" (terrain crosses the line), ">999%"; '—' when unknown.
@@ -118,8 +118,12 @@
 
   function fmtH(h) { return String(round(h, 1)); }
 
+  function validDegree(value, limit) {
+    return (typeof value === 'number' || (typeof value === 'string' && value.trim() !== '')) &&
+      Math.abs(value) <= limit;
+  }
   function validLatLon(lat, lon) {
-    return isFinite(lat) && isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+    return validDegree(lat, 90) && validDegree(lon, 180);
   }
 
   // "lat,lon,lat,lon,…" → [{lat, lon}], rounded to COORD_DP. Pairs that are
@@ -568,6 +572,15 @@
     return 'New site ' + (idx + 1);
   }
 
+  function siteCoordinatesHtml(site, step) {
+    if (!validLatLon(site.lat, site.lon)) return '';
+    var pair = fmtLatLon(site, true);
+    return '<div class="mc-pl-site-coords"><span>' + pair + '</span>' +
+      '<button type="button" class="mc-pl-btn mc-pl-btn-small" data-copy-coords="' + pair +
+        '" aria-label="Copy coordinates for site ' + Number(step) + '">Copy</button>' +
+      '<span role="status"></span></div>';
+  }
+
   function optionRowHtml(opt, list, idx, selected) {
     var name = optionName(opt, idx);
     var ca = chipFor(linkAnalysis(opt.leg_a)), cb = chipFor(linkAnalysis(opt.leg_b));
@@ -589,7 +602,7 @@
       '</span>' +
       '<span class="mc-pl-score" title="Worst first-Fresnel-zone clearance of the two legs"><b>' + esc(fmtClearance(opt.bottleneck_pct)) +
         '</b>' + (isClearanceWord(opt.bottleneck_pct) ? '' : '<span>F1 clearance</span>') + '</span>' +
-      '</button></li>';
+      '</button>' + (list === 'open' ? siteCoordinatesHtml(opt, idx + 1) : '') + '</li>';
   }
 
   // A direct link the server could not measure (an error such as no_terrain,
@@ -1217,6 +1230,13 @@
     if (ds.undo === 'chain') { undoClearChain(); return; }
     if (ds.clear === 'relay') { clearRelay(); return; }
     if (ds.pick) { togglePick(ds.pick); return; }
+    if (ds.copyCoords) {
+      var status = t.nextElementSibling;
+      window.copyToClipboard(ds.copyCoords, function () { status.textContent = 'Copied'; }, function () {
+        status.textContent = 'Copy failed. Select the coordinates to copy them manually.';
+      });
+      return;
+    }
     if (ds.opt) { selectRelayOption(ds.opt, { focus: true }); return; }
     if (ds.directProfile != null) { openDirectProfile(); return; }
   }
@@ -1922,12 +1942,10 @@
   }
 
   function normOption(o, kind) {
-    if (!o || typeof o !== 'object') return null;
-    var lat = Number(o.lat), lon = Number(o.lon);
-    if (!validLatLon(lat, lon)) return null;
+    if (!o || !validLatLon(o.lat, o.lon)) return null;
     return {
       kind: kind, pubkey: o.pubkey ? String(o.pubkey) : '', name: o.name ? String(o.name) : '',
-      lat: lat, lon: lon, elev_m: Number(o.elev_m), antenna_m: Number(o.antenna_m),
+      lat: Number(o.lat), lon: Number(o.lon), elev_m: Number(o.elev_m), antenna_m: Number(o.antenna_m),
       leg_a: o.leg_a || {}, leg_b: o.leg_b || {}, bottleneck_pct: Number(o.bottleneck_pct)
     };
   }
@@ -2161,7 +2179,7 @@
         map: S.map, layer: layer, panel: panel,
         cfg: S.rawCfg, params: params(), setParams: setParams,
         fetchJob: fetchJob, showProfiles: showProfiles, esc: esc,
-        nodes: S.rawNodes, fmtClearance: fmtClearance,
+        nodes: S.rawNodes, fmtClearance: fmtClearance, siteCoordinatesHtml: siteCoordinatesHtml,
         jobErrorText: jobErrorText, warningsHtml: warningsHtml,
         errorHtml: function (msg) { return errorHtml(msg, null); },
         progressHtml: function (state, frac) { return progressHtml(frac, JOB_STATES[state] || 'Working…'); }
