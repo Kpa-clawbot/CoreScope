@@ -21,7 +21,7 @@ func newReachScanTestDB(t *testing.T) *DB {
 	stmts := []string{
 		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, from_pubkey TEXT, payload_type INTEGER, route_type INTEGER DEFAULT 1)`,
 		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, inactive INTEGER)`,
-		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, snr REAL, path_json TEXT, timestamp INTEGER)`,
+		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, direction TEXT, snr REAL, path_json TEXT, timestamp INTEGER)`,
 		`INSERT INTO observers (id) VALUES ('OBS1')`, // rowid 1
 		`INSERT INTO transmissions (id, from_pubkey, payload_type) VALUES (1,'FF00',4),(2,'',5),(3,'',5)`,
 		`INSERT INTO observations (id, transmission_id, observer_idx, snr, path_json, timestamp) VALUES
