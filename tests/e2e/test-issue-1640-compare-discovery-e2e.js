@@ -190,6 +190,58 @@ async function run() {
     }
   });
 
+  await step('Pin a reference, compare every peer and keep explicit pair links (#671)', async () => {
+    const fleet = await ctx.newPage();
+    const requests = [];
+    const packets = [];
+    const roster = [{ id: 'ref', name: 'Reference' }, { id: 'peer', name: 'Peer' }, { id: 'quiet', name: 'Quiet' }];
+    await fleet.route('**/api/observers', route => route.fulfill({ json: { observers: roster } }));
+    await fleet.route('**/api/packets?**', route => {
+      const q = new URL(route.request().url()).searchParams;
+      if (q.has('observer')) packets.push(q.get('observer'));
+      return route.fulfill({ json: { packets: [] } });
+    });
+    await fleet.route('**/api/analytics/observer-comparison?**', route => {
+      const ref = new URL(route.request().url()).searchParams.get('ref');
+      requests.push(ref);
+      return route.fulfill({ json: ref === 'ref' ? { referenceTotal: 5, peers: [
+        { id: 'peer', name: 'Peer', total: 6, shared: 4, snrDelta: 1, snrPairs: 2 },
+        { id: 'quiet', name: 'Quiet', total: 0, shared: 0, snrDelta: null, snrPairs: 0 }
+      ] } : { referenceTotal: 0, peers: [
+        { id: 'ref', name: 'Reference', total: 5, shared: 0, snrDelta: null, snrPairs: 0 }
+      ] } });
+    });
+    const rows = fleet.getByRole('table', { name: 'Reference comparison' }).locator('tbody tr');
+    try {
+      await fleet.goto(BASE + '/#/compare');
+      await fleet.waitForSelector('#compareObsA');
+      const enter = fleet.getByRole('link', { name: 'Reference comparison', exact: true });
+      assert(await enter.count() === 1, 'Compare must offer a keyboard-accessible reference comparison');
+      await enter.focus();
+      await enter.press('Enter');
+      const picker = fleet.getByLabel('Reference observer', { exact: true });
+      await picker.selectOption('ref');
+      await rows.first().waitFor();
+      assert(new URLSearchParams(new URL(fleet.url()).hash.split('?')[1]).get('ref') === 'ref', 'missing shareable reference');
+      const cells = i => rows.nth(i).locator('td').allTextContents();
+      assert(JSON.stringify(await cells(0)) === JSON.stringify(['Peer','6','4','80.0%','66.7%','+1.0 dB','2']), 'peer overlaps or paired SNR are incorrect');
+      assert(JSON.stringify(await cells(1)) === JSON.stringify(['Quiet','0','0','0.0%','—','—','0']), 'quiet observer or missing denominator/SNR handled incorrectly');
+      assert(requests.join() === 'ref' && !packets.length, 'fleet must use a single aggregate request');
+
+      await fleet.goto(BASE + '/#/compare?a=peer&b=ref');
+      await fleet.waitForSelector('.compare-summary-text');
+      assert((await fleet.inputValue('#compareObsA')) === 'peer' && (await fleet.inputValue('#compareObsB')) === 'ref', 'saved pin must preserve explicit pair links');
+      await fleet.getByRole('link', { name: 'Reference comparison', exact: true }).click();
+      await rows.first().waitFor();
+      assert((await picker.inputValue()) === 'ref', 'returning to fleet must restore the pinned reference');
+      await fleet.goto(BASE + '/#/compare?ref=quiet');
+      await rows.first().waitFor();
+      assert((await picker.inputValue()) === 'quiet' && (await cells(0))[3] === '—', 'an explicit empty reference must override a saved pin and keep its zero denominator undefined');
+    } finally {
+      await fleet.close();
+    }
+  });
+
   await browser.close();
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   if (failed) process.exit(1);
