@@ -381,7 +381,7 @@ func TestNeighborRankQueryLimitCountsCharacters(t *testing.T) {
 		{strings.Repeat("é", 64), http.StatusOK},
 		{strings.Repeat("é", 65), http.StatusBadRequest},
 		{"Station de répétition " + strings.Repeat("à", 42), http.StatusOK}, // 64 characters
-		{strings.Repeat("日", 64), http.StatusOK},                          // 3 bytes each
+		{strings.Repeat("日", 64), http.StatusOK},                            // 3 bytes each
 	} {
 		if rr, _ := getRank(t, s, "q="+url.QueryEscape(c.q)); rr.Code != c.want {
 			t.Errorf("%d characters, %d bytes: status %d, want %d", len([]rune(c.q)), len(c.q), rr.Code, c.want)
