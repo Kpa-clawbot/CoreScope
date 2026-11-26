@@ -433,6 +433,32 @@ func TestNeighborGraphAPI_RegionFilter(t *testing.T) {
 	}
 }
 
+// observers.id is upper case in the DB but the graph keys observers in lower
+// case; the region filter must still match them.
+func TestNeighborGraphAPI_RegionFilterMatchesObserverCase(t *testing.T) {
+	now := time.Now()
+	sjc := newEdge("aaaa", "bbbb", "bb", 100, now)
+	sjc.Observers = map[string]bool{"0a1b2c3d": true}
+	lax := newEdge("cccc", "dddd", "dd", 100, now)
+	lax.Observers = map[string]bool{"9f8e7d6c": true}
+	srv := makeTestServer(makeTestGraph(sjc, lax))
+	db := setupTestDB(t)
+	defer db.Close()
+	srv.store = &PacketStore{
+		db:                 db,
+		regionObsCache:     map[string]map[string]bool{"SJC": {"0A1B2C3D": true}},
+		regionObsCacheTime: now,
+	}
+	rr := serveRequest(srv, "GET", "/api/analytics/neighbor-graph?region=SJC&min_count=1&min_score=0")
+	var resp NeighborGraphResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Edges) != 1 || resp.Edges[0].Source != "aaaa" {
+		t.Fatalf("region SJC should keep only the aaaa-bbbb edge, got %+v", resp.Edges)
+	}
+}
+
 func TestNeighborGraphAPI_ResponseShape(t *testing.T) {
 	now := time.Now()
 	e := newEdge("aaaa", "bbbb", "bb", 100, now)

@@ -129,7 +129,8 @@ func (s *Server) handleAdminUserDetail(w http.ResponseWriter, r *http.Request, _
 	if err != nil {
 		log.Printf("[users] admin latest mail: %v", err)
 	}
-	d := adminUserDetailJSON{User: a.adminRow(*u, last), Sessions: []sessionJSON{}, Mail: []mailJSON{}, Audit: []auditJSON{}}
+	d := adminUserDetailJSON{User: a.adminRow(*u, last), Sessions: []sessionJSON{}, Mail: []mailJSON{}, Audit: []auditJSON{},
+		MailDeliveryStatus: a.deliveryStatus()}
 	list, err := a.st.ListSessions(u.ID)
 	if err != nil {
 		adminStoreFail(w, "list sessions", u.ID, err)

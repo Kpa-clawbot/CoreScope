@@ -55,6 +55,96 @@ function indexOfStarts(headers, prefix) {
   return -1;
 }
 
+// #2405: independently fetched health may be newer than the node response.
+// Drive the actual tablet row and full-detail link, retaining the request budget.
+async function tabletLastHeard(browser) {
+  const old = '2025-06-06T12:00:00Z', recent = '2025-06-10T11:55:00Z';
+  const newer = '2025-06-10T11:58:00Z', future = '2025-06-10T12:02:00Z';
+  const cases = [
+    { label: 'health-newer', health: recent, text: '5m ago', title: '2025-06-10 11:55:00' },
+    { label: 'node-newer', node: { last_heard: newer }, health: recent, text: '2m ago', title: '2025-06-10 11:58:00' },
+    { label: 'advert-newer', node: { last_seen: newer }, health: recent, text: '2m ago', title: '2025-06-10 11:58:00' },
+    { label: 'missing-health', node: { last_heard: recent }, health: null, text: '5m ago', title: '2025-06-10 11:55:00' },
+    { label: 'health-only', node: { last_seen: null, last_heard: null }, health: recent, text: '5m ago', title: '2025-06-10 11:55:00' },
+    { label: 'invalid-health', node: { last_heard: recent }, health: 'not-a-date', text: '5m ago', title: '2025-06-10 11:55:00' },
+    { label: 'invalid-node', node: { last_heard: 'not-a-date' }, health: recent, text: '5m ago', title: '2025-06-10 11:55:00' },
+    { label: 'invalid-all', node: { last_seen: 'not-a-date', last_heard: 'not-a-date' }, health: 'not-a-date', text: '—', title: '—' },
+    { label: 'future-health', health: future, text: '2025-06-10 12:02:00', title: 'in 2m', future: true },
+    { label: 'ambiguous-relay', node: { last_relayed: newer }, health: old, text: '4d ago', title: '2025-06-06 12:00:00' },
+    { label: 'relay-only', node: { last_seen: null, last_heard: null, last_relayed: newer }, health: null, text: '—', title: '—' },
+  ];
+  const key = 'ab'.repeat(32), prefix = '/api/nodes/' + key;
+  for (const theme of ['light', 'dark']) {
+    const ctx = await browser.newContext({ viewport: { width: 800, height: 1000 } });
+    await ctx.addInitScript(theme => {
+      Date.now = () => Date.parse('2025-06-10T12:00:00Z');
+      localStorage.setItem('meshcore-theme', theme);
+      localStorage.setItem('meshcore-user-level', 'experienced');
+      localStorage.setItem('meshcore-timestamp-mode', 'ago');
+      localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+      localStorage.setItem('meshcore-timestamp-format', 'iso');
+    }, theme);
+    const p = await ctx.newPage();
+    const errors = [], requests = [];
+    p.on('pageerror', e => errors.push(e.message));
+    p.on('request', r => { const u = new URL(r.url()); if (u.pathname.startsWith('/api/')) requests.push(u.pathname); });
+    let current, node;
+    await p.route(/\/api\/nodes(?:\?.*)?$/, r => r.fulfill({ json: { nodes: [node], total: 1, has_more: false, counts: {} } }));
+    await p.route(/\/api\/nodes\/ab(?:[0-9a-f]{62})(?:\/[^?]*)?(?:\?.*)?$/, r => {
+      const suffix = new URL(r.request().url()).pathname.slice(prefix.length);
+      const data = !suffix ? { node, recentAdverts: [] }
+        : suffix === '/health' ? current.health === null ? null : { node, stats: { lastHeard: current.health }, observers: [], recentPackets: [] }
+        : suffix === '/neighbors' ? { neighbors: [] } : suffix === '/paths' ? { paths: [] } : {};
+      return r.fulfill({ json: data });
+    });
+    await p.route('**/api/rf-params', r => r.fulfill({ json: { enabled: false } }));
+    try {
+      for (const c of cases) {
+        current = c;
+        node = { public_key: key, name: 'Last Heard fixture', role: 'repeater', advert_count: 1, last_seen: old, last_heard: old, ...c.node };
+        await step(`#2405 ${theme}: ${c.label} tablet and full detail agree`, async () => {
+          await p.goto(BASE + '/?heard-case=' + c.label + '#/nodes', { waitUntil: 'domcontentloaded' });
+          await p.waitForFunction(() => window.SITE_CONFIG && _themeRefreshTimer === null);
+          await p.locator('#nodesTable tbody tr[data-key="' + key + '"]').waitFor();
+          requests.length = 0;
+          await p.locator('#nodesTable tbody tr[data-key="' + key + '"]').click();
+          const preview = p.locator('.slide-over-content dl');
+          await preview.waitFor();
+          const readHeard = root => root.evaluate(el => {
+            const label = [...el.querySelectorAll('dt, tr > td:first-child')].find(e => e.textContent.trim() === 'Last Heard');
+            const value = label.nextElementSibling, stamp = value.querySelector('.timestamp-text');
+            return { text: stamp.textContent, title: stamp.title, future: !!value.querySelector('.timestamp-future-icon') };
+          });
+          const tablet = await readHeard(preview);
+          assert(JSON.stringify(requests.filter(url => url.startsWith('/api/nodes/')).sort()) === JSON.stringify([prefix, prefix + '/health']), 'tablet must fetch only node and health once');
+          assert(await preview.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'tablet metadata overflows');
+          if (process.env.SCREENSHOT_DIR && (c.label === 'health-newer' || c.future)) {
+            fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+            await p.locator('.slide-over-content').screenshot({ path: path.join(process.env.SCREENSHOT_DIR, `tablet-heard-${c.label}-${theme}.png`) });
+          }
+          await p.locator('.slide-over-content .node-detail-btn').click();
+          const full = p.locator('#node-stats');
+          await full.waitFor();
+          const detail = await readHeard(full);
+          assert(await p.locator('.slide-over-content:visible').count() === 0, 'full-detail navigation must close the preview');
+          assert(new URL(p.url()).hash === '#/nodes/' + key, 'full-detail navigation must retain the node URL');
+          const expected = { text: c.text, title: c.title, future: !!c.future };
+          assert(JSON.stringify(detail) === JSON.stringify(expected), 'full detail expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(detail));
+          await p.waitForFunction(() => ['fullNeighborsContent', 'fullPathsContent'].every(id => {
+            const el = document.getElementById(id);
+            return el && !el.textContent.includes('Loading');
+          }));
+          const actual = requests.filter(url => url.startsWith('/api/nodes/')).sort();
+          assert(JSON.stringify(actual) === JSON.stringify(['', '/health', '/neighbors', '/paths', '/clock-skew'].map(s => prefix + s).sort()), 'navigation added detail requests: ' + JSON.stringify(actual));
+          assert(requests.filter(url => url === '/api/rf-params').length <= 1, 'RF parameters fetched more than once');
+          assert(JSON.stringify(tablet) === JSON.stringify(expected), 'tablet expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(tablet));
+        });
+      }
+      await step(`#2405 ${theme}: no page errors`, async () => assert(errors.length === 0, errors.join(' | ')));
+    } finally { await ctx.close(); }
+  }
+}
+
 // #2309 shares the existing CI-wired node-detail suite. These responses use
 // the real {node,recentAdverts} contract; only the input data is controlled.
 async function previewMetadata(browser) {
@@ -309,6 +399,11 @@ async function prefixToolNavigation(browser) {
         assert(await link.count() === 1, 'known one-byte repeater must offer Inspect in Prefix Tool');
         assert(await link.getAttribute('href') === destination, 'inspection must carry the full public key');
         assert(await link.isVisible(), 'inspection link must be visible');
+        const panel = p.locator('.slide-over-panel');
+        const backdrop = p.locator('.slide-over-backdrop');
+        if (layout.name === 'tablet') {
+          assert(await panel.isVisible() && await backdrop.isVisible(), 'tablet preview and backdrop must be visible before inspection');
+        }
         assert((await link.getAttribute('style') || '').includes('color:var(--link-color)'), 'inspection must use the shared link color');
         assert(await p.locator('html').getAttribute('data-theme') === theme, 'wrong theme');
         assert(await root.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'metadata overflows its layout');
@@ -330,7 +425,13 @@ async function prefixToolNavigation(browser) {
         await p.waitForURL(url => url.hash === destination);
         await p.waitForFunction(() => document.getElementById('ptCheckerResults')?.textContent.includes('Derived prefixes:'));
         assert(await p.locator('#analyticsTabs [data-tab="prefix-tool"]').evaluate(el => el.classList.contains('active')), 'Prefix Tool tab must be selected');
-        assert(await p.locator('#ptPrefixInput').inputValue() === selected.public_key, 'full key must be prefilled');
+        const input = p.locator('#ptPrefixInput');
+        assert(await input.inputValue() === selected.public_key, 'full key must be prefilled');
+        if (layout.name === 'tablet') {
+          assert(await panel.isHidden(), 'tablet preview must close on the Prefix Tool');
+          assert(await backdrop.isHidden(), 'tablet preview backdrop must clear the Prefix Tool');
+          await input.click({ trial: true });
+        }
         const resultKeys = await p.locator('#ptCheckerResults a').evaluateAll(links => links.map(a => a.getAttribute('href')));
         const expectedKeys = [nodes[1], ...(layout.filtered ? [] : [nodes[4]])].map(n => '#/nodes/' + n.public_key);
         assert(JSON.stringify(resultKeys.sort()) === JSON.stringify(expectedKeys.sort()), 'auto-results must exclude self, non-repeaters and filtered nodes: ' + JSON.stringify(resultKeys));
@@ -462,6 +563,7 @@ async function prefixToolNavigation(browser) {
     }
   });
 
+  await tabletLastHeard(browser);
   await previewMetadata(browser);
   await prefixToolNavigation(browser);
   await browser.close();

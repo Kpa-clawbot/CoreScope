@@ -685,6 +685,173 @@ test('attach: two maps on one page are independent', () => {
   assert.ok(m2._layers.includes(h2.group));
 });
 
+// The expanded list fits the visible map (above bottomInset) and scrolls;
+// Leaflet alone measured the whole map, under the Live replay bar.
+test('picker: the expanded list fits above the bottom inset and scrolls', () => {
+  const s = makeSandbox();
+  const cls = (el) => el._cls || (el._cls = new Set());
+  s.ctx.L.DomUtil = {
+    hasClass: (el, c) => cls(el).has(c),
+    addClass: (el, c) => { cls(el).add(c); },
+    removeClass: (el, c) => { cls(el).delete(c); },
+  };
+  const layers = s.ctx.L.control.layers;
+  s.ctx.L.control.layers = function () {
+    const c = layers.apply(this, arguments);
+    c._container = {};
+    c._section = { style: { height: '' }, scrollHeight: 800, getBoundingClientRect: () => ({ top: 176 }) };
+    c.expand = function () { cls(c._container).add('leaflet-control-layers-expanded'); return c; };
+    return c;
+  };
+  let bottom = 900;
+  s.w.innerHeight = 900;
+  const map = makeMap();
+  map.getContainer = () => ({ getBoundingClientRect: () => ({ bottom }) });
+  const boxes = [];
+  const h = s.w.MC_attachAutoTiles(map, { controlPosition: 'topright', bottomInset: (box) => { boxes.push(box); return 80; } });
+  const c = s.stats.controls[0];
+  const sec = c._section;
+  map._handlers.resize();
+  assert.strictEqual(sec.style.height, '', 'collapsed: untouched');
+  c.expand();
+  assert.strictEqual(sec.style.height, (900 - 80 - 176 - 12) + 'px');
+  assert.ok(cls(sec).has('leaflet-control-layers-scrollbar'), 'scrolls');
+  assert.strictEqual(boxes[0].top, 176, 'bottomInset gets the list box');
+  s.w.innerHeight = 1300; bottom = 1300;
+  map._handlers.resize();
+  assert.strictEqual(sec.style.height, '', 'fits a taller window');
+  assert.ok(!cls(sec).has('leaflet-control-layers-scrollbar'));
+  bottom = 700; // the map ends above the viewport's bottom
+  map._handlers.resize();
+  assert.strictEqual(sec.style.height, (700 - 176 - 12) + 'px');
+  h.destroy();
+  assert.ok(!map._handlers.resize, 'resize handler removed');
+});
+
+// One picker fixture for the fit tests: an expandable control with a
+// measurable list, an _update Leaflet calls on re-render, and a map whose
+// resize handlers are counted.
+function fitFixture(opts) {
+  opts = opts || {};
+  const s = makeSandbox();
+  const cls = (el) => el._cls || (el._cls = new Set());
+  s.ctx.L.DomUtil = {
+    hasClass: (el, c) => cls(el).has(c),
+    addClass: (el, c) => { cls(el).add(c); },
+    removeClass: (el, c) => { cls(el).delete(c); },
+  };
+  const layers = s.ctx.L.control.layers;
+  const list = { top: 100, left: 600, right: 800 };
+  s.ctx.L.control.layers = function () {
+    const c = layers.apply(this, arguments);
+    c._container = {};
+    // Like a browser, clearing the height (list no longer scrolls) resets scrollTop.
+    let height = '';
+    const sec = {
+      scrollHeight: 800, scrollTop: 0,
+      getBoundingClientRect: () => ({ top: list.top, left: list.left, right: list.right, height: 1, width: 200 }),
+    };
+    sec.style = {
+      get height() { return height; },
+      set height(v) { height = v; if (!v) sec.scrollTop = 0; },
+    };
+    c._section = sec;
+    c.expand = function () { cls(c._container).add('leaflet-control-layers-expanded'); return c; };
+    c._update = function () { c.updates = (c.updates || 0) + 1; };
+    return c;
+  };
+  s.w.innerHeight = opts.vh || 900;
+  const map = makeMap();
+  const resize = [];
+  map.on = (e, fn) => { if (e === 'resize') resize.push(fn); else map._handlers[e] = fn; };
+  map.off = (e, fn) => { if (e === 'resize') { const i = resize.indexOf(fn); if (i >= 0) resize.splice(i, 1); } else if (map._handlers[e] === fn) delete map._handlers[e]; };
+  let bottom = opts.mapBottom || s.w.innerHeight;
+  map.getContainer = () => ({ getBoundingClientRect: () => ({ bottom }) });
+  if (opts.corners) map._controlCorners = opts.corners;
+  const h = s.w.MC_attachAutoTiles(map, { controlPosition: 'topright', bottomInset: opts.bottomInset });
+  const ctl = () => s.stats.controls[s.stats.controls.length - 1];
+  return { s, map, h, ctl, cls, resize, list, setBottom: (b) => { bottom = b; } };
+}
+
+test('MC_coveredBelow: only rects below the list top and in its columns count', () => {
+  const s = makeSandbox();
+  const list = { top: 100, left: 600, right: 800 };
+  const r = (top, left, right, height) => ({ top, left, right, height: height == null ? 40 : height, width: right - left });
+  assert.strictEqual(s.w.MC_coveredBelow(list, [], 900), 0, 'nothing below');
+  assert.strictEqual(s.w.MC_coveredBelow(list, [r(820, 0, 1000)], 900), 80, 'full-width bar');
+  assert.strictEqual(s.w.MC_coveredBelow(list, [r(820, 0, 1000), r(600, 700, 1000)], 900), 300, 'the highest one wins');
+  assert.strictEqual(s.w.MC_coveredBelow(list, [r(600, 0, 600)], 900), 0, 'left of the list');
+  assert.strictEqual(s.w.MC_coveredBelow(list, [r(600, 800, 1000)], 900), 0, 'right of the list');
+  assert.strictEqual(s.w.MC_coveredBelow(list, [r(50, 600, 800)], 900), 0, 'starts above the list (beside it, not below)');
+  assert.strictEqual(s.w.MC_coveredBelow(list, [r(600, 600, 800, 0)], 900), 0, 'zero-size box');
+});
+
+test('MC_layerListInset skips hidden, invisible and faded-out elements', () => {
+  const s = makeSandbox();
+  const list = { top: 100, left: 600, right: 800 };
+  const el = (top, style) => ({ _style: style || {}, getBoundingClientRect: () => ({ top, left: 0, right: 1000, height: 40, width: 1000 }) });
+  s.w.getComputedStyle = (e) => Object.assign({ display: 'block', visibility: 'visible', opacity: '1' }, e._style);
+  assert.strictEqual(s.w.MC_layerListInset(list, [el(700)], 900), 200);
+  assert.strictEqual(s.w.MC_layerListInset(list, [el(500, { visibility: 'hidden' }), el(700)], 900), 200, 'visibility:hidden');
+  assert.strictEqual(s.w.MC_layerListInset(list, [el(500, { opacity: '0' }), el(700)], 900), 200, 'faded out (.live-legend.hidden)');
+  assert.strictEqual(s.w.MC_layerListInset(list, [el(500, { display: 'none' })], 900), 0, 'display:none');
+  s.w.innerHeight = 1000;
+  assert.strictEqual(s.w.MC_layerListInset(list, [el(700)]), 300, 'defaults to window.innerHeight');
+});
+
+test('picker: the list keeps clear of the map\'s bottom-corner controls in its columns', () => {
+  const box = (top, left, right) => ({ getBoundingClientRect: () => ({ top, left, right, height: 900 - top, width: right - left }) });
+  const f = fitFixture({ corners: { bottomleft: { children: [box(500, 0, 300)] }, bottomright: { children: [box(840, 400, 1000)] } } });
+  f.ctl().expand();
+  assert.strictEqual(f.ctl()._section.style.height, (840 - 100 - 12) + 'px', 'stops above the attribution; the left control is not in its columns');
+});
+
+test('picker: the viewport caps the list when the map runs below it', () => {
+  const f = fitFixture({ vh: 700, mapBottom: 1200 });
+  f.ctl().expand();
+  assert.strictEqual(f.ctl()._section.style.height, (700 - 100 - 12) + 'px');
+});
+
+test('picker: a re-render while open re-fits and keeps the scroll position', () => {
+  let inset = 80;
+  const f = fitFixture({ bottomInset: () => inset });
+  const c = f.ctl();
+  c.expand();
+  const sec = c._section;
+  assert.strictEqual(sec.style.height, (900 - 80 - 100 - 12) + 'px');
+  sec.scrollTop = 250;
+  inset = 300;
+  c._update();
+  assert.strictEqual(c.updates, 1, 'Leaflet\'s _update still runs');
+  assert.strictEqual(sec.style.height, (900 - 300 - 100 - 12) + 'px', 're-fit on _update');
+  assert.strictEqual(sec.scrollTop, 250, 'scroll position kept');
+  f.resize.forEach(fn => fn());
+  assert.strictEqual(sec.scrollTop, 250, 'kept across a resize too');
+});
+
+test('picker: a very short viewport still gets a small scrolling list', () => {
+  const f = fitFixture({ vh: 180, bottomInset: () => 120 });
+  const c = f.ctl();
+  c.expand();
+  assert.strictEqual(c._section.style.height, '60px');
+  assert.ok(f.cls(c._section).has('leaflet-control-layers-scrollbar'));
+});
+
+test('picker: a fromConfig rebuild leaves one resize handler; destroy removes it', () => {
+  const f = fitFixture();
+  assert.strictEqual(f.resize.length, 1);
+  f.s.w.MC_MAP_CFG = { tiles: { providers: { carto: { key: 'k1' } } } };
+  f.s.w.MC_initTileRegistry(true);
+  f.s.w.MC_initTileRegistry(true);
+  assert.ok(f.s.stats.controls.length >= 3, 'picker rebuilt');
+  assert.strictEqual(f.resize.length, 1, 'one handler after rebuilds');
+  f.ctl().expand();
+  f.resize[0]();
+  assert.strictEqual(f.ctl()._section.style.height, (900 - 100 - 12) + 'px', 'the handler fits the new control');
+  f.h.destroy();
+  assert.strictEqual(f.resize.length, 0);
+});
+
 console.log('');
 console.log('map layer builder: ' + passed + ' passed, ' + failed + ' failed');
 if (failed > 0) process.exit(1);

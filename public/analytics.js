@@ -21,6 +21,9 @@
     if (abs < 86400) return (v / 3600).toFixed(1) + 'h';
     return (v / 86400).toFixed(1) + 'd';
   }
+  // Bumped by every loadSubpathDetail, tab render and destroy, so an answer that
+  // is no longer the newest request draws nothing (#2461).
+  var _subpathGen = 0;
   var _subpathMap = null; // subpath detail minimap; removed on re-render and page destroy (WebGL/Leaflet leak)
   // #1085 — auto-refresh timer for the Roles tab. Started when the Roles
   // tab is rendered, cleared on tab switch and destroy.
@@ -383,6 +386,7 @@
   }
 
   async function renderTab(tab) {
+    _subpathGen++;
     const el = document.getElementById('analyticsContent');
     const d = _analyticsData;
     // A tab click or refresh before the bulk load lands keeps the loading
@@ -2326,11 +2330,12 @@
           </div>
         </div>`;
 
-      // Click handler for rows
-      el.addEventListener('click', e => {
+      // Bind to this render's list. The analytics container survives tab changes.
+      const list = el.querySelector('#subpathList');
+      list.addEventListener('click', e => {
         const tr = e.target.closest('tr[data-hops]');
         if (!tr) return;
-        el.querySelectorAll('tr.subpath-selected').forEach(r => r.classList.remove('subpath-selected'));
+        list.querySelectorAll('tr.subpath-selected').forEach(r => r.classList.remove('subpath-selected'));
         tr.classList.add('subpath-selected');
         loadSubpathDetail(tr.dataset.hops);
       });
@@ -2359,13 +2364,16 @@
   }
 
   async function loadSubpathDetail(hopsStr) {
+    const gen = ++_subpathGen;
     const panel = document.getElementById('subpathDetail');
     panel.classList.remove('collapsed');
     panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
     try {
       const data = await api('/analytics/subpath-detail?hops=' + encodeURIComponent(hopsStr), { ttl: CLIENT_TTL.analyticsRF });
+      if (gen !== _subpathGen) return;
       renderSubpathDetail(panel, data);
     } catch (e) {
+      if (gen !== _subpathGen) return;
       panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
     }
   }
@@ -3206,7 +3214,7 @@
     }
   }
 
-function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _subpathMap = null; } _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _loadError = null; if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; } if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; } _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _subpathGen++; if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _subpathMap = null; } _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _loadError = null; if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; } if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; } _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -3785,7 +3793,7 @@ function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _s
     const nodes = allNodes.filter(n => n.role === 'repeater');
 
     if (nodes.length === 0) {
-      el.innerHTML = `<div class="analytics-card"><p class="text-muted">No repeaters in the network yet. Any prefix is available!</p></div>`;
+      el.innerHTML = `<div class="analytics-card"><p class="text-muted">No repeaters loaded for the current view.</p></div>`;
       return;
     }
 
@@ -3992,7 +4000,7 @@ function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _s
 
       <div class="analytics-card" id="ptChecker">
         <h3 style="margin-top:0">Check a Prefix</h3>
-        <p class="text-muted" style="margin-top:0;font-size:0.9em">Enter a 1-byte (2 hex chars), 2-byte (4 hex chars), or 3-byte (6 hex chars) prefix — or paste a full public key.</p>
+        <p class="text-muted" style="margin-top:0;font-size:0.9em">Enter a 1-byte (2 hex chars), 2-byte (4 hex chars), or 3-byte (6 hex chars) prefix — or paste a full public key. Results use only loaded repeaters, subject to active region and area filters and the node loading limit.</p>
         <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
           <input id="ptPrefixInput" type="text" placeholder="e.g. A3F1" maxlength="64"
             style="font-family:var(--mono);font-size:1em;padding:6px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;min-width:180px;flex:1"
@@ -4085,8 +4093,8 @@ function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _s
         </div>`;
       }
       if (isFullKey) {
-        const inNetwork = nodes.some(n => n.public_key.toUpperCase() === input);
-        html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">Derived prefixes: <code class="mono">${input.slice(0,2)}</code> / <code class="mono">${input.slice(0,4)}</code> / <code class="mono">${input.slice(0,6)}</code>${!inNetwork ? ' — <em>this node is not yet in the network</em>' : ''}</p>`;
+        const inLoadedRepeaters = nodes.some(n => n.public_key.toUpperCase() === input);
+        html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">Derived prefixes: <code class="mono">${input.slice(0,2)}</code> / <code class="mono">${input.slice(0,4)}</code> / <code class="mono">${input.slice(0,6)}</code>${!inLoadedRepeaters ? ' — <em>this node is not present among the loaded repeaters</em>' : ''}</p>`;
       }
 
       tiers.forEach(({ b, prefix }) => {
@@ -4101,7 +4109,7 @@ function destroy() { if (_subpathMap) { window.MC_safeRemoveMap(_subpathMap); _s
               ${severityBadge(count)}
             </div>
             ${count === 0
-              ? '<div class="text-muted" style="font-size:0.85em">No existing nodes use this prefix.</div>'
+              ? `<div class="text-muted" style="font-size:0.85em">${matches.length ? 'The entered key is the only match among loaded repeaters.' : 'No matches among loaded repeaters.'}</div>`
               : `<div style="font-size:0.85em;max-height:140px;overflow-y:auto">${colliders.map(nodeEntry).join('')}</div>`}
           </div>`;
       });

@@ -262,5 +262,6 @@ node tests/unit/test-map-vector.js
 node tests/unit/test-map-overlays-vector.js
 node tests/unit/test-map-tile-pin.js
 node tests/unit/test-map-ducting.js
+node tests/unit/test-issue-2461-stale-detail-load.js
 
 echo "All standalone frontend suites passed"

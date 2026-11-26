@@ -248,6 +248,7 @@
  *   SlideOver.shouldUse()   → boolean (current viewport <= breakpoint)
  *   SlideOver.open(opts)    → returns the inner content element. opts:
  *     { title?: string, onClose?: function, restoreFocus?: () => Element|null }
+ *     `onClose` receives `'replace'` when a new preview takes over.
  *     `restoreFocus` (optional) overrides the auto-captured
  *     `document.activeElement` and is invoked at close time to look up the
  *     element to focus. Use this when the caller re-renders the originating
@@ -431,7 +432,7 @@
   function open(opts) {
     // If already open, properly close the prior caller first so its onClose
     // (which clears `selectedKey`/hash state) fires before we replace it.
-    if (isOpen()) close();
+    if (isOpen()) close('replace');
     ensureNodes();
     opts = opts || {};
     // #1168 Munger #1: bump open sequence so any pending rAF from a
@@ -475,7 +476,7 @@
     return content;
   }
 
-  function close() {
+  function close(reason) {
     if (!panel || !panelOpen) return;
     // #1168 Munger #3: release the ref-counted scroll-lock token.
     if (scrollLockToken != null) {
@@ -494,7 +495,7 @@
     // re-render the originating table inside cb() (e.g. clearing the
     // selected row state), which detaches the originating <tr>; we
     // intentionally re-look-up via the resolver below.
-    if (cb) try { cb(); } catch {}
+    if (cb) try { cb(reason); } catch {}
 
     // Resolve the focus target by DATA-VALUE LOOKUP AT RESTORE TIME.
     // #1616: no captured-element-ref path — if cb() re-rendered the
@@ -1160,6 +1161,8 @@
   let directPacketId = null;
   let directPacketHash = null;
   let initGeneration = 0;
+  let rowSelectionGeneration = 0;
+  let detailGeneration = 0;
   let _docActionHandler = null;
   let _docMenuCloseHandler = null;
   let _docColMenuCloseHandler = null;
@@ -1299,6 +1302,7 @@
 
   async function init(app, routeParam) {
     const gen = ++initGeneration;
+    const routePath = location.hash.split('?')[0];
     // #1689 r1 (adv #4): subscribe to the customizer hide-1-byte-hops toggle
     // so the packets table re-renders LIVE when operators flip it (the
     // toggle promised "applies everywhere" — without a listener it only
@@ -1332,7 +1336,7 @@
 
     // Read URL params (router strips query from routeParam; read from location.hash)
     var _initUrlParams = getHashParams();
-    directObsId = _initUrlParams.get('obs');
+    directObsId = _initUrlParams.get('obs') || null;
     // Full Names is a view mode: a shared link carries it (fullNames=1/0).
     // It applies to this page only; the visitor's saved preference is theirs,
     // so opening somebody else's link does not overwrite it.
@@ -1387,6 +1391,7 @@
     // them together rather than in series halves worst-case time-to-first-row
     // on slow links / loaded CI runners without changing render contracts.
     await Promise.all([loadObservers(), loadPackets()]);
+    if (gen !== initGeneration) return;
 
     // Auto-select packet detail when arriving via hash URL
     if (directPacketHash) {
@@ -1396,7 +1401,9 @@
       directObsId = null;
       try {
         const data = await api(`/packets/${h}`);
-        if (gen === initGeneration && data?.packet) {
+        // A new packet or observation can be requested before hashchange runs.
+        const sameLink = location.hash.split('?')[0] === routePath && (getHashParams().get('obs') || null) === obsTarget;
+        if (gen === initGeneration && sameLink && data?.packet) {
           if (obsTarget && data.observations) {
             // Find the matching observation by its unique id
             const obs = data.observations.find(o => String(o.id) === String(obsTarget));
@@ -1413,6 +1420,7 @@
           }
         }
       } catch {}
+      if (gen !== initGeneration) return;
     }
 
     // Event delegation for data-action buttons
@@ -1454,6 +1462,7 @@
           const hashInput = document.getElementById('fHash');
           if (hashInput) hashInput.value = filters.hash;
           await loadPackets();
+          if (gen !== initGeneration) return;
         }
         // Show detail in sidebar
         const panel = document.getElementById('pktRight');
@@ -1466,10 +1475,12 @@
           try {
             await resolveHopsForPackets([pkt]);
           } catch {}
+          if (gen !== initGeneration) return;
           await renderDetail(content, data, obsTarget);
-          initPanelResize();
+          if (gen === initGeneration) initPanelResize();
         }
       } catch {}
+      if (gen !== initGeneration) return;
     }
     wsHandler = debouncedOnWS(function (msgs) {
       if (packetsPaused) {
@@ -1589,6 +1600,7 @@
   }
 
   function destroy() {
+    ++detailGeneration;
     clearTimeout(_renderTimer);
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
@@ -1621,6 +1633,7 @@
     totalCount = 0;
     observers = [];
     observerMap = new Map();
+    ++initGeneration;
     directPacketId = null;
     directPacketHash = null;
     groupByHash = true;
@@ -2496,14 +2509,8 @@
             selectPacket(child.id, parentHash, {packet: obsPacket, observations: parentData?.observations}, child.id);
           }
         }
-        else if (action === 'select-hash') pktSelectHash(value);
-        else if (action === 'toggle-select') {
-          // #1486: pktToggleGroup() already opens the detail panel on EXPAND
-          // (via selectPacket()), and must NOT open it on COLLAPSE. The
-          // previously-unconditional pktSelectHash() trailing call was both
-          // redundant on expand AND reopened the panel the operator had just
-          // closed when they clicked the chevron to collapse — drop it.
-          pktToggleGroup(value);
+        else if (action === 'select-hash' || action === 'toggle-select') {
+          pktSelectHash(value, action === 'toggle-select');
         }
       };
       pktBody.addEventListener('click', handler);
@@ -3485,15 +3492,15 @@
   let selectedObservationId = null;
 
   async function selectPacket(id, hash, prefetchedData, obsRowId) {
+    // Retire the outgoing overlay before installing the new packet's selection and route.
+    if (window.SlideOver) window.SlideOver.close('replace');
     if (window.setRouteTitle) window.setRouteTitle('packets', String(hash || id));
     selectedId = id;
     selectedObservationId = obsRowId || null;
     const obsParam = selectedObservationId ? `?obs=${selectedObservationId}` : '';
-    if (hash) {
-      history.replaceState(null, '', `#/packets/${hash}${obsParam}`);
-    } else {
-      history.replaceState(null, '', `#/packets/${id}${obsParam}`);
-    }
+    const openingRoute = `#/packets/${hash || id}`;
+    let canonicalRoute;
+    history.replaceState(null, '', openingRoute + obsParam);
     updatePacketsUrl();
     renderTableRows();
     const isMobileNow = window.innerWidth <= 640;
@@ -3524,11 +3531,15 @@
           return document.querySelector('#pktTable tbody tr[data-hash="' + esc + '"]')
               || document.querySelector('#pktTable tbody tr[data-id="' + esc + '"]');
         },
-        onClose: function () {
+        onClose: function (reason) {
+          // Observation links use the resolved packet hash even when opened by an alias.
+          const route = location.hash.split('?')[0];
+          if (reason !== 'replace' && (route === openingRoute || route === canonicalRoute)) {
+            history.replaceState(null, '', '#/packets');
+            if (window.setRouteTitle) window.setRouteTitle('packets');
+          }
           selectedId = null;
           selectedObservationId = null;
-          history.replaceState(null, '', '#/packets');
-          if (window.setRouteTitle) window.setRouteTitle('packets');
           renderTableRows();
         }
       });
@@ -3563,20 +3574,24 @@
       initPanelResize();
     }
 
+    const gen = ++detailGeneration;
     try {
       const data = prefetchedData || await api(hash ? `/packets/${hash}` : `/packets/${id}`);
+      if (gen !== detailGeneration) return;
       // Resolve path hops for detail view
       const pkt = data.packet;
+      canonicalRoute = `#/packets/${pkt.hash || pkt.id}`;
       try {
         await resolveHopsForPackets([pkt]);
       } catch {}
+      if (gen !== detailGeneration) return;
       panel.innerHTML = isMobileNow ? '' : (useSlideOver ? '' : ('<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML));
       const content = document.createElement('div');
       panel.appendChild(content);
       await renderDetail(content, data, selectedObservationId);
       if (!isMobileNow && !useSlideOver) initPanelResize();
     } catch (e) {
-      panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
+      if (gen === detailGeneration) panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
     }
   }
 
@@ -4432,38 +4447,39 @@
   }
 
   // Global handlers
-  async function pktToggleGroup(hash) {
-    if (expandedHashes.has(hash)) {
+  async function pktSelectHash(hash, toggleGroup) {
+    if (toggleGroup && expandedHashes.has(hash)) {
       expandedHashes.delete(hash);
       renderTableRows();
       return;
     }
-    // Single fetch — gets packet + observations + path
+    // A pending click supersedes earlier clicks. The open detail can finish
+    // rendering until a replacement actually opens, including if this lookup fails.
+    const rowGen = ++rowSelectionGeneration;
+    const detailGen = detailGeneration;
+    const route = location.hash;
+    const group = toggleGroup ? hashIndex.get(hash) : null;
     try {
       const data = await api(`/packets/${hash}`);
-      const pkt = data.packet;
-      if (!pkt) return;
-      const group = hashIndex.get(hash);
-      if (group && data.observations) {
-        group._children = data.observations.map(o => clearParsedCache({...pkt, ...o, _isObservation: true}));
-        group._fetchedData = data;
-        // Sort children based on current sort mode
-        sortGroupChildren(group);
+      if (!data?.packet) return;
+      if (toggleGroup) {
+        // Other group arrows on this list expand independently of the preview.
+        if (!group || hashIndex.get(hash) !== group) return;
+        if (data.observations) {
+          group._children = data.observations.map(o => clearParsedCache({...data.packet, ...o, _isObservation: true}));
+          group._fetchedData = data;
+          sortGroupChildren(group);
+        }
+        await cacheResolvedPaths(group._children || []);
+        await resolveHopsForPackets(group._children || []);
+        if (hashIndex.get(hash) !== group) return;
+        expandedHashes.add(hash);
+        renderTableRows();
       }
-      // Resolve hops from children: prefer server-side resolved_path
-      await cacheResolvedPaths(group?._children || []);
-      await resolveHopsForPackets(group?._children || []);
-      expandedHashes.add(hash);
-      renderTableRows();
-      // Also open detail panel — no extra fetch needed
-      selectPacket(pkt.id, hash, data);
-    } catch {}
-  }
-  async function pktSelectHash(hash) {
-    // When grouped, select packet — reuse cached detail endpoint
-    try {
-      const data = await api(`/packets/${hash}`);
-      if (data?.packet) selectPacket(data.packet.id, hash, data);
+      // The hash can change before the router tears down the old page.
+      if (rowGen === rowSelectionGeneration && detailGen === detailGeneration && route === location.hash) {
+        selectPacket(data.packet.id, hash, data);
+      }
     } catch {}
   }
 

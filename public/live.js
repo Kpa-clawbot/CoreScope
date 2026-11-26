@@ -142,7 +142,7 @@
   const _initialSpeed = [0.25, 0.5, 1, 2, 4, 8].includes(_savedSpeed) ? _savedSpeed : 1;
   let rainCanvas = null, rainCtx = null, rainDrops = [], rainRAF = null;
   const propagationBuffer = new Map(); // hash -> {timer, packets[]}
-  let _onResize = null;
+  let _resizeCleanup = null;
   let _navCleanup = null;
   let _timelineRefreshInterval = null;
   let _lcdClockInterval = null;
@@ -317,8 +317,10 @@
   }
 
   function initResizeHandler() {
+    if (_resizeCleanup) _resizeCleanup();
     let resizeTimer = null;
-    _onResize = function() {
+    const orientationTimers = [];
+    function onResize() {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         // Set live-page height from JS — most reliable across all mobile browsers
@@ -356,17 +358,25 @@
           map.invalidateSize({ animate: false, pan: false });
         }
       }, 50);
-    };
-    // Run immediately to set correct initial height
-    _onResize();
-    window.addEventListener('resize', _onResize);
-    window.addEventListener('orientationchange', () => {
-      // Orientation change is async — viewport dimensions settle late
-      [50, 200, 500, 1000, 2000].forEach(ms => setTimeout(_onResize, ms));
-    });
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', _onResize);
     }
+    function onOrientationChange() {
+      // Viewport dimensions settle late. Only the latest rotation needs retries.
+      [50, 200, 500, 1000, 2000].forEach((ms, index) => {
+        clearTimeout(orientationTimers[index]);
+        orientationTimers[index] = setTimeout(onResize, ms);
+      });
+    }
+    onResize();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onOrientationChange);
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', onResize);
+    _resizeCleanup = function() {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onOrientationChange);
+      if (window.visualViewport) window.visualViewport.removeEventListener('resize', onResize);
+      clearTimeout(resizeTimer);
+      orientationTimers.forEach(clearTimeout);
+    };
   }
 
   // === VCR Controls ===
@@ -1559,7 +1569,16 @@
 
     // Shared theme-synced basemap; the provider picker goes on the right,
     // after the zoom control.
-    _liveAutoTiles = window.MC_attachAutoTiles(map, { controlPosition: 'topright' });
+    _liveAutoTiles = window.MC_attachAutoTiles(map, {
+      controlPosition: 'topright',
+      // Keep the picker's list clear of what Live draws over the map's
+      // bottom right when it sits below the list: the replay bar, the
+      // legend or its toggle, the feed or its show button, a node detail.
+      bottomInset: function (list) {
+        return window.MC_layerListInset(list,
+          document.querySelectorAll('#vcrBar, .live-legend, .legend-toggle-btn, #feedShowBtn, .live-feed, .live-node-detail'));
+      },
+    });
 
     // Add custom Leaflet Control for Fullscreen
     const LiveFullscreenControl = L.Control.extend({
@@ -4603,11 +4622,7 @@
     if (window.RegionFilter && typeof RegionFilter.destroy === 'function') RegionFilter.destroy();
     if (_liveAutoTiles) { _liveAutoTiles.destroy(); _liveAutoTiles = null; }
     if (map) { window.MC_safeRemoveMap(map); map = null; }
-    if (_onResize) {
-      window.removeEventListener('resize', _onResize);
-      window.removeEventListener('orientationchange', _onResize);
-      if (window.visualViewport) window.visualViewport.removeEventListener('resize', _onResize);
-    }
+    if (_resizeCleanup) { _resizeCleanup(); _resizeCleanup = null; }
     if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
     // Restore #app height to CSS default
     const appEl = document.getElementById('app');

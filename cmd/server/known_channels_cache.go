@@ -41,7 +41,7 @@ type KnownChannelEntry struct {
 	Channel     string `json:"channel"` // e.g. "#antwerpen" (# prefix preserved)
 	Description string `json:"description,omitempty"`
 	Key         string `json:"key,omitempty"` // optional PSK (base64) — present for some entries
-	Region      string `json:"region"`        // ISO 3166-1 alpha-2 lowercase
+	Region      string `json:"region"`        // catalogue label, trimmed and lowercased
 	RegionName  string `json:"regionName,omitempty"`
 }
 

@@ -538,7 +538,23 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     var sk = obsSkewMap[o.id];
     var skewLine = (sk && sk.samples) ? renderSkewBadge(observerSkewSeverity(sk.offsetSec), sk.offsetSec) + ' (' + sk.samples + ' samples)' : '—';
     var pkts = sparkBar(o.packetsLastHour || 0, Math.max(1, o.packetsLastHour || 1));
-    var content = window.SlideOver.open({ title: (o.name || o.id) });
+    var restorePage;
+    var content = window.SlideOver.open({
+      title: o.name || o.id,
+      restoreFocus: function () {
+        // Pin the controller's deferred retries to the observer visit visible at dismissal.
+        if (restorePage === undefined) {
+          restorePage = document.querySelector('#app > .observers-page, #app > .observer-detail-page');
+        }
+        if (!restorePage || !restorePage.isConnected) return document.activeElement;
+        var table = document.getElementById('obsTable');
+        var row = table && table.querySelector('tr[data-observer-id="' + CSS.escape(id) + '"]');
+        if (row) return row;
+        var heading = restorePage.querySelector('.page-header h2');
+        if (heading) heading.tabIndex = -1;
+        return heading;
+      }
+    });
     var naiveChipHTML = window.ObserversNaiveChip.render(o);
     content.innerHTML =
       (naiveChipHTML ? '<div style="margin-bottom:10px">' + naiveChipHTML + ' <span class="text-muted">Clock is naive — per-packet timing clamped to ingest time. Clears itself 24h after the last skew event.</span></div>' : '') +

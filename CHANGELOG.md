@@ -3,18 +3,19 @@
 ## [Unreleased]
 
 ### Added
-- **More map providers** (#2428) - new groups, each off until the operator sets `map.tiles.providers.<group>.enabled: true` (an upgrade changes nothing in the picker): EOX (Sentinel-2 satellite 2025 and 2016, Terrain Light, place-label overlays), OSM France (Humanitarian, CyclOSM, OSM Gray, OSM Gray Dark), and the vector styles OpenFreeMap (Liberty, Bright, Positron, Dark, Fiord) and VersaTiles (Colorful, Muted, Gray, Colorful Dark, Gray Dark). Check each group's terms before turning it on: EOX 2025 imagery is non-commercial (CC BY-NC-SA 4.0), OSM France is volunteer-run fair use.
-- **Your own tile servers** - `map.tiles.custom` adds raster (XYZ), vector (MapLibre style) and raster overlay entries as `custom-<id>`, usable in `darkDefault` / `lightDefault`. Invalid entries are skipped with a console warning.
-- **Overlays** - a hillshade overlay shaded in the browser from Terrarium elevation tiles (`map.tiles.providers.hillshade.url` can point at a mirror) and EOX place labels, ticked from a new Overlays group in the picker (each with its group turned on).
-- **The picked map is saved** - a map pinned in the picker survives a reload and applies on every page (the small maps without a picker use it when it suits the current theme); **Auto** clears it.
-- **MapLibre GL vendored** in `public/vendor/` and lazy-loaded (about 380 KB gzipped) only when a vector map is picked; without WebGL the map falls back to the default raster map.
 - **Tropospheric ducting overlay** - off by default; enable with `"ducting": { "enabled": true }`. The server fetches a pressure-level forecast from Open-Meteo (the public API works for non-commercial sites within its free limits; a self-hosted Open-Meteo set in `ducting.baseUrl` is recommended, has no call limits, and is required only for commercial sites), computes refractivity and duct type per grid cell, and serves it at `GET /api/ducting`. A new "Tropospheric ducting" overlay on the Map, Live and Repeater Planner pages draws colour bands of the mean refractivity gradient over the lowest 1.5 km above ground across the bounding box of your nodes plus a margin (clear for normal air, then above normal, high and very high), outlines the cells that may carry LoRa at the site's frequency (`los.frequencyMhz`, else 868 and 915 MHz) with a dashed line (a model estimate: thin ducts are not visible to it), marks the edge of the forecast area with a dotted line, has a forecast-time slider, and flags a forecast that is out of date. Keys: `model` (`gfs`, `icon`, `rrfs-conus`), `area`, `marginDeg` (default 5 degrees around the nodes' bounding box), `gridStepDeg`, `maxPoints` (default 450), `refreshMinutes`, `forecastHours`, `baseUrl`. See docs/deployment.md.
 
-### Changed
-- **Every map page follows the provider choice**, including the home page mini-map, with one shared picker (Auto, Street, Topographic, Satellite, Overlays).
-- `docs/deployment.md` Map Tile Providers rewritten to match the real config keys.
+## [3.19.0] - 2026-11-24
 
-Closes #2428.
+See [docs/release-notes/v3.19.0.md](docs/release-notes/v3.19.0.md) for the full notes. 32 commits since v3.18.0: 14 fix, 8 feat, 5 test, 2 ci, 2 docs, 1 refactor.
+
+### Highlights
+- **The ingestor rebuilds the analyzer `observers` table once** (#2407, #2445) - an explicit `idx` primary key; local indexes, triggers and views are kept. It refuses, and ingestor and server stop, on a column CoreScope did not create or a NULL `id`; v3.18.0 still starts then. **Check before upgrading if you changed `observers` by hand.**
+- **The content-hash migration from #787 now runs, in the ingestor** (#2409) - only changes old installs with data from before April 18; restart the server if its log line asks.
+- **`users.db` migrates to schema v10 with user accounts on** (#2429) - a v3.18.x binary refuses it afterwards, so keep the pre-upgrade copy for a rollback.
+- **SNR per node from direct receptions only** (#2451, #2452, #2453, #2454) - Avg SNR, signal grade and "Heard By, direct" change; nodes nobody heard directly show no SNR. `topHops[].bestSnr`, `topHops[].medianSnr` and `hopsVsSnr` are removed from the API.
+- **Planner Coverage tab** (#2406), **more map providers and your own tile servers** (#2434), **plain SMTP for account mail plus a test mail** (#2466), **repeater claims from mobile apps** (#2429, #2430). All opt-in.
+- **Rows lost at startup** (#2408) and **ingest stopping after a broker restart** (#2413) are fixed.
 
 ## [3.18.0] - 2026-11-17
 

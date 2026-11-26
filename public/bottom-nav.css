@@ -23,7 +23,7 @@
 
 /* #1174 mesh-op review: --bottom-nav-reserve is the contract page-level
  * full-viewport rules use to subtract the bottom-nav's height from
- * 100dvh. 0px at desktop (no nav reserved); 56px + safe-area at ≤768px.
+ * 100dvh. The mobile reserve includes the tabs, border and safe area.
  * Pages opt-in by referencing it (see public/live.css for /live, and
  * #app.app-fixed in style.css for the SPA fixed-page container). */
 :root {
@@ -42,7 +42,7 @@
    * page-level full-viewport rules (e.g. .live-page, #app.app-fixed)
    * automatically subtract the bottom-nav height. */
   :root {
-    --bottom-nav-reserve: calc(56px + env(safe-area-inset-bottom, 0px));
+    --bottom-nav-reserve: calc(56px + 2px + env(safe-area-inset-bottom, 0px));
   }
 
   .bottom-nav {
@@ -85,11 +85,13 @@
     justify-content: space-between;
   }
 
-  /* Reserve space at page bottom so fixed-positioned bottom-nav does
-   * not cover the last row of content. 56px tab + 8px breathing room
-   * + safe-area inset. */
-  body {
-    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  /* Body-scroll pages need clearance even in browsers without :has(). */
+  #app:not(.app-fixed) {
+    padding-bottom: var(--bottom-nav-reserve);
+  }
+  /* The active Planner already subtracts the nav from its height. */
+  #app:has(> .mc-pl-page) {
+    padding-bottom: 0;
   }
 }
 
