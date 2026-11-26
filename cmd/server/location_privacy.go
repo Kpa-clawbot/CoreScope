@@ -9,7 +9,6 @@ import (
 	"hash"
 	"math"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -55,17 +54,31 @@ import (
 //                  block does not say "enabled": false explicitly; on a config.json
 //                  that fails to parse, refuse only when the env secret is set or
 //                  the raw file may turn it on (rawLocationPrivacyMayEnable).
-//   Offsets:       the offset of a served point derives from the cell only
-//                  (row, col), so co-located nodes share one approximate point and
-//                  cannot be averaged.
+//   Offsets:       every node has its own grid and its own offsets, both keyed by
+//                  its 32-byte public key, so the point served for one node says
+//                  nothing about the cell or the point of any other: a probe
+//                  node placed next to a target never lands on the target's
+//                  point. Trade-off: N co-located nodes get N independent
+//                  points, so averaging them narrows their shared position by
+//                  about √N. This relies on the ingestor's advert signature
+//                  check (validateSignatures, on by default): only the holder
+//                  of a key can put a position under it, so nobody can move a
+//                  target's key around to map its grid. Estimates are computed
+//                  from unsigned companion reports, so an estimate of a node
+//                  (FuzzEstimate) has a grid and offsets of its own, unrelated
+//                  to the node's: probing it maps nothing Fuzz uses. A pubkey
+//                  that is not 64 hex digits, or a non-finite coordinate, gets
+//                  no position at all, never a shared grid.
 //
-// Geometry: metre-based grid, cell side s = 0.4·R, origin offset derived
-// from HMAC-SHA256(secret, "grid"); a node keeps its anchor cell while its
-// exact position stays inside that cell grown by 0.25·s on every side
-// (hysteresis, in memory, bounded); the served point is the anchor cell centre
-// plus an offset uniform in a disk of radius r = R − 1.0607·s, derived from
-// HMAC-SHA256(secret, "offset" | row | col) — the cell only, never the
-// pubkey. So |served − exact| ≤ R always.
+// Geometry: metre-based grid per node and purpose (purpose: one byte, node
+// position or estimate), cell side s = 0.4·R, origin fractions (row, column)
+// from HMAC-SHA256(secret, "csloc/v2/grid\x00" ‖ purpose ‖ pubkey); a slot
+// keeps its anchor cell while its exact position stays inside that cell grown
+// by 0.25·s on every side (hysteresis, in memory, LRU-bounded); the served
+// point is the anchor cell centre plus an offset uniform in a disk of radius
+// r = R − 1.0607·s, derived from HMAC-SHA256(secret, "csloc/v2/offset\x00" ‖
+// purpose ‖ pubkey ‖ row ‖ col), row and col as 8-byte big-endian integers. So
+// |served − exact| ≤ R always.
 
 // LocationPrivacyConfig is the "locationPrivacy" config block.
 //
@@ -161,13 +174,73 @@ const (
 	// moved off (0, 0), which every consumer reads as "no fix".
 	locNullEps = 1e-5
 
-	// locAnchorCap bounds the hysteresis map. When it is full, inserting a
-	// new pubkey first evicts one arbitrary entry (Go map iteration order):
-	// O(1), no unbounded growth, and a flood of fake pubkeys only costs the
-	// evicted nodes their hysteresis (they re-anchor to their current cell
-	// on the next call), never the distance bound or determinism.
+	// locAnchorCap bounds the hysteresis cache (node and estimate slots
+	// together). When it is full, a new slot evicts the least recently used
+	// one: O(1), no unbounded growth, and a flood of fake pubkeys only costs
+	// the nodes not served since their hysteresis (they re-anchor to their
+	// current cell on the next call), never the distance bound or determinism.
 	locAnchorCap = 200000
+
+	// HMAC message labels. Every message is a label followed by fixed-width
+	// binary fields, so no two inputs can spell the same message.
+	locGridLabel   = "csloc/v2/grid\x00"
+	locOffsetLabel = "csloc/v2/offset\x00"
+	// locPubkeyLen is the length of a node public key, bytes.
+	locPubkeyLen = 32
 )
+
+// locPurpose names what a slot holds: a node's stored position or an estimate
+// of it. It is part of the cache key, so the two never evict each other, and
+// of both HMAC messages, so their grids and offsets are unrelated. The values
+// are part of the derivation: never renumber them.
+type locPurpose uint8
+
+const (
+	locNodeSlot     locPurpose = 0
+	locEstimateSlot locPurpose = 1
+)
+
+// locAnchorKey identifies one hysteresis slot.
+type locAnchorKey struct {
+	purpose locPurpose
+	pk      [locPubkeyLen]byte
+}
+
+// locGrid is the grid origin of one slot (node and purpose): secret fractions of a row and of a
+// column, each in [0, 1).
+type locGrid struct {
+	fLat, fLon float64
+}
+
+// parseLocPubkey decodes a node public key: exactly 64 hex digits, any case,
+// surrounding spaces ignored. It allocates nothing.
+func parseLocPubkey(pubkey string) (pk [locPubkeyLen]byte, ok bool) {
+	s := strings.TrimSpace(pubkey)
+	if len(s) != 2*locPubkeyLen {
+		return pk, false
+	}
+	for i := range pk {
+		hi, lo := hexNibble(s[2*i]), hexNibble(s[2*i+1])
+		if hi < 0 || lo < 0 {
+			return [locPubkeyLen]byte{}, false
+		}
+		pk[i] = byte(hi<<4 | lo)
+	}
+	return pk, true
+}
+
+// hexNibble is the value of one hex digit, -1 when c is not one.
+func hexNibble(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
+}
 
 // locationFuzzer turns exact positions into approximate ones. Safe for
 // concurrent use. A nil *locationFuzzer means the feature is off.
@@ -175,19 +248,18 @@ type locationFuzzer struct {
 	radiusM float64
 	cellM   float64 // s = 0.4·R
 	dLat    float64 // row height, degrees
-	fLat    float64 // secret row offset, fraction of a row [0, 1)
-	fLon    float64 // secret column offset, fraction of a column [0, 1)
 
 	macs sync.Pool // hash.Hash: HMAC-SHA256 keyed with the secret
 
-	mu        sync.Mutex // guards anchors; held only for map access
-	anchors   map[string]locAnchor
-	anchorCap int
+	mu      sync.Mutex // guards anchors; held only for cache access
+	anchors *lru[locAnchorKey, locAnchor]
 }
 
-// locAnchor is a node's anchor cell, its expanded bounds and the served
-// point the cell yields for that node.
+// locAnchor is a slot's anchor cell in its own grid, its expanded bounds
+// and the served point the cell yields for that slot. It carries the grid so
+// a warm call costs one lookup and a re-anchor one HMAC.
 type locAnchor struct {
+	grid           locGrid
 	row, col       int64
 	latLo, latHi   float64 // expanded latitude bounds
 	lonC, halfLonX float64 // column centre and expanded half-width, degrees
@@ -222,17 +294,12 @@ func newLocationFuzzer(c *LocationPrivacyConfig) (*locationFuzzer, error) {
 	}
 	key := []byte(secret)
 	f := &locationFuzzer{
-		radiusM:   radius,
-		cellM:     locCellFrac * radius,
-		anchors:   make(map[string]locAnchor),
-		anchorCap: locAnchorCap,
+		radiusM: radius,
+		cellM:   locCellFrac * radius,
+		anchors: newLRU[locAnchorKey, locAnchor](locAnchorCap, 0, nil),
 	}
 	f.dLat = f.cellM / locMetresPerDeg
 	f.macs.New = func() any { return hmac.New(sha256.New, key) }
-	var sum [sha256.Size]byte
-	f.mac([]byte("grid"), &sum)
-	f.fLat = unitFloat(sum[0:8])
-	f.fLon = unitFloat(sum[8:16])
 	return f, nil
 }
 
@@ -250,25 +317,19 @@ func unitFloat(b []byte) float64 {
 	return float64(binary.BigEndian.Uint64(b)>>11) / (1 << 53)
 }
 
-// anchorFor returns the stored anchor of pk.
-func (f *locationFuzzer) anchorFor(pk string) (locAnchor, bool) {
+// anchorFor returns the stored anchor of slot k and marks it recently used.
+func (f *locationFuzzer) anchorFor(k locAnchorKey) (locAnchor, bool) {
 	f.mu.Lock()
-	a, ok := f.anchors[pk]
+	a, ok := f.anchors.Get(k)
 	f.mu.Unlock()
 	return a, ok
 }
 
-// storeAnchor records pk's anchor, evicting one arbitrary entry when the map
-// is full and pk is new.
-func (f *locationFuzzer) storeAnchor(pk string, a locAnchor) {
+// storeAnchor records slot k's anchor, evicting the least recently used slot
+// when the cache is full and k is new.
+func (f *locationFuzzer) storeAnchor(k locAnchorKey, a locAnchor) {
 	f.mu.Lock()
-	if _, ok := f.anchors[pk]; !ok && len(f.anchors) >= f.anchorCap {
-		for k := range f.anchors {
-			delete(f.anchors, k)
-			break
-		}
-	}
-	f.anchors[pk] = a
+	f.anchors.Put(k, a)
 	f.mu.Unlock()
 }
 
@@ -276,27 +337,41 @@ func (f *locationFuzzer) storeAnchor(pk string, a locAnchor) {
 func (f *locationFuzzer) anchorCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.anchors)
+	return f.anchors.Len()
 }
 
-// cellAt returns the cell containing (glat, lon) and the point it serves.
-// The point depends on the cell only, so every node in one cell shares it
-// and averaging co-located nodes reveals nothing. glat is already clamped
-// to ±locGridMaxLat.
-func (f *locationFuzzer) cellAt(glat, lon float64) locAnchor {
-	row := int64(math.Floor(glat/f.dLat + f.fLat))
-	latC := (float64(row) + 0.5 - f.fLat) * f.dLat
+// gridFor derives slot k's grid origin from the secret, the purpose and the
+// key alone.
+func (f *locationFuzzer) gridFor(k *locAnchorKey) locGrid {
+	var buf [len(locGridLabel) + 1 + locPubkeyLen]byte
+	msg := append(buf[:0], locGridLabel...)
+	msg = append(msg, byte(k.purpose))
+	msg = append(msg, k.pk[:]...)
+	var sum [sha256.Size]byte
+	f.mac(msg, &sum)
+	return locGrid{fLat: unitFloat(sum[0:8]), fLon: unitFloat(sum[8:16])}
+}
+
+// cellAt returns the cell of slot k's grid g containing (glat, lon) and the
+// point it serves for that slot. Grid and offset are keyed by the purpose and
+// the pubkey, so two nodes at one spot, or a node and an estimate of it, get
+// unrelated cells and points: a served point reveals nothing about another
+// slot's cell, at the price that co-located nodes can be averaged (about √N).
+// glat is already clamped to ±locGridMaxLat.
+func (f *locationFuzzer) cellAt(k *locAnchorKey, g locGrid, glat, lon float64) locAnchor {
+	row := int64(math.Floor(glat/f.dLat + g.fLat))
+	latC := (float64(row) + 0.5 - g.fLat) * f.dLat
 	// Columns: width s/(111320·cos(row centre)), rounded down so a whole
 	// number of columns wraps the parallel and the antimeridian is no seam.
 	cosC := math.Cos(math.Min(math.Abs(latC), locGridMaxLat) * math.Pi / 180)
 	ncol := math.Ceil(360 / (f.cellM / (locMetresPerDeg * cosC)))
 	dLon := 360 / ncol
-	x := (lon+180)/dLon - f.fLon
+	x := (lon+180)/dLon - g.fLon
 	col := int64(math.Mod(math.Floor(x), ncol))
 	if col < 0 {
 		col += int64(ncol)
 	}
-	lonC := wrapLon(-180 + (float64(col)+0.5+f.fLon)*dLon)
+	lonC := wrapLon(-180 + (float64(col)+0.5+g.fLon)*dLon)
 
 	halfLatX := (0.5 + locMarginFrac) * f.dLat
 	halfLonX := (0.5 + locMarginFrac) * dLon
@@ -310,11 +385,12 @@ func (f *locationFuzzer) cellAt(glat, lon float64) locAnchor {
 	dMax = math.Max(dMax, 0.75*math.Sqrt2*f.cellM)
 	r := f.radiusM*(1-locRelSlack) - locAbsSlackM - dMax
 
-	var buf [64]byte
-	msg := append(buf[:0], "offset|"...)
-	msg = strconv.AppendInt(msg, row, 10)
-	msg = append(msg, '|')
-	msg = strconv.AppendInt(msg, col, 10)
+	var buf [len(locOffsetLabel) + 1 + locPubkeyLen + 16]byte
+	msg := append(buf[:0], locOffsetLabel...)
+	msg = append(msg, byte(k.purpose))
+	msg = append(msg, k.pk[:]...)
+	msg = binary.BigEndian.AppendUint64(msg, uint64(row))
+	msg = binary.BigEndian.AppendUint64(msg, uint64(col))
 	var sum [sha256.Size]byte
 	f.mac(msg, &sum)
 	theta := 2 * math.Pi * unitFloat(sum[0:8])
@@ -325,7 +401,8 @@ func (f *locationFuzzer) cellAt(glat, lon float64) locAnchor {
 	sLat, sLon := destinationPoint(latC, lonC, theta, rho)
 
 	return locAnchor{
-		row: row, col: col,
+		grid: g,
+		row:  row, col: col,
 		latLo: latC - halfLatX, latHi: latC + halfLatX,
 		lonC: lonC, halfLonX: halfLonX,
 		sLat: sLat, sLon: sLon,
@@ -500,30 +577,53 @@ func (f *locationFuzzer) RadiusM() float64 {
 	return f.radiusM
 }
 
-// Fuzz returns the approximate position served for the node pubkey (any case)
-// at exact position (lat, lon). A no-fix position (0, 0) is returned unchanged;
-// any other result is never (0, 0). Identity when f is nil.
+// Fuzz serves node pubkey's stored position. ok is false when pubkey is not a
+// 64-hex-digit key (after trimming spaces; case-insensitive) or a coordinate
+// is not finite: the caller then serves no position at all. Identity with ok
+// true when f is nil or (lat, lon) is (0, 0), the no-fix position; any other
+// served point is never (0, 0).
 //
-// Non-finite input carries no position and is returned unchanged. A latitude
-// outside [-90, 90] is clamped and a longitude outside [-180, 180) wrapped
-// before fuzzing.
-func (f *locationFuzzer) Fuzz(pubkey string, lat, lon float64) (float64, float64) {
+// A latitude outside [-90, 90] is clamped and a longitude outside [-180, 180)
+// wrapped before fuzzing.
+func (f *locationFuzzer) Fuzz(pubkey string, lat, lon float64) (sLat, sLon float64, ok bool) {
+	return f.fuzz(locNodeSlot, pubkey, lat, lon)
+}
+
+// FuzzEstimate is Fuzz for a computed estimate of the node's position, with
+// its own grid and offsets, so an unsigned estimate cannot probe the node's
+// grid, and its own hysteresis slot, so the two never evict each other.
+func (f *locationFuzzer) FuzzEstimate(pubkey string, lat, lon float64) (sLat, sLon float64, ok bool) {
+	return f.fuzz(locEstimateSlot, pubkey, lat, lon)
+}
+
+// fuzz is Fuzz for the given hysteresis slot of the node.
+func (f *locationFuzzer) fuzz(purpose locPurpose, pubkey string, lat, lon float64) (float64, float64, bool) {
 	if f == nil || (lat == 0 && lon == 0) {
-		return lat, lon
+		return lat, lon, true
+	}
+	k := locAnchorKey{purpose: purpose}
+	var ok bool
+	if k.pk, ok = parseLocPubkey(pubkey); !ok {
+		return 0, 0, false
 	}
 	if math.IsNaN(lat) || math.IsNaN(lon) || math.IsInf(lat, 0) || math.IsInf(lon, 0) {
-		return lat, lon
+		return 0, 0, false
 	}
 	lat = math.Max(-90, math.Min(90, lat))
 	lon = wrapLon(lon)
 	// Cell selection uses the latitude clamped to ±locGridMaxLat.
 	glat := math.Max(-locGridMaxLat, math.Min(locGridMaxLat, lat))
-	pk := strings.ToLower(pubkey)
 
-	a, ok := f.anchorFor(pk)
-	if !ok || !a.contains(glat, lon) {
-		a = f.cellAt(glat, lon) // HMAC work, outside the lock
-		f.storeAnchor(pk, a)
+	a, hit := f.anchorFor(k)
+	if !hit || !a.contains(glat, lon) {
+		// HMAC work, outside the lock. The grid depends on the slot only, so
+		// a stored anchor's grid is reused whatever cell it was for.
+		g := a.grid
+		if !hit {
+			g = f.gridFor(&k)
+		}
+		a = f.cellAt(&k, g, glat, lon)
+		f.storeAnchor(k, a)
 	}
 
 	sLat, sLon := a.sLat, a.sLon
@@ -536,7 +636,8 @@ func (f *locationFuzzer) Fuzz(pubkey string, lat, lon float64) (float64, float64
 		brg := initialBearing(glat, lon, sLat, sLon)
 		sLat, sLon = destinationPoint(lat, lon, brg, d)
 	}
-	return avoidNullIsland(sLat, sLon)
+	sLat, sLon = avoidNullIsland(sLat, sLon)
+	return sLat, sLon, true
 }
 
 // Client is the /api/config/client view.

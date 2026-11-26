@@ -172,10 +172,11 @@ func TestFixGridSecretOrigin(t *testing.T) {
 	if diff < 150 {
 		t.Errorf("only %d of 200 fixes land in a different cell under another secret", diff)
 	}
-	// Independent of the node grid: a different label, so different offsets.
+	// Independent of the node grids: a different label, so different offsets.
 	f := cellTestFuzzerWith(t, 1000, strings.Repeat("a", 32))
-	if g := fixGridFor(f); g.fLat == f.fLat || g.fLon == f.fLon {
-		t.Error("the fix grid reuses the node grid's offsets")
+	_, ng := locTestGrid(t, f, locNodeSlot, locKey("fixgrid"))
+	if g := fixGridFor(f); g.fLat == ng.fLat || g.fLon == ng.fLon {
+		t.Error("the fix grid reuses a node grid's offsets")
 	}
 }
 
@@ -372,7 +373,7 @@ func TestRxLeaderboardPrivacyCells(t *testing.T) {
 	}
 }
 
-// R11: the estimate is served as Fuzz(node, estimate), radius grown by R.
+// R11: the estimate is served as FuzzEstimate(node, estimate), radius grown by R.
 func TestReportedNodesEstimateFuzzed(t *testing.T) {
 	exact := map[string]PositionEstimate{}
 	for _, n := range getReported(t, seedReported(t)).Nodes {
@@ -390,7 +391,7 @@ func TestReportedNodesEstimateFuzzed(t *testing.T) {
 		}
 		n++
 		e := exact[nd.Pubkey]
-		wLat, wLon := fz.Fuzz(nd.Pubkey, e.Lat, e.Lon)
+		wLat, wLon, _ := fz.FuzzEstimate(nd.Pubkey, e.Lat, e.Lon)
 		if nd.Estimate.Lat != wLat || nd.Estimate.Lon != wLon || nd.Estimate.RadiusM != e.RadiusM+cellTestRadiusM {
 			t.Errorf("%s: estimate %+v, want %v,%v radius %v", nd.Pubkey, nd.Estimate, wLat, wLon, e.RadiusM+cellTestRadiusM)
 		}

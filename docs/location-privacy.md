@@ -39,7 +39,7 @@ before relying on it.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `enabled` | `false` | Turns the feature on. |
-| `radiusM` | `1000` | Maximum distance in metres between a served position and the real one. Positions are grouped in cells 0.4 x `radiusM` on a side, which sets what one known position gives away (see [What it protects](#what-it-protects-and-what-it-does-not)). Valid range 100 to 50000; `0` or omitted means 1000. |
+| `radiusM` | `1000` | Maximum distance in metres between a served position and the real one. Each node has its own grid with cells 0.4 x `radiusM` on a side; the grid of one node says nothing about another. Several nodes at one site can be averaged, so raise it for more cover there (see [What it protects](#what-it-protects-and-what-it-does-not)). Valid range 100 to 50000; `0` or omitted means 1000. |
 | `secret` | empty | At least 32 bytes. Overridden by `CORESCOPE_LOCATION_SECRET` when that is set. Never written to API output or logs. |
 
 The server reads this block; the ingestor does not need it. See also the `locationPrivacy` block in
@@ -48,11 +48,15 @@ The server reads this block; the ingestor does not need it. See also the `locati
 ## What changes for users
 
 - **Node positions.** Every node position served (map markers, node detail, observers, exports,
-  packets) is within `radiusM` of the real one. The point is stable: it is derived from a grid and
-  the secret, not re-randomised per request, and it stays put while the node moves only a little.
-- **Co-located nodes share a point.** The offset comes from the grid cell only, not from the node.
-  Nodes in the same cell (several repeaters on one mast, or nodes close together) are shown at the
-  same approximate point, so their markers can stack.
+  packets) is within `radiusM` of the real one. The point is stable: it is derived from the secret,
+  the node's public key and a grid, not re-randomised per request, and it stays put while the node
+  moves only a little.
+- **Each node has its own point.** The grid and the offset are derived from the node's public key,
+  so every node is moved independently. Nodes at the same spot (several repeaters on one mast) are
+  shown at separate points, up to 2 x `radiusM` apart, and two markers close together on
+  the map are not evidence that the nodes are close.
+- **Nodes without a full public key.** A node whose public key is not 64 hex digits is served
+  without a position.
 - **Distances and analysis.** The repeater planner, line of sight, distances, reach and neighbour
   distances are computed from the approximate positions. Treat their results as indicative.
 - **RX coverage and RF noise.** Cells built from companion GPS fixes are coarser. Each fix is
@@ -84,17 +88,27 @@ live feed, learning the exact position of a node or where a companion was.
 How much it hides depends on what the viewer already knows:
 
 - **From the served point alone,** a node is somewhere within `radiusM` of it.
-- **Once one position in a cell is known,** the uncertainty for every node served the same point
-  shrinks to that cell. The served point depends on the cell only, and cells are 0.4 x `radiusM` on
-  a side (0.6 x `radiusM` at most for a node near a cell edge, which keeps its cell a little longer
-  so it does not flicker). Anyone who knows where one node in a cell is (their own node, a public
-  mast) can place every node that shares its served point inside that square: 400 m across at the
-  default `radiusM` of 1000.
-- **Nodes served the same point are close together.** Two nodes 300 m apart may share one point,
-  which tells a viewer they are within a cell of each other.
+- **Knowing where another node is does not help.** Each node has its own grid (cells 0.4 x
+  `radiusM` on a side) and its own offset per cell, both derived from the secret and that node's
+  public key. The served point of one node says nothing about the grid or the offset of any other.
+  Someone who knows the real position of one node (their own node, a public mast), or who places
+  nodes of their own near a target, learns nothing about the target.
+- **Several nodes known to be at one site can be averaged.** Nodes at the same spot are shown at
+  independent points. Someone who knows that N nodes really are at one site can average their
+  served points and get closer than a single point allows. At the default `radiusM` of 1000:
 
-So choose `radiusM` for the cell size you can accept, not only the radius: for cells about 1 km
-across, use a `radiusM` of 2500.
+  | Nodes at one site | Median error | 90th percentile |
+  |---|---|---|
+  | 1 | 404 m | 617 m |
+  | 2 | 268 m | 454 m |
+  | 4 | 184 m | 325 m |
+  | 10 | 114 m | 208 m |
+
+  The errors scale with `radiusM`. The served points do not show which nodes are at one site; the
+  viewer has to know that from elsewhere (node names, for example).
+
+So if you run several nodes on one mast and want more cover for that site, raise `radiusM`: at 2500,
+four nodes at one site are located no better than one node is at 1000 (median error about 460 m).
 
 Does not protect against:
 
@@ -111,7 +125,17 @@ Does not protect against:
 
 - **Keep the secret private and stable.** Use the same secret across restarts and across replicas.
   Changing it moves every approximate position, and comparing the old and the new positions of a
-  node narrows down where it really is. Rotate only if the secret has leaked.
+  node narrows down where it really is. Rotate only if the secret has leaked, never on a schedule.
+- **Keep advert signature validation on.** The ingestor checks advert signatures by default
+  (`validateSignatures`, a top-level key of the ingestor config). Each node's grid is tied to its
+  public key, so this is what stops someone else from using it. With validation off, anyone who can
+  get adverts heard could send adverts under a real node's key from positions of their choice,
+  watch where the served point changes, and find that node's grid. Position estimates built from
+  companion reports, which are not signed, use a separate grid of their own, so a report someone
+  submits for a key never reveals anything about that node's own grid.
+- **Do not re-key a node in place.** A new keypair at the same site gives the node a new,
+  independent point. Anyone who can tell that the old and the new key are the same node can
+  compare the two points, as with several nodes at one site.
 - **Startup refusal.** The server exits at startup when location privacy is enabled and the secret
   (from the config or `CORESCOPE_LOCATION_SECRET`) is missing or shorter than 32 bytes, or when
   `radiusM` is outside 100 to 50000.
@@ -135,8 +159,13 @@ Does not protect against:
 
 ## Residual risks
 
-- Someone who can inject adverts (a radio near an observer, or an MQTT feed) can learn where the
-  grid lines lie by placing their own nodes and watching where the served points change.
+- Someone who can inject adverts (a radio near an observer, or an MQTT feed) can map the grid of
+  the nodes they inject by moving them and watching where the served points change. That is the
+  grid of their own keys only, and it says nothing about any other node. This holds while the
+  ingestor validates advert signatures (see Operations).
+- The served points of several nodes known to be at one site, or of one site under an old and a
+  new key, can be averaged (see
+  [What it protects](#what-it-protects-and-what-it-does-not)).
 - Restarts, replicas and eviction from the in-memory state can re-anchor a node that sits on a cell
   edge. Both points are within the radius, and comparing them says a little about where the node is.
 - Rotating the secret lets old and new points be compared (see Operations).
@@ -148,14 +177,19 @@ Does not protect against:
 **Why not just round the coordinates?**
 Rounding to a fixed grid gives a public, predictable cell, and nodes near an edge flip between
 cells as they move or as GPS jitters. Here the grid origin and the offset of each cell come from the
-secret, so the served point is not the cell centre or any public function of the position, and the
-distance to the real position is bounded by `radiusM`. The cell is still what one known position
-in it gives away (see [What it protects](#what-it-protects-and-what-it-does-not)).
+secret and the node's public key, so the served point is not the cell centre or any public function
+of the position, the grid is different for every node, and the distance to the real position is
+bounded by `radiusM`.
 
-**Why do co-located nodes show at one point?**
-If each node had its own independent offset, the points of several nodes on one site could be
-averaged to get close to the real position. With the offset taken from the cell, they all show the
-same point, and there is nothing to average.
+**Why does each node get its own grid?**
+With one grid for all nodes, every node in a cell would be shown at the same point. Anyone who can
+get adverts heard could then place about six nodes of their own around a target's served point;
+the one that came back with the identical point would give away the target's cell, 400 m across at
+the default `radiusM`. About 25 adverts would map the whole grid. With a grid per public key, a
+node someone else places says nothing about yours. The cost is that nodes at one site are shown at
+separate points that can be averaged (see
+[What it protects](#what-it-protects-and-what-it-does-not)); raise `radiusM` if that matters for
+your site.
 
 **Why is the planner less accurate?**
 It works from the served positions, which are up to `radiusM` off. Short legs and fine distances

@@ -63,19 +63,19 @@ func edgeNodes(t *testing.T, f *locationFuzzer) (in, out visNode) {
 	t.Helper()
 	const edge, d = 31.0, 0.0005
 	var haveIn, haveOut bool
-	// Offsets depend on the cell only, so walk the position along the edge
-	// (inside visTestPolygon's lon -98..-97) to try a new cell every few steps.
+	// Every key has its own grid and offsets: try key after key, walking the
+	// position along the edge (inside visTestPolygon's lon -98..-97).
 	for i := 0; i < 1200 && !(haveIn && haveOut); i++ {
 		pk := fmt.Sprintf("ed%062x", i)
 		lon := -97.9 + float64(i)*0.0008
 		if !haveIn {
-			if la, _ := f.Fuzz(pk, edge-d, lon); la > edge {
+			if la, _, _ := f.Fuzz(pk, edge-d, lon); la > edge {
 				in, haveIn = visNode{pubkey: pk, name: "Edge inside", lat: edge - d, lon: lon, visible: true}, true
 				continue
 			}
 		}
 		if !haveOut {
-			if la, _ := f.Fuzz(pk, edge+d, lon); la < edge {
+			if la, _, _ := f.Fuzz(pk, edge+d, lon); la < edge {
 				out, haveOut = visNode{pubkey: pk, name: "Edge outside", lat: edge + d, lon: lon}, true
 			}
 		}
@@ -114,7 +114,7 @@ func TestNodeCoordGeoFilterUsesExactPosition(t *testing.T) {
 	if len(page.Nodes) != 1 || page.Nodes[0]["public_key"] != in.pubkey || page.Total != 1 {
 		t.Fatalf("/api/nodes = %v (total %d), want only %s", page.Nodes, page.Total, in.pubkey)
 	}
-	wantLat, wantLon := f.Fuzz(in.pubkey, in.lat, in.lon)
+	wantLat, wantLon, _ := f.Fuzz(in.pubkey, in.lat, in.lon)
 	if lat, lon := nodeCoordRow(t, page.Nodes[0]); lat != wantLat || lon != wantLon {
 		t.Fatalf("/api/nodes serves %v,%v, want the approximate %v,%v", lat, lon, wantLat, wantLon)
 	}
@@ -154,7 +154,7 @@ func TestNodeCoordGeoFilterUsesExactPosition(t *testing.T) {
 	if svc.known(elevKey(geoPoint{in.lat, in.lon})) {
 		t.Fatal("route LOS knows the visible node's exact position")
 	}
-	oLat, oLon := f.Fuzz(out.pubkey, out.lat, out.lon)
+	oLat, oLon, _ := f.Fuzz(out.pubkey, out.lat, out.lon)
 	if svc.known(elevKey(geoPoint{oLat, oLon})) {
 		t.Fatal("route LOS knows the hidden node")
 	}
@@ -165,9 +165,9 @@ func TestNodeCoordGeoFilterUsesExactPosition(t *testing.T) {
 // read the stored one.
 func TestNodeCoordReadersServeApproximatePositions(t *testing.T) {
 	nodes := []visNode{
-		{pubkey: "aa00000000000001", name: "One", lat: 30.123456, lon: -97.654321},
-		{pubkey: "aa00000000000002", name: "Two", lat: 30.654321, lon: -97.123456},
-		{pubkey: "aa00000000000003", name: "No fix"},
+		{pubkey: fmt.Sprintf("aa%062x", 1), name: "One", lat: 30.123456, lon: -97.654321},
+		{pubkey: fmt.Sprintf("aa%062x", 2), name: "Two", lat: 30.654321, lon: -97.123456},
+		{pubkey: fmt.Sprintf("aa%062x", 3), name: "No fix"},
 	}
 	for _, on := range []bool{false, true} {
 		t.Run(fmt.Sprintf("privacy=%v", on), func(t *testing.T) {
@@ -181,7 +181,7 @@ func TestNodeCoordReadersServeApproximatePositions(t *testing.T) {
 				if n.lat == 0 && n.lon == 0 {
 					return nil, nil
 				}
-				la, lo := f.Fuzz(n.pubkey, n.lat, n.lon)
+				la, lo, _ := f.Fuzz(n.pubkey, n.lat, n.lon)
 				if on && (la == n.lat || lo == n.lon) {
 					t.Fatalf("fuzzer left %s in place", n.pubkey)
 				}
@@ -331,7 +331,7 @@ func TestNodeCoordConcurrentReads(t *testing.T) {
 				srv.store.InvalidateNodeCache()
 				all, _ := srv.store.getCachedNodesAndPM()
 				for _, n := range all {
-					if la, lo := f.Fuzz(n.PublicKey, n.exactLat, n.exactLon); n.Lat != la || n.Lon != lo {
+					if la, lo, _ := f.Fuzz(n.PublicKey, n.exactLat, n.exactLon); n.Lat != la || n.Lon != lo {
 						t.Errorf("%s: %v,%v not the approximate position", n.PublicKey, n.Lat, n.Lon)
 						return
 					}

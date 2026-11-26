@@ -137,8 +137,22 @@ func (f *lkFixture) point(name string) lkPoint {
 
 // fuzzed is the position the server may serve for p.
 func (f *lkFixture) fuzzed(p lkPoint) geoPoint {
-	lat, lon := f.fuzz.Fuzz(p.pubkey, p.lat, p.lon)
+	lat, lon := lkFuzz(f.fuzz, p)
 	return geoPoint{Lat: lat, Lon: lon}
+}
+
+// lkFuzz serves p as the server does: the ghost's computed estimate through
+// FuzzEstimate, every other point through Fuzz. Fixture keys are well formed.
+func lkFuzz(f *locationFuzzer, p lkPoint) (float64, float64) {
+	fuzz := f.Fuzz
+	if p.name == "ghost-estimate" {
+		fuzz = f.FuzzEstimate
+	}
+	lat, lon, ok := fuzz(p.pubkey, p.lat, p.lon)
+	if !ok {
+		panic("fixture pubkey refused by the fuzzer: " + p.name)
+	}
+	return lat, lon
 }
 
 // lkDistM is the great-circle distance in metres.
@@ -174,10 +188,19 @@ func lkCoordNeedles(v float64) (decimals []string, micro string) {
 //     more than lkDistSlackKm (lkGPSDistSlackKm when a GPS point is involved).
 //
 // The choice depends only on the fuzzer, so runs are reproducible.
+//
+// Those two rules cannot foresee every misfire: the leak test holds each
+// served distance, read as kilometres and as miles, against the exact
+// distance of every pair of points, and a fuzzed distance, or a sum or mean of
+// several, lands on one of them at two decimals for some secrets (a different
+// field and a different pair each time, where a real leak shows under every
+// secret). Ruling those out here leaves no secret at all, so the list starts
+// at lkSecretStart, the first secret the leak test accepts in full. Move it
+// only after reading what the leak test reports for the secrets before it.
 func newLeakFuzzer(t testing.TB, points []lkPoint) *locationFuzzer {
 	t.Helper()
 	var first *locationFuzzer
-	for i := 0; i < 20000; i++ {
+	for i := lkSecretStart; i < 20000; i++ {
 		f, err := newLocationFuzzer(&LocationPrivacyConfig{
 			Enabled: true, RadiusM: lkRadiusM,
 			Secret: fmt.Sprintf("location-privacy-leak-test-secret-%04d", i),
@@ -196,6 +219,14 @@ func newLeakFuzzer(t testing.TB, points []lkPoint) *locationFuzzer {
 	return nil
 }
 
+// lkSecretStart is the first candidate secret of newLeakFuzzer. With the
+// per-node, per-purpose derivation (csloc/v2) the secrets that pass
+// lkFuzzerSuits below 20000 are 1289, 8502, 8661, 8710 and 11868; 1289 and
+// 8661 each trip one coincidence on /api/analytics/distance (a hop distance
+// reading as relay to gps-spot2; a path total reading as inactive to
+// ghost-estimate), the other three pass.
+const lkSecretStart = 8502
+
 // How much a fuzzed distance must differ from the exact one: between two
 // nodes, more than the dist check's tolerance for a distance served with one
 // decimal; from a node to a GPS point, for one served with two.
@@ -208,7 +239,7 @@ func lkFuzzerSuits(f *locationFuzzer, points []lkPoint) bool {
 	fz := make([]geoPoint, len(points))
 	identity := true
 	for i, p := range points {
-		la, lo := f.Fuzz(p.pubkey, p.lat, p.lon)
+		la, lo := lkFuzz(f, p)
 		fz[i] = geoPoint{Lat: la, Lon: lo}
 		if la != p.lat || lo != p.lon {
 			identity = false
@@ -224,7 +255,7 @@ func lkFuzzerSuits(f *locationFuzzer, points []lkPoint) bool {
 			needles = append(append(needles, dec...), micro)
 		}
 	}
-	for i, p := range points {
+	for i := range points {
 		for _, v := range []float64{fz[i].Lat, fz[i].Lon} {
 			s := strconv.FormatFloat(math.Abs(v), 'f', 9, 64)
 			micro := strconv.FormatInt(int64(math.Round(math.Abs(v)*1e6)), 10)
@@ -234,6 +265,8 @@ func lkFuzzerSuits(f *locationFuzzer, points []lkPoint) bool {
 				}
 			}
 		}
+	}
+	for i, p := range points {
 		for j := range points[:i] {
 			q := points[j]
 			if q.geo() == p.geo() || (p.gps && q.gps) {

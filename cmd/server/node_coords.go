@@ -47,7 +47,8 @@ func (db *DB) locationFuzzer() *locationFuzzer {
 // servedNodePos is the position the server serves and computes with for the
 // node pubkey whose stored position is (lat, lon). Unchanged when location
 // privacy is off. When it is on, a half-NULL position is no position at all
-// (both NULL), so neither coordinate is served exactly.
+// (both NULL), so neither coordinate is served exactly, and so is the
+// position of a pubkey the fuzzer refuses (not 64 hex digits).
 func (db *DB) servedNodePos(pubkey string, lat, lon sql.NullFloat64) (sql.NullFloat64, sql.NullFloat64) {
 	f := db.locationFuzzer()
 	if f == nil {
@@ -56,7 +57,10 @@ func (db *DB) servedNodePos(pubkey string, lat, lon sql.NullFloat64) (sql.NullFl
 	if !lat.Valid || !lon.Valid {
 		return sql.NullFloat64{}, sql.NullFloat64{}
 	}
-	la, lo := f.Fuzz(pubkey, lat.Float64, lon.Float64)
+	la, lo, ok := f.Fuzz(pubkey, lat.Float64, lon.Float64)
+	if !ok {
+		return sql.NullFloat64{}, sql.NullFloat64{}
+	}
 	return sql.NullFloat64{Float64: la, Valid: true}, sql.NullFloat64{Float64: lo, Valid: true}
 }
 
