@@ -413,23 +413,48 @@ func TestNeighborAPI_DistanceKm_NoGPS(t *testing.T) {
 }
 
 func TestNeighborGraphAPI_RegionFilter(t *testing.T) {
-	now := time.Now()
-	// Edge with observer "obs-sjc" — would match region SJC if we had region resolution.
-	// Without a store, region filtering returns nothing (no observers match).
-	e1 := newEdge("aaaa", "bbbb", "bb", 100, now)
-	srv := makeTestServer(makeTestGraph(e1))
-	// No store → region filter has no observers → filters everything out.
-	rr := serveRequest(srv, "GET", "/api/analytics/neighbor-graph?region=SJC&min_count=1&min_score=0")
-	var resp NeighborGraphResponse
-	json.Unmarshal(rr.Body.Bytes(), &resp)
-
-	// With no store, regionObs is nil so filter is skipped → all edges returned.
-	// Actually: region="" when store is nil → regionObs stays nil → no filtering.
-	// Wait, we set region=SJC and store is nil → resolveRegionObservers won't be called
-	// because s.store is nil. So regionObs is nil → filter not applied.
-	// Let's just check it doesn't crash.
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
+	db := setupTestDB(t)
+	defer db.Close()
+	if _, err := db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('Obs1', 'Receiver', 'SJC')`); err != nil {
+		t.Fatal(err)
+	}
+	store := NewPacketStore(db, nil)
+	graph := makeTestGraph(newEdge("aaaa", "obs1", "aa", 100, time.Now()))
+	graph.RejectedEdgesGeoFar = 3
+	withEdge := GraphStats{TotalNodes: 2, TotalEdges: 1, AvgClusterSize: 1, RejectedEdgesGeoFar: 3}
+	empty := GraphStats{RejectedEdgesGeoFar: 3}
+	for _, tc := range []struct {
+		name, query string
+		store       *PacketStore
+		want        GraphStats
+	}{
+		{"global", "", store, withEdge},
+		{"matching observer", "&region=sjc&role=observer", store, withEdge},
+		{"empty region", "&region=YKF", store, empty},
+		{"without store", "&region=SJC", nil, empty},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := makeTestServer(graph)
+			srv.db, srv.store = db, tc.store
+			rr := serveRequest(srv, "GET", "/api/analytics/neighbor-graph?min_count=1&min_score=0"+tc.query)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", rr.Code)
+			}
+			var got NeighborGraphResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Nodes == nil || got.Edges == nil {
+				t.Fatal("nodes and edges must be JSON arrays")
+			}
+			if len(got.Nodes) != tc.want.TotalNodes || len(got.Edges) != tc.want.TotalEdges {
+				t.Errorf("got nodes=%d edges=%d, want nodes=%d edges=%d",
+					len(got.Nodes), len(got.Edges), tc.want.TotalNodes, tc.want.TotalEdges)
+			}
+			if got.Stats != tc.want {
+				t.Errorf("stats = %+v, want %+v", got.Stats, tc.want)
+			}
+		})
 	}
 }
 
