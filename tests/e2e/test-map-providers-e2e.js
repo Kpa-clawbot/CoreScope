@@ -108,6 +108,40 @@ async function waitFilter(page, pred, what) {
   }, pred, { timeout: 8000 }).catch(() => { throw new Error('timeout waiting for ' + what); });
 }
 
+// Hold the server's actual reply. Let the normal customizer apply it and
+// dispatch its debounced refresh only after the detail is open (#2464).
+async function holdTheme(page) {
+  let receive;
+  const held = new Promise(resolve => { receive = resolve; });
+  await page.route('**/api/config/theme', async route => {
+    receive({ route, response: await route.fetch() });
+  });
+  return async () => {
+    const { route, response } = await held;
+    assert(response.ok(), 'server theme request failed');
+    await page.evaluate(() => {
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({
+        distanceUnit: 'km', home: { footerLinks: [{ label: 'Route guide', url: '#/map' }] },
+      }));
+      window.addEventListener('theme-refresh', () => {
+        if (window.SITE_CONFIG?.distanceUnit === 'km') window.__detailThemeReady = true;
+      });
+    });
+    await route.fulfill({ response });
+    await page.waitForFunction(() => window.__detailThemeReady);
+  };
+}
+
+async function openRoutePatterns(page) {
+  // A rendered bulk tab proves the initial analytics load has finished.
+  await page.goto(BASE + '/#/analytics?tab=hashsizes', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.locator('#analyticsContent .hash-bar-row, #analyticsContent .analytics-table').first().waitFor();
+  await page.locator('#analyticsTabs [data-tab="subpaths"]').click();
+}
+
+const rowHops = rows => rows.evaluateAll(rows => rows.map(row => row.dataset.hops));
+const hasShortHop = hops => hops.split(',').some(hop => hop.length === 2);
+
 async function run() {
   const browser = await chromium.launch({
     headless: true,
@@ -621,6 +655,149 @@ async function run() {
         });
       } finally { await c.context.close(); }
     }
+
+    await test('Home keeps its open health card and map when the server theme arrives (#2464)', async () => {
+      const c = await newPage(browser);
+      try {
+        const { page } = c;
+        const releaseTheme = await holdTheme(page);
+        const nodes = await (await page.request.get(BASE + '/api/nodes?limit=200')).json();
+        const node = nodes.nodes.find(n => n.name && n.lat && n.lon);
+        assert(node, 'fixture needs a named node with coordinates');
+        await MH.presetStorage(page, { extra: {
+          'meshcore-user-level': 'experienced',
+          'meshcore-my-nodes': JSON.stringify([{ pubkey: node.public_key, name: node.name }]),
+        } });
+        await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.locator('.mnc-btn[data-action="health"]').click();
+        const card = page.locator('#homeHealth.visible');
+        await card.locator('#healthMap .leaflet-tile-loaded').first().waitFor();
+        const packet = card.locator('.timeline-item').first();
+        const journey = page.locator('#homeJourney.visible');
+        await packet.press('Enter');
+        const original = await journey.innerText();
+        assert(original.includes(node.name), 'packet journey must show the selected sender');
+        await releaseTheme();
+        await page.locator('.home-footer-link', { hasText: 'Route guide' }).waitFor();
+        assert(await card.getByText(node.name, { exact: true }).first().isVisible(),
+          'the selected node health card disappeared after the theme refresh');
+        await card.locator('#healthMap .leaflet-tile-loaded').first().waitFor();
+        assert(await page.evaluate(() => window.__mcHarness.maps.length) === 1, 'expected one live health map');
+        assert(await journey.isVisible() && await journey.innerText() === original, 'the open packet journey changed');
+        await page.locator('.mnc-btn[data-action="health"]').click();
+        assert(!await journey.isVisible(), 'opening health again must close the old journey');
+        await packet.click();
+        assert(await journey.innerText() === original, 'the refreshed timeline must still open the packet');
+        assert(c.errors.length === 0, 'page errors: ' + c.errors);
+        await page.evaluate(() => { location.hash = '/packets'; });
+        await card.waitFor({ state: 'detached' });
+        assert(await page.evaluate(() => window.__mcNodeTileSync.maps.length) === 0, 'closed health map is still registered for tile changes');
+      } finally { await c.context.close(); }
+    });
+
+    await test('Route Patterns keeps the latest route and map and applies the new distance unit (#2464)', async () => {
+      const c = await newPage(browser);
+      try {
+        const { page } = c;
+        const releaseTheme = await holdTheme(page);
+        await MH.presetStorage(page, { extra: { 'meshcore-distance-unit': 'mi' } });
+        await openRoutePatterns(page);
+        const rows = page.locator('#sp-quads tr[data-hops]');
+        await rows.first().click();
+        const latest = rows.nth(1);
+        const hops = await latest.getAttribute('data-hops');
+        await latest.click();
+        const detail = page.locator('#subpathDetail:not(.collapsed)');
+        const prefix = detail.getByText(hops.split(',').join(' → '), { exact: true });
+        await prefix.waitFor();
+        await detail.locator('#subpathMap .leaflet-tile-loaded').first().waitFor();
+        assert(/\bmi\b/.test(await detail.textContent()), 'fixture route must have distances in miles before refresh');
+        await releaseTheme();
+        assert(await prefix.isVisible(),
+          'the selected route detail disappeared after the theme refresh');
+        assert(await page.locator('tr.subpath-selected').getAttribute('data-hops') === hops, 'selection changed');
+        await detail.locator('#subpathMap .leaflet-tile-loaded').first().waitFor();
+        assert(/\bkm\b/.test(await detail.textContent()), 'open route distances did not change to kilometres');
+        assert(await page.evaluate(() => window.__mcHarness.maps.length) === 1, 'expected one live route map');
+        assert(c.errors.length === 0, 'page errors: ' + c.errors);
+        await page.locator('#analyticsTabs [data-tab="hashsizes"]').click();
+        assert(await page.evaluate(() => window.__mcNodeTileSync.maps.length) === 0, 'closed route map is still registered for tile changes');
+      } finally { await c.context.close(); }
+    });
+
+    await test('a route that the user left before the theme arrived stays closed (#2464)', async () => {
+      const c = await newPage(browser);
+      try {
+        const { page } = c;
+        const releaseTheme = await holdTheme(page);
+        await openRoutePatterns(page);
+        await page.locator('#sp-quads tr[data-hops]').first().click();
+        await page.locator('#subpathDetail .subpath-meta').waitFor();
+        await page.locator('#analyticsTabs [data-tab="hashsizes"]').click();
+        await releaseTheme();
+        await page.locator('#analyticsTabs [data-tab="subpaths"]').click();
+        await page.locator('#subpathList tr[data-hops]').first().waitFor();
+        assert(await page.locator('#subpathDetail.collapsed').count() === 1, 'a previous route reopened');
+      } finally { await c.context.close(); }
+    });
+
+    for (const excluded of [false, true]) {
+      await test('the hop filter ' + (excluded ? 'closes an excluded' : 'keeps an eligible') + ' selected route (#2464)', async () => {
+        const { page, context, errors, requests } = await newPage(browser);
+        try {
+          const releaseTheme = await holdTheme(page);
+          await openRoutePatterns(page);
+          const rows = page.locator('#subpathList tr[data-hops]');
+          await rows.first().waitFor();
+          const group = page.locator((excluded ? '#sp-quads' : '#sp-pairs') + ' tr[data-hops]');
+          const hops = (await rowHops(group)).find(hops => hasShortHop(hops) === excluded);
+          assert(hops, 'fixture needs routes with and without one-byte hops');
+          await page.locator('tr[data-hops="' + hops + '"]').first().click();
+          const tiles = page.locator('#subpathMap .leaflet-tile-loaded').first();
+          await tiles.waitFor();
+          await page.evaluate(() => {
+            invalidateApiCache('/analytics/subpath-detail');
+            window.MC_setHide1ByteHops(true);
+          });
+          await releaseTheme();
+          await rows.first().waitFor();
+          assert(!(await rowHops(rows)).some(hasShortHop), 'filtered list still contains a one-byte hop');
+          if (excluded) {
+            assert(await page.locator('tr.subpath-selected').count() === 0 && await page.locator('#subpathDetail.collapsed').count() === 1,
+              'excluded selection stayed open');
+          } else {
+            const selected = page.locator('tr.subpath-selected');
+            assert(await selected.count() === 1 && await selected.getAttribute('data-hops') === hops, 'eligible selection lost');
+            assert(await page.locator('#subpathDetail .hop-prefix').first().textContent() === hops.split(',').join(' → '), 'wrong route detail');
+            await tiles.waitFor();
+          }
+          assert(await page.evaluate(() => window.__mcHarness.maps.length) === (excluded ? 0 : 1), 'unexpected live route map count');
+          assert(requests.filter(url => url.includes('/subpath-detail?')).length === 1, 'expected a single route detail request');
+          assert(errors.length === 0, 'page errors: ' + errors);
+        } finally { await context.close(); }
+      });
+    }
+
+    await test('the late server theme retries a failed Route Patterns list using the current filters (#2464)', async () => {
+      const { page, context, errors } = await newPage(browser);
+      try {
+        const releaseTheme = await holdTheme(page);
+        let attempts = 0;
+        await page.route('**/api/analytics/subpaths-bulk?**', route => ++attempts === 1
+          ? route.fulfill({ status: 500, body: 'Temporary list failure' }) : route.continue());
+        await openRoutePatterns(page);
+        const error = page.getByText(/Error loading subpath data/);
+        await error.waitFor();
+        await page.evaluate(() => window.MC_setHide1ByteHops(true));
+        await releaseTheme();
+        assert(!await error.isVisible(), 'route list still shows its error after ' + attempts + ' request(s)');
+        const rows = page.locator('#subpathList tr[data-hops]');
+        await rows.first().waitFor();
+        assert(attempts === 2 && !(await rowHops(rows)).some(hasShortHop), 'expected one retry showing only eligible rows');
+        assert(await page.locator('#analyticsTabs .active').getAttribute('data-tab') === 'subpaths', 'retry changed tabs');
+        assert(errors.length === 0, 'page errors: ' + errors);
+      } finally { await context.close(); }
+    });
   } finally {
     await browser.close();
   }

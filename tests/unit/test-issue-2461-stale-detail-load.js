@@ -47,7 +47,7 @@ function extractIfPresent(file, re) {
 
 const HOME = [
   extractIfPresent('home.js', /function removeMiniMap\s*\(\)\s*\{/),
-  extract('home.js', /async function loadHealth\s*\(pubkey\)\s*\{/),
+  extract('home.js', /async function loadHealth\s*\([^)]*\)\s*\{/),
   extract('home.js', /function destroy\s*\(\)\s*\{/),
   extract('home.js', /function renderHome\s*\(container\)\s*\{/),
   extract('home.js', /function showChooser\s*\(container\)\s*\{/),
@@ -55,7 +55,7 @@ const HOME = [
 const ANALYTICS = [
   extractIfPresent('analytics.js', /function removeSubpathMap\s*\(\)\s*\{/),
   extract('analytics.js', /function renderSubpathDetail\s*\(panel, data\)\s*\{/),
-  extract('analytics.js', /async function loadSubpathDetail\s*\(hopsStr\)\s*\{/),
+  extract('analytics.js', /async function loadSubpathDetail\s*\([^)]*\)\s*\{/),
   extract('analytics.js', /function destroy\s*\(\)\s*\{/),
   extract('analytics.js', /async function renderTab\s*\(tab\)\s*\{/),
 ].join('\n');
