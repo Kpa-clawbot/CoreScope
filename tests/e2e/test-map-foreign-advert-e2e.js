@@ -136,10 +136,10 @@ async function scenario(browser, width, theme) {
   await step(width + 'px ' + theme + ': share, clear and revisit the historical advert filter', async () => {
     const drawn = () => page.evaluate(ids => ids.filter(id => !!window.fixtureMarker(id)), [...keys, 'observer-only']);
     assert.deepEqual(await drawn(), [keys[0]], 'the fresh shared link must draw only positioned nodes with a past foreign advert');
-    const filter = page.getByRole('checkbox', { name: 'Only nodes with a past foreign advert' });
+    const filter = page.getByLabel('Only nodes with a past foreign advert', { exact: true });
     const gear = page.getByRole('button', { name: 'Toggle map controls' });
     if (await gear.getAttribute('aria-expanded') === 'false') await gear.click();
-    const section = page.getByRole('button', { name: 'Filters', exact: true });
+    const section = page.getByRole('button', { name: /^Filters\b/i });
     if (await section.getAttribute('aria-expanded') === 'false') await section.click();
     assert.ok(await filter.isChecked());
     const bulkReads = requests.filter(p => p === '/api/nodes').length;
