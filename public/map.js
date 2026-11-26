@@ -208,11 +208,9 @@
     return ev.declared || ev.observed;
   }
 
-  // nodeFiltersNarrowed says whether a node filter that also removes
-  // non-forwarding roles is active. The observer layer stands down while it
-  // is (see observerLayerShown).
+  // Plain observer pins have no node scope, region or foreign-advert evidence.
   function nodeFiltersNarrowed(f) {
-    return (!!f.scopeState && f.scopeState !== 'all') || !!f.regionScope;
+    return (!!f.scopeState && f.scopeState !== 'all') || !!f.regionScope || !!f.foreignOnly;
   }
 
   // observerLayerShown decides whether _renderMarkersInner draws the plain
@@ -233,6 +231,7 @@
   function nodePassesMapFilters(n, f, ctx) {
     if (!n.lat || !n.lon) return false;
     if (!f[n.role || 'companion']) return false;
+    if (f.foreignOnly && n.foreign !== true) return false;
     // Byte size filter (applies only to repeaters). A node with no observed
     // size is its own bucket: folding it into "1-byte" made that bucket a
     // mix of measured and merely-unheard nodes.
@@ -569,7 +568,7 @@
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
             <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
             <label for="mcScopeOverlay" title="Colour repeater markers by their region-scope configuration"><input type="checkbox" id="mcScopeOverlay"> Scope config colours</label>
-            <label for="mcEstimated" title="Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Follows the repeater role filter only, not the area, region or last-heard filters."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
+            <label for="mcEstimated" title="Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Hidden when filtering for past foreign adverts or excluding repeaters. Independent of area, region and last-heard filters."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
             <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
           </fieldset>
           <div id="mapAreaFilter"></div>
@@ -591,6 +590,7 @@
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
+            <label for="mcForeignOnly" title="${FOREIGN_ADVERT_DESCRIPTION}"><input type="checkbox" id="mcForeignOnly"> Only nodes with a past foreign advert</label>
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
             <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Ref: <span id="mcNeighborRefName">—</span></div>
             <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Click a node marker to set the reference node</div>
@@ -811,6 +811,16 @@
     const heatEl = document.getElementById('mcHeatmap');
     if (localStorage.getItem('meshcore-map-heatmap') === 'true') { heatEl.checked = true; }
     heatEl.addEventListener('change', e => { localStorage.setItem('meshcore-map-heatmap', e.target.checked); toggleHeatmap(e.target.checked); });
+    const foreignEl = document.getElementById('mcForeignOnly');
+    filters.foreignOnly = urlParams.get('foreign') === 'true';
+    foreignEl.checked = filters.foreignOnly;
+    foreignEl.addEventListener('change', () => {
+      filters.foreignOnly = foreignEl.checked;
+      const hash = URLState.updateHashParams({ foreign: filters.foreignOnly ? 'true' : null }, location.hash);
+      history.replaceState(history.state, '', hash);
+      renderMarkers();
+      renderEstimated();
+    });
     document.getElementById('mcNeighbors').addEventListener('change', e => {
       filters.neighbors = e.target.checked;
       const hintEl = document.getElementById('mcNeighborHint');
@@ -2082,12 +2092,11 @@
     }
   }
 
-  // renderEstimated draws the estimated positions, hidden with the toggle or
-  // when repeaters are filtered out (they are all repeaters).
+  // Reported-only repeaters have never advertised, so they cannot carry the flag.
   function renderEstimated() {
     if (!estimatedLayer || !window.MapEstimated) return;
     estimatedLayer.clearLayers();
-    if (filters.estimated && filters.repeater) window.MapEstimated.addTo(estimatedLayer, L, reported.nodes, reported.method);
+    if (filters.estimated && filters.repeater && !filters.foreignOnly) window.MapEstimated.addTo(estimatedLayer, L, reported.nodes, reported.method);
   }
 
   function renderMarkers() {
