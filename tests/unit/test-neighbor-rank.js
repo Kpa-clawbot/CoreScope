@@ -32,6 +32,13 @@ t('buildQuery sanitizes bad role, page and over-long q', () => {
   assert.strictEqual(NR.buildQuery({ page: 'abc' }), 'offset=0&limit=50');
   const q = decodeURIComponent(NR.buildQuery({ q: 'x'.repeat(200) }).split('&')[0].slice(2));
   assert.strictEqual(q.length, 64);
+  // The cap counts characters, as the server does, and never cuts one in two.
+  const qe = decodeURIComponent(NR.buildQuery({ q: 'é'.repeat(70) }).split('&')[0].slice(2));
+  assert.strictEqual(qe, 'é'.repeat(64));
+  const emoji = '\u{1F4E1}'; // 2 UTF-16 units, 1 character
+  const qm = decodeURIComponent(NR.buildQuery({ q: 'a' + emoji.repeat(70) }).split('&')[0].slice(2));
+  assert.strictEqual(Array.from(qm).length, 64);
+  assert.strictEqual(qm, 'a' + emoji.repeat(63));
 });
 
 t('parseHashState round trip', () => {

@@ -370,6 +370,25 @@ func TestNeighborRankBadParams(t *testing.T) {
 	}
 }
 
+// The 64-character limit counts characters, not UTF-8 bytes: 64 accented
+// characters (128 bytes) pass and 65 fail, as the docs and the input say.
+func TestNeighborRankQueryLimitCountsCharacters(t *testing.T) {
+	s := standardRankServer(t)
+	for _, c := range []struct {
+		q    string
+		want int
+	}{
+		{strings.Repeat("é", 64), http.StatusOK},
+		{strings.Repeat("é", 65), http.StatusBadRequest},
+		{"Station de répétition " + strings.Repeat("à", 42), http.StatusOK}, // 64 characters
+		{strings.Repeat("日", 64), http.StatusOK},                          // 3 bytes each
+	} {
+		if rr, _ := getRank(t, s, "q="+url.QueryEscape(c.q)); rr.Code != c.want {
+			t.Errorf("%d characters, %d bytes: status %d, want %d", len([]rune(c.q)), len(c.q), rr.Code, c.want)
+		}
+	}
+}
+
 func TestNeighborRankNoSnapshot503(t *testing.T) {
 	// A DB without neighbor_edges and no prior snapshot: nothing to serve.
 	conn, err := sql.Open("sqlite3", ":memory:")

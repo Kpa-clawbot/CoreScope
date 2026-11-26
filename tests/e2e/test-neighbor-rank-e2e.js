@@ -13,6 +13,12 @@ async function getJson(page, url) {
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage();
+  // Analytics renders the tab again on the first theme-refresh after a load;
+  // typing before it would go into the input that render replaces.
+  await page.addInitScript(() => {
+    window.addEventListener('theme-refresh', () => { window.__themeReady = true; }, { once: true });
+  });
+  const themeReady = () => page.waitForFunction(() => window.__themeReady === true, null, { timeout: 15000 });
 
   // 1. Endpoint shape.
   const api = await getJson(page, BASE + '/api/nodes/neighbor-rank?offset=0&limit=50');
@@ -29,6 +35,8 @@ async function getJson(page, url) {
   await page.waitForSelector('#nrRows tr', { timeout: 20000 });
   check((await page.locator('#nrRows tr').count()) === api.entries.length, 'row count != API entries');
   check(await page.locator('.nr-foot', { hasText: 'ranked nodes' }).count(), 'ranked footer missing');
+  await themeReady();
+  await page.waitForSelector('#nrRows tr', { timeout: 20000 });
 
   // 3. Search narrows without renumbering.
   const target = api.entries.find(e => e.name) || api.entries[0];
@@ -83,6 +91,42 @@ async function getJson(page, url) {
   } else {
     console.log('  (Reach card not rendered for this node; link check skipped)');
   }
+
+  // 7. Leaving the tab cancels what it started (#2457 review). Two paths:
+  //    a search still in its 250 ms debounce, and a request in flight.
+  //    Neither may rewrite the other tab's URL, fetch after leaving, or
+  //    throw when its answer lands. A fresh page, so only errors from here count.
+  await page.close();
+  const p7 = await browser.newPage();
+  await p7.addInitScript(() => {
+    window.addEventListener('theme-refresh', () => { window.__themeReady = true; }, { once: true });
+  });
+  const errors = [];
+  p7.on('pageerror', e => errors.push(String(e) + ' @ ' + String(e.stack).split('\n').slice(1, 4).join(' / ')));
+  const rankRequests = [];
+  p7.on('request', r => { if (r.url().includes('/api/nodes/neighbor-rank')) rankRequests.push(Date.now()); });
+
+  await p7.goto(BASE + '/#/analytics?tab=neighbor-rank');
+  await p7.waitForFunction(() => window.__themeReady === true, null, { timeout: 15000 });
+  await p7.waitForSelector('#nrRows tr', { timeout: 20000 });
+  await p7.fill('#nrSearch', term);
+  const left = Date.now();
+  await p7.click('.tab-btn[data-tab="overview"]');
+  await p7.waitForTimeout(800);
+  check(!p7.url().includes('q='), 'debounced search rewrote the other tab\'s URL: ' + p7.url());
+  check(!rankRequests.some(t => t >= left), 'debounced search fetched after leaving the tab');
+
+  let release;
+  const held = new Promise(r => { release = r; });
+  await p7.route('**/api/nodes/neighbor-rank**', async route => { await held; await route.continue(); });
+  await p7.click('.tab-btn[data-tab="neighbor-rank"]');
+  await p7.waitForFunction(() => /Loading/.test((document.getElementById('nrStatus') || {}).textContent || ''));
+  await p7.click('.tab-btn[data-tab="overview"]');
+  release();
+  await p7.waitForTimeout(800);
+  await p7.unroute('**/api/nodes/neighbor-rank**');
+  check(!p7.url().includes('tab=neighbor-rank'), 'late answer brought the tab back: ' + p7.url());
+  check(!errors.length, 'page errors after leaving the tab: ' + errors.join(' | '));
 
   await browser.close();
   console.log('neighbor-rank E2E OK');

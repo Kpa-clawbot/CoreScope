@@ -19,7 +19,8 @@
 
   function normState(s) {
     s = s || {};
-    var q = String(s.q == null ? '' : s.q).trim().slice(0, MAX_Q);
+    // Code points, as the server counts them (no lone surrogate from a cut emoji).
+    var q = Array.from(String(s.q == null ? '' : s.q).trim()).slice(0, MAX_Q).join('');
     var role = ROLES.indexOf(s.role) >= 0 ? s.role : '';
     var page = parseInt(s.page, 10);
     if (!isFinite(page) || page < 1) page = 1;
@@ -126,6 +127,9 @@
 
     var $ = function (id) { return el.querySelector('#' + id); };
     var rows = $('nrRows'), status = $('nrStatus'), prev = $('nrPrev'), next = $('nrNext');
+    // el is the shared #analyticsContent, still connected on every other tab;
+    // only this render's own rows say whether the tab is still the one shown.
+    function live() { return rows.isConnected; }
 
     function syncChips() {
       el.querySelectorAll('.nr-chip').forEach(function (b) {
@@ -158,7 +162,7 @@
       var pendingNow = focusPending;
       var qs = buildQuery(pendingNow ? state : Object.assign({}, state, { focus: '' }));
       api('/nodes/neighbor-rank?' + qs, { bust: true }).then(function (d) {
-        if (id !== reqId || !el.isConnected) return;
+        if (id !== reqId || !live()) return;
         var entries = (d && d.entries) || [];
         var total = (d && d.total) || 0;
         lastTotal = total;
@@ -192,12 +196,14 @@
         var f = rows.querySelector('.nr-focus');
         if (f && f.scrollIntoView) f.scrollIntoView({ block: 'center' });
       }).catch(function (err) {
-        if (id !== reqId || !el.isConnected) return;
+        if (id !== reqId || !live()) return;
         showError(err);
       });
     }
 
     function change(patch) {
+      // A debounced search or a click that outlives the tab changes nothing.
+      if (!live()) return;
       focusPending = false;
       for (var k in patch) state[k] = patch[k];
       state = normState(state);

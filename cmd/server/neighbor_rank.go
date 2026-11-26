@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Limits for GET /api/nodes/neighbor-rank.
@@ -124,7 +125,7 @@ func (s *Server) getNeighborRankView(ctx context.Context) *neighborRankView {
 func (s *Server) handleNeighborRank(w http.ResponseWriter, r *http.Request) {
 	qp := r.URL.Query()
 	q := strings.ToLower(strings.TrimSpace(qp.Get("q")))
-	if len(q) > neighborRankMaxQuery {
+	if utf8.RuneCountInString(q) > neighborRankMaxQuery { // characters, as documented, not bytes
 		writeError(w, http.StatusBadRequest, "q too long: max 64 characters")
 		return
 	}
