@@ -9,7 +9,9 @@
  *   - the planner shows the approximate-positions notice (when the planner
  *     is enabled on this server);
  *   - a packet served with location_hidden shows the hidden-bytes message and
- *     the page logs no console errors.
+ *     the page logs no console errors;
+ *   - one companion's RX coverage (?rx=) refused to an anonymous viewer shows
+ *     a notice, not a blank map (when clientRxCoverage is on).
  *
  * BASE_URL defaults to http://localhost:3000. Never point this at production.
  */
@@ -112,6 +114,29 @@ async function main() {
     check((msg || '').includes('Raw bytes hidden'), 'hidden-bytes message shown: ' + JSON.stringify(msg));
     check(await page.locator('.hex-dump').count() === 0, 'no hex dump for the hidden packet');
     check(consoleErrors.length === 0, 'no console errors on the hidden packet' + (consoleErrors.length ? ': ' + consoleErrors.join(' | ') : ''));
+  }
+
+  // One companion's coverage, refused to an anonymous viewer: a notice, not a
+  // blank map, and it goes once the view is everyone's again. Any pubkey is
+  // refused, so none from the fixture is needed.
+  const rx = 'ab'.repeat(32);
+  const gate = await fetch(`${BASE}/api/rx-coverage?bbox=-90,-180,90,180&z=8&rx=${rx}`);
+  if (gate.status === 404 && process.env.LOCPRIV_REQUIRE !== '1') {
+    console.log('  SKIP: clientRxCoverage not enabled on this server');
+  } else {
+    check(gate.status === 403, 'anonymous ?rx= coverage is refused: HTTP ' + gate.status);
+    await page.goto(`${BASE}/#/rx-coverage?days=7&rx=${rx}`, { waitUntil: 'domcontentloaded' });
+    const shown = await page.waitForSelector('#rxRefused:not([hidden])', { timeout: 15000 }).then(() => true, () => false);
+    check(shown, 'refused per-companion view shows a notice');
+    const note = await page.locator('#rxRefused').textContent().catch(() => '');
+    check(/owner or an admin/.test(note || ''), 'notice says who can see it: ' + JSON.stringify(note));
+    check(await page.locator('#rxMap path.leaflet-interactive').count() === 0, 'no hexes drawn under the notice');
+    await page.goto(`${BASE}/#/rx-coverage?days=7`, { waitUntil: 'domcontentloaded' });
+    const gone = await page.waitForFunction(() => {
+      const el = document.getElementById('rxRefused');
+      return el && el.hidden;
+    }, null, { timeout: 15000 }).then(() => true, () => false);
+    check(gone, 'notice hidden once no companion is selected');
   }
 
   await browser.close();

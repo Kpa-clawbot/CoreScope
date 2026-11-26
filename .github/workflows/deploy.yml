@@ -634,6 +634,7 @@ jobs:
           {
             "port": 13583,
             "locationPrivacy": { "enabled": true, "radiusM": 1000 },
+            "clientRxCoverage": { "enabled": true },
             "planner": { "enabled": true }
           }
           JSON
