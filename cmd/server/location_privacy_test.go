@@ -686,6 +686,20 @@ func TestLocationPrivacyFailClosed(t *testing.T) {
 	enabledFalse := write("false.json", `{"locationPrivacy": {"enabled": false, "radiusM": 1000, "secret": ""},}`)
 	noEnabled := write("noenabled.json", `{"locationPrivacy": {"radiusM": 1000},}`)
 	without := write("without.json", `{"port": 3000,`)
+	// #2458 review: neither may start with exact positions.
+	quotedTrue := write("quoted.json", `{"locationPrivacy": {"enabled": "true", "secret": "`+testLocSecret+`"}}`)
+	braceInComment := write("brace.json", `{"locationPrivacy": {"_comment": "see {docs}", "enabled": true}, "port": 3000,}`)
+	// Go keeps the last of two keys, and matches keys and escapes as below.
+	dupEnabled := write("dup.json", `{"locationPrivacy": {"enabled": false, "enabled": true}, "port": 3000,}`)
+	dupBlock := write("dupblock.json", `{"locationPrivacy": {"enabled": false}, "locationPrivacy": {"enabled": true}, "port": 3000,}`)
+	escapedKey := write("escaped.json", `{"location\u0050rivacy": {"\u0065nabled": true}, "port": 3000,}`)
+	// An unescaped quote earlier in the file pairs the strings up wrongly.
+	strayQuote := write("stray.json", `{"_c": "say "hi" there", "locationPrivacy": {"enabled": true}}`)
+	unterminated := write("unterminated.json", `{"locationPrivacy": {"enabled": false}, "_c": "oops, "locationPrivacy": {"enabled": true}}`)
+	unterminatedNoMention := write("unterminated2.json", `{"locationPrivacy": {"enabled": false}, "_c": "oops}`)
+	// A clean block is read exactly: braces in strings, duplicates resolved to false.
+	falseBraceComment := write("falsebrace.json", `{"locationPrivacy": {"_comment": "see {docs} \"quoted\"", "enabled": false}, "port": 3000,}`)
+	mentionOnly := write("mention.json", `{"_c": "set locationPrivacy to hide positions", "port": 3000,}`)
 	missing := filepath.Join(dir, "missing.json")
 	parseErr := json.Unmarshal([]byte(`{"port": 3000,`), &Config{})
 	cases := []struct {
@@ -702,6 +716,16 @@ func TestLocationPrivacyFailClosed(t *testing.T) {
 		{"parse error, block without enabled", parseErr, noEnabled, false, false},
 		{"parse error, no block", parseErr, without, false, false},
 		{"parse error, file missing", parseErr, missing, false, false},
+		{"parse error, enabled quoted \"true\"", parseErr, quotedTrue, false, true},
+		{"parse error, brace in a string before enabled", parseErr, braceInComment, false, true},
+		{"parse error, enabled false then true", parseErr, dupEnabled, false, true},
+		{"parse error, second block enabled", parseErr, dupBlock, false, true},
+		{"parse error, escaped keys", parseErr, escapedKey, false, true},
+		{"parse error, stray quote before the block", parseErr, strayQuote, false, true},
+		{"parse error, unread tail names the block again", parseErr, unterminated, false, true},
+		{"parse error, enabled false, unread tail without the name", parseErr, unterminatedNoMention, false, false},
+		{"parse error, enabled false, braces and quotes in a string", parseErr, falseBraceComment, false, false},
+		{"parse error, name only mentioned in a string", parseErr, mentionOnly, false, false},
 		{"parse error, env set, enabled false", parseErr, enabledFalse, true, true},
 		{"parse error, env set, no block", parseErr, without, true, true},
 		{"parse error, env set, file missing", parseErr, missing, true, true},

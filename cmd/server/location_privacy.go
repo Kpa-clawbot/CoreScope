@@ -9,7 +9,6 @@ import (
 	"hash"
 	"math"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -384,19 +383,15 @@ func avoidNullIsland(lat, lon float64) (float64, float64) {
 	return lat, lon
 }
 
-// locEnabledTrueRe matches a locationPrivacy block that says "enabled": true
-// in raw config bytes, with Go's case-insensitive key matching.
-var locEnabledTrueRe = regexp.MustCompile(`(?i)"locationPrivacy"\s*:\s*\{[^}]*"enabled"\s*:\s*true`)
-
 // locationPrivacyFailClosed decides whether a config file that could not be
 // parsed (loadErr, at cfgPath) must stop the server, because the fallback
 // (the next config file or the defaults) would serve exact positions. It
 // must when the secret environment variable is set, or when the raw file
-// has a locationPrivacy block with "enabled": true. A file that merely
-// contains the stock disabled block (config.example.json, copied by the
-// Docker entrypoint) does not stop it; nor does a missing or unreadable
-// file without the env secret, or no parse error. The error never contains
-// the secret or the file contents.
+// may turn location privacy on (rawLocationPrivacyMayEnable). A file whose
+// every locationPrivacy block reads as off, such as the stock disabled block
+// in config.example.json (copied by the Docker entrypoint), does not stop
+// it; nor does a missing or unreadable file without the env secret, or no
+// parse error. The error never contains the secret or the file contents.
 func locationPrivacyFailClosed(loadErr error, cfgPath string, getenv func(string) string) error {
 	if loadErr == nil {
 		return nil
@@ -405,10 +400,65 @@ func locationPrivacyFailClosed(loadErr error, cfgPath string, getenv func(string
 		return fmt.Errorf("config.json could not be parsed and %s is set; refusing to start with exact positions: %w", locationSecretEnv, loadErr)
 	}
 	data, err := os.ReadFile(cfgPath)
-	if err != nil || !locEnabledTrueRe.Match(data) {
+	if err != nil || !rawLocationPrivacyMayEnable(data) {
 		return nil
 	}
-	return fmt.Errorf("config.json could not be parsed and location privacy appears configured; refusing to start with exact positions: %w", loadErr)
+	return fmt.Errorf("config.json could not be parsed and location privacy appears configured; fix the file, or set locationPrivacy.enabled to false; refusing to start with exact positions: %w", loadErr)
+}
+
+// rawLocationPrivacyMayEnable reads a config file that json.Unmarshal
+// rejected and reports whether it may turn location privacy on. It walks the
+// file's string tokens (escapes included, so braces and quotes inside
+// strings are skipped). Every key that decodes to locationPrivacy, matched
+// case-insensitively as encoding/json does, has its value decoded on its own
+// through LocationPrivacyConfig.UnmarshalJSON, so duplicate keys, escapes and
+// a quoted "true" read exactly as a clean load would read them. Any block
+// that does not decode, or decodes as enabled, may enable.
+//
+// A syntax error can also hide a block from the walk: an unescaped quote
+// pairs the following strings up wrongly, an unterminated one ends the walk.
+// So every case-insensitive "locationprivacy" in the raw bytes must lie
+// inside a string token the walk read; one outside them may enable.
+func rawLocationPrivacyMayEnable(raw []byte) bool {
+	const name = "locationprivacy"
+	data := string(raw)
+	total := strings.Count(strings.ToLower(data), name)
+	seen := 0
+	for i := 0; i < len(data); i++ {
+		if data[i] != '"' {
+			continue
+		}
+		end := jsonStringEnd(data, i)
+		if end < 0 {
+			break // unterminated: the rest is unread
+		}
+		tok := data[i : end+1]
+		seen += strings.Count(strings.ToLower(tok), name)
+		var key string
+		if colon := skipJSONSpace(data, end+1); colon < len(data) && data[colon] == ':' &&
+			json.Unmarshal([]byte(tok), &key) == nil && strings.EqualFold(key, "locationPrivacy") {
+			var c LocationPrivacyConfig
+			if err := json.NewDecoder(strings.NewReader(data[colon+1:])).Decode(&c); err != nil || c.Enabled {
+				return true
+			}
+		}
+		i = end
+	}
+	return seen != total
+}
+
+// jsonStringEnd returns the index of the quote closing the JSON string that
+// opens at data[start], or -1 when it is not closed.
+func jsonStringEnd(data string, start int) int {
+	for j := start + 1; j < len(data); j++ {
+		switch data[j] {
+		case '\\':
+			j++
+		case '"':
+			return j
+		}
+	}
+	return -1
 }
 
 // locationPrivacyStartupCheck is the check on a config that did load: with

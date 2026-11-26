@@ -105,10 +105,14 @@ Does not protect against:
   misspelled key or a missing `enabled` stops startup, so a supplied secret never leaves the
   instance serving exact positions.
 - **Unparseable config.** If `config.json` cannot be parsed, the server refuses to start when
-  `CORESCOPE_LOCATION_SECRET` is set, or when the raw file has a `locationPrivacy` block with
-  `"enabled": true`. A disabled install with a broken config (for example a copy of
-  `config.example.json`, whose block is disabled, with a typo) starts as before, as does a missing
-  or unreadable file without the env secret.
+  `CORESCOPE_LOCATION_SECRET` is set, or when the raw file may turn location privacy on: a
+  `locationPrivacy` block that does not read as off on its own (a quoted `"true"`, a second
+  `enabled` or a second block saying `true`, or a block that is itself broken), or one the server
+  cannot find its way to because a broken string earlier in the file hides it. A file whose every
+  block reads as off (for example a copy of `config.example.json`, whose block is disabled, with a
+  typo elsewhere) starts as before, as does a file without the block, or a missing or unreadable
+  file without the env secret. To get past a refusal, fix the file, or set
+  `"enabled": false` in the block.
 - **Replicas.** Each replica keeps its own small in-memory state that stops a node flickering
   between cells near a cell edge. A node sitting exactly on a cell edge when a replica starts may
   therefore be shown at a slightly different approximate point by different replicas. Both points
