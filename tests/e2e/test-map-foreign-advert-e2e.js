@@ -56,6 +56,13 @@ async function toggle(page, id, checked) {
   }, { id, checked });
 }
 
+async function revisitMap(page, navigate) {
+  const oldMap = await page.locator('#leaflet-map').elementHandle();
+  await navigate();
+  await oldMap.waitForElementState('hidden');
+  await page.waitForSelector('#leaflet-map[data-loaded="true"]');
+}
+
 async function scenario(browser, width, theme) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme });
   const page = await context.newPage();
@@ -69,12 +76,14 @@ async function scenario(browser, width, theme) {
     scope_config_state: 'full', multi_byte_status: 'confirmed',
     ...(i === 2 ? {} : { foreign: i !== 1 }),
   }));
+  const mapHash = '#/map?theme=' + theme;
+  const sharedHash = mapHash + '&foreign=true';
+  let testingFilter = true;
   let includeObserver = true;
   let socket;
   await page.routeWebSocket('**', ws => { socket = ws; });
   await page.addInitScript(() => {
     localStorage.setItem('meshcore-map-clustering', 'false');
-    localStorage.setItem('meshcore-map-estimated', 'false');
     window.addEventListener('theme-refresh', () => { window.fixtureThemeReady = true; });
   });
   // Map tiles are unrelated to the flag and must not require an external API key.
@@ -89,11 +98,18 @@ async function scenario(browser, width, theme) {
     // Let a WS advert exercise loadNodes immediately, without the normal list TTL.
     if (url.pathname === '/api/config/cache') return json({ nodeList: 0, observers: 0 });
     if (url.pathname === '/api/stats') return json({ totalPackets: 0, totalNodes: nodes.length, totalObservers: 1 });
-    if (url.pathname === '/api/observers') return json({ observers: includeObserver ? [{ id: keys[0], name: 'Fixture observer', lat: 51, lon: 5 }] : [] });
+    if (url.pathname === '/api/observers') {
+      const observers = includeObserver ? [{ id: keys[0], name: 'Fixture observer', lat: 51, lon: 5 }] : [];
+      if (testingFilter) observers.push({ id: 'observer-only', name: 'Observer only', lat: 51, lon: 5 });
+      return json({ observers });
+    }
+    if (url.pathname === '/api/nodes/reported') return json({ nodes: [{
+      pubkey: 'ee'.repeat(32), name: 'Reported only', estimate: { lat: 51, lon: 5, radius_m: 500 },
+    }] });
     if (url.pathname === '/api/config/map') return json({ center: [51, 5], zoom: 16 });
     return json({});
   });
-  await page.goto(BASE + '/#/map?theme=' + theme, { waitUntil: 'load' });
+  await page.goto(BASE + '/' + sharedHash, { waitUntil: 'load' });
   await page.waitForSelector('#leaflet-map[data-loaded="true"]');
   // Initial theme application rebuilds the markers after its debounce.
   await page.waitForFunction(() => window.fixtureThemeReady);
@@ -116,6 +132,47 @@ async function scenario(browser, width, theme) {
     await page.waitForFunction(expected => JSON.stringify(window.__mc_nodes) === expected, JSON.stringify(nodes));
     assert.equal(requests.filter(p => p === '/api/nodes').length, previous + 1, 'one bulk node fetch per live refresh');
   };
+
+  await step(width + 'px ' + theme + ': share, clear and revisit the historical advert filter', async () => {
+    const drawn = () => page.evaluate(ids => ids.filter(id => !!window.fixtureMarker(id)), [...keys, 'observer-only']);
+    assert.deepEqual(await drawn(), [keys[0]], 'the fresh shared link must draw only positioned nodes with a past foreign advert');
+    const filter = page.getByRole('checkbox', { name: 'Only nodes with a past foreign advert' });
+    const gear = page.getByRole('button', { name: 'Toggle map controls' });
+    if (await gear.getAttribute('aria-expanded') === 'false') await gear.click();
+    const section = page.getByRole('button', { name: 'Filters', exact: true });
+    if (await section.getAttribute('aria-expanded') === 'false') await section.click();
+    assert.ok(await filter.isChecked());
+    const bulkReads = requests.filter(p => p === '/api/nodes').length;
+    await filter.uncheck();
+    assert.equal(new URL(page.url()).hash, mapHash, 'clearing the flag preserves the other shared parameters');
+    assert.deepEqual(await drawn(), [...keys.slice(0, 3), 'observer-only']);
+    await page.locator('.mc-est-marker').waitFor();
+    await filter.check();
+    assert.equal(new URL(page.url()).hash, sharedHash);
+    assert.deepEqual(await drawn(), [keys[0]]);
+    assert.equal(await page.locator('.mc-est-marker, .mc-est-area').count(), 0, 'repeaters without adverts cannot match the flag');
+    if (process.env.SCREENSHOT_DIR) {
+      fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'map-foreign-filter-' + width + '-' + theme + '.png') });
+    }
+    await toggle(page, 'mcRole_repeater', false);
+    assert.deepEqual(await drawn(), [], 'a role-filtered repeater must not reappear as a plain observer');
+    await toggle(page, 'mcRole_repeater', true);
+    await toggle(page, 'mcClusters', true);
+    assert.deepEqual(await drawn(), [keys[0]], 'the cluster layer receives the same filtered markers');
+    await toggle(page, 'mcClusters', false);
+    assert.equal(requests.filter(p => p === '/api/nodes').length, bulkReads, 'checkbox changes use the loaded node list');
+    await revisitMap(page, () => page.goto(BASE + '/#/map'));
+    assert.deepEqual(await drawn(), [...keys.slice(0, 3), 'observer-only'], 'the ordinary map clears the shared filter');
+    assert.equal(await filter.isChecked(), false);
+    await revisitMap(page, () => page.goBack());
+    assert.equal(new URL(page.url()).hash, sharedHash);
+    assert.ok(await filter.isChecked());
+    assert.deepEqual(await drawn(), [keys[0]], 'Back restores the shared filter');
+  });
+  testingFilter = false;
+  await toggle(page, 'mcEstimated', false);
+  await revisitMap(page, () => page.goto(BASE + '/' + mapHash));
 
   for (const labels of [true, false]) {
     const label = width + 'px ' + theme + ' ' + (labels ? 'hash labels' : 'dots');
