@@ -3,6 +3,8 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/meshcore-analyzer/dbschema"
 )
 
 func serveReach(srv *Server, path string) *httptest.ResponseRecorder {
@@ -69,7 +72,7 @@ func newReachIntegrationDB(t *testing.T, obsPath string) (*DB, string) {
 		`CREATE TABLE nodes (public_key TEXT, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, advert_count INTEGER)`,
 		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, from_pubkey TEXT, payload_type INTEGER, route_type INTEGER DEFAULT 1)`,
 		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, inactive INTEGER)`,
-		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, snr REAL, path_json TEXT, timestamp INTEGER)`,
+		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, direction TEXT, snr REAL, path_json TEXT, timestamp INTEGER)`,
 		`CREATE TABLE neighbor_edges (node_a TEXT, node_b TEXT, count INTEGER)`,
 	}
 	for _, s := range stmts {
@@ -94,6 +97,70 @@ func newReachIntegrationDB(t *testing.T, obsPath string) (*DB, string) {
 		}
 	}
 	return &DB{conn: conn, isV3: true}, n
+}
+
+func TestNodeReach_ExcludesTXObservations(t *testing.T) {
+	db, n := newReachIntegrationDB(t, `["AABB","01FA"]`)
+	defer db.conn.Close()
+	// Transmission 1 was both sent by OBS1 and received by OBS2. Transmission 2
+	// was only sent by OBS2. The other two current reports have legacy directions.
+	mustExecDB(t, db, `UPDATE observations SET direction = 'tx' WHERE id = 1;
+		INSERT INTO observers (id) VALUES ('OBS2');
+		INSERT INTO transmissions (id, payload_type) VALUES (2,5),(3,5),(4,5),(5,5);
+		INSERT INTO observations (id, transmission_id, observer_idx, direction, snr, path_json, timestamp) VALUES
+			(2,2,2,'tx',20,'["CCDD","01FA"]',unixepoch()),
+			(3,1,2,'rx',-6,'["AABB","01FA"]',unixepoch()),
+			(4,3,2,NULL,-2,'["AABB","01FA"]',unixepoch()),
+			(5,4,2,'',-4,'["AABB","01FA"]',unixepoch()),
+			(6,5,2,'rx',12,'["CCDD","01FA"]',unixepoch()-2*86400)`)
+	// Both TX rows precede the three eligible observations. They must not use
+	// up slots in the SQL result before directional attribution.
+	defer func(orig int) { reachScanRowLimit = orig }(reachScanRowLimit)
+	reachScanRowLimit = 4
+
+	for _, mode := range []string{"path_json", "hop_index"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := &Config{}
+			srv := &Server{store: newTestStoreWithDB(t, db, cfg), db: db, cfg: cfg, perfStats: NewPerfStats()}
+			if mode == "hop_index" {
+				if err := dbschema.EnsureObservationHopsSchema(db.conn, nil); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := dbschema.IndexObservationHops(db.conn, 0, math.MaxInt64); err != nil {
+					t.Fatal(err)
+				}
+				mustExecDB(t, db, `UPDATE observation_hops_coverage SET since = 0`)
+				// A broken indexed query would otherwise fall back to path_json.
+				rows, err := srv.scanReachRowsIndexed(t.Context(), map[string]bool{"01FA": true}, time.Now().Add(-24*time.Hour).Unix())
+				if err != nil || len(rows) != 3 {
+					t.Errorf("indexed scan returned %d rows, err=%v; want 3 eligible rows", len(rows), err)
+				}
+			}
+			rr := serveReach(srv, "/api/nodes/"+n+"/reach?days=1")
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status=%d, body=%s", rr.Code, rr.Body)
+			}
+			var resp NodeReachResponse
+			if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if resp.Importance.RelayObservations != 3 {
+				t.Errorf("relay observations=%d, want 3", resp.Importance.RelayObservations)
+			}
+			links := make(map[string][2]int)
+			for _, link := range resp.Links {
+				links[link.Pubkey] = [2]int{link.WeHear, link.TheyHear}
+			}
+			want := map[string][2]int{pk64("aabb"): {3, 0}, "obs2": {0, 3}}
+			if !maps.Equal(links, want) {
+				t.Errorf("directional links=%v, want %v", links, want)
+			}
+			obs := resp.DirectObservers
+			if len(obs) != 1 || obs[0].Pubkey != "obs2" || obs[0].Count != 3 || obs[0].AvgSNR == nil || *obs[0].AvgSNR != -4 {
+				t.Errorf("direct observers=%+v, want only OBS2 with count 3 and average SNR -4", obs)
+			}
+		})
+	}
 }
 
 func TestClampDays(t *testing.T) {
@@ -236,6 +303,7 @@ func TestNodeReach_ShapeAndClamp(t *testing.T) {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		transmission_id INTEGER,
 		observer_idx INTEGER,
+		direction TEXT,
 		snr REAL,
 		path_json TEXT,
 		timestamp INTEGER
