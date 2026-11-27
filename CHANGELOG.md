@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Pinned maps** (#2444) - a load with a saved map pick no longer starts the theme's Auto tiles first; a pick made in another tab reaches the maps already open there (the Home mini-map, Analytics route maps and node maps follow it, and **Auto** in one tab clears it in the others).
+
 ## [3.19.0] - 2026-11-24
 
 See [docs/release-notes/v3.19.0.md](docs/release-notes/v3.19.0.md) for the full notes. 32 commits since v3.18.0: 14 fix, 8 feat, 5 test, 2 ci, 2 docs, 1 refactor.

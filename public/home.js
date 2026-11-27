@@ -76,6 +76,7 @@
 
   function showChooser(container) {
     _healthGen++;
+    removeMiniMap(); // its container goes with the page content
     container.innerHTML = `
       <section class="home-chooser">
         <h1>Welcome to ${escapeHtml(window.SITE_CONFIG?.branding?.siteName || 'CoreScope')}</h1>
@@ -105,6 +106,7 @@
     const homeCfg = window.SITE_CONFIG?.home || null;
     const siteName = window.SITE_CONFIG?.branding?.siteName || 'CoreScope';
 
+    removeMiniMap(); // its container goes with the page content
     container.innerHTML = `
       <section class="home-hero">
         <svg class="home-hero-logo" xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" aria-hidden="true" focusable="false"><path d="M540 100 A 30 30 0 1 0 540 160" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="1.00"/>
@@ -273,11 +275,20 @@
     }
   }
 
+  // Every path that drops the mini-map comes through here: the tile-sync
+  // record (nodes.js _applyTilesToNodeMap) goes first, then the Leaflet map.
+  function removeMiniMap() {
+    if (!miniMap) return;
+    if (typeof window.__mcNodeTileSyncUnregister === 'function') window.__mcNodeTileSyncUnregister(miniMap);
+    window.MC_safeRemoveMap(miniMap);
+    miniMap = null;
+  }
+
   function destroy() {
     _healthGen++;
     clearTimeout(searchTimeout);
     if (searchAbort) { searchAbort.abort(); searchAbort = null; }
-    if (miniMap) { window.MC_safeRemoveMap(miniMap); miniMap = null; }
+    removeMiniMap();
     if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
   }
 
@@ -456,6 +467,7 @@
     const journey = document.getElementById('homeJourney');
     if (!card) return;
     const gen = ++_healthGen;
+    removeMiniMap(); // its container goes with the card's content
     card.innerHTML = '<p style="color:var(--text-muted);padding:12px">Loading…</p>';
     card.classList.add('visible');
     if (journey) journey.classList.remove('visible');
@@ -479,6 +491,7 @@
       const snrVal = stats.avgSnr;
       const snrLabel = snrQuality(snrVal).label;
 
+      removeMiniMap(); // its container goes with the card's content
       card.innerHTML = `
         <div class="health-banner ${color}">
           <span class="${status === 'healthy' ? 'status-ok' : status === 'degraded' ? 'status-warn' : 'status-err'}" aria-label="${status}">${status === 'healthy' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg>' : status === 'degraded' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x-circle"/></svg>'}</span>
@@ -528,21 +541,18 @@
 
       // Mini map
       if (hasLocation && typeof L !== 'undefined') {
-        if (miniMap) { miniMap.remove(); miniMap = null; }
         const mapEl = document.getElementById('healthMap');
         if (mapEl) {
           miniMap = L.map(mapEl, { zoomControl: false, attributionControl: false }).setView([node.lat, node.lon], 12);
-          // Follow the provider pick for the current theme; plain OSM if the
-          // shared tile module is absent.
-          const tileR = (typeof window.MC_resolveTile === 'function' && typeof window.MC_buildTileLayer === 'function')
-            ? window.MC_resolveTile(typeof window.MC_isDarkTheme === 'function' ? window.MC_isDarkTheme() : false) : null;
-          (tileR ? window.MC_buildTileLayer(tileR, { raster: true }) : L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')).addTo(miniMap);
-          try {
-            const pane = tileR && tileR.invertFilter && miniMap.getPane('tilePane');
-            if (pane) pane.style.filter = tileR.invertFilter;
-          } catch (_e) {}
+          // The shared helper (nodes.js) builds the pick for the current theme
+          // and keeps following it: a pick here or in another tab, a theme
+          // flip. Plain OSM if nodes.js is absent.
+          if (typeof window._applyTilesToNodeMap === 'function') window._applyTilesToNodeMap(miniMap);
+          else L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(miniMap);
           L.marker([node.lat, node.lon]).addTo(miniMap);
-          setTimeout(() => miniMap.invalidateSize(), 100);
+          // The map may be removed or replaced before the timer fires.
+          const m = miniMap;
+          setTimeout(() => { if (miniMap === m) m.invalidateSize(); }, 100);
         }
       }
 
@@ -559,6 +569,7 @@
       });
     } catch (e) {
       if (gen !== _healthGen) return;
+      removeMiniMap();
       card.innerHTML = '<p style="color:var(--status-red, #ef4444);padding:12px">Failed to load node health.</p>';
     }
   }

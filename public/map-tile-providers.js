@@ -1640,7 +1640,17 @@
       busy = false;
     }
 
-    function onStorage(e) { if (e && e.key === OVERLAYS_KEY) sync(); }
+    // Another tab changed the ticked overlays, or cleared localStorage (key
+    // null). Another storage area's events are not this preference. Storage
+    // now holds the newest value, which supersedes this tab's copy of a
+    // write that failed, as for the pin.
+    function onStorage(e) {
+      if (!e || _otherStorageArea(e)) return;
+      if (e.key !== OVERLAYS_KEY && e.key !== null) return;
+      _overlaysMemo = (e.key === OVERLAYS_KEY && e.newValue) ? e.newValue : null;
+      _overlaysUnsaved = false;
+      sync();
+    }
 
     try {
       window.addEventListener(OVERLAYS_EVENT, sync);
@@ -1713,6 +1723,8 @@
    * 'mc-tile-provider-changed' and on documentElement data-theme changes.
    * Every call keeps its own state, so several maps on one page are
    * independent; the config arriving async re-syncs through the same event.
+   * On a picker map that loads with a saved pick the group stays off the map
+   * and empty until Auto is shown (#2444).
    *
    * @param {L.Map} map
    * @param {{controlPosition?: string, bottomInset?: function(DOMRect): number}} [opts]
@@ -1724,7 +1736,13 @@
    */
   window.MC_attachAutoTiles = function (map, opts) {
     opts = opts || {};
-    var group = L.layerGroup().addTo(map);
+    var group = L.layerGroup();
+    // A picker map loading with a saved pick shows that pick, not Auto: the
+    // control adds the group only when Auto is shown, and the Auto layer is
+    // built when the group first joins the map, so the theme's tiles are not
+    // started only to be cancelled (#2444).
+    var lazy = !!opts.controlPosition && !!getPinnedId();
+    if (!lazy) group.addTo(map);
     var cur = null;       // descriptor the current layer was built from
     var layer = null;     // the layer inside group
     var destroyed = false;
@@ -1749,6 +1767,7 @@
 
     function sync() {
       if (destroyed) return;
+      if (!layer && lazy && !map.hasLayer(group)) return; // built on the group's first add
       var r;
       // On a map with a picker the Auto group is always the theme's map: the
       // pin is shown as the explicit layer, never loaded into the hidden group.
@@ -1791,6 +1810,7 @@
     }
 
     sync();
+    if (lazy) group.on('add', function () { if (!layer) sync(); });
     try { window.addEventListener(EVENT_NAME, onProviderChanged); } catch (_) {}
     if (typeof MutationObserver === 'function') {
       try {
@@ -1820,9 +1840,31 @@
   // ── Cross-tab sync ──────────────────────────────────────────────────────
   // If another tab in the same browser changes the provider, mirror the
   // dispatch + filter-apply here so live map.js / live.js swap tiles too.
+  // A pick saved there (mc-tile-pinned), or storage cleared there (key
+  // null), re-syncs the maps here the same way: a map without a picker
+  // follows the pin (when it fits the theme); a map with a picker keeps its
+  // layer and radio, its Auto ignoring the pin, until its next load (#2444).
+  // Nothing is written back, so tabs never echo each other's picks.
+  // Only localStorage counts: sessionStorage events (a same-origin iframe
+  // clearing its own arrives with key null) must not drop an unsaved pick.
+  function _otherStorageArea(e) {
+    if (!e.storageArea) return false; // not reported: treat as localStorage
+    try { return e.storageArea !== window.localStorage; } catch (_) { return false; }
+  }
   try {
     window.addEventListener('storage', function (e) {
-      if (!e || (e.key !== STORAGE_KEY && e.key !== STORAGE_KEY_LIGHT)) return;
+      if (!e) return;
+      if (_otherStorageArea(e)) return;
+      if (e.key === PIN_KEY || e.key === null) {
+        // Storage now holds the newest pick, which supersedes this tab's
+        // copy of a write that failed. getPinnedId validates it as usual.
+        _pinMemo = (e.key === PIN_KEY && e.newValue) ? e.newValue : null;
+        _pinUnsaved = false;
+        _dispatch(EVENT_NAME, { pinned: getPinnedId(), crossTab: true });
+        applyTileFilter();
+        return;
+      }
+      if (e.key !== STORAGE_KEY && e.key !== STORAGE_KEY_LIGHT) return;
       if (!_hasId(e.newValue)) return;
       var detail = { id: e.newValue, provider: REGISTRY[e.newValue], crossTab: true };
       try {
