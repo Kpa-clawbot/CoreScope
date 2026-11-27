@@ -6,8 +6,10 @@
  *
  * The real functions are extracted from the real public/*.js files by brace
  * counting and run in a vm sandbox (their IIFE/page closures make them
- * otherwise unreachable). The node-detail/reach/RX helper is covered in
- * test-issue-1470-node-tile-helper.js.
+ * otherwise unreachable). The analytics and home maps build through the
+ * nodes.js helper (_applyTilesToNodeMap), covered by itself in
+ * test-issue-1470-node-tile-helper.js; that they keep following the pick is
+ * in test-issue-2444-secondary-map-tile-sync.js.
  */
 'use strict';
 const vm = require('vm');
@@ -65,6 +67,11 @@ function makeL() {
   return { L, log, pane };
 }
 
+// What the page scripts get from nodes.js and roles.js at run time.
+const SHARED = extract('nodes.js', /function _applyTilesToNodeMap\s*\(map\)\s*\{/) +
+  '\nwindow._applyTilesToNodeMap = _applyTilesToNodeMap;\n' +
+  extract('roles.js', /window\.MC_safeRemoveMap = function\s*\(map\)\s*\{/) + ';\n';
+
 function withBuilder(ctx, desc) {
   ctx.MC_isDarkTheme = () => false;
   ctx.MC_resolveTile = () => desc;
@@ -78,7 +85,8 @@ const DESC = { url: 'https://sat.example/{z}/{x}/{y}', maxZoom: 19, invertFilter
 
 (async () => {
   console.log('── analytics subpath map ──');
-  const subSrc = extract('analytics.js', /function renderSubpathDetail\s*\(panel, data\)\s*\{/);
+  const subSrc = extract('analytics.js', /function removeSubpathMap\s*\(\)\s*\{/) + '\n' +
+    extract('analytics.js', /function renderSubpathDetail\s*\(panel, data\)\s*\{/);
   const data = {
     nodes: [{ name: 'a', lat: 1, lon: 2 }, { name: 'b', lat: 3, lon: 4 }],
     hops: ['aa', 'bb'], hourDistribution: new Array(24).fill(1), signal: {}, observers: [],
@@ -91,10 +99,10 @@ const DESC = { url: 'https://sat.example/{z}/{x}/{y}', maxZoom: 19, invertFilter
     ctx.window = ctx;
     if (builder) withBuilder(ctx, DESC);
     vm.createContext(ctx);
-    vm.runInContext('var _subpathMap = null;' + subSrc + '; renderSubpathDetail({ innerHTML: "" }, __d);', Object.assign(ctx, { __d: data }));
+    vm.runInContext((builder ? SHARED : '') + 'var _subpathMap = null;' + subSrc + '; renderSubpathDetail({ innerHTML: "" }, __d);', Object.assign(ctx, { __d: data }));
     return { log, pane, ctx };
   }
-  test('uses MC_buildTileLayer(MC_resolveTile(...)) when present and applies invertFilter', () => {
+  test('builds MC_buildTileLayer(MC_resolveTile(...)) through the nodes.js helper and applies invertFilter', () => {
     const { log, pane } = runSubpath(true);
     assert.strictEqual(log.built.length, 1);
     assert.strictEqual(log.built[0].desc, DESC);
@@ -113,14 +121,15 @@ const DESC = { url: 'https://sat.example/{z}/{x}/{y}', maxZoom: 19, invertFilter
     assert.strictEqual(log.removed.length, 1);
     assert.strictEqual(log.removed[0], log.maps[0], 'the previous map was the one removed');
   });
-  test('falls back to plain L.tileLayer(getTileUrl()) when the builder is absent', () => {
+  test('falls back to plain L.tileLayer(getTileUrl()) when the nodes.js helper is absent', () => {
     const { log } = runSubpath(false);
     assert.strictEqual(log.plain.length, 1);
     assert.strictEqual(log.plain[0].url, 'https://fallback/{z}/{x}/{y}');
   });
 
   console.log('── home mini-map ──');
-  const healthSrc = extract('home.js', /async function loadHealth\s*\(pubkey\)\s*\{/);
+  const healthSrc = extract('home.js', /function removeMiniMap\s*\(\)\s*\{/) + '\n' +
+    extract('home.js', /async function loadHealth\s*\(pubkey\)\s*\{/);
   async function runHome(builder) {
     const { L, log, pane } = makeL();
     const card = {
@@ -138,11 +147,11 @@ const DESC = { url: 'https://sat.example/{z}/{x}/{y}', maxZoom: 19, invertFilter
     ctx.window = ctx;
     if (builder) withBuilder(ctx, DESC);
     vm.createContext(ctx);
-    vm.runInContext(healthSrc + '; loadHealth("abc");', ctx);
+    vm.runInContext((builder ? SHARED : '') + healthSrc + '; loadHealth("abc");', ctx);
     await new Promise((r) => setImmediate(r));
     return { log, pane, card };
   }
-  await atest('uses MC_buildTileLayer for the current theme and applies invertFilter', async () => {
+  await atest('builds MC_buildTileLayer for the current theme through the nodes.js helper and applies invertFilter', async () => {
     const { log, pane } = await runHome(true);
     assert.strictEqual(log.built.length, 1);
     assert.strictEqual(log.built[0].desc, DESC);
@@ -150,7 +159,7 @@ const DESC = { url: 'https://sat.example/{z}/{x}/{y}', maxZoom: 19, invertFilter
     assert.strictEqual(pane.style.filter, 'invert(1)');
     assert.deepStrictEqual(JSON.parse(JSON.stringify(log.built[0].opts)), { raster: true }, 'mini-map is raster-only');
   });
-  await atest('keeps the OSM URL when the shared tile globals are absent', async () => {
+  await atest('keeps the OSM URL when the nodes.js helper is absent', async () => {
     const { log, card } = await runHome(false);
     assert.ok(!/Failed to load/.test(card.innerHTML), 'loadHealth completed: ' + card.innerHTML.slice(0, 80));
     assert.strictEqual(log.plain.length, 1);

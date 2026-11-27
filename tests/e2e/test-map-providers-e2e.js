@@ -41,18 +41,26 @@ const OPT_IN_IDS = ['eox-s2-2025', 'eox-s2-2016', 'eox-terrain-light', 'osmfr-ho
   'openfreemap-liberty', 'openfreemap-bright', 'openfreemap-positron', 'openfreemap-dark', 'openfreemap-fiord',
   'versatiles-colorful', 'versatiles-muted', 'versatiles-gray', 'versatiles-colorful-dark', 'versatiles-gray-dark'];
 
-async function newPage(browser, { theme, provider, overlays, custom, planner, providers } = {}) {
+async function newPage(browser, opts = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+  return newTab(context, opts, true);
+}
+
+// Another page (tab) in `context`, set up like the first one. The tile stub
+// is per context: only the first page installs it.
+async function newTab(context, { theme, provider, overlays, custom, planner, providers } = {}, first) {
   const page = await context.newPage();
   page.setDefaultTimeout(15000);
   const errors = [], warnings = [];
   page.on('pageerror', e => errors.push(String(e && e.message || e)));
   page.on('console', m => { if (m.type() === 'warning') warnings.push(m.text()); });
   await MH.installCollectors(page);
-  await MH.installTileStub(page, {
-    mode: 'stub', baseUrl: BASE,
-    extraHosts: [{ key: 'e2e-custom', kind: 'raster', test: new RegExp(CUSTOM_HOST.replace(/\./g, '\\.')) }],
-  });
+  if (first) {
+    await MH.installTileStub(page, {
+      mode: 'stub', baseUrl: BASE,
+      extraHosts: [{ key: 'e2e-custom', kind: 'raster', test: new RegExp(CUSTOM_HOST.replace(/\./g, '\\.')) }],
+    });
+  }
   await MH.presetStorage(page, { theme: theme || 'light', provider: provider || 'auto', overlays });
   // Rewrite map.tiles.custom / planner in the client config.
   await page.route('**/api/config/client', async (route) => {
@@ -265,15 +273,27 @@ async function run() {
             const box = document.querySelector(`label[data-tile-overlay-id="${o}"] input`);
             return { writes: window.__ovWrites, stored: JSON.parse(localStorage.getItem('mc-tile-overlays') || '[]'), box: !!(box && box.checked) };
           }, other);
+          // Waits for the state the asserts below expect after click n (n
+          // writes, hillshade stored iff `hill`, the other overlay stored and
+          // its box ticked), then one more frame and tick, so a late extra
+          // write or a box unticked by the deferred sync is still seen. A
+          // state that never arrives is reported by the asserts.
+          const settled = async (n, hill) => {
+            await c.page.waitForFunction(([o, want, h]) => {
+              const box = document.querySelector(`label[data-tile-overlay-id="${o}"] input`);
+              const stored = JSON.parse(localStorage.getItem('mc-tile-overlays') || '[]');
+              return window.__ovWrites >= want && stored.indexOf(o) >= 0 && (stored.indexOf('hillshade') >= 0) === h && !!(box && box.checked);
+            }, [other, n, hill], { timeout: 5000 }).catch(() => {});
+            await c.page.evaluate(() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))));
+            return state();
+          };
           await pickOverlay(c.page, 'hillshade');
-          await c.page.waitForTimeout(300);
-          let st = await state();
+          let st = await settled(1, true);
           assert(st.writes === 1, `first click wrote ${st.writes}x: ${JSON.stringify(st.stored)}`);
           assert(st.stored.indexOf(other) >= 0 && st.stored.indexOf('hillshade') >= 0, 'after first click stored ' + JSON.stringify(st.stored));
           assert(st.box, `${other} box not ticked after the first click`);
           await pickOverlay(c.page, 'hillshade');
-          await c.page.waitForTimeout(300);
-          st = await state();
+          st = await settled(2, false);
           assert(st.writes === 2, `second click: ${st.writes} writes in total, want 2: ${JSON.stringify(st.stored)}`);
           assert(st.stored.indexOf(other) >= 0 && st.stored.indexOf('hillshade') < 0, 'after second click stored ' + JSON.stringify(st.stored));
           assert(st.box, `${other} box not ticked after the second click`);
@@ -355,6 +375,14 @@ async function run() {
     const drawn = (page, re, scope) => page.waitForFunction(([src, sel]) =>
       Array.from(document.querySelectorAll(sel + ' .leaflet-tile-pane img.leaflet-tile-loaded')).some(i => new RegExp(src).test(i.src)),
       [re, scope || ''], { timeout: 15000 });
+    // Home and the Analytics tabs rebuild their content on 'theme-refresh',
+    // which app.js fires 300 ms after each 'theme-changed'; a page load ends
+    // with one, once /api/config/theme is applied. A card or route detail
+    // opened before it is dropped with its map, and the network going idle
+    // does not order after it: wait for the config and for app.js's timer.
+    const themeSettled = (page) => page.waitForFunction(() =>
+      !!(window._customizerV2 && window._customizerV2.initDone) && _themeRefreshTimer === null,
+      null, { timeout: 15000 });
     {
       const c = await newPage(browser, { theme: 'light' });
       try {
@@ -418,6 +446,161 @@ async function run() {
           assert(c.errors.length === 0, 'page errors: ' + c.errors);
         });
       } finally { await c.context.close(); }
+    }
+
+    // ── 7d. A load with a saved pick never starts the Auto tiles ────────
+    // The picker shows the pick; the theme's map (the Auto layer) must not
+    // be started first only to be replaced and cancelled. Chromium drops a
+    // tile image aborted in the same task before it reaches the network, so
+    // the check counts the tile images Leaflet starts (every http(s) src set
+    // on an <img>) as well as the network requests.
+    {
+      const c = await newPage(browser, { theme: 'light' });
+      try {
+        await gotoMap(c.page);
+        await test('7d a reload with a saved pick starts the pinned tiles only, none of the Auto (theme) map', async () => {
+          await pick(c.page, 'osmfr-hot');
+          await drawn(c.page, 'openstreetmap\\.fr/hot');
+          await c.page.addInitScript(() => {
+            window.__tileSrcs = [];
+            const d = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+            Object.defineProperty(HTMLImageElement.prototype, 'src', {
+              configurable: true, get: d.get,
+              set(v) { if (/^https?:/.test(v)) window.__tileSrcs.push(String(v)); return d.set.call(this, v); },
+            });
+          });
+          c.requests.length = 0;
+          await reloadMap(c.page);
+          await drawn(c.page, 'openstreetmap\\.fr/hot');
+          await MH.waitForTiles(c.page, { timeout: 15000 });
+          const srcs = await c.page.evaluate(() => window.__tileSrcs);
+          const count = (list, re) => list.filter(u => re.test(u)).length;
+          const AUTO = /cartocdn\.com\//, PIN = /openstreetmap\.fr\/hot\//;
+          const n = { autoStarted: count(srcs, AUTO), pinStarted: count(srcs, PIN), autoRequested: count(c.requests, AUTO), pinRequested: count(c.requests, PIN) };
+          console.log('     pinned reload: ' + JSON.stringify(n));
+          assert(n.pinStarted > 0 && n.pinRequested > 0, 'no pinned tile requested: ' + JSON.stringify(n));
+          assert(n.autoStarted === 0 && n.autoRequested === 0, 'Auto (carto) tiles started on a load with a saved pick: ' + JSON.stringify(n));
+          await pick(c.page, '__auto__');
+          await drawn(c.page, 'cartocdn');
+          assert(await pinned(c.page) === null, 'Auto did not clear the pin');
+          assert(c.errors.length === 0, 'page errors: ' + c.errors);
+        });
+      } finally { await c.context.close(); }
+    }
+
+    // ── 7e. A pick made in another tab reaches open maps ────────────────
+    // Pages in one context (real 'storage' events): A picks on the map
+    // page; B shows a node detail map (no picker) and follows without a
+    // reload; C is another map page with a picker, which keeps its own
+    // layer and radio. Nothing is written back. The Home mini-map and the
+    // Analytics route map (two more tabs) follow like B.
+    {
+      const a = await newPage(browser, { theme: 'light' });
+      try {
+        const b = await newTab(a.context, { theme: 'light' });
+        const c = await newTab(a.context, { theme: 'light' });
+        await gotoMap(a.page);
+        await gotoMap(c.page);
+        const pk = await a.page.evaluate(async () => {
+          const r = await fetch('/api/nodes?limit=200'); const j = await r.json();
+          const n = (j.nodes || []).find(x => x.lat && x.lon);
+          return n ? n.public_key : null;
+        });
+        assert(pk, 'the fixture has no node with a location');
+        await b.page.goto(`${BASE}/#/nodes/${pk}`, { waitUntil: 'domcontentloaded' });
+        await b.page.waitForSelector('#nodeFullMap .leaflet-tile-loaded', { timeout: 15000 });
+        // The client config, and the node page once its data lands, re-apply
+        // the tiles (and so pick up a stored pin by themselves): let every
+        // tab settle first.
+        for (const t of [a, b, c]) await t.page.waitForFunction(() => window.MC_MAP_CFG, null, { timeout: 15000 });
+        await b.page.waitForLoadState('networkidle');
+        const countWrites = (p) => p.evaluate(() => {
+          window.__pinWrites = 0;
+          const set = Storage.prototype.setItem, rm = Storage.prototype.removeItem;
+          Storage.prototype.setItem = function (k, v) { if (k === 'mc-tile-pinned') window.__pinWrites++; return set.call(this, k, v); };
+          Storage.prototype.removeItem = function (k) { if (k === 'mc-tile-pinned') window.__pinWrites++; return rm.call(this, k); };
+        });
+        await countWrites(b.page);
+        await countWrites(c.page);
+        const noOsmfr = (p, scope) => p.locator(`${scope || ''} .leaflet-tile-pane img[src*="openstreetmap.fr"]`).count();
+        await test('7e a pick in tab A redraws a picker-less map in tab B without a reload', async () => {
+          await pick(a.page, 'osmfr-hot');
+          await drawn(a.page, 'openstreetmap\\.fr/hot');
+          await drawn(b.page, 'openstreetmap\\.fr/hot', '#nodeFullMap');
+        });
+        await test('7e Auto in tab A returns tab B to the theme map', async () => {
+          await pick(a.page, '__auto__');
+          await drawn(a.page, 'cartocdn');
+          await b.page.waitForFunction(() => {
+            const imgs = Array.from(document.querySelectorAll('#nodeFullMap .leaflet-tile-pane img.leaflet-tile'));
+            return imgs.length > 0 && imgs.every(i => !/openstreetmap\.fr/.test(i.src)) && imgs.some(i => i.classList.contains('leaflet-tile-loaded') && /cartocdn/.test(i.src));
+          }, null, { timeout: 15000 });
+        });
+        await test('7e a map page with a picker in tab C keeps its layer and radio; no tab writes the pick back', async () => {
+          // Tab C's own 'storage' event for the pick, counted by a listener
+          // added after the page's, so the page has handled every one counted.
+          await c.page.evaluate(() => {
+            window.__pinEvents = 0;
+            window.addEventListener('storage', (e) => { if (e.key === 'mc-tile-pinned') window.__pinEvents++; });
+          });
+          await pick(a.page, 'osmfr-hot');
+          await drawn(b.page, 'openstreetmap\\.fr/hot', '#nodeFullMap');
+          await c.page.waitForFunction(() => window.__pinEvents >= 1, null, { timeout: 15000 });
+          await c.page.evaluate(() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)))); // and drew what it would
+          assert(await radioOn(c.page, '__auto__'), 'tab C: Auto no longer selected');
+          assert(!(await radioOn(c.page, 'osmfr-hot')), 'tab C: osmfr-hot selected');
+          assert(await noOsmfr(c.page) === 0, 'tab C draws the other tab\'s pick');
+          assert((await tileKeys(c.page)).some(u => /cartocdn/.test(u)), 'tab C lost its Auto tiles');
+          const w = [await b.page.evaluate(() => window.__pinWrites), await c.page.evaluate(() => window.__pinWrites)];
+          assert(w[0] === 0 && w[1] === 0, 'pin writes in tabs B, C: ' + w);
+          assert(await pinned(c.page) === 'osmfr-hot', 'stored pin: ' + await pinned(c.page));
+          for (const t of [a, b, c]) assert(t.errors.length === 0, 'page errors: ' + t.errors);
+        });
+        await test('7e the Home mini-map and the Analytics route map follow a pick in tab A, and its Auto', async () => {
+          await pick(a.page, '__auto__');
+          await drawn(a.page, 'cartocdn');
+          const d = await newTab(a.context, { theme: 'light' });
+          const e = await newTab(a.context, { theme: 'light' });
+          // Home: the located node as a claimed node, its card opened.
+          await d.page.addInitScript((k) => {
+            localStorage.setItem('meshcore-my-nodes', JSON.stringify([{ pubkey: k, name: 'e2e', addedAt: 0 }]));
+            localStorage.setItem('meshcore-user-level', 'experienced');
+          }, pk);
+          await d.page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+          await themeSettled(d.page);
+          await d.page.waitForSelector('.my-node-card');
+          await d.page.locator('.my-node-card .mnc-btn[data-action="health"]').first().click();
+          await drawn(d.page, 'cartocdn', '#healthMap');
+          // Analytics: the first route whose detail has a map (two located nodes).
+          await e.page.goto(`${BASE}/#/analytics?tab=subpaths`, { waitUntil: 'domcontentloaded' });
+          await themeSettled(e.page);
+          await e.page.waitForSelector('tr[data-hops]');
+          const rows = await e.page.locator('tr[data-hops]').count();
+          let found = false;
+          for (let i = 0; i < Math.min(rows, 25) && !found; i++) {
+            await e.page.locator('tr[data-hops]').nth(i).click();
+            await e.page.waitForSelector('#subpathDetail .subpath-detail-inner');
+            found = await e.page.locator('#subpathMap').count() > 0;
+          }
+          assert(found, 'no route with a map among the first 25 of ' + rows);
+          await drawn(e.page, 'cartocdn', '#subpathMap');
+          for (const t of [d, e]) {
+            await t.page.waitForFunction(() => window.MC_MAP_CFG, null, { timeout: 15000 });
+            await t.page.waitForLoadState('networkidle');
+          }
+          await pick(a.page, 'osmfr-hot');
+          await drawn(d.page, 'openstreetmap\\.fr/hot', '#healthMap');
+          await drawn(e.page, 'openstreetmap\\.fr/hot', '#subpathMap');
+          await pick(a.page, '__auto__');
+          for (const [t, sel] of [[d, '#healthMap'], [e, '#subpathMap']]) {
+            await t.page.waitForFunction((scope) => {
+              const imgs = Array.from(document.querySelectorAll(scope + ' .leaflet-tile-pane img.leaflet-tile'));
+              return imgs.length > 0 && imgs.every(i => !/openstreetmap\.fr/.test(i.src)) && imgs.some(i => i.classList.contains('leaflet-tile-loaded') && /cartocdn/.test(i.src));
+            }, sel, { timeout: 15000 });
+            assert(t.errors.length === 0, 'page errors: ' + t.errors);
+          }
+        });
+      } finally { await a.context.close(); }
     }
 
     // ── 7c. Untouched config: the opt-in groups are not offered ─────────

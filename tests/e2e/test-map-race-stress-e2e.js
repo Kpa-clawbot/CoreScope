@@ -24,6 +24,10 @@
  *      home (cycles = clamp(ITER * 2.5, 5, 50)). A visit to the route the
  *      page is already on rebuilds nothing, so a basemap picked on the last
  *      visit is still expected.
+ *   h  two picker tabs alternate rapid base-map picks (mc-tile-pinned) with a
+ *      node detail map open in a third: every tab ends on the same stored
+ *      pin, each picker keeps its own last pick, the node map follows the
+ *      pin, and every write is one of a tab's own picks (no echo)
  *
  *   g  tropospheric ducting overlay (only when /api/config/client has a
  *      `ducting` block; otherwise noted and skipped): per iteration 25-45
@@ -129,12 +133,13 @@ function stressInit() {
   /* eslint-disable no-var */
   if (window.__mcStress) return;
   var TYPES = { 'mc-tile-provider-changed': 1, 'mc-tile-overlays-changed': 1, 'storage': 1 };
-  var WATCH_KEYS = { 'mc-tile-overlays': 1, 'mc-dark-tile-provider': 1, 'mc-light-tile-provider': 1 };
+  var WATCH_KEYS = { 'mc-tile-overlays': 1, 'mc-dark-tile-provider': 1, 'mc-light-tile-provider': 1, 'mc-tile-pinned': 1 };
   var S = window.__mcStress = {
     listeners: {},      // type -> Map(fn -> { caps: {true/false: 1}, site })
     events: {},         // dispatched on window, by type
     storageIn: {},      // storage events received, by key
     setItem: {},        // localStorage.setItem calls, by watched key
+    removeItem: {},     // localStorage.removeItem calls, by watched key
     gl: [],             // { ctx: WeakRef, canvas: WeakRef }
     glCreated: 0,
     autoHandles: [],    // { map, destroyed, group }
@@ -195,6 +200,11 @@ function stressInit() {
   Storage.prototype.setItem = function (k, v) {
     if (this === window.localStorage && WATCH_KEYS[k]) S.setItem[k] = (S.setItem[k] || 0) + 1;
     return origSet.apply(this, arguments);
+  };
+  var origRemoveItem = Storage.prototype.removeItem;
+  Storage.prototype.removeItem = function (k) {
+    if (this === window.localStorage && WATCH_KEYS[k]) S.removeItem[k] = (S.removeItem[k] || 0) + 1;
+    return origRemoveItem.apply(this, arguments);
   };
   var origWarn = console.warn;
   console.warn = function () {
@@ -429,7 +439,7 @@ function stressInit() {
     // What should be drawn.
     var exp, entry, layer;
     if (want === '__auto__') {
-      var r = window.MC_resolveTile(dark);
+      var r = window.MC_resolveTile(dark, { ignorePin: true }); // a picker's Auto ignores the pin
       entry = REG[r.id] || null;
       exp = { url: r.url, format: r.format, id: r.id, refUrl: r.refUrl };
       layer = autos[0].group;
@@ -550,6 +560,7 @@ function stressInit() {
       events: Object.assign({}, S.events),
       storageIn: Object.assign({}, S.storageIn),
       setItem: Object.assign({}, S.setItem),
+      removeItem: Object.assign({}, S.removeItem),
     };
   };
 
@@ -1305,6 +1316,96 @@ async function scenarioE(browser) {
   sc.durationMs = Date.now() - t0;
 }
 
+// ── Scenario h: cross-tab saved pick ────────────────────────────────────────
+async function scenarioH(browser) {
+  const sc = scen('h', 'cross-tab saved pick');
+  const t0 = Date.now();
+  const nodes = await findNodes();
+  if (!nodes.node) results.notes.push('h: no located node; the picker-less tab is skipped');
+  for (const it of iterationsFor('h')) {
+    await runIteration(browser, 'h', it, async ({ rng, open }) => {
+      const theme = rng.pick(['light', 'dark']);
+      const A = await open({ preset: { theme, provider: 'auto', overlays: [] } });
+      const B = await open({});
+      const C = nodes.node ? await open({}) : null;
+      await gotoFirst(A, '#/map');
+      await waitPicker(A);
+      await gotoFirst(B, rng.pick(['#/map', '#/live']));
+      await waitPicker(B);
+      if (C) {
+        await gotoFirst(C, '#/nodes/' + encodeURIComponent(nodes.node.public_key));
+        await C.waitForFunction(() => window.__mcNodeTileSync && window.__mcNodeTileSync.maps.length > 0, null, { timeout: 15000 });
+      }
+      const tabs = C ? { A, B, C } : { A, B };
+      await Promise.all(Object.values(tabs).map(p => p.waitForFunction(() => window.MC_MAP_CFG, null, { timeout: 15000 })));
+      await sleep(300);
+      const ids = await A.evaluate(() => window.__mcStress.baseIds().filter(x => !window.__mcStress.vectorIds().includes(x)));
+      const before = {};
+      for (const [k, P] of Object.entries(tabs)) before[k] = await snapshot(P);
+      const shown = { A: '__auto__', B: '__auto__' }; // each picker's own selection
+      const writes = { A: 0, B: 0 };
+      let stored = null; // the last pick written by either tab
+      const log = [];
+      const n = rng.int(10, 24);
+      for (let i = 0; i < n; i++) {
+        const who = rng.chance(0.5) ? 'A' : 'B';
+        const id = rng.chance(0.2) ? '__auto__' : rng.pick(ids);
+        const res = await tabs[who].evaluate((x) => window.__mcStress.clickBase(x), id);
+        // Clicking the radio that is already selected changes (and writes) nothing.
+        if (res === 'ok' && shown[who] !== id) {
+          shown[who] = id;
+          writes[who]++;
+          stored = id === '__auto__' ? null : id;
+        }
+        log.push(`${who} ${id} -> ${res}`);
+        await sleep(rng.int(0, 120));
+      }
+      const probs = [];
+      for (const k of ['A', 'B']) {
+        const intent = { mode: shown[k] === '__auto__' ? 'auto' : 'explicit', id: shown[k] === '__auto__' ? null : shown[k], theme, overlays: null, pickers: 1 };
+        const r = await settleCheck(tabs[k], intent, { minMs: k === 'A' ? 800 : 0, maxMs: 5000 });
+        probs.push(...r.problems.map(p => `tab ${k}: ${p}`));
+      }
+      for (const [k, P] of Object.entries(tabs)) {
+        const got = await P.evaluate(() => ({ raw: localStorage.getItem('mc-tile-pinned'), pin: window.MC_getPinnedTileProvider() }));
+        if (got.raw !== stored || got.pin !== stored) probs.push(`tab ${k}: stored pin ${JSON.stringify(got)} want ${JSON.stringify(stored)}`);
+      }
+      if (C) {
+        // The node map converges on what MC_resolveTile gives for the pin.
+        let last = null;
+        const tEnd = Date.now() + 5000;
+        for (;;) {
+          last = await C.evaluate(() => {
+            const st = window.__mcNodeTileSync;
+            const rec = st && st.maps.filter(r => r.map && r.map._container && r.map._container.isConnected)[0];
+            if (!rec || !rec.layer) return { err: 'no node map' };
+            const l = typeof rec.layer.getLayers === 'function' ? rec.layer.getLayers()[0] : rec.layer;
+            return { got: l && l._url, want: window.MC_resolveTile(window.MC_isDarkTheme()).url };
+          });
+          if ((last.got && last.got === last.want) || Date.now() >= tEnd) break;
+          await sleep(150);
+        }
+        if (last.err || last.got !== last.want) probs.push('tab C node map ' + JSON.stringify(last));
+      }
+      const after = {};
+      for (const [k, P] of Object.entries(tabs)) after[k] = await snapshot(P);
+      const d = (k, f) => ((after[k][f] || {})['mc-tile-pinned'] || 0) - ((before[k][f] || {})['mc-tile-pinned'] || 0);
+      for (const k of Object.keys(tabs)) {
+        const own = writes[k] || 0;
+        const w = d(k, 'setItem') + d(k, 'removeItem');
+        if (w !== own) probs.push(`tab ${k} wrote mc-tile-pinned ${w}x for ${own} own picks (echo loop)`);
+        const others = writes.A + writes.B - own;
+        const got = d(k, 'storageIn');
+        if (got > others) probs.push(`tab ${k} received ${got} pin storage events for ${others} writes in the other tabs`);
+      }
+      if (probs.length) probs.push('actions: ' + log.slice(-12).join(' | '));
+      sc.details.maxWrites = Math.max(sc.details.maxWrites || 0, writes.A + writes.B);
+      return probs;
+    });
+  }
+  sc.durationMs = Date.now() - t0;
+}
+
 // ── Scenario f: navigation churn ────────────────────────────────────────────
 async function findNodes() {
   const out = { node: null, repeater: null };
@@ -1627,6 +1728,9 @@ async function run() {
       console.log(`--- ${k} ---`);
       await fn(browser);
     }
+    // Kept out of the table above so this scenario's registration never
+    // touches the lines other scenarios add there.
+    if (!ONLY || ONLY.h) { console.log('--- h ---'); await scenarioH(browser); }
   } finally {
     await browser.close().catch(() => {});
   }
