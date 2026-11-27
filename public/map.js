@@ -225,13 +225,16 @@
     return !!f.observer && !nodeFiltersNarrowed(f);
   }
 
+  function isMappableNode(n, foreignOnly) {
+    return !!(n.lat && n.lon) && (!foreignOnly || n.foreign === true);
+  }
+
   // nodePassesMapFilters is the marker filter _renderMarkersInner runs over
   // the loaded nodes. ctx carries the neighbor-filter state
   // ({ selectedReferenceNode, neighborPubkeys }).
   function nodePassesMapFilters(n, f, ctx) {
-    if (!n.lat || !n.lon) return false;
+    if (!isMappableNode(n, f.foreignOnly)) return false;
     if (!f[n.role || 'companion']) return false;
-    if (f.foreignOnly && n.foreign !== true) return false;
     // Byte size filter (applies only to repeaters). A node with no observed
     // size is its own bucket: folding it into "1-byte" made that bucket a
     // mix of measured and merely-unheard nodes.
@@ -820,6 +823,7 @@
       history.replaceState(history.state, '', hash);
       renderMarkers();
       renderEstimated();
+      if (heatEl.checked) toggleHeatmap(true);
     });
     document.getElementById('mcNeighbors').addEventListener('change', e => {
       filters.neighbors = e.target.checked;
@@ -2111,7 +2115,15 @@
     if (markerLayer) {
       markerLayer.clearLayers();
     }
-    if (clusterGroup) clusterGroup.clearLayers();
+    if (clusterGroup && clusterGroup._chunkPending) {
+      // A queued addLayers chunk can repopulate a cleared group. Retire it
+      // before rebuilding, preserving visibility if a route hid the clusters.
+      const visible = map.hasLayer(clusterGroup);
+      retireClusterGroup(clusterGroup);
+      clusterGroup.remove();
+      clusterGroup = createClusterGroup();
+      if (visible) clusterGroup.addTo(map);
+    } else if (clusterGroup) clusterGroup.clearLayers();
     _currentMarkerData = [];
 
     const filterCtx = { selectedReferenceNode, neighborPubkeys };
@@ -2496,7 +2508,7 @@
   // no handle for (addLayers' bound closure), and clearLayers() does not stop
   // them. Once the map is gone the next chunk throws in this._map.getMinZoom()
   // (_addLayer per marker, _recursivelyAddChildrenToMap after the last one).
-  // The group is thrown away with the page, so shadow those two with no-ops on
+  // The retired group is thrown away, so shadow those two with no-ops on
   // this instance. Its zoom-animation queue does have a handle: drop it, its
   // callbacks only finish an animation on a map that no longer exists.
   function retireClusterGroup(group) {
@@ -2538,27 +2550,36 @@
   }
 
   function toggleHeatmap(on) {
-    if (!on || !map) {
-      if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; window._meshcoreHeatLayer = null; }
+    // A packet route can temporarily hide the base map layers.
+    if (on && heatLayer && map && !map.hasLayer(heatLayer)) return;
+    const points = [];
+    if (on && map) {
+      for (const n of nodes) {
+        if (filters.foreignOnly ? isMappableNode(n, true) : n.lat != null && n.lon != null) {
+          points.push([n.lat, n.lon, n.advert_count || 1]);
+        }
+      }
+    }
+    if (!points.length) {
+      if (heatLayer) { heatLayer.remove(); heatLayer = null; window._meshcoreHeatLayer = null; }
       return;
     }
-    const points = nodes
-      .filter(n => n.lat != null && n.lon != null)
-      .map(n => {
-        const weight = n.advert_count || 1;
-        return [n.lat, n.lon, weight];
-      });
-    if (!points.length || typeof L.heatLayer !== 'function') return;
-    var savedOpacity = parseFloat(localStorage.getItem('meshcore-heatmap-opacity'));
-    if (isNaN(savedOpacity)) savedOpacity = 0.25;
     // Update existing layer data without recreating (avoids opacity flash)
     if (heatLayer) {
       heatLayer.setLatLngs(points);
       return;
     }
+    if (typeof L.heatLayer !== 'function') return;
+    var savedOpacity = parseFloat(localStorage.getItem('meshcore-heatmap-opacity'));
+    if (isNaN(savedOpacity)) savedOpacity = 0.25;
     heatLayer = L.heatLayer(points, {
       radius: 25, blur: 15, maxZoom: 14, minOpacity: 0.05,
       gradient: { 0.2: '#0d47a1', 0.4: '#1565c0', 0.6: '#42a5f5', 0.8: '#ffca28', 1.0: '#ff5722' }
+    });
+    heatLayer.on('remove', function () {
+      // Leaflet.heat leaves its queued redraw pointing at the detached map.
+      L.Util.cancelAnimFrame(this._frame);
+      this._frame = null;
     });
     // Set opacity on canvas BEFORE it's visible — hook the 'add' event
     heatLayer.on('add', function() {
@@ -2799,10 +2820,11 @@
       console.warn('[map] L.markerClusterGroup not loaded — clustering disabled');
       return null;
     }
-    return L.markerClusterGroup({
+    const group = L.markerClusterGroup({
       chunkedLoading: true,
       chunkInterval: 100,
       chunkDelay: 25,
+      chunkProgress(done, total) { group._chunkPending = done < total; },
       removeOutsideVisibleBounds: true,
       maxClusterRadius: 60,
       spiderfyOnMaxZoom: true,
@@ -2814,6 +2836,7 @@
       animateAddingMarkers: false,
       iconCreateFunction: makeClusterIcon,
     });
+    return group;
   }
 
   function makeClusterIcon(cluster) {
