@@ -128,6 +128,33 @@
     }).join('') + '</ul>';
   }
 
+  // pushoverHtml is the Pushover block, shown only while the instance
+  // offers it: a field for the user key, or the saved key's controls.
+  function pushoverHtml(data) {
+    var po = data.pushover;
+    if (!po) return '';
+    var html = '<h4>Pushover</h4>';
+    if (!po.configured) {
+      html += '<p class="account-hint">Get these alerts in the Pushover app too. Pushover uses the events chosen above and has its own on and off, separate from mail.</p>';
+      if (po.subscribe) {
+        html += '<div class="account-actions"><button type="button" class="account-btn account-btn-primary" id="notifyPushoverConnect">Connect Pushover</button></div>' +
+          '<p class="account-hint">Or paste the user key from your pushover.net dashboard:</p>';
+      } else {
+        html += '<p class="account-hint">Enter the user key shown on your pushover.net dashboard.</p>';
+      }
+      return html + '<form id="notifyPushoverForm" class="account-form" novalidate>' +
+        '<label class="account-field" for="notifyPushoverKey">Pushover user key' +
+        '<input type="text" id="notifyPushoverKey" autocomplete="off" spellcheck="false" maxlength="30" inputmode="text"></label>' +
+        '<button type="submit" class="account-btn ' + (po.subscribe ? 'account-btn-secondary' : 'account-btn-primary') + '">Save key</button></form>';
+    }
+    return html + '<p class="account-hint">' + escapeHtml('Pushover user key ending in ' + (po.keyHint || '…') + '.') + '</p>' +
+      '<label class="account-check" for="notifyPushoverEnabled"><input type="checkbox" id="notifyPushoverEnabled"' + (po.enabled ? ' checked' : '') +
+      '> Send alerts to Pushover</label>' +
+      '<div class="account-actions">' +
+      '<button type="button" class="account-btn account-btn-secondary" id="notifyPushoverTest"' + (po.enabled ? '' : ' disabled') + '>Send test</button>' +
+      '<button type="button" class="account-btn account-btn-secondary" id="notifyPushoverRemove">Remove key</button></div>';
+  }
+
   function sectionHtml(data) {
     var lim = data.limits || {};
     return '<form id="notifyForm" class="account-form" novalidate>' +
@@ -135,6 +162,7 @@
       '<fieldset class="account-fieldset"><legend>Events</legend>' + eventsHtml(data) + '</fieldset>' +
       '<p class="account-hint">' + escapeHtml('At most ' + lim.perUserPerDay + ' mails per 24 hours; sent in the last 24 hours: ' + lim.mailsLast24h + '.') + '</p>' +
       '<button type="submit" class="account-btn account-btn-primary">Save</button></form>' +
+      pushoverHtml(data) +
       '<h4>' + escapeHtml('Watched nodes (' + data.watches.length + ' of ' + lim.maxWatches + ')') + '</h4>' +
       '<div id="notifyWatches">' + watchesHtml(data) + '</div>' +
       '<button type="button" class="account-btn account-btn-secondary" id="notifyMyNodes">Watch my nodes</button>';
@@ -180,6 +208,7 @@
         }, failed(msgId));
       });
     });
+    if (data.pushover) bindPushover(el, msgId, data, guarded);
     document.getElementById('notifyMyNodes').addEventListener('click', function () {
       return guarded(function () {
         return window.CSAuth.request('POST', '/api/account/notifications/watch-my-nodes').then(function (r) {
@@ -194,17 +223,98 @@
     });
   }
 
+  function bindPushover(el, msgId, data, guarded) {
+    var path = '/api/account/notifications/pushover';
+    function update(method, body, done) {
+      return guarded(function () {
+        return window.CSAuth.request(method, path, body).then(function (r) {
+          if (!r.ok) { sayIn(msgId, window.CSAuth.errText(r), false); return; }
+          draw(el, msgId, store(r.data));
+          sayIn(msgId, done, true);
+        }, failed(msgId));
+      });
+    }
+    if (!data.pushover.configured) {
+      if (data.pushover.subscribe) {
+        document.getElementById('notifyPushoverConnect').addEventListener('click', function () {
+          return guarded(function () {
+            return window.CSAuth.request('POST', path + '/subscribe').then(function (r) {
+              if (!r.ok || !r.data || !/^https:\/\//.test(r.data.url || '')) { sayIn(msgId, window.CSAuth.errText(r), false); return; }
+              window.location.assign(r.data.url);
+            }, failed(msgId));
+          });
+        });
+      }
+      document.getElementById('notifyPushoverForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var key = document.getElementById('notifyPushoverKey');
+        var value = key ? String(key.value || '').trim() : '';
+        if (!/^[A-Za-z0-9]{30}$/.test(value)) {
+          sayIn(msgId, 'A Pushover user key is 30 letters and digits.', false);
+          return;
+        }
+        return update('PUT', { userKey: value }, 'Pushover is on. Send a test to check it.');
+      });
+      return;
+    }
+    document.getElementById('notifyPushoverEnabled').addEventListener('change', function (e) {
+      var on = !!e.target.checked;
+      return update('PUT', { enabled: on }, on ? 'Pushover is on.' : 'Pushover is off.');
+    });
+    document.getElementById('notifyPushoverRemove').addEventListener('click', function () {
+      return update('DELETE', undefined, 'Pushover key removed.');
+    });
+    document.getElementById('notifyPushoverTest').addEventListener('click', function () {
+      return guarded(function () {
+        return window.CSAuth.request('POST', path + '/test').then(function (r) {
+          if (!r.ok) {
+            sayIn(msgId, window.CSAuth.errText(r), false);
+            // A rejected key is turned off on the server; show that.
+            return mountSection(el, msgId);
+          }
+          sayIn(msgId, 'Test sent. It should arrive in Pushover in a few seconds.', true);
+        }, failed(msgId));
+      });
+    });
+  }
+
+  // The account page is opened with ?pushover=<outcome> after the
+  // "Connect Pushover" round trip; say how it went, once.
+  var PUSHOVER_OUTCOMES = {
+    connected: ['Pushover is connected. Send a test to check it.', true],
+    disconnected: ['Pushover is disconnected: you unsubscribed on pushover.net.', true],
+    cancelled: ['Pushover wasn\'t connected: the subscription was cancelled on pushover.net.', false],
+    expired: ['That Pushover connection link expired or was already used. Try Connect Pushover again.', false],
+    signin: ['Sign in, then try Connect Pushover again.', false],
+    busy: ['Too many Pushover attempts. Try again later.', false],
+    failed: ['Pushover didn\'t confirm the subscription. Try again, or paste your user key.', false]
+  };
+  // pushoverOutcome takes a return from pushover.net out of the address:
+  // [message, ok], or null. The notification section reports it; for a
+  // signed-out browser the server sends it to the login page instead.
+  function pushoverOutcome() {
+    var hash = (window.location && window.location.hash) || '';
+    var m = /[?&]pushover=([a-z]+)/.exec(hash);
+    if (!m || !PUSHOVER_OUTCOMES[m[1]]) return null;
+    try {
+      window.history.replaceState(null, '', hash.replace(/([?&])pushover=[a-z]+&?/, '$1').replace(/[?&]$/, ''));
+    } catch (_) { /* the message still shows */ }
+    return PUSHOVER_OUTCOMES[m[1]];
+  }
+
   // mountSection loads the caller's state (always fresh) into el.
   function mountSection(el, msgId) {
     if (!el || !enabled() || !currentUser()) return Promise.resolve();
+    var outcome = pushoverOutcome();
     return window.CSAuth.request('GET', '/api/account/notifications').then(function (r) {
       if (!r.ok) { sayIn(msgId, window.CSAuth.errText(r), false); return; }
       draw(el, msgId, store(r.data));
+      if (outcome) sayIn(msgId, outcome[0], outcome[1]);
     }, failed(msgId));
   }
 
   window.addEventListener('cs-auth-changed', function () { cache.userId = null; cache.promise = null; });
 
   window.CSNotify = { enabled: enabled, load: load, store: store, toggleState: toggleState, toggleHtml: toggleHtml, mount: mount,
-    sectionHtml: sectionHtml, mountSection: mountSection };
+    sectionHtml: sectionHtml, mountSection: mountSection, pushoverOutcome: pushoverOutcome };
 })();

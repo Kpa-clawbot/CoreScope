@@ -41,6 +41,9 @@ func TestAccountExportSections(t *testing.T) {
 	if _, err := st.ActivatePushBinding(staged, "sub_export", time.Now().Add(30*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.SetPushoverKey(uid, strings.Repeat("k", 30)); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Audit(&bossID, "user.role", &uid, map[string]string{"role": "user"}); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +113,9 @@ func TestAccountExportSections(t *testing.T) {
 		n.PushDevices[0].ExpiresAt == "" {
 		t.Fatalf("push devices = %+v", n.PushDevices)
 	}
+	if n.Pushover == nil || n.Pushover.KeyHint != "kkkk" || !n.Pushover.Enabled || n.Pushover.ValidatedAt == "" {
+		t.Fatalf("pushover = %+v", n.Pushover)
+	}
 	var role *exportAuditEntry
 	for i := range x.Audit {
 		switch x.Audit[i].Action {
@@ -147,6 +153,7 @@ func TestAccountExportSections(t *testing.T) {
 		"push proof hash":    "proof-hash",
 		"push binding id":    "bind_export",
 		"push subscription":  "sub_export",
+		"Pushover user key":  strings.Repeat("k", 30),
 	}
 	for name, v := range secrets {
 		if v == "" {
@@ -193,7 +200,7 @@ func TestAccountExportEmptySectionsAndNoWrites(t *testing.T) {
 	w := f.do("GET", "/api/account/export", nil, as(uma))
 	expectStatus(t, w, 200)
 	body := w.Body.String()
-	for _, want := range []string{`"settings":null`, `"proposals":[]`, `"prefs":null`, `"watches":[]`, `"pendingEmail":null`} {
+	for _, want := range []string{`"settings":null`, `"proposals":[]`, `"prefs":null`, `"watches":[]`, `"pushover":null`, `"pendingEmail":null`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("export lacks %s: %s", want, body)
 		}

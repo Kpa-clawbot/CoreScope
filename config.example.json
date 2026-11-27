@@ -539,6 +539,11 @@
         "enabled": false,
         "floorMinutes": 30,
         "minObservers": 3
+      },
+      "_comment_pushover": "Optional Pushover delivery (docs/user-guide/accounts.md). To offer it, rename _pushover to pushover and put the application token in CORESCOPE_PUSHOVER_TOKEN: with a pushover block, the server does not start without the token. maxPerMonth caps the instance's messages in 30 days; subscriptionCode turns on Connect Pushover.",
+      "_pushover": {
+        "maxPerMonth": 7500,
+        "subscriptionCode": ""
       }
     },
     "backup": {

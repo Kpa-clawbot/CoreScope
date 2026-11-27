@@ -94,6 +94,16 @@ type exportNotifications struct {
 	Prefs       *exportNotifyPrefs `json:"prefs"`
 	Watches     []exportWatch      `json:"watches"`
 	PushDevices []exportPushDevice `json:"pushDevices"`
+	Pushover    *exportPushover    `json:"pushover"` // null without a saved key
+}
+
+// exportPushover is the user's Pushover destination. Like the API, it
+// shows only the key's last 4 characters: the key lets any Pushover
+// application message the user, and they have it on pushover.net.
+type exportPushover struct {
+	KeyHint     string `json:"keyHint"`
+	Enabled     bool   `json:"enabled"`
+	ValidatedAt string `json:"validatedAt"`
 }
 
 // exportPushDevice is a push relay device link: the relay's analyzer
@@ -229,6 +239,11 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 	for _, d := range devices {
 		x.Notifications.PushDevices = append(x.Notifications.PushDevices,
 			exportPushDevice{AnalyzerID: d.AnalyzerID, InstallationID: d.InstallationID, ExpiresAt: rfc3339(d.ExpiresAt)})
+	}
+	if p, ok, err := a.st.PushoverFor(u.ID); err != nil {
+		return nil, fmt.Errorf("pushover: %w", err)
+	} else if ok {
+		x.Notifications.Pushover = &exportPushover{KeyHint: pushoverKeyHint(p.UserKey), Enabled: p.Enabled, ValidatedAt: rfc3339(p.ValidatedAt)}
 	}
 	entries, err := a.st.AuditAllFor(u.ID)
 	if err != nil {

@@ -70,13 +70,16 @@ function load(opts) {
     say(id, text, ok) { const el = document.getElementById(id); el.textContent = text; el.ok = !!ok; },
     errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); },
   };
+  const nav = { assigned: [], replaced: [] };
   const ctx = { document, CSAuth, console, escapeHtml: loadEscapeHtml(),
+    location: { hash: opts.hash || '', assign(u) { nav.assigned.push(u); } },
+    history: { replaceState(a, b, u) { nav.replaced.push(u); } },
     addEventListener(t, fn) { listeners[t] = fn; },
     MC_USER_MGMT: opts.flag === false ? null : { enabled: true, notifications: opts.notifications !== false } };
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(src('public/notifications.js'), ctx);
-  return { N: ctx.CSNotify, els, calls, user, document, fire(t) { if (listeners[t]) listeners[t]({}); } };
+  return { N: ctx.CSNotify, els, calls, user, document, nav, fire(t) { if (listeners[t]) listeners[t]({}); } };
 }
 
 console.log('notifications.js: toggle');
@@ -242,6 +245,96 @@ test('a failed load shows the server message', async () => {
   const env = load({ routes: () => ({ ok: false, status: 500, data: { error: 'internal error' } }) });
   await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
   assert.strictEqual(env.els.notifyMsg.textContent, 'internal error');
+});
+
+console.log('notifications.js: Pushover');
+
+const POKEY = 'u'.repeat(30);
+
+test('no Pushover block unless the instance offers it', async () => {
+  const env = load();
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  assert(env.els.notifySection.innerHTML.indexOf('Pushover') === -1, env.els.notifySection.innerHTML);
+});
+
+test('Pushover key form checks the key, saves it and redraws the saved state', async () => {
+  const saved = STATE({ pushover: { configured: true, enabled: true, keyHint: '<i>' } });
+  const env = load({ routes: (m) => ({ ok: true, status: 200, data: m === 'GET' ? STATE({ pushover: { configured: false, enabled: false } }) : saved }) });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  assert(env.els.notifySection.innerHTML.indexOf('id="notifyPushoverKey"') !== -1, env.els.notifySection.innerHTML);
+  env.document.getElementById('notifyPushoverKey').value = 'too short';
+  await env.els.notifyPushoverForm.handlers.submit({ preventDefault() {} });
+  assert.strictEqual(env.calls.length, 1, 'a malformed key was sent');
+  assert(/30 letters and digits/.test(env.els.notifyMsg.textContent));
+  env.document.getElementById('notifyPushoverKey').value = '  ' + POKEY + ' ';
+  await env.els.notifyPushoverForm.handlers.submit({ preventDefault() {} });
+  assert.deepStrictEqual(plain(env.calls[1]), { method: 'PUT', p: '/api/account/notifications/pushover', body: { userKey: POKEY } });
+  const html = env.els.notifySection.innerHTML;
+  assert(html.indexOf('ending in &lt;i&gt;') !== -1 && html.indexOf('<i>') === -1, html);
+  assert(html.indexOf('id="notifyPushoverEnabled" checked') !== -1, html);
+});
+
+test('saved Pushover key: turn off, test, remove', async () => {
+  const on = STATE({ pushover: { configured: true, enabled: true, keyHint: 'uuuu' } });
+  let testOk = true;
+  const env = load({ routes: (m, p, body) => {
+    if (p.endsWith('/test')) return testOk ? { ok: true, status: 204, data: null } : { ok: false, status: 400, data: { error: "Pushover doesn't recognize this user key." } };
+    if (m === 'PUT') return { ok: true, status: 200, data: STATE({ pushover: { configured: true, enabled: body.enabled, keyHint: 'uuuu' } }) };
+    if (m === 'DELETE') return { ok: true, status: 200, data: STATE({ pushover: { configured: false, enabled: false } }) };
+    return { ok: true, status: 200, data: on };
+  } });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  await env.els.notifyPushoverTest.handlers.click();
+  assert.deepStrictEqual(plain(env.calls[1]), { method: 'POST', p: '/api/account/notifications/pushover/test' });
+  assert(/Test sent/.test(env.els.notifyMsg.textContent));
+  testOk = false;
+  await env.els.notifyPushoverTest.handlers.click();
+  assert(/doesn't recognize/.test(env.els.notifyMsg.textContent));
+  assert.strictEqual(env.calls[3].method, 'GET', 'a failed test reloads the state');
+  await env.els.notifyPushoverEnabled.handlers.change({ target: { checked: false } });
+  assert.deepStrictEqual(plain(env.calls[4]), { method: 'PUT', p: '/api/account/notifications/pushover', body: { enabled: false } });
+  assert(env.els.notifySection.innerHTML.indexOf('id="notifyPushoverTest" disabled') !== -1, 'test stays off while Pushover is off');
+  await env.els.notifyPushoverRemove.handlers.click();
+  assert.strictEqual(env.calls[5].method, 'DELETE');
+  assert(env.els.notifySection.innerHTML.indexOf('id="notifyPushoverKey"') !== -1, 'the key form is back');
+});
+
+test('Connect Pushover goes to the subscription URL; pasting stays as a fallback', async () => {
+  const env = load({ routes: (m, p) => (p.endsWith('/subscribe')
+    ? { ok: true, status: 200, data: { url: 'https://pushover.net/subscribe/Mesh-abc?success=x' } }
+    : { ok: true, status: 200, data: STATE({ pushover: { subscribe: true, configured: false, enabled: false } }) }) });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  const html = env.els.notifySection.innerHTML;
+  assert(html.indexOf('id="notifyPushoverConnect"') !== -1 && html.indexOf('id="notifyPushoverKey"') !== -1, html);
+  await env.els.notifyPushoverConnect.handlers.click();
+  assert.deepStrictEqual(plain(env.calls[1]), { method: 'POST', p: '/api/account/notifications/pushover/subscribe' });
+  assert.deepStrictEqual(env.nav.assigned, ['https://pushover.net/subscribe/Mesh-abc?success=x']);
+});
+
+test('the return from pushover.net is reported once and dropped from the address', async () => {
+  const env = load({ hash: '#/account?section=notifications&pushover=connected',
+    routes: () => ({ ok: true, status: 200, data: STATE({ pushover: { configured: true, enabled: true, keyHint: 'uuuu' } }) }) });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  assert(/Pushover is connected/.test(env.els.notifyMsg.textContent) && env.els.notifyMsg.ok);
+  assert.deepStrictEqual(env.nav.replaced, ['#/account?section=notifications']);
+  const odd = load({ hash: '#/account?pushover=nonsense' });
+  await odd.N.mountSection(odd.document.getElementById('notifySection'), 'notifyMsg');
+  assert.strictEqual(odd.document.getElementById('notifyMsg').textContent, '', 'an unknown outcome said something');
+});
+
+test('a signed-out return is taken from the login page address', () => {
+  const env = load({ hash: '#/account/login?pushover=signin' });
+  const outcome = env.N.pushoverOutcome();
+  assert(outcome && /Sign in, then try Connect Pushover again/.test(outcome[0]) && outcome[1] === false);
+  assert.deepStrictEqual(env.nav.replaced, ['#/account/login']);
+  assert.strictEqual(load({ hash: '#/account/login' }).N.pushoverOutcome(), null);
+});
+
+test('the login page reports a Pushover outcome', () => {
+  const account = src('public/account.js');
+  const login = account.slice(account.indexOf('login: function (app)'), account.indexOf('register: function (app)'));
+  assert(/CSNotify\.pushoverOutcome\(\)/.test(login) && /CSAuth\.say\('accountMsg', pushover\[0\], pushover\[1\]\)/.test(login),
+    'views.login does not show the outcome');
 });
 
 test('a second click while a request is in flight sends nothing', async () => {

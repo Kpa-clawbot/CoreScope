@@ -367,6 +367,70 @@ The feed is JSON, at most 1 MB, fetched once per check while someone has the eve
   The server log says when the feed stops and starts being usable.
 - The server only reads the feed; the states live in `users.db` like the other events.
 
+#### Pushover (optional)
+
+[Pushover](https://pushover.net) delivers alerts to its own app on iOS, Android and the
+desktop. With it on, each user can add their Pushover user key and get the same alerts
+as email, in the Pushover app. CoreScope sends them straight to Pushover; no relay is
+involved.
+
+1. Create an application at [pushover.net/apps/build](https://pushover.net/apps/build)
+   and copy its 30-character API token.
+2. Set `CORESCOPE_PUSHOVER_TOKEN` to that token in the server environment. Keep it out
+   of `config.json` and the web customizer.
+3. Add a `pushover` block inside `userManagement.notifications` and restart:
+
+```json
+"notifications": {
+  "enabled": true,
+  "pushover": { "maxPerMonth": 7500, "subscriptionCode": "YourApp-1oiwozgx5tg38a1" }
+}
+```
+
+CoreScope refuses to start with the block but without a valid token.
+
+4. Optional, recommended: in the application's settings on pushover.net, create a
+   web-based subscription with the analyzer's `publicBaseUrl` (for example
+   `https://analyzer.example.org/`) as its base URL, and copy the subscription code into
+   `subscriptionCode`. Users then get a **Connect Pushover** button instead of copying
+   their user key by hand. Pushover only returns users to addresses under that base URL,
+   so it must match `publicBaseUrl`.
+
+Users then open **My account → Notifications → Pushover** and either click **Connect
+Pushover** (with a subscription code), confirm on pushover.net and come back connected,
+or paste the user key from their pushover.net dashboard. **Send test** checks it.
+CoreScope checks every key with Pushover before saving it.
+
+- **Connect Pushover** gives CoreScope a key made for this application only. The return
+  from pushover.net only counts for the signed-in user who clicked the button, within 15
+  minutes and once, so a link from someone else can't put their key on your account.
+- To stop, a user removes the key on the account page, or unsubscribes in the Pushover
+  app (tap and hold the application, then **Unsubscribe**). Pushover then rejects the
+  key, and CoreScope turns Pushover off for that user at their next message. To connect
+  again, remove the old key and click **Connect Pushover**.
+- Pushover uses the events a user chose for notifications, and has its own on and off:
+  turning notification mails off, or the unsubscribe link in a mail, doesn't stop
+  Pushover, and the reverse.
+- All of a user's changes in one check go into one message, with a link to the node or,
+  for several changes, to the notification settings. CoreScope sends Pushover the
+  instance's host name as the title and the same lines a mail would contain: node
+  names, what changed and when.
+- Messages wait in `users.db` and are sent within seconds. A message Pushover can't take
+  is retried with backoff for up to an hour, then dropped. If Pushover rejects a user's
+  key, CoreScope turns Pushover off for that user; saving the key again turns it back on.
+- `maxPerMonth` (default 7,500) caps the messages the instance sends in 30 days, test
+  messages included. Pushover's free tier allows 10,000 per application per month.
+  Messages queued after the cap is reached expire unsent.
+- Each user gets at most `notifications.perUserPerDay` (default 20) Pushover messages in
+  24 hours, test messages included, so one user can't use up the instance's cap. It is
+  the same number as the mail limit, counted separately: messages past it are not
+  queued.
+- The key is personal data. The API and the account export show only its last four
+  characters; the user has the full key on pushover.net. Deleting the account or the key
+  removes it and any queued messages.
+- The key is stored unencrypted in `users.db`, and so in its backups (see
+  [Backups](#backups)). Anyone holding the file could send that user Pushover messages.
+
 #### Mobile push (optional)
 
 With push enabled, a signed-in user's watched-node alerts also arrive as push
@@ -646,6 +710,9 @@ server's user only yourself (`chmod 700 <dir>`).
 A deleted account, including one the user deleted themselves, stays in the snapshots
 for up to `keep` days (one snapshot a day), and in every downloaded copy until you
 delete that copy.
+
+Snapshots and downloads also contain users' Pushover user keys in plain text, if
+Pushover is set up. Keep them as private as the database itself.
 
 ```json
 "userManagement": {

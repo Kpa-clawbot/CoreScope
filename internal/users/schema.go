@@ -257,6 +257,45 @@ var migrations = [][]string{
 				AND instr(',' || NEW.events || ',', ',' || event || ',') = 0;
 		END`,
 	},
+	// v12: Pushover, a per-user destination: the user's key, a queue of
+	// rendered messages, and a log of sends for the monthly cap and the
+	// per-user daily limit. A deleted user's sends still count toward the cap.
+	{
+		`CREATE TABLE notification_pushover (
+			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			user_key TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			validated_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE notification_pushover_jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			title TEXT NOT NULL,
+			message TEXT NOT NULL,
+			url TEXT NOT NULL DEFAULT '',
+			url_title TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL,
+			next_at INTEGER NOT NULL DEFAULT 0,
+			attempts INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX notification_pushover_jobs_due ON notification_pushover_jobs(next_at, id)`,
+		`CREATE INDEX notification_pushover_jobs_user ON notification_pushover_jobs(user_id)`,
+		`CREATE TABLE notification_pushover_sent (
+			user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+			sent_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX notification_pushover_sent_at ON notification_pushover_sent(sent_at)`,
+		`CREATE INDEX notification_pushover_sent_user ON notification_pushover_sent(user_id, sent_at)`,
+		`CREATE TRIGGER notification_pushover_changed AFTER UPDATE OF enabled, user_key ON notification_pushover
+			WHEN NEW.enabled = 0 OR NEW.user_key != OLD.user_key BEGIN
+			DELETE FROM notification_pushover_jobs WHERE user_id = OLD.user_id;
+		END`,
+		`CREATE TRIGGER notification_pushover_removed AFTER DELETE ON notification_pushover BEGIN
+			DELETE FROM notification_pushover_jobs WHERE user_id = OLD.user_id;
+		END`,
+	},
 }
 
 func (s *Store) migrate() error {

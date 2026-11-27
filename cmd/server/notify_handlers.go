@@ -47,6 +47,7 @@ type notifyAccountJSON struct {
 	Watches         []notifyWatchJSON         `json:"watches"`
 	Limits          notifyLimitsJSON          `json:"limits"`
 	PushRelay       *notifyPushCapabilityJSON `json:"pushRelay,omitempty"`
+	Pushover        *notifyPushoverJSON       `json:"pushover,omitempty"` // present while the instance offers Pushover
 }
 
 type watchMyNodesJSON struct {
@@ -58,6 +59,7 @@ type watchMyNodesJSON struct {
 
 func (s *Server) registerNotifyRoutes(r *mux.Router) {
 	s.registerNotifyPushRoutes(r)
+	s.registerPushoverRoutes(r)
 	r.HandleFunc("/api/account/notifications", s.withUser(s.handleNotifyGet)).Methods("GET")
 	r.HandleFunc("/api/account/notifications", s.withUser(s.handleNotifyPut)).Methods("PUT")
 	r.HandleFunc("/api/account/notifications/watches/{pubkey}", s.withUser(s.handleWatchPut)).Methods("PUT")
@@ -139,6 +141,9 @@ func (s *Server) notifyAccount(u *users.User) (notifyAccountJSON, error) {
 		}
 	}
 	s.auth.relayDelivery.mu.RUnlock()
+	if out.Pushover, err = s.pushoverState(u.ID); err != nil {
+		return notifyAccountJSON{}, err
+	}
 	for _, e := range p.Events {
 		if (u.Role == users.RoleAdmin || !users.IsAdminNotifyEvent(e)) && (ext || e != users.NotifyNodeExternal) {
 			out.Events = append(out.Events, e)
