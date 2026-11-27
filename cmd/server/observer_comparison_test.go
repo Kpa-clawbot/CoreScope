@@ -1,14 +1,69 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/gorilla/mux"
 )
+
+func TestObserverComparisonLegacyTimestamps(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	createTestDBAt(t, path, 0) // observer_id and TEXT timestamps
+	rw, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rw.Close()
+	if _, err := rw.Exec(`CREATE INDEX idx_observations_timestamp ON observations(timestamp);
+		INSERT INTO observers(id) VALUES ('ref'), ('peer')`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	offset := time.FixedZone("UTC-10", -10*60*60)
+	samples := []any{
+		now.Add(-time.Minute).Format("2006-01-02T15:04:05.000Z"),
+		now.Add(-time.Hour).Format("2006-01-02 15:04:05"),
+		now.Add(-24*time.Hour + time.Minute).In(offset).Format(time.RFC3339),
+		now.Add(-2 * time.Hour).Unix(), // Unix seconds in a TEXT-affinity column
+		now.Add(-24*time.Hour - time.Minute).Format(time.RFC3339),
+		now.Add(time.Hour).In(offset).Format(time.RFC3339),
+	}
+	for i, ts := range samples {
+		if _, err := rw.Exec(`INSERT INTO observations(transmission_id,observer_id,direction,snr,timestamp)
+			VALUES (?,'ref','rx',-4,?), (?,'peer','rx',2,?)`, i+1, ts, i+1, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	router := mux.NewRouter()
+	NewServer(db, &Config{}, NewHub()).RegisterRoutes(router)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest("GET", "/api/analytics/observer-comparison?ref=ref", nil))
+	var response struct {
+		ReferenceTotal int
+		Peers          []struct {
+			Total, Shared, SNRPairs int
+			SNRDelta                *float64
+		}
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || response.ReferenceTotal != 4 || len(response.Peers) != 1 {
+		t.Fatalf("legacy window: want four shared transmissions, got HTTP %d %s", w.Code, w.Body.String())
+	}
+	peer := response.Peers[0]
+	if peer.Total != 4 || peer.Shared != 4 || peer.SNRPairs != 4 || peer.SNRDelta == nil || *peer.SNRDelta != 6 {
+		t.Fatalf("legacy receptions: want four pairs at +6 dB, got %s", w.Body.String())
+	}
+}
 
 func TestObserverComparison(t *testing.T) {
 	for _, version := range []string{"v2", "v3"} {
