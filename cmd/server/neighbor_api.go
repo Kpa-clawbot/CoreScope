@@ -283,7 +283,7 @@ func (s *Server) handleNeighborGraph(w http.ResponseWriter, r *http.Request) {
 			minScore = f
 		}
 	}
-	region := r.URL.Query().Get("region")
+	region := strings.Join(normalizeRegionCodes(r.URL.Query().Get("region")), ",")
 	roleFilter := strings.ToLower(r.URL.Query().Get("role"))
 
 	// #1481 P0-1: serve the default-shape request from the atomic-pointer
@@ -335,7 +335,6 @@ func (s *Server) buildDefaultNeighborGraphResponse() NeighborGraphResponse {
 // pipeline previously inlined in handleNeighborGraph.
 func (s *Server) computeNeighborGraphResponse(minCount int, minScore float64, region, roleFilter string) NeighborGraphResponse {
 	graph := s.getNeighborGraph()
-	allEdges := graph.AllEdges()
 	now := time.Now()
 
 	// Resolve region observers if filtering.
@@ -353,7 +352,13 @@ func (s *Server) computeNeighborGraphResponse(minCount int, minScore float64, re
 		}
 	}
 
-	nodeMap := s.buildNodeInfoMap()
+	// An explicit region with no observers cannot contribute any edges.
+	var allEdges []*NeighborEdge
+	var nodeMap map[string]nodeInfo
+	if region == "" || len(regionObs) > 0 {
+		allEdges = graph.AllEdges()
+		nodeMap = s.buildNodeInfoMap()
+	}
 	nodeSet := make(map[string]bool)
 	var filteredEdges []GraphEdge
 	ambiguousCount := 0
