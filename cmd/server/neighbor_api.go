@@ -283,7 +283,7 @@ func (s *Server) handleNeighborGraph(w http.ResponseWriter, r *http.Request) {
 			minScore = f
 		}
 	}
-	region := r.URL.Query().Get("region")
+	region := strings.Join(normalizeRegionCodes(r.URL.Query().Get("region")), ",")
 	roleFilter := strings.ToLower(r.URL.Query().Get("role"))
 
 	// #1481 P0-1: serve the default-shape request from the atomic-pointer
