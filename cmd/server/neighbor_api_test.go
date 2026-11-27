@@ -415,21 +415,35 @@ func TestNeighborAPI_DistanceKm_NoGPS(t *testing.T) {
 func TestNeighborGraphAPI_RegionFilter(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	if _, err := db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('Obs1', 'Receiver', 'SJC')`); err != nil {
+	if _, err := db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES
+		('Obs1', 'Receiver', 'SJC'), ('Obs2', 'Second receiver', 'PDX')`); err != nil {
 		t.Fatal(err)
 	}
 	store := NewPacketStore(db, nil)
-	graph := makeTestGraph(newEdge("aaaa", "obs1", "aa", 100, time.Now()))
+	now := time.Now()
+	pdxEdge := newEdge("bbbb", "obs2", "bb", 100, now)
+	pdxEdge.Observers = map[string]bool{"obs2": true}
+	graph := makeTestGraph(newEdge("aaaa", "obs1", "aa", 100, now), pdxEdge)
 	graph.RejectedEdgesGeoFar = 3
-	withEdge := GraphStats{TotalNodes: 2, TotalEdges: 1, AvgClusterSize: 1, RejectedEdgesGeoFar: 3}
+	global := GraphStats{TotalNodes: 4, TotalEdges: 2, AvgClusterSize: 1, RejectedEdgesGeoFar: 3}
+	sjc := GraphStats{TotalNodes: 2, TotalEdges: 1, AvgClusterSize: 1, RejectedEdgesGeoFar: 3}
 	empty := GraphStats{RejectedEdgesGeoFar: 3}
 	for _, tc := range []struct {
 		name, query string
 		store       *PacketStore
 		want        GraphStats
 	}{
-		{"global", "", store, withEdge},
-		{"matching observer", "&region=sjc&role=observer", store, withEdge},
+		{"global", "", store, global},
+		{"empty value", "&region=", store, global},
+		{"blank value", "&region=%20", store, global},
+		{"comma only", "&region=,", store, global},
+		{"All", "&region=All", store, global},
+		{"lowercase all", "&region=all", store, global},
+		{"All without store", "&region=All", nil, global},
+		{"matching observer", "&region=sjc&role=observer", store, sjc},
+		{"All and matching region", "&region=All,sjc", store, sjc},
+		{"empty and matching regions", "&region=YKF,sjc", store, sjc},
+		{"All and empty region", "&region=All,YKF", store, empty},
 		{"empty region", "&region=YKF", store, empty},
 		{"without store", "&region=SJC", nil, empty},
 	} {
@@ -448,8 +462,11 @@ func TestNeighborGraphAPI_RegionFilter(t *testing.T) {
 				t.Fatal("nodes and edges must be JSON arrays")
 			}
 			if len(got.Nodes) != tc.want.TotalNodes || len(got.Edges) != tc.want.TotalEdges {
-				t.Errorf("got nodes=%d edges=%d, want nodes=%d edges=%d",
+				t.Fatalf("got nodes=%d edges=%d, want nodes=%d edges=%d",
 					len(got.Nodes), len(got.Edges), tc.want.TotalNodes, tc.want.TotalEdges)
+			}
+			if tc.want == sjc && (got.Edges[0].Source != "aaaa" || got.Edges[0].Target != "obs1") {
+				t.Errorf("expected the SJC edge, got %+v", got.Edges[0])
 			}
 			if got.Stats != tc.want {
 				t.Errorf("stats = %+v, want %+v", got.Stats, tc.want)
