@@ -28,6 +28,7 @@ async function step(name, fn) {
   catch (e) { failed++; console.error('  \u274c ' + name + ': ' + e.message); }
 }
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
+function bookmark(page) { return new URLSearchParams(new URL(page.url()).hash.split('?')[1]); }
 
 async function pickTwoObserverIds(page) {
   await page.goto(BASE + '/#/observers', { waitUntil: 'domcontentloaded' });
@@ -190,6 +191,48 @@ async function run() {
     }
   });
 
+  for (const invalidB of ['', idA]) {
+    await step((invalidB ? 'Duplicating' : 'Clearing') + ' a pending pair clears obsolete results and updates its bookmark', async () => {
+      const pair = await ctx.newPage();
+      let release;
+      const paused = new Promise(resolve => { release = resolve; });
+      const isFor = (request, id) => {
+        const url = new URL(request.url());
+        return url.pathname === '/api/packets' && url.searchParams.get('observer') === id;
+      };
+      await pair.route('**/api/packets?**', async route => {
+        if (![idA, idB].some(id => isFor(route.request(), id))) return route.continue();
+        await paused;
+        return route.fulfill({ json: { packets: [] } });
+      });
+      try {
+        await Promise.all([
+          pair.waitForRequest(r => isFor(r, idA)), pair.waitForRequest(r => isFor(r, idB)),
+          pair.goto(BASE + '/#/compare?a=' + idA + '&b=' + idB + '&theme=dark', { waitUntil: 'domcontentloaded' })
+        ]);
+        const picker = pair.locator('#compareObsB');
+        const content = pair.locator('#compareContent');
+        await picker.selectOption(invalidB);
+        const pendingText = await content.innerText();
+        release();
+        await pair.waitForLoadState('networkidle');
+        assert(/(?:choose|select).*observers?/i.test(pendingText), 'expected an idle prompt while requests are pending, got: ' + pendingText);
+        assert(await content.innerText() === pendingText, 'late packets replaced the idle prompt');
+        const params = bookmark(pair);
+        assert(params.get('a') === idA && params.get('b') === (invalidB || null) && params.get('theme') === 'dark',
+          'bookmark must restore the current selections and shared theme, got: ' + params);
+
+        await picker.selectOption(idB);
+        await pair.locator('.compare-summary-text').waitFor();
+        await picker.selectOption(invalidB);
+        assert(await content.innerText() === pendingText, 'invalidating a completed pair must also clear its results');
+      } finally {
+        release();
+        await pair.close();
+      }
+    });
+  }
+
   await step('Pin a reference, compare every peer and keep explicit pair links (#671)', async () => {
     const fleet = await ctx.newPage();
     const requests = [];
@@ -222,7 +265,7 @@ async function run() {
       const picker = fleet.getByLabel('Reference observer', { exact: true });
       await picker.selectOption('ref');
       await rows.first().waitFor();
-      assert(new URLSearchParams(new URL(fleet.url()).hash.split('?')[1]).get('ref') === 'ref', 'missing shareable reference');
+      assert(bookmark(fleet).get('ref') === 'ref', 'missing shareable reference');
       const cells = i => rows.nth(i).locator('td').allTextContents();
       assert(JSON.stringify(await cells(0)) === JSON.stringify(['Peer','6','4','80.0%','66.7%','+1.0 dB','2']), 'peer overlaps or paired SNR are incorrect');
       assert(JSON.stringify(await cells(1)) === JSON.stringify(['Quiet','0','0','0.0%','—','—','0']), 'quiet observer or missing denominator/SNR handled incorrectly');
@@ -241,6 +284,75 @@ async function run() {
       await fleet.close();
     }
   });
+
+  const regional = await browser.newPage();
+  const ids = ['1', '2'].map(suffix => 'a'.repeat(63) + suffix);
+  const stations = ids.map(id => ({ id, name: 'Station', iata: 'BBB' }));
+  const roster = [{ id: 'ref', name: 'Reference', iata: 'AAA' }, ...stations, { id: 'quiet', name: 'Quiet', iata: 'BBB' }];
+  const peers = [
+    { ...stations[0], total: 3, shared: 2, snrPairs: 2, snrDelta: 0 },
+    { ...stations[1], total: 1, shared: 1, snrPairs: 1, snrDelta: -3 },
+    { id: 'quiet', name: 'Quiet', total: 0, shared: 0, snrPairs: 0, snrDelta: null }
+  ];
+  const requests = [];
+  await regional.route('**/api/observers', r => r.fulfill({ json: { observers: roster } }));
+  await regional.route('**/api/config/regions', r => r.fulfill({ json: { AAA: 'Reference only', BBB: 'Other receivers' } }));
+  await regional.route('**/api/analytics/observer-comparison?**', route => {
+    const params = new URL(route.request().url()).searchParams;
+    requests.push(params);
+    return route.fulfill({ json: { referenceTotal: 5, peers: params.get('region') === 'AAA' ? [] : peers } });
+  });
+  const table = regional.getByRole('table', { name: 'Reference comparison' });
+  const reference = regional.getByLabel('Reference observer', { exact: true });
+  try {
+    await step('Fleet choices and measurements distinguish observers sharing a name and region', async () => {
+      await regional.goto(BASE + '/#/compare?ref=ref&region=All');
+      await table.waitFor();
+      const rows = await table.locator('tbody tr').evaluateAll(trs => trs.map(tr => Array.from(tr.cells, td => td.textContent)));
+      assert(rows[0][5] === '0.0 dB' && rows[1][5] === '-3.0 dB' && rows[2][5] === '—', 'zero, negative and missing SNR must remain distinct');
+      const options = await reference.locator('option').evaluateAll(opts => Object.fromEntries(opts.map(o => [o.value, o.text])));
+      for (const [i, id] of ids.entries()) {
+        const suffix = id.slice(-1);
+        assert([options[id], rows[i][0]].every(label => label.includes('Station') && label.includes(suffix) && !label.includes(ids[1 - i].slice(-1))),
+          'each same-name picker option and result row must identify its receiver, got ' + options[id] + ' and ' + rows[i][0]);
+      }
+    });
+
+    await step('A region with no peers keeps the reference total, bookmark and shared display settings on reload', async () => {
+      await regional.goto(BASE + '/#/compare?ref=ref&region=All&theme=dark&embed=1');
+      await table.waitFor();
+      const region = regional.getByRole('checkbox', { name: 'Reference only' });
+      const empty = regional.locator('#compareContent [role="status"]').filter({ hasText: 'No other observers in the selected regions' });
+      await region.click();
+      await empty.waitFor();
+      const checkEmpty = async () => {
+        const q = requests[requests.length - 1];
+        assert(q.get('ref') === 'ref' && q.get('region') === 'AAA', 'wrong aggregate request: ' + q);
+        assert(await reference.inputValue() === 'ref' && await region.getAttribute('aria-checked') === 'true', 'reference and region must match the bookmark');
+        assert((await empty.innerText()).includes('Reference received 5 distinct transmissions') && await table.isHidden(), 'empty region must show the reference total and hide the table');
+      };
+      await checkEmpty();
+      assert(bookmark(regional).get('region') === 'AAA', 'chosen region must be in the bookmark');
+      // A shared link must work even when the recipient has no saved region or pin.
+      await regional.evaluate(() => localStorage.clear());
+      const beforeReload = requests.length;
+      await regional.reload({ waitUntil: 'domcontentloaded' });
+      await empty.waitFor();
+      await checkEmpty();
+      assert(requests.length === beforeReload + 1, 'reloading the bookmark must issue one regional comparison');
+      const hasDisplaySettings = () => bookmark(regional).get('theme') === 'dark' && bookmark(regional).get('embed') === '1';
+      assert(hasDisplaySettings() && await regional.locator('html').getAttribute('data-theme') === 'dark',
+        'reloaded comparison lost its shareable display settings: ' + regional.url());
+      await regional.getByRole('link', { name: 'Pairwise comparison' }).click();
+      await regional.locator('#compareObsA').waitFor();
+      assert(hasDisplaySettings() && !bookmark(regional).has('ref'), 'switching to pairwise must preserve shared settings and clear the reference');
+      await regional.getByRole('link', { name: 'Reference comparison' }).click();
+      await reference.waitFor();
+      assert(hasDisplaySettings(), 'switching back to the fleet must preserve shared settings');
+    });
+  } finally {
+    await regional.close();
+  }
 
   await browser.close();
   console.log('\n' + passed + ' passed, ' + failed + ' failed');

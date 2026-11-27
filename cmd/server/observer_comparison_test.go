@@ -145,6 +145,7 @@ func TestObserverComparison(t *testing.T) {
 			check("?ref=ref", `{"referenceTotal":5,"peers":[`+peer+","+equal+","+quiet+`]}`)
 			// Peer regions do not change the pinned reference or its denominator.
 			check("?ref=ref&region=bbb", `{"referenceTotal":5,"peers":[`+peer+","+quiet+`]}`)
+			check("?ref=ref&region=CCC", `{"referenceTotal":5,"peers":[]}`)
 			check("?ref=quiet&region=BBB", `{"referenceTotal":0,"peers":[{"id":"peer","name":"Peer","total":6,"shared":0,"snrPairs":0,"snrDelta":null}]}`)
 			get("", 400)
 			for _, ref := range []string{"unknown", "hidden", "inactive"} {
