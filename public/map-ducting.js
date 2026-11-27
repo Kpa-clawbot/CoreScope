@@ -1,0 +1,2171 @@
+/* map-ducting.js — tropospheric ducting map overlay.
+ *
+ * Draws the forecast mean refractivity gradient over the lowest 1.5 km (the
+ * cells' `n`) as a semi-transparent field of colour bands (like the usual
+ * tropo-ducting forecast maps): transparent where propagation is normal, then
+ * purple, blue, cyan, green, yellow, orange, red and pink as the gradient gets
+ * stronger; each colour is one range of N/km. Cells where the model shows a
+ * duct that may carry LoRa (lowest trapped frequency, as shown, at most this
+ * site's LoRa frequency, or at most 915 MHz when the server sets none) get a
+ * dashed outline (from the duct analysis: c and f, not n).
+ * Data: GET /api/ducting (hourly
+ * forecast, one array entry per `times` entry, see cmd/server/ducting_types.go).
+ *
+ *   window.MC_createDuctingLayer(opts) -> L.Layer
+ *       Fetches /api/ducting when added to a map, refreshes every 30 min while
+ *       on it (every minute until it has data), draws the field as one canvas
+ *       image overlay, the LoRa outlines and the forecast-area edge as
+ *       non-interactive lines, and one panel (bottom left; collapsible,
+ *       movable, see _buildPanel) holding the forecast-time timeline and
+ *       the legend.
+ *       A layer removed mid-fetch never touches the map afterwards.
+ *       Nothing it draws takes pointer events: a click on the map is looked
+ *       up in the lattice (MC_ductCellAt) by one map click handler, which
+ *       never stops the event, so the page's own map clicks (Planner sites,
+ *       Live paths) work inside the forecast area. The cell popup opens only
+ *       when the click did nothing else (see _watchClicks).
+ *   layer.openCellPopup(latlng) -> true when a cell with data at the shown
+ *       hour is there and its popup opened
+ *   window.MC_ductCellAt(grid, lat, lon) -> index into the cells of the cell
+ *       whose square contains (lat, lon), or -1
+ *   window.MC_ductTimeIndex(times, now) -> index of the latest time <= now
+ *   window.MC_ductFieldColor(v, stops)  -> [r, g, b, a] (band colour) for a field value (N/km)
+ *   window.MC_ductFieldStops()          -> stops read from the CSS variables
+ *   window.MC_ductGrid(cells, step)     -> the cells' lattice (see ductGrid)
+ *   window.MC_ductGridValues(grid, cells, i) -> Float32Array, NaN = no data
+ *   window.MC_ductSample(grid, vals, lat, lon) -> { g, a }: g = field value
+ *       (n, N/km; the name predates n), a = coverage
+ *   window.MC_ductFieldValues(grid, vals) -> { g, a } Float32Arrays, one entry
+ *       per image pixel: what the field image is coloured from
+ *   window.MC_ductRowLat(y, h, north, south)   -> latitude of image row y
+ *   window.MC_ductTimelineLayout(times) / MC_ductTimelineIndexAt(xs, x) /
+ *       MC_ductTimelineKeyIndex(key, i, xs, pxPerSec) /
+ *       MC_ductTimelineDaySpans(layout, minPx) -> the timeline's geometry,
+ *       the time under an x, the time a key moves to, the day label spans
+ *   window.MC_ductClampPos / MC_ductPosToFrac / MC_ductPosFromFrac -> the
+ *       moved panel's position inside the map
+ *   window.MC_ductPanelPrefs(raw) -> the stored panel state, validated
+ *
+ * The field image:
+ *   - The cells sit on a regular lattice: centre = floor(x/step)*step + step/2.
+ *     The image covers the bounding box of every cell that has data at some
+ *     hour (the cells' outer edges), so its bounds stay put while the slider
+ *     moves. Several separate regions share one image; its long side is
+ *     capped at MAX_SIDE px, so far-apart regions get fewer pixels per cell
+ *     (the browser smooths the upscaling). PX_PER_CELL is high so the band
+ *     edges stay smooth curves at the zoom a region is usually viewed at. Cells on both sides of the
+ *     antimeridian are drawn where Leaflet puts them (lon -180..180); the
+ *     image then spans the whole width, nothing is wrapped.
+ *   - Rows are sampled in Web Mercator (row -> latitude by the inverse
+ *     projection), so the field lines up with the basemap at every zoom.
+ *   - The value is the cell's mean dN/dh over the lowest 1.5 km (n; 0 or
+ *     missing = no data at that hour), interpolated between cell
+ *     centres with Catmull-Rom bicubic over the 4x4 neighbourhood (lattice
+ *     indices clamped at its border), so band edges are smooth curves rather
+ *     than the straight segments bilinear gives. Next to a cell without data
+ *     (any of the 16 missing) it falls back to bilinear over the cells that
+ *     have data. Where a neighbour has no data the field fades to
+ *     transparent by the cell's edge (coverage, bilinear), so there are no
+ *     hard square edges. At the outer edge of the forecast area (the lattice
+ *     slots that have data at some hour) the fade is twice as wide: it starts
+ *     a full cell inside the edge (see areaSoft).
+ *   - The area's outer boundary is drawn as thin dotted lines (ductEdges),
+ *     one segment per run of cell edges, so users see where the forecast ends.
+ *   - Colour: the flat colour of the band n falls in (no blending between
+ *     stops), every band at the same field opacity, times the coverage.
+ *   - Built only when the data, the forecast hour or the theme changes,
+ *     O(image pixels): the interpolation is separable (per image column the
+ *     lattice taps and weights are computed once per grid, per image row the
+ *     vertical sums once per lattice column), so a pixel costs a handful of
+ *     multiply-adds. Pan and zoom only move/scale the image.
+ *
+ * Colours come from the --mc-duct-s1..s8 CSS variables (hex or rgb()), the
+ * field opacity from --mc-duct-alpha and the LoRa outline from
+ * --mc-duct-lora and the dotted edge line from --mc-duct-edge, all read at
+ * draw time.
+ *   window.MC_ductEdges(grid)           -> [[[lat, lon], [lat, lon]], ...]
+ */
+(function () {
+  'use strict';
+
+  var API_URL = '/api/ducting';
+  var REFRESH_MS = 30 * 60 * 1000;
+  // While there is no data yet (server still preparing, or a failed fetch),
+  // ask again every minute instead of waiting a full refresh period.
+  var RETRY_MS = 60 * 1000;
+  // A duct "may carry LoRa" at a frequency when its lowest trapped frequency
+  // (as shown, two significant figures) is at most that frequency: this
+  // site's LoRa frequency when the operator set one (los.frequencyMhz), else
+  // 868 and 915 MHz each. With model levels ~200 m apart it is an estimate.
+  var BAND_868 = 868;           // LoRa bands judged when the site's frequency is unknown
+  var BAND_915 = 915;
+  // los.frequencyMhz as shipped (cmd/server/los_config.go, config.example.json).
+  // The server sends it whenever line of sight is on, so this value alone
+  // does not say the operator chose it: an EU site that never touched the
+  // setting would be judged at 910.525 MHz only. Treated as not set.
+  var LOS_DEFAULT_MHZ = 910.525;
+  var TYPE_NAME = { 0: 'No data', 1: 'Normal', 2: 'Super-refraction', 3: 'Elevated duct', 4: 'Surface-based duct' };
+
+  // Colour bands: --mc-duct-sN colours n (mean dN/dh over the lowest 1.5 km,
+  // N/km) from STOP_N[N-1] down to (not including) the next stop; the last one
+  // everything below it. Above the first (-44) is transparent: normal air is
+  // about -40. Whole numbers: the colour table relies on it.
+  var STOP_N = [-44, -48, -54, -58, -62, -70, -80, -90];
+  var DEFAULT_ALPHA = 0.8;      // when --mc-duct-alpha is unset
+  // Colour table: entry k is the colour of the value -k, and of every value
+  // in (-k - 1, -k] (same band, the stops being whole numbers); the last
+  // entry covers everything stronger.
+  var LUT_SIZE = 1 - STOP_N[STOP_N.length - 1];
+  var PX_PER_CELL = 48;
+  var MAX_SIDE = 2048;          // image long side, px
+  var MAX_GRID = 1 << 22;       // lattice slots (0.25 deg worldwide is ~1M)
+  var MAX_LAT = 85.0511287798;  // Web Mercator limit
+  var FIELD_PANE = 'mcDuctFieldPane';
+  var FIELD_Z = '245';          // above tiles (200), below the tile overlays (250) and vectors (400)
+  // The LoRa outlines and the forecast-area edge: their own canvas in their
+  // own pane, above the tile overlays, below every page's vectors (400) and
+  // Planner's node pane (390), and never hit by the pointer, so the canvas
+  // never sits over another page's clickable paths.
+  var LINE_PANE = 'mcDuctLinePane';
+  var LINE_Z = '380';
+  var LORA_VAR = '--mc-duct-lora';
+  var ALPHA_VAR = '--mc-duct-alpha';
+  var EDGE_VAR = '--mc-duct-edge';
+  var EDGE_STYLE = { stroke: true, weight: 1, opacity: 0.7, dashArray: '1 5', interactive: false };
+  var LORA_STYLE = { stroke: true, weight: 1.5, opacity: 0.95, dashArray: '4 3', fill: false, interactive: false };
+
+  // Legend: where each band starts (0..1 along the bar; the last runs to the
+  // end, transparent before the first). Spread out instead of linear in n,
+  // so the labels have room. "Very high" sits right-aligned at the end.
+  var BAR_POS = [0.19, 0.26, 0.34, 0.41, 0.48, 0.6, 0.73, 0.86];
+  var BAR_LABELS = [[0, 'Normal'], [BAR_POS[0], 'Above normal'], [BAR_POS[4], 'High'], [1, 'Very high', true]];
+  var CAPTION = 'Refractivity gradient over the lowest 1.5 km (N/km)';
+  var MINUS = '\u2212';
+
+  var NOTE = 'Indicator only: model levels are ~200 m apart, so thinner ducts are not visible.';
+  var MSG_LOADING = 'Loading ducting forecast';
+  var MSG_PENDING = 'Ducting forecast is being prepared';
+  var MSG_ERROR = 'Ducting forecast unavailable';
+  var MSG_STALE = 'Forecast out of date \u2014 showing the last one received';
+  // 'Dashed outline: … LoRa at 869.525 MHz' (this site) or '868 / 915 MHz'.
+  function msgLoraRow() {
+    return 'Dashed outline: the model shows a duct that may carry LoRa at ' + loraFreqs().map(function (f) { return Math.round(f * 1000) / 1000; }).join(' / ') + ' MHz';
+  }
+  var HOUR_S = 3600;
+
+  // ── Pure helpers ──────────────────────────────────────────────────────────
+
+  // Latest time <= now; the first when every time is in the future; -1 when
+  // there are no times.
+  function ductTimeIndex(times, nowSec) {
+    if (!Array.isArray(times) || !times.length) return -1;
+    var best = 0;
+    for (var i = 0; i < times.length; i++) {
+      if (times[i] <= nowSec) best = i; else break;
+    }
+    return best;
+  }
+
+  function fmtTime(sec) {
+    try {
+      return new Date(sec * 1000).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch (_) { return String(sec); }
+  }
+
+  // ── Timeline and panel geometry (pure) ────────────────────────────────────
+
+  var DAY_S = 24 * HOUR_S;
+  var TL_DAY_PX = 240;        // a day on the timeline is at least this wide
+  var TL_MIN_STEP_PX = 8;     // and the usual step between times at least this
+  var TL_HOUR_EVERY = 6;      // hour labels at 06, 12 and 18 local time
+  var TL_DAY_MIN_PX = 96;     // a day label needs this much room before the next
+  var TL_MAX_DAYS = 400;      // label loop bound; the server never sends this much
+
+  // Median gap between consecutive times, in seconds; HOUR_S when there are
+  // fewer than two times or no positive gap.
+  function medianStep(times) {
+    var gaps = [];
+    for (var i = 1; i < times.length; i++) {
+      var g = times[i] - times[i - 1];
+      if (g > 0) gaps.push(g);
+    }
+    if (!gaps.length) return HOUR_S;
+    gaps.sort(function (a, b) { return a - b; });
+    return gaps[Math.floor(gaps.length / 2)];
+  }
+
+  // Lays the timeline out from the times (ascending Unix seconds). Positions
+  // follow time, not index, so uneven steps (history then forecast) sit where
+  // they belong. Returns:
+  //   pxPerSec  scale: a day >= TL_DAY_PX and the median step >= TL_MIN_STEP_PX
+  //   width     px from the first time to the last
+  //   xs        x of every time (xs[0] = 0)
+  //   days      { x, sec } at each local midnight inside the range, plus one
+  //             at x 0 for the first time's day when it does not start at midnight
+  //   hours     { x, sec } at 06, 12 and 18 local time inside the range
+  // Labels follow the local clock (DST days included); their text is the
+  // caller's to format. Empty input gives width 0 and empty lists.
+  function ductTimelineLayout(times) {
+    var out = { pxPerSec: TL_DAY_PX / DAY_S, width: 0, xs: [], days: [], hours: [] };
+    if (!Array.isArray(times) || !times.length) return out;
+    var t0 = Number(times[0]), tn = Number(times[times.length - 1]);
+    if (!isFinite(t0) || !isFinite(tn) || tn < t0) return out;
+    var pps = Math.max(TL_DAY_PX / DAY_S, TL_MIN_STEP_PX / medianStep(times));
+    out.pxPerSec = pps;
+    out.width = (tn - t0) * pps;
+    for (var i = 0; i < times.length; i++) out.xs.push((Number(times[i]) - t0) * pps);
+    var d = new Date(t0 * 1000);
+    d.setHours(0, 0, 0, 0);
+    for (var n = 0; n < TL_MAX_DAYS; n++) {
+      var mid = d.getTime() / 1000;
+      if (mid > tn) break;
+      if (mid >= t0) out.days.push({ x: (mid - t0) * pps, sec: mid });
+      else if (n === 0) out.days.push({ x: 0, sec: t0 });
+      for (var h = TL_HOUR_EVERY; h < 24; h += TL_HOUR_EVERY) {
+        var hs = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h).getTime() / 1000;
+        if (hs >= t0 && hs <= tn) out.hours.push({ x: (hs - t0) * pps, sec: hs });
+      }
+      d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+    }
+    return out;
+  }
+
+  // Index of the x in xs (ascending) nearest to x; ties go to the earlier
+  // time; -1 for an empty list.
+  function ductTimelineIndexAt(xs, x) {
+    if (!xs || !xs.length) return -1;
+    var lo = 0, hi = xs.length - 1;
+    if (!(x > xs[0])) return 0;
+    if (x >= xs[hi]) return hi;
+    while (hi - lo > 1) {
+      var m = (lo + hi) >> 1;
+      if (xs[m] <= x) lo = m; else hi = m;
+    }
+    return (x - xs[lo] <= xs[hi] - x) ? lo : hi;
+  }
+
+  // Top-left of a w x h box kept inside an areaW x areaH area, at least
+  // margin from every edge; a box larger than the area sits at the margin.
+  function ductClampPos(left, top, w, h, areaW, areaH, margin) {
+    var m = margin > 0 ? margin : 0;
+    function clamp(v, size, area) {
+      var max = area - size - m;
+      if (!(max > m)) return m;
+      if (!isFinite(v)) return m;
+      return Math.min(Math.max(v, m), max);
+    }
+    return { left: clamp(left, w, areaW), top: clamp(top, h, areaH) };
+  }
+
+  // A position as fractions of the free space (0 = left/top edge, 1 =
+  // right/bottom), so it survives a resized map; and back, clamped.
+  function ductPosToFrac(left, top, w, h, areaW, areaH) {
+    function f(v, size, area) {
+      var free = area - size;
+      if (!(free > 0)) return 0;
+      return Math.min(Math.max(v / free, 0), 1);
+    }
+    return { fx: f(left, w, areaW), fy: f(top, h, areaH) };
+  }
+
+  function ductPosFromFrac(frac, w, h, areaW, areaH, margin) {
+    var fx = frac && isFinite(frac.fx) ? frac.fx : 0;
+    var fy = frac && isFinite(frac.fy) ? frac.fy : 0;
+    return ductClampPos(fx * (areaW - w), fy * (areaH - h), w, h, areaW, areaH, margin);
+  }
+
+  // The day spans of a timeline layout: { x, w, sec } from each day's start
+  // to the next day's (the last to the end of the times). A day shorter than
+  // minPx that another follows (a first day starting late) is left out: its
+  // label could not fit before the next one.
+  function ductTimelineDaySpans(lay, minPx) {
+    var out = [], days = (lay && lay.days) || [];
+    for (var k = 0; k < days.length; k++) {
+      var x1 = days[k + 1] ? days[k + 1].x : lay.width;
+      var w = Math.max(x1 - days[k].x, 0);
+      if (days[k + 1] && w < minPx) continue;
+      out.push({ x: days[k].x, w: w, sec: days[k].sec });
+    }
+    return out;
+  }
+
+  // The index a timeline key moves to from i: ArrowLeft/ArrowDown one
+  // earlier, ArrowRight/ArrowUp one later, PageDown/PageUp the time nearest
+  // 24 h earlier/later (at least one step, so a gap in the times never
+  // traps the key), Home/End the first/last; clamped. -1 for any other key
+  // or no times.
+  function ductTimelineKeyIndex(key, i, xs, pxPerSec) {
+    var n = xs ? xs.length : 0;
+    if (!n) return -1;
+    var cur = Math.min(Math.max(isFinite(i) ? Math.round(i) : 0, 0), n - 1);
+    var day = DAY_S * (pxPerSec > 0 ? pxPerSec : 0);
+    switch (key) {
+      case 'ArrowLeft': case 'ArrowDown': return Math.max(cur - 1, 0);
+      case 'ArrowRight': case 'ArrowUp': return Math.min(cur + 1, n - 1);
+      case 'PageDown': return Math.max(Math.min(ductTimelineIndexAt(xs, xs[cur] - day), cur - 1), 0);
+      case 'PageUp': return Math.min(Math.max(ductTimelineIndexAt(xs, xs[cur] + day), cur + 1), n - 1);
+      case 'Home': return 0;
+      case 'End': return n - 1;
+    }
+    return -1;
+  }
+
+  // The stored panel state (a JSON string, or anything else) as
+  // { collapsed: true | false | null (never chosen), pos: { fx, fy } | null };
+  // anything unreadable is "nothing stored". Fractions are clamped to 0..1.
+  function ductPanelPrefs(raw) {
+    var out = { collapsed: null, pos: null };
+    var o = null;
+    try { o = typeof raw === 'string' ? JSON.parse(raw) : null; } catch (_) { o = null; }
+    if (!o || typeof o !== 'object') return out;
+    if (typeof o.collapsed === 'boolean') out.collapsed = o.collapsed;
+    var p = o.pos;
+    if (p && typeof p === 'object' && typeof p.fx === 'number' && typeof p.fy === 'number' && isFinite(p.fx) && isFinite(p.fy)) {
+      out.pos = { fx: Math.min(Math.max(p.fx, 0), 1), fy: Math.min(Math.max(p.fy, 0), 1) };
+    }
+    return out;
+  }
+
+  function at(arr, i) { return (arr && arr[i] != null) ? Number(arr[i]) : 0; }
+
+  // The field value of `cell` at time index i: n (N/km), or NaN when there is
+  // no data (class 0; n missing, 0 or not a number).
+  function fieldValue(cell, i) {
+    if (at(cell.c, i) < 1) return NaN;
+    var n = at(cell.n, i);
+    return (n !== 0 && isFinite(n)) ? n : NaN;
+  }
+
+  // '-52' with a real minus sign.
+  function fmtSigned(v) { return v < 0 ? MINUS + Math.abs(v) : String(v); }
+
+  // Two significant figures: 78 -> 78, 380 -> 380, 868 -> 870, 1234 -> 1200.
+  function sig2(v) { return Number(Number(v).toPrecision(2)); }
+
+  // The LoRa frequencies to judge a duct against: this site's own (the line
+  // of sight setting, /api/config/client los.frequencyMhz) when the operator
+  // set one, else both common bands: no line of sight config, a value out
+  // of range, or the shipped default (LOS_DEFAULT_MHZ). In MHz, ascending.
+  function loraFreqs() {
+    var c = (typeof window !== 'undefined' && window.MC_LOS_CFG) || null;
+    var f = c ? Number(c.frequencyMhz) : NaN;
+    var chosen = f >= 100 && f <= 6000 && Math.abs(f - LOS_DEFAULT_MHZ) >= 0.0005;
+    return chosen ? [f] : [BAND_868, BAND_915];
+  }
+
+  // A duct's lowest trapped frequency as shown (two significant figures):
+  // the verdicts compare this same value, so the number and the answer never
+  // disagree at a band edge. 0 = no duct.
+  function shownFmin(cell, i) {
+    var f = at(cell.f, i);
+    return (at(cell.c, i) >= 3 && f > 0) ? sig2(f) : 0;
+  }
+
+  // Dashed outline: the model's duct may trap at least one of loraFreqs().
+  function isLora(cell, i) {
+    var f = shownFmin(cell, i), fr = loraFreqs();
+    return f > 0 && f <= fr[fr.length - 1];
+  }
+
+  function fmtMHz(f) { return (Math.round(f * 1000) / 1000) + ' MHz'; }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function button(cls, text, label) {
+    var b = el('button', cls, text);
+    b.type = 'button';
+    if (label) { b.setAttribute('aria-label', label); b.title = label; }
+    return b;
+  }
+
+  // ── panel and timeline plumbing ───────────────────────────────────────────
+
+  var PANEL_KEY = 'mc-duct-panel';      // localStorage: { collapsed, pos: { fx, fy } }
+  var PANEL_MARGIN = 8;                 // a moved panel stays this far inside the map
+  var PANEL_KEY_STEP = 16;              // px per arrow key on the move handle (Shift: x4)
+  var NARROW_Q = '(max-width: 600px)';  // phones: legend collapsed by default, no moving
+  var TL_IDLE_MS = 120;                 // no scroll for this long = the scroll has ended
+  var TL_DRAG_PX = 4;                   // a mouse press moving less than this is a click
+  var panelSeq = 0;                     // ids unique per panel (several maps on a page)
+
+  function matches(q) {
+    try { return !!(window.matchMedia && window.matchMedia(q).matches); } catch (_) { return false; }
+  }
+  function narrowScreen() { return matches(NARROW_Q); }
+  function reducedMotion() { return matches('(prefers-reduced-motion: reduce)'); }
+
+  // Storage may be missing, null or throw (private mode, blocked site data).
+  function loadPanelPrefs() {
+    try {
+      var st = window.localStorage;
+      return ductPanelPrefs(st ? st.getItem(PANEL_KEY) : null);
+    } catch (_) { return ductPanelPrefs(null); }
+  }
+  function savePanelPrefs(collapsed, pos) {
+    try {
+      var st = window.localStorage;
+      if (st) st.setItem(PANEL_KEY, JSON.stringify({ collapsed: collapsed, pos: pos ? { fx: pos.fx, fy: pos.fy } : null }));
+    } catch (_) {}
+  }
+
+  // requestAnimationFrame / setTimeout with fallbacks (the unit sandbox and
+  // old browsers may lack either); each returns a handle for its cancel.
+  function frame(fn) {
+    if (typeof requestAnimationFrame === 'function') return { raf: requestAnimationFrame(fn) };
+    if (typeof setTimeout === 'function') return { to: setTimeout(fn, 16) };
+    fn();
+    return null;
+  }
+  function cancelFrame(h) {
+    if (!h) return;
+    try {
+      if (h.raf != null) cancelAnimationFrame(h.raf);
+      else if (h.to != null) clearTimeout(h.to);
+    } catch (_) {}
+  }
+  function later(fn, ms) { return typeof setTimeout === 'function' ? setTimeout(fn, ms) : null; }
+  function cancelLater(id) { if (id != null) { try { clearTimeout(id); } catch (_) {} } }
+
+  // Adds or removes one class (keeps the others, e.g. Leaflet's).
+  function setClass(e, cls, on) {
+    var parts = String(e.className || '').split(/\s+/).filter(Boolean), i = parts.indexOf(cls);
+    if (on && i < 0) parts.push(cls);
+    else if (!on && i >= 0) parts.splice(i, 1);
+    else return;
+    e.className = parts.join(' ');
+  }
+
+  function stopEvent(e) { if (e && e.stopPropagation) e.stopPropagation(); }
+
+  function dayText(sec) {
+    try { return new Date(sec * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }); } catch (_) { return ''; }
+  }
+  function hourText(sec) {
+    try { return new Date(sec * 1000).toLocaleTimeString([], { hour: '2-digit' }); } catch (_) { return String(new Date(sec * 1000).getHours()); }
+  }
+
+  // Popup body for cell `cell` at time index `i` (DOM nodes, textContent only).
+  function popupContent(cell, i) {
+    var cls = at(cell.c, i);
+    var box = el('div', 'mc-duct-popup');
+    box.appendChild(el('div', 'mc-duct-popup-title', TYPE_NAME[cls] || TYPE_NAME[0]));
+    // What the field colour shows; for every class, since it can be strong
+    // where the duct analysis finds no duct.
+    var n = fieldValue(cell, i);
+    if (n === n) box.appendChild(el('div', null, 'Gradient, lowest 1.5 km: ' + fmtSigned(Math.round(n)) + ' N/km'));
+    if (cls < 2) return box;
+    var rows = [];
+    if (cls >= 3) {
+      rows.push('Trapping layer in the model (its levels are ~200 m apart, so thinner layers are not resolved)');
+      rows.push('Base: ' + Math.round(at(cell.b, i)) + ' m above ground');
+      rows.push('Top: ' + Math.round(at(cell.t, i)) + ' m above ground');
+    }
+    rows.push('Strength: ' + (at(cell.dm, i) / 10).toFixed(1) + ' M-units');
+    var shown = shownFmin(cell, i);
+    rows.push('Lowest trapped frequency: ' + (shown > 0 ? '\u2248 ' + shown + ' MHz (model estimate)' : 'none'));
+    loraFreqs().forEach(function (fr) {
+      rows.push('LoRa ' + fmtMHz(fr) + ': ' + (shown > 0 && shown <= fr ? 'possibly trapped (model estimate)' : 'not trapped by this layer'));
+    });
+    for (var r = 0; r < rows.length; r++) box.appendChild(el('div', null, rows[r]));
+    return box;
+  }
+
+  // '' when the variable is undefined.
+  function cssVar(name) {
+    try {
+      var v = getComputedStyle(document.documentElement).getPropertyValue(name);
+      return v ? String(v).trim() : '';
+    } catch (_) { return ''; }
+  }
+
+  // '#rgb', '#rrggbb', '#rrggbbaa', 'rgb(r, g, b)' or 'rgba(...)' -> [r, g, b]
+  // (alpha ignored: the field has one opacity); null for anything else.
+  function parseColor(s) {
+    s = String(s || '').trim().toLowerCase();
+    var m = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(s);
+    if (m) {
+      var h = m[1];
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+    }
+    m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(s);
+    if (m) return [Math.round(+m[1]), Math.round(+m[2]), Math.round(+m[3])];
+    return null;
+  }
+
+  // The colour stops from the CSS variables: [{ g, rgb }] (g = the stop's
+  // field value, N/km), strongest last.
+  // A missing or unreadable variable drops its stop (nothing is invented).
+  function fieldStops() {
+    var out = [];
+    for (var k = 0; k < STOP_N.length; k++) {
+      var rgb = parseColor(cssVar('--mc-duct-s' + (k + 1)));
+      if (rgb) out.push({ g: STOP_N[k], rgb: rgb });
+    }
+    return out;
+  }
+
+  function fieldAlpha() {
+    var a = parseFloat(cssVar(ALPHA_VAR));
+    return (isFinite(a) && a >= 0 && a <= 1) ? a : DEFAULT_ALPHA;
+  }
+
+  // Colour of field value g (N/km): [r, g, b, a], the flat colour of its band
+  // (stops[k].g >= g > stops[k + 1].g -> stops[k]; at or below the last stop
+  // -> the last), alpha 1; transparent above the first stop, for NaN or
+  // without stops. No blending between stops, no opacity ramp.
+  function fieldColor(g, stops) {
+    if (!stops || !stops.length || !(g <= stops[0].g)) return [0, 0, 0, 0];
+    for (var k = stops.length - 1; k > 0; k--) if (g <= stops[k].g) break;
+    var c = stops[k].rgb;
+    return [c[0], c[1], c[2], 1];
+  }
+
+  // RGBA table: entry n is the colour of the value -n, alpha scaled by `alpha`.
+  function fieldLut(stops, alpha) {
+    var lut = new Uint8ClampedArray(LUT_SIZE * 4);
+    for (var n = 0; n < LUT_SIZE; n++) {
+      var c = fieldColor(-n, stops);
+      lut[n * 4] = c[0]; lut[n * 4 + 1] = c[1]; lut[n * 4 + 2] = c[2];
+      lut[n * 4 + 3] = Math.round(c[3] * alpha * 255);
+    }
+    return lut;
+  }
+
+  function pct(f) { return Math.round(f * 1000) / 10 + '%'; }
+
+  function mercY(lat) { return Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)); }
+
+  // Latitude at y px from the top of an image h px tall spanning north..south
+  // in Web Mercator (y may be fractional; 0 = north edge, h = south edge).
+  function rowLat(y, h, north, south) {
+    var yn = mercY(north), ys = mercY(south);
+    var m = yn + (ys - yn) * (y / h);
+    return (2 * Math.atan(Math.exp(m)) - Math.PI / 2) * 180 / Math.PI;
+  }
+
+  // Lattice of the cells that have data (class >= 1) at some hour:
+  // { step, i0, j0, rows, cols, slot (cell index -> lattice slot, -1 = none),
+  //   cell (lattice slot -> cell index, -1 = none),
+  //   south, west, north, east (outer cell edges), w, h (image px) }, or null.
+  function ductGrid(cells, step) {
+    step = Number(step);
+    if (!(step > 0) || !Array.isArray(cells)) return null;
+    var slot = new Int32Array(cells.length).fill(-1);
+    var ii = new Int32Array(cells.length), jj = new Int32Array(cells.length);
+    var i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity, n = 0;
+    for (var k = 0; k < cells.length; k++) {
+      var cell = cells[k];
+      if (!cell || !Array.isArray(cell.c) || !isFinite(cell.lat) || !isFinite(cell.lon)) continue;
+      var any = false;
+      for (var t = 0; t < cell.c.length; t++) if (cell.c[t] >= 1) { any = true; break; }
+      if (!any) continue;
+      var i = Math.round(cell.lat / step - 0.5), j = Math.round(cell.lon / step - 0.5);
+      ii[k] = i; jj[k] = j; slot[k] = 0; n++;
+      if (i < i0) i0 = i; if (i > i1) i1 = i;
+      if (j < j0) j0 = j; if (j > j1) j1 = j;
+    }
+    if (!n) return null;
+    var rows = i1 - i0 + 1, cols = j1 - j0 + 1;
+    if (rows * cols > MAX_GRID) return null;
+    var present = new Uint8Array(rows * cols);
+    var owner = new Int32Array(rows * cols).fill(-1);
+    for (k = 0; k < cells.length; k++) {
+      if (slot[k] !== 0) continue;
+      slot[k] = (ii[k] - i0) * cols + (jj[k] - j0);
+      present[slot[k]] = 1;
+      owner[slot[k]] = k;
+    }
+    var g = { step: step, i0: i0, j0: j0, rows: rows, cols: cols, slot: slot, cell: owner, soft: areaSoft(present, rows, cols),
+      south: Math.max(-MAX_LAT, i0 * step), north: Math.min(MAX_LAT, (i1 + 1) * step),
+      west: j0 * step, east: (j1 + 1) * step };
+    if (!(g.north > g.south)) return null;
+    // Image size: PX_PER_CELL per cell across, the Mercator aspect down,
+    // long side capped.
+    var w = cols * PX_PER_CELL;
+    var h = w * ((mercY(g.north) - mercY(g.south)) * 180 / Math.PI) / (g.east - g.west);
+    var scale = Math.min(1, MAX_SIDE / Math.max(w, h));
+    g.w = Math.max(1, Math.round(w * scale));
+    g.h = Math.max(1, Math.round(h * scale));
+    return g;
+  }
+
+  // The cell (index into the cells) whose square [i*step, (i+1)*step) x
+  // [j*step, (j+1)*step) contains (lat, lon), or -1. Longitude is wrapped to
+  // -180..180 first (a click on a world copy). O(1).
+  function ductCellAt(grid, lat, lon) {
+    lat = Number(lat); lon = Number(lon);
+    if (!grid || !grid.cell || !isFinite(lat) || !isFinite(lon)) return -1;
+    lon = ((lon + 180) % 360 + 360) % 360 - 180;
+    var i = Math.floor(lat / grid.step) - grid.i0, j = Math.floor(lon / grid.step) - grid.j0;
+    if (i < 0 || i >= grid.rows || j < 0 || j >= grid.cols) return -1;
+    return grid.cell[i * grid.cols + j];
+  }
+
+  // Per lattice slot: 0 outside the forecast area, 1 on its outer edge (some
+  // of the 8 neighbours is outside, or off the lattice), 2 inside. The
+  // coverage (rowSums/evalAt) uses it to widen the fade at the outer edge only.
+  function areaSoft(present, rows, cols) {
+    var out = new Uint8Array(rows * cols);
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        var s = r * cols + c;
+        if (!present[s]) continue;
+        var inner = r > 0 && r < rows - 1 && c > 0 && c < cols - 1;
+        if (inner) {
+          for (var d = -1; d <= 1 && inner; d++) {
+            var o = s + d * cols;
+            if (!present[o - 1] || !present[o] || !present[o + 1]) inner = false;
+          }
+        }
+        out[s] = inner ? 2 : 1;
+      }
+    }
+    return out;
+  }
+
+  // The outer boundary of the forecast area: the cell edges whose neighbour
+  // cell is outside the area, merged into runs along each lattice row and
+  // column: [[[lat, lon], [lat, lon]], ...]. A filled rectangle is 4 segments.
+  // Across the antimeridian a cell at lon 180 and one at -180 are neighbours,
+  // so there is no edge at the seam when both exist. O(lattice slots).
+  function ductEdges(grid) {
+    var out = [];
+    if (!grid || !grid.soft) return out;
+    var soft = grid.soft, rows = grid.rows, cols = grid.cols, step = grid.step;
+    var clampLat = function (lat) { return Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)); };
+    var r, c, start, lat, lon;
+    for (r = 0; r <= rows; r++) {
+      lat = clampLat((grid.i0 + r) * step);
+      start = -1;
+      for (c = 0; c <= cols; c++) {
+        var edge = c < cols && ((r > 0 && soft[(r - 1) * cols + c] > 0) !== (r < rows && soft[r * cols + c] > 0));
+        if (edge && start < 0) start = c;
+        if (!edge && start >= 0) {
+          out.push([[lat, (grid.j0 + start) * step], [lat, (grid.j0 + c) * step]]);
+          start = -1;
+        }
+      }
+    }
+    var seamCol = function (lon, east) {   // lattice column across the antimeridian, or -1
+      var j = Math.round(east ? -180 / step : 180 / step - 1) - grid.j0;
+      return (Math.abs(lon - (east ? 180 : -180)) < 1e-9 && j >= 0 && j < cols) ? j : -1;
+    };
+    for (c = 0; c <= cols; c++) {
+      lon = (grid.j0 + c) * step;
+      var mirror = c === cols ? seamCol(lon, true) : c === 0 ? seamCol(lon, false) : -1;
+      start = -1;
+      for (r = 0; r <= rows; r++) {
+        var has = function (col) { return r < rows && col >= 0 && col < cols && soft[r * cols + col] > 0; };
+        var left = c > 0 ? has(c - 1) : has(mirror);
+        var right = c < cols ? has(c) : has(mirror);
+        var vedge = r < rows && left !== right;
+        if (vedge && start < 0) start = r;
+        if (!vedge && start >= 0) {
+          out.push([[clampLat((grid.i0 + start) * step), lon], [clampLat((grid.i0 + r) * step), lon]]);
+          start = -1;
+        }
+      }
+    }
+    return out;
+  }
+
+  // The field value (n) at time index i per lattice slot; NaN where there is
+  // no data (class 0, n 0 or missing: an older server sends no n, and then
+  // the whole field is empty while the cells, popups and outlines still work).
+  function ductGridValues(grid, cells, i) {
+    var vals = new Float32Array(grid.rows * grid.cols).fill(NaN);
+    for (var k = 0; k < cells.length; k++) {
+      var s = grid.slot[k];
+      if (s >= 0) vals[s] = fieldValue(cells[k], i);
+    }
+    return vals;
+  }
+
+  // ── Interpolation ──
+  // At lattice row v / column u (fractional, 0 = first centre):
+  //   g: Catmull-Rom bicubic over the 4x4 slots around (v, u), indices
+  //      clamped to the lattice; bilinear over the slots with data when any
+  //      of the 16 has none (NaN propagates through the sums, which is how
+  //      that is detected).
+  //   a: coverage, from the bilinear weights of the slots with data: 1 where
+  //      all four have data, falling to 0 by the edge of a cell whose
+  //      neighbour has none; with `soft` (areaSoft) also scaled down towards
+  //      the outer edge of the forecast area, so the fade there spans a full
+  //      cell (1 at the second cell in, 0 at the edge).
+  // Separable: colTaps holds the horizontal taps of a set of columns,
+  // rowSums the vertical sums of one row per lattice column, rowEval combines
+  // them. The renderer and sample() share all three, so they agree exactly.
+
+  // Catmull-Rom weights of the 4 taps at t (0..1) into w[o..o+3]; t = 0 is
+  // exactly [0, 1, 0, 0], so the field equals the data at the cell centres.
+  function crWeights(t, w, o) {
+    var t2 = t * t, t3 = t2 * t;
+    w[o] = 0.5 * (2 * t2 - t3 - t);
+    w[o + 1] = 0.5 * (3 * t3 - 5 * t2 + 2);
+    w[o + 2] = 0.5 * (4 * t2 - 3 * t3 + t);
+    w[o + 3] = 0.5 * (t3 - t2);
+  }
+
+  // Horizontal taps for lattice columns us[x]: bj = the interval between
+  // lattice columns bj - 1 and bj (index into rowSums' padded arrays; -1 =
+  // off the lattice), fu = the fraction across it.
+  function colTaps(cols, us) {
+    var n = us.length;
+    var T = { bj: new Int32Array(n), fu: new Float64Array(n) };
+    for (var x = 0; x < n; x++) {
+      var u = us[x], j = Math.floor(u);
+      T.bj[x] = (j >= -1 && j < cols) ? j + 1 : -1;
+      T.fu[x] = u - j;
+    }
+    return T;
+  }
+
+  // Reusable per-row buffers for a lattice `cols` wide. P/S/Q are padded by
+  // one column on each side (zeros), so bilinear taps never need a check.
+  function rowBufs(cols) {
+    return { ok: false, P: new Float64Array(cols + 2), S: new Float64Array(cols + 2), Q: new Float64Array(cols + 2),
+      cub: new Float64Array(cols), C: new Float64Array((cols + 1) * 4), wv: new Float64Array(4) };
+  }
+
+  // Vertical sums of lattice row v into R, per lattice column c:
+  //   P/S/Q[c + 1] = bilinear weight, weighted value and weighted soft of the
+  //   two rows around v that have data; cub[c] = bicubic sum of the 4 rows
+  //   (NaN when any has no data). Then, per interval b between columns b - 1
+  //   and b, the horizontal Catmull-Rom polynomial through cub[b - 2..b + 1]
+  //   (clamped): C[4b..4b+3] = c0..c3, g(t) = ((c3 t + c2) t + c1) t + c0.
+  //   c0 is the column's own value, so g(0) is exact; c3 involves all four,
+  //   so a missing one makes g NaN everywhere in the interval.
+  //   R.ok = false when v is off the lattice.
+  function rowSums(vals, soft, rows, cols, v, R) {
+    var i = Math.floor(v), fv = v - i;
+    R.ok = i >= -1 && i < rows;
+    if (!R.ok) return R;
+    var P = R.P, S = R.S, Q = R.Q, cub = R.cub, wv = R.wv, c;
+    P.fill(0); S.fill(0); Q.fill(0);
+    for (var di = 0; di < 2; di++) {
+      var r = i + di;
+      if (r < 0 || r >= rows) continue;
+      var w = di ? fv : 1 - fv, base = r * cols;
+      for (c = 0; c < cols; c++) {
+        var x = vals[base + c];
+        if (x !== x) continue;               // NaN: no data
+        P[c + 1] += w; S[c + 1] += w * x;
+        if (soft) Q[c + 1] += w * soft[base + c];
+      }
+    }
+    crWeights(fv, wv, 0);
+    var last = rows - 1;
+    var b0 = Math.max(0, Math.min(last, i - 1)) * cols, b1 = Math.max(0, Math.min(last, i)) * cols;
+    var b2 = Math.max(0, Math.min(last, i + 1)) * cols, b3 = Math.max(0, Math.min(last, i + 2)) * cols;
+    var w0 = wv[0], w1 = wv[1], w2 = wv[2], w3 = wv[3];
+    for (c = 0; c < cols; c++) cub[c] = w0 * vals[b0 + c] + w1 * vals[b1 + c] + w2 * vals[b2 + c] + w3 * vals[b3 + c];
+    var C = R.C, lc = cols - 1;
+    for (var b = 0; b <= cols; b++) {
+      var j = b - 1;
+      var p0 = cub[Math.max(0, Math.min(lc, j - 1))], p1 = cub[Math.max(0, Math.min(lc, j))];
+      var p2 = cub[Math.max(0, Math.min(lc, j + 1))], p3 = cub[Math.max(0, Math.min(lc, j + 2))];
+      C[4 * b] = p1;
+      C[4 * b + 1] = 0.5 * (p2 - p0);
+      C[4 * b + 2] = 0.5 * (2 * p0 - 5 * p1 + 4 * p2 - p3);
+      C[4 * b + 3] = 0.5 * (3 * p1 - p0 - 3 * p2 + p3);
+    }
+    return R;
+  }
+
+  // Field along the row in R at every column of taps T: gs[x] = g (NaN = no
+  // data), as[x] = coverage (scaled by the soft sums in Q when hasSoft).
+  // The hot loop. It walks runs of columns in the same lattice interval, so
+  // the interval's coefficients stay in locals and a pixel costs only the
+  // polynomial; inside the forecast area (both columns full) the coverage
+  // needs no smoothstep or division.
+  function rowEval(R, T, hasSoft, gs, as) {
+    var n = gs.length, none = NaN;         // local: a global lookup per pixel is slow in some engines
+    if (!R.ok) { gs.fill(none); as.fill(0); return; }
+    var bj = T.bj, fu = T.fu, P = R.P, S = R.S, Q = R.Q, C = R.C;
+    var x = 0, end, f, e;
+    while (x < n) {
+      var b = bj[x];
+      for (end = x + 1; end < n && bj[end] === b; end++);
+      if (b < 0) { for (; x < end; x++) { gs[x] = none; as[x] = 0; } continue; }
+      var p0 = P[b], p1 = P[b + 1], s0 = S[b], s1 = S[b + 1], q0 = hasSoft ? Q[b] : 0, q1 = hasSoft ? Q[b + 1] : 0;
+      var o = 4 * b, c0 = C[o], c1 = C[o + 1], c2 = C[o + 2], c3 = C[o + 3];
+      var cubic = c3 === c3;               // NaN when one of the 16 has no data
+      if (p0 === 1 && p1 === 1) {          // full coverage on both sides
+        for (; x < end; x++) {
+          f = fu[x]; e = 1 - f;
+          as[x] = hasSoft ? (e * q0 + f * q1) / 2 : 1;
+          gs[x] = cubic ? ((c3 * f + c2) * f + c1) * f + c0 : e * s0 + f * s1;
+        }
+        continue;
+      }
+      for (; x < end; x++) {
+        f = fu[x]; e = 1 - f;
+        var p = e * p0 + f * p1;
+        if (!(p > 0)) { gs[x] = none; as[x] = 0; continue; }
+        var a = 2 * p - 1;
+        a = a <= 0 ? 0 : a >= 1 ? 1 : a * a * (3 - 2 * a);
+        as[x] = hasSoft ? a * (e * q0 + f * q1) / (2 * p) : a;
+        gs[x] = cubic ? ((c3 * f + c2) * f + c1) * f + c0 : (e * s0 + f * s1) / p;
+      }
+    }
+  }
+
+  function sample(grid, vals, lat, lon) {
+    var R = rowSums(vals, grid.soft, grid.rows, grid.cols, lat / grid.step - 0.5 - grid.i0, rowBufs(grid.cols));
+    var T = colTaps(grid.cols, [lon / grid.step - 0.5 - grid.j0]);
+    var gs = new Float64Array(1), as = new Float64Array(1);
+    rowEval(R, T, !!grid.soft, gs, as);
+    return { g: gs[0], a: as[0] };
+  }
+
+  // The image columns' taps: computed once per grid (its width never changes).
+  function gridTaps(grid) {
+    if (grid._taps) return grid._taps;
+    var W = grid.w, us = new Float64Array(W);
+    for (var x = 0; x < W; x++) us[x] = (grid.west + (grid.east - grid.west) * (x + 0.5) / W) / grid.step - 0.5 - grid.j0;
+    return (grid._taps = colTaps(grid.cols, us));
+  }
+
+  // Runs fn(y, gs, as) for every image row y with that row's g and coverage
+  // (buffers reused from row to row).
+  function eachRow(grid, vals, fn) {
+    var W = grid.w, H = grid.h, T = gridTaps(grid), R = rowBufs(grid.cols), soft = !!grid.soft;
+    var gs = new Float64Array(W), as = new Float64Array(W);
+    for (var y = 0; y < H; y++) {
+      rowSums(vals, grid.soft, grid.rows, grid.cols, rowLat(y + 0.5, H, grid.north, grid.south) / grid.step - 0.5 - grid.i0, R);
+      rowEval(R, T, soft, gs, as);
+      fn(y, gs, as);
+    }
+  }
+
+  // g and coverage per image pixel (row-major), as renderField sees them.
+  function fieldValues(grid, vals) {
+    var W = grid.w, out = { g: new Float32Array(W * grid.h), a: new Float32Array(W * grid.h) };
+    eachRow(grid, vals, function (y, gs, as) { out.g.set(gs, y * W); out.a.set(as, y * W); });
+    return out;
+  }
+
+  // Fills `out` (RGBA, grid.w x grid.h, all zero) with the field. O(pixels).
+  function renderField(grid, vals, lut, out) {
+    var W = grid.w, top = LUT_SIZE - 1;
+    eachRow(grid, vals, function (y, gs, as) {
+      for (var x = 0, o = y * W * 4; x < W; x++, o += 4) {
+        var cov = as[x];
+        if (!(cov > 0)) continue;
+        var ng = -gs[x];
+        if (!(ng >= 0)) continue;              // no colour, or NaN
+        var n = ng > top ? top : ng | 0;       // floor
+        var a = lut[n * 4 + 3];
+        if (!a) continue;
+        out[o] = lut[n * 4]; out[o + 1] = lut[n * 4 + 1]; out[o + 2] = lut[n * 4 + 2];
+        out[o + 3] = a * cov;
+      }
+    });
+    return out;
+  }
+
+  // ── Layer ─────────────────────────────────────────────────────────────────
+
+  // Leaflet 1.9.4's canvas _updatePaths (run on every map move) redraws at
+  // once but leaves an already queued animation-frame redraw in place, its id
+  // dropped. If the overlay is switched off before that frame, removing the
+  // renderer cannot cancel it, and the orphaned callback draws to the deleted
+  // context ("reading 'clearRect'"). This renderer cancels the queued frame
+  // before redrawing.
+  var CanvasClass = null;
+  function newRenderer(pane) {
+    if (!CanvasClass && L.Canvas && typeof L.Canvas.extend === 'function') {
+      CanvasClass = L.Canvas.extend({
+        _updatePaths: function () {
+          if (!this._postponeUpdatePaths && this._redrawRequest) {
+            L.Util.cancelAnimFrame(this._redrawRequest);
+            this._redrawRequest = null;
+          }
+          L.Canvas.prototype._updatePaths.call(this);
+        }
+      });
+    }
+    var o = { padding: 0.5 };
+    if (pane) o.pane = pane;
+    return CanvasClass ? new CanvasClass(o) : L.canvas(o);
+  }
+
+  // An image overlay whose image is a canvas: the field is drawn straight
+  // into it (no data URL encode/decode), and Leaflet positions and scales it
+  // like any image overlay. null when this Leaflet has no ImageOverlay.
+  var FieldClass = null;
+  function newField(canvas, bounds, pane) {
+    if (!FieldClass && L.ImageOverlay && typeof L.ImageOverlay.extend === 'function') {
+      FieldClass = L.ImageOverlay.extend({
+        _initImage: function () {
+          var img = this._image = this._url;
+          L.DomUtil.addClass(img, 'leaflet-image-layer');
+          if (this._zoomAnimated) L.DomUtil.addClass(img, 'leaflet-zoom-animated');
+          if (this.options.className) L.DomUtil.addClass(img, this.options.className);
+          img.onselectstart = L.Util.falseFn;
+          img.onmousemove = L.Util.falseFn;
+        }
+      });
+    }
+    if (!FieldClass) return null;
+    var opts = { interactive: false, className: 'mc-duct-field' };
+    if (pane) opts.pane = pane;
+    var f = new FieldClass(canvas, bounds, opts);
+    f._mcField = true;
+    return f;
+  }
+
+  // A pane of the overlay's own at z-index z that never takes pointer
+  // events: FIELD_PANE (the field: above the tiles, below the tile overlays,
+  // vectors and markers) and LINE_PANE (the outlines).
+  function inertPane(map, name, z) {
+    try {
+      if (map.getPane(name)) return name;
+      var p = map.createPane(name);
+      p.style.zIndex = z;
+      p.style.pointerEvents = 'none';
+      return name;
+    } catch (_) { return null; }
+  }
+
+  // True when the click landed on another layer's interactive element: an
+  // SVG path or marker, or a canvas that is hovering one of its interactive
+  // paths (Leaflet marks both with leaflet-interactive; it is also what
+  // shows the pointer cursor).
+  function hitInteractive(e) {
+    var t = e && e.originalEvent && e.originalEvent.target;
+    return !!(t && t.classList && typeof t.classList.contains === 'function' && t.classList.contains('leaflet-interactive'));
+  }
+
+  function gridBounds(g) { return [[g.south, g.west], [g.north, g.east]]; }
+
+  function makeLayerClass() {
+    return L.Layer.extend({
+      initialize: function (opts) {
+        L.setOptions(this, opts || {});
+        this._mcDuct = true;
+        this._gen = 0;
+        this._cells = [];
+        this._data = null;
+        this._state = 'loading';   // loading | pending | error | ok
+        this._timer = null;
+        this._idx = -1;
+        this._userPicked = false;
+      },
+
+      onAdd: function (map) {
+        this._map = map;
+        var gen = ++this._gen;
+        this._cells = [];
+        this._edge = this._lora = null;
+        this._edgeColor = this._loraKey = '';
+        this._grid = null;
+        this._pane = inertPane(map, FIELD_PANE, FIELD_Z);
+        try {
+          this._renderer = newRenderer(inertPane(map, LINE_PANE, LINE_Z));
+          this._group = L.layerGroup();
+          map.addLayer(this._group);
+        } catch (_) { this._group = null; }
+        this._addControls(map);
+        this._watchAttribution(map);
+        this._watchClicks(map, gen);
+        // Kept data is drawn at once, so a re-add never shows a blank map while
+        // the refetch is pending or failing; the refetch below replaces it.
+        if (this._data) this._show();
+        else { this._renderLegend(); this._renderStatus(); }
+        this._load(gen);
+        this._schedule(REFRESH_MS);
+        this._armHourTick();
+        var self = this;
+        // Colours are read from CSS variables, so a theme switch needs a redraw.
+        this._onTheme = function () { if (self._data) self._restyle(); };
+        try { window.addEventListener('theme-changed', this._onTheme); } catch (_) {}
+      },
+
+      onRemove: function (map) {
+        this._gen++;                       // in-flight results are ignored
+        if (this._timer != null) { try { clearInterval(this._timer); } catch (_) {} this._timer = null; }
+        this._timerMs = 0;
+        cancelLater(this._hourTimer);
+        this._hourTimer = null;
+        if (this._abort) { try { this._abort.abort(); } catch (_) {} this._abort = null; }
+        var m = map || this._map;
+        if (this._onTheme) { try { window.removeEventListener('theme-changed', this._onTheme); } catch (_) {} this._onTheme = null; }
+        this._unwatchAttribution(m);
+        this._unwatchClicks(m);
+        this._removePanel(m);
+        if (this._group && m) { try { m.removeLayer(this._group); } catch (_) {} }
+        if (this._field && m) { try { m.removeLayer(this._field); } catch (_) {} }
+        if (this._renderer && m) { try { m.removeLayer(this._renderer); } catch (_) {} }
+        this._map = this._group = this._renderer = this._field = this._canvas = this._grid = this._img = null;
+        this._cells = [];
+        this._edge = this._lora = null;
+        this._loraKey = '';
+      },
+
+      // ── map clicks ──
+      // One map click handler instead of interactive cells: an interactive
+      // layer with a popup stops the click (Leaflet's popup opener does), so
+      // the page's own map click handlers would never run in the forecast
+      // area. This one never stops anything; it runs after every other
+      // handler of the same click (a microtask, so the whole synchronous
+      // Leaflet dispatch is over) and opens the cell popup only when the
+      // click did nothing else:
+      //   - not on another layer's interactive element (hitInteractive);
+      //   - no layer was added and no popup opened since the click's
+      //     preclick: Planner placing a site or chain point, Live opening a
+      //     path popup. Clicks the page uses keep the map to themselves.
+      _watchClicks: function (map, gen) {
+        var self = this, changes = 0, mark = -1;
+        this._onMapChange = function () { changes++; };
+        this._onPreclick = function () { mark = changes; };
+        this._onMapClick = function (e) {
+          var since = mark >= 0 ? mark : changes;
+          mark = -1;
+          if (!e || !e.latlng || hitInteractive(e)) return;
+          var latlng = e.latlng;
+          Promise.resolve().then(function () {
+            if (gen !== self._gen || changes !== since) return;
+            self.openCellPopup(latlng);
+          });
+        };
+        try {
+          map.on('layeradd popupopen', this._onMapChange);
+          map.on('preclick', this._onPreclick);
+          map.on('click', this._onMapClick);
+        } catch (_) {}
+      },
+
+      _unwatchClicks: function (map) {
+        if (map && this._onMapClick) {
+          try {
+            map.off('layeradd popupopen', this._onMapChange);
+            map.off('preclick', this._onPreclick);
+            map.off('click', this._onMapClick);
+          } catch (_) {}
+        }
+        if (map && this._popup) { try { map.closePopup(this._popup); } catch (_) {} }
+        this._onMapChange = this._onPreclick = this._onMapClick = null;
+        this._popup = this._popupCell = null;
+      },
+
+      // Opens the popup of the cell under latlng at the shown hour; false
+      // (nothing opened) outside the forecast area or where that cell has no
+      // data at this hour.
+      openCellPopup: function (latlng) {
+        var map = this._map, d = this._data;
+        if (!map || !d || !latlng || !L.popup) return false;
+        var k = ductCellAt(this._grid, latlng.lat, latlng.lng);
+        var cell = k >= 0 ? d.cells[k] : null;
+        if (!cell || at(cell.c, this._idx) < 1) return false;
+        try {
+          if (!this._popup) this._popup = L.popup({ maxWidth: 280 });
+          this._popupCell = cell;
+          this._popup.setLatLng(latlng).setContent(popupContent(cell, this._idx)).openOn(map);
+          return true;
+        } catch (_) { return false; }
+      },
+
+      _popupOpen: function () {
+        try { return !!(this._popup && this._popup.isOpen()); } catch (_) { return false; }
+      },
+
+      // Keeps an open cell popup in step with the shown hour and data: new
+      // text for the cell under it, closed where there is no data any more.
+      _syncPopup: function () {
+        if (!this._popupOpen()) return;
+        var d = this._data, ll = this._popup.getLatLng();
+        var k = ll ? ductCellAt(this._grid, ll.lat, ll.lng) : -1;
+        var cell = (d && k >= 0) ? d.cells[k] : null;
+        if (!cell || at(cell.c, this._idx) < 1) {
+          try { this._map.closePopup(this._popup); } catch (_) {}
+          return;
+        }
+        this._popupCell = cell;
+        this._popup.setContent(popupContent(cell, this._idx));
+      },
+
+      // ── the panel ──
+      // One Leaflet control in the bottom-left corner: a header (move
+      // handle, title, reset, collapse), the forecast-time timeline and the
+      // legend body. Collapsing hides only the legend body. Dragging the
+      // handle (wide screens only) takes the panel out of the corner into
+      // the map container, absolutely positioned and kept inside it; its
+      // place is remembered as fractions of the free space (survives a
+      // resized map) in localStorage with the collapsed state. Every
+      // listener goes through _listen and is removed in _removePanel.
+      _addControls: function (map) {
+        var self = this;
+        var prefs = loadPanelPrefs();
+        this._collapsedPref = prefs.collapsed;
+        this._pos = prefs.pos;
+        if (prefs.collapsed != null) this._legendOpen = !prefs.collapsed;
+        else if (this._legendOpen == null) this._legendOpen = !narrowScreen();   // compact on phones
+        this._offs = [];
+        this._floating = false;
+        this._tlKey = null;
+        try {
+          var ctl = new L.Control({ position: 'bottomleft' });
+          ctl.onAdd = function () { return self._buildPanel(); };
+          this._panelCtl = ctl;
+          ctl.addTo(map);
+        } catch (_) { /* map already gone */ }
+        this._onMapResize = function () { self._placePanel(); };
+        try { map.on('resize', this._onMapResize); } catch (_) {}
+        try {
+          if (this._panelEl && typeof ResizeObserver === 'function') {
+            this._panelRo = new ResizeObserver(function () { self._onPanelResize(); });
+            this._panelRo.observe(this._panelEl);
+          }
+        } catch (_) { this._panelRo = null; }
+        this._placePanel();
+        this._tlState();
+      },
+
+      // addEventListener that _removePanel undoes. (Not _on: that is
+      // L.Evented's, which layer.on() relies on.)
+      _listen: function (target, type, fn, opts) {
+        try {
+          target.addEventListener(type, fn, opts || false);
+          this._offs.push(function () { try { target.removeEventListener(type, fn, opts || false); } catch (_) {} });
+        } catch (_) {}
+      },
+
+      _buildPanel: function () {
+        var self = this, uid = ++panelSeq;
+        var panel = el('div', 'mc-duct-panel');
+        panel.setAttribute('role', 'region');
+        panel.setAttribute('aria-label', 'Tropospheric ducting');
+        this._panelEl = panel;
+
+        var head = el('div', 'mc-duct-head');
+        var drag = button('mc-duct-drag', null, 'Move ducting panel');
+        var title = el('span', 'mc-duct-title', 'Tropospheric ducting');
+        var reset = button('mc-duct-reset', 'Reset', 'Reset position');
+        reset.hidden = true;
+        var coll = button('mc-duct-collapse');
+        coll.setAttribute('aria-controls', 'mc-duct-legend-' + uid);
+        head.appendChild(drag);
+        head.appendChild(title);
+        head.appendChild(reset);
+        head.appendChild(coll);
+        panel.appendChild(head);
+        this._dragEl = drag;
+        this._resetEl = reset;
+        this._collapseEl = coll;
+
+        var time = el('div', 'mc-duct-time');
+        // "Forecast time: <time>" and Now on one line; on a narrow panel
+        // the prefix gives way (ellipsis), never the time.
+        var thead = el('div', 'mc-duct-time-head');
+        var label = el('div', 'mc-duct-time-label');
+        var prefix = el('span', 'mc-duct-time-prefix', 'Forecast time');
+        var value = el('span', 'mc-duct-time-value', '');
+        label.appendChild(prefix);
+        label.appendChild(value);
+        var row = el('div', 'mc-duct-tl-row');
+        var prev = button('mc-duct-step mc-duct-step-prev', null, 'Earlier');
+        var next = button('mc-duct-step mc-duct-step-next', null, 'Later');
+        var now = button('mc-duct-now', 'Now', 'Jump to the current hour');
+        var wrap = el('div', 'mc-duct-timeline-wrap');
+        var vp = el('div', 'mc-duct-timeline');
+        vp.setAttribute('role', 'slider');
+        vp.setAttribute('tabindex', '0');
+        vp.setAttribute('aria-label', 'Ducting forecast time');
+        vp.setAttribute('aria-valuemin', '0');
+        var track = el('div', 'mc-duct-timeline-track');
+        var inner = el('div', 'mc-duct-timeline-inner');
+        var cursor = el('div', 'mc-duct-timeline-cursor');
+        cursor.setAttribute('aria-hidden', 'true');
+        track.appendChild(inner);
+        vp.appendChild(track);
+        wrap.appendChild(vp);
+        wrap.appendChild(cursor);
+        row.appendChild(prev);
+        row.appendChild(wrap);
+        row.appendChild(next);
+        thead.appendChild(label);
+        thead.appendChild(now);
+        // Loading / being prepared / unavailable / out of date: under the
+        // forecast-time line, outside the legend, so a collapsed panel
+        // (the default on phones) still says so. One live region, hidden
+        // while there is nothing to say.
+        var status = el('div', 'mc-duct-status');
+        status.setAttribute('role', 'status');
+        status.hidden = true;
+        time.appendChild(thead);
+        time.appendChild(status);
+        time.appendChild(row);
+        panel.appendChild(time);
+        this._timeLabel = label;
+        this._timePrefix = prefix;
+        this._timeValue = value;
+        this._statusEl = status;
+        this._tl = vp;
+        this._tlTrack = track;
+        this._tlInner = inner;
+        this._prevEl = prev;
+        this._nextEl = next;
+        this._nowEl = now;
+
+        var body = el('div', 'mc-duct-legend');
+        body.id = 'mc-duct-legend-' + uid;
+        panel.appendChild(body);
+        this._legendEl = body;
+
+        if (L.DomEvent) {
+          if (L.DomEvent.disableClickPropagation) L.DomEvent.disableClickPropagation(panel);
+          if (L.DomEvent.disableScrollPropagation) L.DomEvent.disableScrollPropagation(panel);
+        }
+        // The map pans on pointer/mouse/touch down anywhere in its container.
+        this._listen(panel, 'pointerdown', stopEvent);
+        this._listen(coll, 'click', function () { self._setCollapsed(!self._legendOpen); });
+        this._listen(reset, 'click', function () { self._resetPanel(); });
+        this._bindDrag(drag);
+        this._bindTimeline(vp);
+        this._listen(prev, 'click', function () { self._step(-1); });
+        this._listen(next, 'click', function () { self._step(1); });
+        this._listen(now, 'click', function () { self._toNow(); });
+        this._syncCollapse();
+        return panel;
+      },
+
+      _removePanel: function (map) {
+        var offs = this._offs || [];
+        for (var i = 0; i < offs.length; i++) offs[i]();
+        this._offs = [];
+        if (this._panelRo) { try { this._panelRo.disconnect(); } catch (_) {} this._panelRo = null; }
+        if (this._onMapResize && map) { try { map.off('resize', this._onMapResize); } catch (_) {} }
+        cancelFrame(this._tlFrame);
+        cancelLater(this._tlIdleTimer);
+        var p = this._panelEl;
+        // Leaflet removes the control's container wherever it is (corner
+        // or, moved, the map container); a gone map may throw first.
+        if (this._panelCtl) { try { this._panelCtl.remove(); } catch (_) {} }
+        if (p && p.parentNode && p.parentNode.removeChild) { try { p.parentNode.removeChild(p); } catch (_) {} }
+        this._panelCtl = this._panelEl = this._legendEl = this._timeLabel = this._timePrefix = this._timeValue = this._statusEl = null;
+        this._dragEl = this._resetEl = this._collapseEl = this._prevEl = this._nextEl = this._nowEl = null;
+        this._tl = this._tlTrack = this._tlInner = this._tlNow = this._tlLayout = null;
+        this._onMapResize = this._tlFrame = this._tlIdleTimer = this._drag = this._tlDrag = null;
+        this._tlTarget = null;
+        this._tlTouch = this._tlMoved = this._floating = false;
+        this._dock = null;
+        this._tlKey = null;
+      },
+
+      // ── collapse ──
+      _setCollapsed: function (open) {
+        this._legendOpen = !!open;
+        this._collapsedPref = !open;
+        savePanelPrefs(this._collapsedPref, this._pos);
+        this._syncCollapse();
+        this._placePanel();
+      },
+
+      _syncCollapse: function () {
+        var open = !!this._legendOpen, b = this._collapseEl;
+        if (this._legendEl) this._legendEl.hidden = !open;
+        if (b) {
+          var name = open ? 'Collapse ducting legend' : 'Expand ducting legend';
+          b.setAttribute('aria-expanded', open ? 'true' : 'false');
+          b.setAttribute('aria-label', name);
+          b.title = name;
+        }
+        var p = this._panelEl;
+        if (p) {
+          setClass(p, 'mc-duct-panel-floating', this._floating);
+          setClass(p, 'mc-duct-panel-collapsed', !open);
+          setClass(p, 'mc-duct-panel-dragging', !!this._drag);
+        }
+      },
+
+      // ── position ──
+      _mapEl: function () {
+        try { return this._map && this._map.getContainer ? this._map.getContainer() : null; } catch (_) { return null; }
+      },
+
+      // Size of the panel and of the map container, for the clamp helpers.
+      _geom: function () {
+        var p = this._panelEl, c = this._mapEl();
+        if (!p || !c) return null;
+        return { w: p.offsetWidth || 0, h: p.offsetHeight || 0, aw: c.clientWidth || 0, ah: c.clientHeight || 0 };
+      },
+
+      // Out of the corner into the map container, where it is now on screen.
+      _float: function () {
+        var p = this._panelEl, c = this._mapEl();
+        if (!p || !c) return false;
+        if (this._floating && p.parentNode === c) return true;
+        var left = 0, top = 0;
+        try {
+          var pr = p.getBoundingClientRect(), cr = c.getBoundingClientRect();
+          left = pr.left - cr.left;
+          top = pr.top - cr.top;
+        } catch (_) {}
+        this._dock = { parent: p.parentNode, next: p.nextSibling };
+        c.appendChild(p);
+        this._floating = true;
+        this._setPos(left, top);
+        this._tlRestore();
+        this._syncCollapse();
+        this._applyLift();                 // releases the corner's lift
+        if (this._resetEl) this._resetEl.hidden = false;
+        return true;
+      },
+
+      // Back into the corner, where Leaflet put it.
+      _dockPanel: function () {
+        var p = this._panelEl;
+        if (!p || !this._floating) return;
+        var d = this._dock || {};
+        var parent = d.parent || (this._map && this._map._controlCorners && this._map._controlCorners.bottomleft);
+        if (parent) {
+          var next = d.next && d.next.parentNode === parent ? d.next : null;
+          if (next && parent.insertBefore) parent.insertBefore(p, next);
+          else parent.appendChild(p);
+        }
+        this._floating = false;
+        this._dock = null;
+        p.style.left = p.style.top = '';
+        this._tlRestore();
+        this._syncCollapse();
+        if (this._resetEl) this._resetEl.hidden = true;
+        this._applyLift();
+      },
+
+      // Moving the panel in the DOM resets the strip's scroll to 0 (without
+      // a scroll event): put the shown time back under the centre.
+      _tlRestore: function () {
+        this._tlTarget = null;
+        this._tlScrollTo(this._idx, false);
+      },
+
+      // left/top clamped inside the map; returns the clamped position.
+      _setPos: function (left, top) {
+        var g = this._geom(), p = this._panelEl;
+        if (!g || !p) return null;
+        var pos = ductClampPos(left, top, g.w, g.h, g.aw, g.ah, PANEL_MARGIN);
+        p.style.left = pos.left + 'px';
+        p.style.top = pos.top + 'px';
+        return pos;
+      },
+
+      // The one rule for where the panel lives: moved (a stored position)
+      // and on a wide screen -> floating at that position, re-clamped to
+      // the current map and panel size; otherwise docked in the corner.
+      _placePanel: function () {
+        if (!this._panelEl || this._drag) return;
+        if (this._pos && !narrowScreen()) {
+          if (!this._float()) return;
+          var g = this._geom();
+          var pos = ductPosFromFrac(this._pos, g.w, g.h, g.aw, g.ah, PANEL_MARGIN);
+          this._panelEl.style.left = pos.left + 'px';
+          this._panelEl.style.top = pos.top + 'px';
+          this._keepReachable();
+        } else {
+          this._dockPanel();
+        }
+      },
+
+      // Pages lay their own panels over the map (Map Controls on the right
+      // sits above the whole map, whatever the z-index inside it), so a
+      // moved panel may land under one and be lost, Reset button and all.
+      // When the centre or right end of its move handle, collapse button or
+      // Now button (right end of the forecast-time line) is covered, it
+      // slides left in 8 px steps to the nearest place where all three can
+      // be clicked, only on a drop, restore or resize, and stays put if
+      // there is no such place.
+      _keepReachable: function () {
+        var p = this._panelEl, c = this._mapEl();
+        if (!this._floating || !p || !c || typeof document.elementFromPoint !== 'function') return;
+        var hits = [this._dragEl, this._collapseEl, this._nowEl];
+        var ok = function () {
+          for (var k = 0; k < hits.length; k++) {
+            var r = hits[k] && hits[k].getBoundingClientRect();
+            if (!r || !r.width) continue;               // hidden (phones): not needed
+            var y = r.top + r.height / 2;
+            var a = document.elementFromPoint(r.left + r.width / 2, y), b = document.elementFromPoint(r.right - 2, y);
+            if (!a || !b || !p.contains(a) || !p.contains(b)) return false;
+          }
+          return true;
+        };
+        try {
+          if (!c.getBoundingClientRect().width || ok()) return;
+          var left = parseFloat(p.style.left) || 0, top = parseFloat(p.style.top) || 0;
+          for (var x = left - 8; x >= PANEL_MARGIN - 8; x -= 8) {
+            this._setPos(x, top);
+            if (ok()) return;
+          }
+          this._setPos(left, top);
+        } catch (_) {}
+      },
+
+      _savePos: function () {
+        var g = this._geom(), p = this._panelEl;
+        if (!g || !p) return;
+        this._pos = ductPosToFrac(parseFloat(p.style.left) || 0, parseFloat(p.style.top) || 0, g.w, g.h, g.aw, g.ah);
+        savePanelPrefs(this._collapsedPref, this._pos);
+      },
+
+      _resetPanel: function () {
+        this._pos = null;
+        savePanelPrefs(this._collapsedPref, null);
+        this._placePanel();
+        try { if (this._dragEl) this._dragEl.focus(); } catch (_) {}
+      },
+
+      _onPanelResize: function () {
+        this._placePanel();
+        this._applyLift();
+        // A panel laid out late (hidden map) gets its strip position now.
+        if (!this._tlDrag && !this._tlTouch && this._tlTarget == null) this._tlScrollTo(this._idx, false);
+      },
+
+      // Pointer drag (setPointerCapture on the handle; the map never sees
+      // it) and arrow keys on the handle. Off on phones.
+      _bindDrag: function (h) {
+        var self = this;
+        var stopAll = function (e) { stopEvent(e); };
+        this._listen(h, 'mousedown', stopAll);
+        this._listen(h, 'touchstart', stopAll);
+        this._listen(h, 'pointerdown', function (e) {
+          stopEvent(e);
+          if (narrowScreen() || (e.pointerType === 'mouse' && e.button !== 0)) return;
+          if (e.preventDefault) e.preventDefault();
+          if (!self._float()) return;
+          var p = self._panelEl;
+          self._drag = { id: e.pointerId, x: e.clientX, y: e.clientY, left: parseFloat(p.style.left) || 0, top: parseFloat(p.style.top) || 0 };
+          try { h.setPointerCapture(e.pointerId); } catch (_) {}
+          self._syncCollapse();
+        });
+        this._listen(h, 'pointermove', function (e) {
+          var d = self._drag;
+          if (!d) return;
+          self._setPos(d.left + (e.clientX - d.x), d.top + (e.clientY - d.y));
+        });
+        var end = function (e) {
+          var d = self._drag;
+          if (!d) return;
+          self._drag = null;
+          try { h.releasePointerCapture(e.pointerId); } catch (_) {}
+          self._keepReachable();
+          self._savePos();
+          self._syncCollapse();
+        };
+        this._listen(h, 'pointerup', end);
+        this._listen(h, 'pointercancel', end);
+        this._listen(h, 'keydown', function (e) {
+          var k = e.key, step = PANEL_KEY_STEP * (e.shiftKey ? 4 : 1);
+          var dx = k === 'ArrowLeft' ? -step : k === 'ArrowRight' ? step : 0;
+          var dy = k === 'ArrowUp' ? -step : k === 'ArrowDown' ? step : 0;
+          if ((!dx && !dy) || narrowScreen()) return;
+          if (e.preventDefault) e.preventDefault();
+          stopEvent(e);
+          if (!self._float()) return;
+          var p = self._panelEl;
+          self._setPos((parseFloat(p.style.left) || 0) + dx, (parseFloat(p.style.top) || 0) + dy);
+          self._savePos();
+        });
+      },
+
+      // ── the timeline ──
+      // A horizontally scrolling strip, one tick per time, placed by time
+      // (ductTimelineLayout). The track is padded by half the viewport on
+      // each side, so scrollLeft is the x of the time under the centre
+      // marker. Scrolls are coalesced to one frame; when they stop the
+      // strip settles on the nearest time. Positioning from code (_setIndex,
+      // buttons, keys) records the scrollLeft it aims at in _tlTarget, so
+      // its scroll events never count as a user pick.
+      _bindTimeline: function (vp) {
+        var self = this;
+        this._listen(vp, 'scroll', function () {
+          self._tlIdleLater();
+          if (self._tlFrame) return;
+          self._tlFrame = frame(function () { self._tlFrame = null; self._tlOnScroll(); });
+        });
+        this._listen(vp, 'scrollend', function () { self._tlIdle(); });
+        this._listen(vp, 'wheel', function (e) {
+          var dx = e.deltaX || 0, dy = e.deltaY || 0;
+          // Sideways (trackpad) scrolls natively; never the map either way.
+          if (!self._tlEnabled() || Math.abs(dx) >= Math.abs(dy)) { self._tlTarget = null; return; }
+          if (e.preventDefault) e.preventDefault();
+          self._tlTarget = null;
+          var k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? (vp.clientWidth || 100) : 1;
+          vp.scrollLeft = (vp.scrollLeft || 0) + dy * k;
+        }, { passive: false });
+        this._listen(vp, 'touchstart', function () { self._tlTouch = true; self._tlTarget = null; }, { passive: true });
+        var touchEnd = function () { self._tlTouch = false; self._tlIdleLater(); };
+        this._listen(vp, 'touchend', touchEnd);
+        this._listen(vp, 'touchcancel', touchEnd);
+        // Mouse drag-to-scroll; touch and pen scroll natively (touch-action: pan-x).
+        this._listen(vp, 'pointerdown', function (e) {
+          self._tlMoved = false;
+          if (e.pointerType !== 'mouse' || e.button !== 0 || !self._tlEnabled()) return;
+          // Not prevented: the press still focuses the strip (keys work next)
+          // without a focus ring; user-select: none stops text selection.
+          self._tlTarget = null;
+          self._tlDrag = { id: e.pointerId, x: e.clientX, left: vp.scrollLeft || 0, moved: false };
+          setClass(vp, 'mc-duct-timeline-dragging', true);
+          try { vp.setPointerCapture(e.pointerId); } catch (_) {}
+        });
+        this._listen(vp, 'pointermove', function (e) {
+          var d = self._tlDrag;
+          if (!d) return;
+          var dx = e.clientX - d.x;
+          if (!d.moved && Math.abs(dx) < TL_DRAG_PX) return;
+          d.moved = true;
+          vp.scrollLeft = d.left - dx;
+        });
+        var up = function (e) {
+          var d = self._tlDrag;
+          if (!d) return;
+          self._tlDrag = null;
+          setClass(vp, 'mc-duct-timeline-dragging', false);
+          try { vp.releasePointerCapture(e.pointerId); } catch (_) {}
+          self._tlMoved = d.moved;
+          if (d.moved) self._tlIdleLater();
+        };
+        this._listen(vp, 'pointerup', up);
+        this._listen(vp, 'pointercancel', up);
+        // A click (no drag) picks the time nearest the clicked x.
+        this._listen(vp, 'click', function (e) {
+          if (self._tlMoved) { self._tlMoved = false; return; }
+          var lay = self._tlLayout;
+          if (!lay || !self._tlEnabled()) return;
+          var left = 0;
+          try { left = vp.getBoundingClientRect().left; } catch (_) {}
+          var x = (vp.scrollLeft || 0) + (e.clientX - left) - (vp.clientWidth || 0) / 2;
+          self._pick(ductTimelineIndexAt(lay.xs, x));
+        });
+        this._listen(vp, 'keydown', function (e) {
+          var lay = self._tlLayout;
+          if (!lay || !self._tlEnabled()) return;
+          var i = ductTimelineKeyIndex(e.key, self._idx, lay.xs, lay.pxPerSec);
+          if (i < 0) return;
+          if (e.preventDefault) e.preventDefault();
+          stopEvent(e);
+          self._pick(i);
+        });
+      },
+
+      _tlEnabled: function () {
+        return !!(this._data && this._data.times && this._data.times.length >= 2 && this._tlLayout);
+      },
+
+      // One frame of scrolling: the time under the centre becomes the shown
+      // hour (a user pick), unless code is positioning the strip.
+      _tlOnScroll: function () {
+        var vp = this._tl, lay = this._tlLayout;
+        if (!vp || !lay || !lay.xs.length) return;
+        var x = vp.scrollLeft || 0;
+        if (this._tlTarget != null) {
+          if (Math.abs(x - this._tlTarget) < 1) this._tlTarget = null;   // arrived
+          return;
+        }
+        var i = ductTimelineIndexAt(lay.xs, x);
+        if (i >= 0 && i !== this._idx) {
+          this._userPicked = true;
+          this._setIndex(i, true);
+        }
+      },
+
+      _tlIdleLater: function () {
+        var self = this;
+        cancelLater(this._tlIdleTimer);
+        this._tlIdleTimer = later(function () { self._tlIdleTimer = null; self._tlIdle(); }, TL_IDLE_MS);
+      },
+
+      // The scroll has stopped: code's scroll is done; a user's settles
+      // (smoothly) on the time under the centre. Not while a finger or the
+      // mouse still holds the strip.
+      _tlIdle: function () {
+        cancelLater(this._tlIdleTimer);
+        this._tlIdleTimer = null;
+        if (this._tlDrag || this._tlTouch) return;
+        if (this._tlTarget != null) {
+          // Code's scroll stopped short (a smooth scroll superseded or cut
+          // off): finish it at once. The target stays until the strip is
+          // there, so the jump's own scroll event is not a user pick.
+          // A strip that does not go there (no layout any more) fires
+          // no such event: the target is dropped.
+          var vp = this._tl, x = this._tlTarget;
+          var away = function () { return Math.abs((vp.scrollLeft || 0) - x) >= 1; };
+          if (vp && away()) {
+            vp.scrollLeft = x;
+            if (away()) this._tlTarget = null;
+          } else this._tlTarget = null;
+          return;
+        }
+        cancelFrame(this._tlFrame);
+        this._tlFrame = null;
+        this._tlOnScroll();
+        this._tlScrollTo(this._idx, true);
+      },
+
+      // Puts time i under the centre marker (smooth unless reduced motion).
+      _tlScrollTo: function (i, smooth) {
+        var vp = this._tl, lay = this._tlLayout;
+        if (!vp || !lay || !(i >= 0) || i >= lay.xs.length) return;
+        // Not laid out (the map or panel is hidden): nothing can scroll, so
+        // no target is recorded, as no scroll event would ever clear it.
+        // _onPanelResize positions the strip once it has a size.
+        if (!vp.scrollWidth) { this._tlTarget = null; return; }
+        var x = lay.xs[i];
+        var max = vp.scrollWidth - (vp.clientWidth || 0);
+        x = max > 0 ? Math.min(Math.max(x, 0), max) : 0;   // max <= 0: nothing to scroll
+        // A code scroll still in flight (rapid keys or buttons): jump, never
+        // start a second smooth scroll, and never drop the target while the
+        // first one may still be moving the strip. Otherwise its remaining
+        // scroll events would read as a user pick of an in-between time.
+        var inFlight = this._tlTarget != null;
+        if (!inFlight && Math.abs((vp.scrollLeft || 0) - x) < 1) return;
+        this._tlTarget = x;
+        // The target is cleared by the scroll's own events (_tlOnScroll,
+        // _tlIdle). Should none come (a scroll that moved nothing), the
+        // idle timer still runs _tlIdle, so a target never outlives it.
+        this._tlIdleLater();
+        if (smooth && !inFlight && !reducedMotion() && typeof vp.scrollTo === 'function') {
+          try { vp.scrollTo({ left: x, behavior: 'smooth' }); return; } catch (_) {}
+        }
+        vp.scrollLeft = x;
+      },
+
+      // A time picked by the user (click, key, button).
+      _pick: function (i) {
+        var d = this._data;
+        if (!d || !(i >= 0) || i >= d.times.length) return;
+        this._userPicked = true;
+        if (i === this._idx) this._tlScrollTo(i, true);
+        else this._setIndex(i, false, true);
+      },
+
+      _step: function (delta) {
+        if (!this._tlEnabled()) return;
+        var n = this._data.times.length;
+        this._pick(Math.min(Math.max(this._idx + delta, 0), n - 1));
+      },
+
+      // Back to the current hour, and following it again on refreshes.
+      _toNow: function () {
+        var d = this._data;
+        if (!d || !d.times.length) return;
+        var i = ductTimeIndex(d.times, Date.now() / 1000);
+        this._userPicked = false;
+        if (i === this._idx) this._tlScrollTo(i, true);
+        else this._setIndex(i, false, true);
+      },
+
+      // The strip's ticks and labels; rebuilt only when the times change.
+      // O(times), a few hundred at most.
+      _tlBuild: function () {
+        var inner = this._tlInner, d = this._data;
+        if (!inner) return;
+        var times = (d && d.times) || [];
+        var key = times.join(',');
+        if (key === this._tlKey) { this._tlPlaceNow(); return; }
+        this._tlKey = key;
+        var lay = this._tlLayout = ductTimelineLayout(times);
+        inner.textContent = '';
+        if (this._tlTrack) this._tlTrack.style.width = lay.width + 'px';
+        inner.style.width = lay.width + 'px';
+        var dayStart = {}, labelled = {}, k;
+        for (k = 0; k < lay.days.length; k++) dayStart[lay.days[k].sec] = true;
+        for (k = 0; k < lay.hours.length; k++) labelled[lay.hours[k].sec] = true;
+        for (var i = 0; i < lay.xs.length; i++) {
+          var t = el('span', 'mc-duct-tick' + (dayStart[times[i]] ? ' mc-duct-tick-day' : labelled[times[i]] ? ' mc-duct-tick-major' : ''));
+          t.style.left = lay.xs[i] + 'px';
+          inner.appendChild(t);
+        }
+        // Each day's label sticks to the strip's left edge inside its day's
+        // span, so the next day's label pushes it off (CSS sticky; the span
+        // is never narrower than its label, see .mc-duct-day).
+        var spans = ductTimelineDaySpans(lay, TL_DAY_MIN_PX);
+        for (k = 0; k < spans.length; k++) {
+          var dl = el('span', 'mc-duct-day');
+          dl.appendChild(el('span', 'mc-duct-day-label', dayText(spans[k].sec)));
+          dl.style.left = spans[k].x + 'px';
+          dl.style.width = spans[k].w + 'px';
+          inner.appendChild(dl);
+        }
+        for (k = 0; k < lay.hours.length; k++) {
+          var hl = el('span', 'mc-duct-hour', hourText(lay.hours[k].sec));
+          hl.style.left = lay.hours[k].x + 'px';
+          inner.appendChild(hl);
+        }
+        this._tlNow = el('span', 'mc-duct-now-line');
+        this._tlNow.setAttribute('aria-hidden', 'true');
+        inner.appendChild(this._tlNow);
+        this._tlPlaceNow();
+      },
+
+      _tlPlaceNow: function () {
+        var line = this._tlNow, lay = this._tlLayout, d = this._data;
+        if (!line || !lay || !d || !d.times.length) return;
+        var now = Date.now() / 1000, t0 = Number(d.times[0]), tn = Number(d.times[d.times.length - 1]);
+        var inside = now >= t0 && now <= tn;
+        line.hidden = !inside;
+        if (inside) line.style.left = (now - t0) * lay.pxPerSec + 'px';
+      },
+
+      // Range and disabled state of the slider and its buttons.
+      _tlState: function () {
+        var vp = this._tl;
+        if (!vp) return;
+        var n = (this._data && this._data.times) ? this._data.times.length : 0;
+        var off = n < 2;
+        vp.setAttribute('aria-valuemax', String(Math.max(n - 1, 0)));
+        if (off) vp.setAttribute('aria-disabled', 'true');
+        else if (vp.removeAttribute) vp.removeAttribute('aria-disabled');
+        else vp.setAttribute('aria-disabled', 'false');
+        if (this._nowEl) this._nowEl.disabled = !n;
+        this._tlAria();
+      },
+
+      _tlAria: function () {
+        var vp = this._tl, d = this._data, i = this._idx;
+        var n = (d && d.times) ? d.times.length : 0;
+        if (vp && i >= 0 && i < n) {
+          vp.setAttribute('aria-valuenow', String(i));
+          vp.setAttribute('aria-valuetext', fmtTime(d.times[i]));
+        }
+        if (this._prevEl) this._prevEl.disabled = n < 2 || i <= 0;
+        if (this._nextEl) this._nextEl.disabled = n < 2 || i >= n - 1;
+      },
+
+      // The bottom-left corner shares the map's bottom edge with Leaflet's
+      // attribution bar, which wraps to several lines on narrow screens.
+      // Lift the corner by the bar's measured height whenever the two overlap
+      // horizontally; re-measured when the map or the bar resizes.
+      // A moved panel is not in the corner: no lift.
+      //
+      // Measuring forces a layout, so it never runs per layer: the map fires
+      // layeradd/layerremove for every marker and line (thousands on the Map
+      // and Live pages). Only where the bar cannot be observed (no
+      // ResizeObserver, or no bar yet) are layer events used, and then only
+      // those of layers that carry attribution, at most once per frame.
+      _watchAttribution: function (map) {
+        var self = this;
+        this._lift = function () { self._applyLift(); };
+        try { map.on('resize', this._lift); } catch (_) {}
+        try {
+          var attr = this._attrEl();
+          if (attr && typeof ResizeObserver === 'function') {
+            this._ro = new ResizeObserver(this._lift);
+            this._ro.observe(attr);
+          }
+        } catch (_) { this._ro = null; }
+        if (!this._ro) {
+          this._liftLayer = function (e) {
+            var l = e && e.layer;
+            if (self._liftFrame || !l || typeof l.getAttribution !== 'function' || !l.getAttribution()) return;
+            self._liftFrame = frame(function () { self._liftFrame = null; self._applyLift(); });
+          };
+          try { map.on('layeradd layerremove', this._liftLayer); } catch (_) {}
+        }
+        this._applyLift();
+      },
+
+      _unwatchAttribution: function (map) {
+        if (this._ro) { try { this._ro.disconnect(); } catch (_) {} this._ro = null; }
+        if (this._lift && map) { try { map.off('resize', this._lift); } catch (_) {} }
+        if (this._liftLayer && map) { try { map.off('layeradd layerremove', this._liftLayer); } catch (_) {} }
+        cancelFrame(this._liftFrame);
+        this._liftFrame = null;
+        if (this._corner) { try { this._corner.style.marginBottom = ''; } catch (_) {} }
+        this._lift = this._liftLayer = this._corner = null;
+      },
+
+      _attrEl: function () {
+        var ac = this._map && this._map.attributionControl;
+        return (ac && typeof ac.getContainer === 'function') ? ac.getContainer() : null;
+      },
+
+      _applyLift: function () {
+        if (this._floating) {
+          if (this._corner) { try { this._corner.style.marginBottom = ''; } catch (_) {} }
+          return;
+        }
+        var box = this._panelEl, attr = this._attrEl();
+        var corner = box && box.parentNode;
+        if (!corner || !corner.style) return;
+        this._corner = corner;
+        var h = 0;
+        try {
+          if (attr && attr.offsetHeight) {
+            var a = attr.getBoundingClientRect(), c = corner.getBoundingClientRect();
+            // Overlap only if the bar reaches left over the ducting controls.
+            if (a.left < c.right) h = attr.offsetHeight;
+          }
+        } catch (_) { h = 0; }
+        corner.style.marginBottom = h ? h + 'px' : '';
+      },
+
+      // What the status line says now: no forecast held (loading, being
+      // prepared, unavailable), or the held one is out of date; '' = nothing.
+      _statusText: function () {
+        if (!this._data) return this._state === 'pending' ? MSG_PENDING : this._state === 'error' ? MSG_ERROR : MSG_LOADING;
+        return this._stale ? MSG_STALE : '';
+      },
+
+      // The status line (see _buildPanel); touched only when its text changes.
+      _renderStatus: function () {
+        var st = this._statusEl;
+        if (!st) return;
+        var msg = this._statusText();
+        if (st.textContent === msg && st.hidden === !msg) return;
+        st.textContent = msg;
+        st.hidden = !msg;
+        // A moved panel that grew stays inside the map (no ResizeObserver: now).
+        if (!this._panelRo) this._placePanel();
+      },
+
+      _renderLegend: function () {
+        var box = this._legendEl;
+        if (!box) return;
+        box.textContent = '';
+        var d = this._data;
+        if (d) {
+          box.appendChild(this._scale());
+          var lrow = el('div', 'mc-duct-legend-row');
+          lrow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-lora'));
+          lrow.appendChild(el('span', null, msgLoraRow()));
+          box.appendChild(lrow);
+          var erow = el('div', 'mc-duct-legend-row');
+          erow.appendChild(el('span', 'mc-duct-swatch mc-duct-swatch-edge'));
+          erow.appendChild(el('span', null, 'Dotted line: edge of the forecast area (no forecast beyond it)'));
+          box.appendChild(erow);
+          var meta = d.attribution || d.modelLabel || d.model || '';
+          if (meta) box.appendChild(el('div', 'mc-duct-legend-meta', meta));
+          if (d.generatedAt) box.appendChild(el('div', 'mc-duct-legend-meta', 'Updated ' + fmtTime(d.generatedAt)));
+        }
+        box.appendChild(el('div', 'mc-duct-legend-note', NOTE));
+        // A moved panel that grew stays inside the map (no ResizeObserver: now).
+        if (!this._panelRo) this._placePanel();
+      },
+
+      // Bar of the same colour bands as the field (hard stops: each colour
+      // starts where the previous ends), labels under it.
+      _scale: function () {
+        var wrap = el('div', 'mc-duct-scale');
+        var bar = el('div', 'mc-duct-scale-bar');
+        var parts = ['transparent 0%', 'transparent ' + pct(BAR_POS[0])];
+        for (var k = 0; k < STOP_N.length; k++) {
+          var c = 'var(--mc-duct-s' + (k + 1) + ') ';
+          parts.push(c + pct(BAR_POS[k]), c + pct(k + 1 < BAR_POS.length ? BAR_POS[k + 1] : 1));
+        }
+        bar.style.background = 'linear-gradient(to right, ' + parts.join(', ') + ')';
+        bar.setAttribute('aria-hidden', 'true');
+        wrap.appendChild(bar);
+        var labels = el('div', 'mc-duct-scale-labels');
+        for (var i = 0; i < BAR_LABELS.length; i++) {
+          var b = BAR_LABELS[i];
+          var lab = el('span', 'mc-duct-scale-label' + (b[2] ? ' mc-duct-scale-label-end' : ''), b[1]);
+          lab.style.left = pct(b[0]);
+          // A label wraps rather than run into the next one ("Above normal").
+          var next = BAR_LABELS[i + 1];
+          if (!b[2] && next && !next[2]) lab.style.maxWidth = pct(next[0] - b[0]);
+          labels.appendChild(lab);
+        }
+        wrap.appendChild(labels);
+        wrap.appendChild(el('div', 'mc-duct-legend-caption', CAPTION));
+        return wrap;
+      },
+
+      // ── data ──
+      _load: function (gen) {
+        var self = this;
+        if (gen !== this._gen) return;
+        var opts = { headers: { Accept: 'application/json' } };
+        if (typeof AbortController === 'function') {
+          if (this._abort) { try { this._abort.abort(); } catch (_) {} }
+          this._abort = new AbortController();
+          opts.signal = this._abort.signal;
+        }
+        var p;
+        try {
+          p = CSApi.fetch(API_URL, opts).then(function (r) {
+            if (!r || r.ok === false) throw new Error('http');
+            return r.json();
+          });
+        } catch (_) { p = Promise.reject(new Error('fetch')); }
+        p.then(function (d) {
+          if (gen !== self._gen) return;
+          self._apply(d);
+        }, function (e) {
+          if (gen !== self._gen) return;
+          // Aborted by the next _load (same generation): not a failure, its
+          // answer is the one that counts.
+          if (e && e.name === 'AbortError') return;
+          self._fail('error');
+        });
+      },
+
+      // Re-arms the refresh interval when its period changes.
+      _schedule: function (ms) {
+        if (this._timer != null && this._timerMs === ms) return;
+        if (this._timer != null) { try { clearInterval(this._timer); } catch (_) {} }
+        var self = this;
+        this._timerMs = ms;
+        this._timer = setInterval(function () { self._load(self._gen); }, ms);
+      },
+
+      // With data held, the last good forecast stays drawn: an error answer
+      // (the server's forecast failed or expired) or a failed request marks
+      // it out of date; pending does not (a restarting server answers
+      // pending while the forecast held here is still valid).
+      _fail: function (state) {
+        if (this._data) {
+          this._setStale(state === 'error' || this._stale);
+          return;
+        }
+        this._schedule(RETRY_MS);
+        this._state = state;
+        this._renderStatus();
+      },
+
+      // The held forecast has run out: its last hour has ended.
+      _expired: function () {
+        var t = this._data && this._data.times;
+        return !!(t && t.length && Number(t[t.length - 1]) + HOUR_S <= Date.now() / 1000);
+      },
+
+      // Out-of-date flag (always on once the forecast has run out).
+      _setStale: function (on) {
+        on = !!on || this._expired();
+        if (on === !!this._stale) return;
+        this._stale = on;
+        this._renderStatus();
+      },
+
+      _apply: function (d) {
+        if (!d || typeof d !== 'object') return this._fail('error');
+        if (d.status === 'pending') return this._fail('pending');
+        if (d.status !== 'ok' || !Array.isArray(d.cells) || !Array.isArray(d.times) || !d.times.length) return this._fail('error');
+        this._state = 'ok';
+        this._schedule(REFRESH_MS);
+        var held = this._data;
+        if (held && d.generatedAt != null && held.generatedAt === d.generatedAt) {
+          // The forecast already drawn: no rebuild (an open popup stays
+          // open); only the hour moves on, unless the user picked one.
+          this._setStale(false);
+          this._followClock();
+          return;
+        }
+        this._data = d;
+        this._stale = this._expired();
+        this._show();
+      },
+
+      // The clock has moved on (a refresh, or the hour tick): the now line
+      // follows, and so does the shown hour unless the user picked one.
+      _followClock: function () {
+        var d = this._data;
+        if (!d) return;
+        this._tlPlaceNow();
+        if (this._userPicked) return;
+        var idx = ductTimeIndex(d.times, Date.now() / 1000);
+        if (idx !== this._idx) this._setIndex(idx);
+      },
+
+      // One timer aimed at the next top of the hour (forecast times are
+      // whole hours), re-armed each time it fires: without it the shown
+      // hour and the now line would wait for the next refresh, up to
+      // REFRESH_MS late. No request is made. A timer that fires a moment
+      // early changes nothing and is re-armed for the remainder.
+      _armHourTick: function () {
+        var self = this, gen = this._gen;
+        cancelLater(this._hourTimer);
+        this._hourTimer = later(function () {
+          self._hourTimer = null;
+          if (gen !== self._gen) return;
+          self._armHourTick();
+          self._setStale(self._stale);     // the forecast may have just run out
+          self._followClock();
+        }, HOUR_S * 1000 - Date.now() % (HOUR_S * 1000));
+      },
+
+      // Draws the held forecast: cells, timeline, legend and the hour (a
+      // user-picked one while it is still in the forecast, else the latest <= now).
+      _show: function () {
+        var d = this._data;
+        var prevTime = this._shown != null ? this._shown : null;
+        this._build();
+        var idx = ductTimeIndex(d.times, Date.now() / 1000);
+        if (this._userPicked) {
+          var keep = prevTime != null ? d.times.indexOf(prevTime) : -1;
+          if (keep >= 0) idx = keep;
+          else this._userPicked = false;   // that hour is gone: follow the clock again
+        }
+        this._tlBuild();
+        this._renderLegend();
+        this._renderStatus();
+        this._setIndex(idx);
+        this._tlState();
+      },
+
+      // The cells that have data (class >= 1) at some hour, the lattice the
+      // field is drawn on and clicks are looked up in, and the area's edge.
+      // The LoRa outlines follow in _restyle.
+      _build: function () {
+        var d = this._data, group = this._group;
+        if (!group) return;
+        try { group.clearLayers(); } catch (_) {}
+        this._cells = [];
+        this._edge = this._lora = null;
+        this._loraKey = '';
+        this._grid = ductGrid(d.cells, Number(d.stepDeg) || 0.5);
+        for (var i = 0; i < d.cells.length; i++) {
+          var cell = d.cells[i];
+          if (!cell || !Array.isArray(cell.c) || !isFinite(cell.lat) || !isFinite(cell.lon)) continue;
+          for (var t = 0; t < cell.c.length; t++) if (cell.c[t] >= 1) { this._cells.push(cell); break; }
+        }
+        this._buildEdge(group);
+      },
+
+      // The forecast area's outline: one non-interactive multi-part polyline
+      // (a part per merged run of boundary cell edges), on the shared canvas.
+      _buildEdge: function (group) {
+        var segs = ductEdges(this._grid);
+        if (!segs.length || !L.polyline) return;
+        var color = cssVar(EDGE_VAR);
+        try {
+          var line = L.polyline(segs, L.extend({ renderer: this._renderer, color: color || undefined }, EDGE_STYLE, { stroke: !!color }));
+          line._mcEdge = true;
+          group.addLayer(line);
+          this._edge = line;
+          this._edgeColor = color;
+        } catch (_) { this._edge = null; }
+      },
+
+      // Shows hour i. fromScroll: the user's scroll put it under the centre
+      // (the strip stays where it is); otherwise the strip moves to it,
+      // smoothly when smooth.
+      _setIndex: function (i, fromScroll, smooth) {
+        var d = this._data;
+        if (!d || i < 0 || i >= d.times.length) return;
+        this._idx = i;
+        this._shown = d.times[i];
+        if (this._timeValue) {
+          var t = fmtTime(d.times[i]);
+          this._timePrefix.textContent = 'Forecast time: ';
+          this._timeValue.textContent = t;
+          this._timeLabel.title = 'Forecast time: ' + t;
+        }
+        this._tlAria();
+        if (!fromScroll) this._tlScrollTo(i, !!smooth);
+        this._restyle();
+        this._syncPopup();
+      },
+
+      // Redraws the field image, the edge colour and the LoRa outlines for
+      // the current hour and theme.
+      _restyle: function () {
+        this._drawField();
+        var edgeColor = cssVar(EDGE_VAR);
+        if (this._edge && edgeColor !== this._edgeColor) {   // theme change
+          this._edgeColor = edgeColor;
+          this._edge.setStyle(edgeColor ? { stroke: true, color: edgeColor } : { stroke: false });
+        }
+        this._drawLora();
+      },
+
+      // The dashed outlines of the cells that may carry LoRa at the shown
+      // hour: one non-interactive multi-polygon (a ring per cell) on the
+      // line canvas, replaced only when the set of cells or the colour
+      // changes. O(cells). No --mc-duct-lora: no outline.
+      _drawLora: function () {
+        var group = this._group;
+        if (!group || !L.polygon) return;
+        var i = this._idx, color = cssVar(LORA_VAR), h = (Number(this._data && this._data.stepDeg) || 0.5) / 2;
+        var cells = [], rings = [], ids = [];
+        if (color) {
+          for (var k = 0; k < this._cells.length; k++) {
+            var c = this._cells[k];
+            if (!isLora(c, i)) continue;
+            cells.push(c);
+            ids.push(k);
+            rings.push([[[c.lat - h, c.lon - h], [c.lat - h, c.lon + h], [c.lat + h, c.lon + h], [c.lat + h, c.lon - h]]]);
+          }
+        }
+        var key = color + '|' + ids.join(',');
+        if (key === this._loraKey) return;
+        this._loraKey = key;
+        if (this._lora) { try { group.removeLayer(this._lora); } catch (_) {} this._lora = null; }
+        if (!rings.length) return;
+        try {
+          var poly = L.polygon(rings, L.extend({ renderer: this._renderer, color: color }, LORA_STYLE));
+          poly._mcLora = true;
+          poly._mcCells = cells;
+          group.addLayer(poly);
+          this._lora = poly;
+        } catch (_) { this._lora = null; }
+      },
+
+      _drawField: function () {
+        var g = this._grid, map = this._map, d = this._data;
+        if (!g || !map || !d) { this._dropField(); return; }
+        var t0 = Date.now();
+        var canvas = this._canvas;
+        try {
+          if (!canvas) canvas = this._canvas = document.createElement('canvas');
+          if (canvas.width !== g.w) canvas.width = g.w;
+          if (canvas.height !== g.h) canvas.height = g.h;
+          var ctx = canvas.getContext('2d');
+          // One pixel buffer per image size, cleared for each redraw.
+          var img = this._img;
+          if (!img || img.width !== g.w || img.height !== g.h) img = this._img = ctx.createImageData(g.w, g.h);
+          else img.data.fill(0);
+          renderField(g, ductGridValues(g, d.cells, this._idx), fieldLut(fieldStops(), fieldAlpha()), img.data);
+          ctx.putImageData(img, 0, 0);
+        } catch (_) { this._dropField(); return; }
+        var bounds = gridBounds(g);
+        if (!this._field) {
+          this._field = newField(canvas, bounds, this._pane);
+          if (this._field) { try { map.addLayer(this._field); } catch (_) { this._field = null; } }
+        } else if (this._fieldKey !== String(bounds)) {
+          try { this._field.setBounds(L.latLngBounds(bounds)); } catch (_) {}
+        }
+        this._fieldKey = String(bounds);
+        this._fieldMs = Date.now() - t0;
+      },
+
+      _dropField: function () {
+        if (this._field && this._map) { try { this._map.removeLayer(this._field); } catch (_) {} }
+        this._field = null;
+        this._fieldKey = '';
+      }
+    });
+  }
+
+  var LayerClass = null;
+  window.MC_createDuctingLayer = function (opts) {
+    if (typeof L === 'undefined' || !L.Layer) return null;
+    if (!LayerClass) LayerClass = makeLayerClass();
+    return new LayerClass(opts);
+  };
+  window.MC_ductTimeIndex = ductTimeIndex;
+  window.MC_ductPopupContent = popupContent;
+  window.MC_ductFieldColor = fieldColor;
+  window.MC_ductFieldStops = fieldStops;
+  window.MC_ductGrid = ductGrid;
+  window.MC_ductEdges = ductEdges;
+  window.MC_ductCellAt = ductCellAt;
+  window.MC_ductGridValues = ductGridValues;
+  window.MC_ductSample = sample;
+  window.MC_ductFieldValues = fieldValues;
+  window.MC_ductRowLat = rowLat;
+  window.MC_ductTimelineLayout = ductTimelineLayout;
+  window.MC_ductTimelineIndexAt = ductTimelineIndexAt;
+  window.MC_ductClampPos = ductClampPos;
+  window.MC_ductPosToFrac = ductPosToFrac;
+  window.MC_ductPosFromFrac = ductPosFromFrac;
+  window.MC_ductTimelineKeyIndex = ductTimelineKeyIndex;
+  window.MC_ductTimelineDaySpans = ductTimelineDaySpans;
+  window.MC_ductPanelPrefs = ductPanelPrefs;
+})();

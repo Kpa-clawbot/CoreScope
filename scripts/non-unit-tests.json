@@ -138,7 +138,8 @@
       "tests/e2e/test-user-management-e2e.js",
       "tests/e2e/test-map-providers-harness-e2e.js",
       "tests/e2e/test-map-providers-e2e.js",
-      "tests/e2e/test-map-race-stress-e2e.js"
+      "tests/e2e/test-map-race-stress-e2e.js",
+      "tests/e2e/test-map-ducting-e2e.js"
     ]
   },
   "domIntegration": {
