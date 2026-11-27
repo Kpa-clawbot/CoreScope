@@ -79,11 +79,10 @@ if (typeof window !== 'undefined') {
 (function () {
   var MAX_PACKETS = 10000;
   var observers = [];
+  var rosterNames;
   var selA = null;
   var selB = null;
   var comparisonResult = null;
-  var packetsA = [];
-  var packetsB = [];
   var currentView = 'summary';
   var routeFilter = 'all';
   var fleetMode = false;
@@ -91,6 +90,32 @@ if (typeof window !== 'undefined') {
   var pinKey = 'corescope.compare.reference';
   var regionContainer, regionListener;
   var requestID = 0;
+
+  function comparisonHash(params) {
+    return URLState.updateHashParams(Object.assign({ a: null, b: null, ref: null, mode: null, region: null }, params), location.hash);
+  }
+
+  function updateBookmark(params) {
+    if (location.hash.split('?')[0] !== '#/compare') return;
+    var hash = comparisonHash(params);
+    if (hash !== location.hash) history.replaceState(null, '', hash);
+  }
+
+  // null marks a name shared by different IDs. The aggregate may be fresher than the roster.
+  function indexFleetNames(receivers, known) {
+    var names = new Map(known);
+    receivers.forEach(function (o) {
+      var name = o.name || o.id;
+      if (!names.has(name)) names.set(name, o.id);
+      else if (names.get(name) !== o.id) names.set(name, null);
+    });
+    return names;
+  }
+
+  function observerLabel(name, id, names) {
+    var label = name || id;
+    return names && names.get(label) === null ? label + ' [' + id + ']' : label;
+  }
 
   function init(app) {
     // Parse preselected observers from URL: #/compare?a=ID1&b=ID2
@@ -104,8 +129,6 @@ if (typeof window !== 'undefined') {
       try { reference = localStorage.getItem(pinKey) || ''; } catch (_) { /* Storage is optional. */ }
     }
     comparisonResult = null;
-    packetsA = [];
-    packetsB = [];
     currentView = 'summary';
     routeFilter = 'all';
 
@@ -113,7 +136,8 @@ if (typeof window !== 'undefined') {
       '<div class="page-header">' +
         '<a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">\u2190</a>' +
         '<h2>\uD83D\uDD0D Observer Comparison</h2>' +
-        (fleetMode ? '<a href="#/compare">Pairwise comparison</a>' : '<a href="#/compare?mode=fleet">Reference comparison</a>') +
+        '<a href="' + escapeHtml(comparisonHash(fleetMode ? {} : { mode: 'fleet' })) + '">' +
+          (fleetMode ? 'Pairwise comparison' : 'Reference comparison') + '</a>' +
       '</div>' +
       '<nav data-role="compare-breadcrumbs" aria-label="Compare breadcrumbs" class="compare-breadcrumbs"></nav>' +
       '<div id="compareControls" class="compare-controls"><div class="text-center text-muted" style="padding:20px">Loading observers\u2026</div></div>' +
@@ -140,11 +164,10 @@ if (typeof window !== 'undefined') {
     if (regionContainer) RegionFilter.destroy(regionContainer);
     regionListener = regionContainer = null;
     observers = [];
+    rosterNames = null;
     selA = null;
     selB = null;
     comparisonResult = null;
-    packetsA = [];
-    packetsB = [];
     routeFilter = 'all';
   }
 
@@ -164,6 +187,7 @@ if (typeof window !== 'undefined') {
       observers = (result[0].observers || []).slice().sort(function (a, b) {
         return (a.name || a.id).localeCompare(b.name || b.id);
       });
+      rosterNames = fleetMode ? indexFleetNames(observers) : null;
       renderControls();
       if (fleetMode) {
         regionListener = RegionFilter.onChange(runFleetComparison);
@@ -180,7 +204,7 @@ if (typeof window !== 'undefined') {
 
     var optionsHtml = '<option value="">Select observer\u2026</option>' +
       observers.map(function (o) {
-        var label = escapeHtml(o.name || o.id);
+        var label = escapeHtml(observerLabel(o.name, o.id, rosterNames));
         var region = o.iata ? ' (' + escapeHtml(o.iata) + ')' : '';
         return '<option value="' + escapeHtml(o.id) + '">' + label + region + '</option>';
       }).join('');
@@ -255,6 +279,11 @@ if (typeof window !== 'undefined') {
       var wrap = document.getElementById('compareControls');
       var ready = isComparisonReady();
       if (wrap) wrap.classList.toggle('is-collapsed', ready);
+      updateBookmark({ a: selA, b: selB });
+      if (!ready) {
+        comparisonResult = null;
+        document.getElementById('compareContent').innerHTML = '<p role="status">Choose two different observers to compare their packets.</p>';
+      }
       renderBreadcrumbs();
     }
     function onChange() {
@@ -306,9 +335,7 @@ if (typeof window !== 'undefined') {
     var content = document.getElementById('compareContent');
     var status = content.querySelector('[role="status"]');
     var table = content.querySelector('table');
-    var region = RegionFilter.regionQueryString();
-    var state = reference ? 'ref=' + encodeURIComponent(reference) : 'mode=fleet';
-    history.replaceState(null, '', '#/compare?' + state + (region || '&region=All'));
+    updateBookmark({ ref: reference, mode: reference ? null : 'fleet', region: RegionFilter.getRegionParam() || 'All' });
     table.parentElement.hidden = true;
     if (!reference || document.getElementById('compareReference').value !== reference) {
       status.textContent = reference ? 'Reference observer unavailable. Choose another reference.' : 'Choose a reference to compare receivers.';
@@ -316,9 +343,10 @@ if (typeof window !== 'undefined') {
     }
     status.textContent = 'Loading receiver comparison…';
     try {
-      var data = await api('/analytics/observer-comparison?' + state + region);
+      var data = await api('/analytics/observer-comparison?ref=' + encodeURIComponent(reference) + RegionFilter.regionQueryString());
       if (ticket !== requestID) return;
-      status.textContent = obsName(reference) + ' received ' + data.referenceTotal.toLocaleString() +
+      var names = indexFleetNames(data.peers, rosterNames);
+      status.textContent = observerLabel(obsName(reference), reference, names) + ' received ' + data.referenceTotal.toLocaleString() +
         ' distinct transmissions in the last 24 hours.' + (data.peers.length ? '' : ' No other observers in the selected regions.');
       var body = table.tBodies[0];
       while (body.rows.length > data.peers.length) body.deleteRow(-1);
@@ -326,7 +354,7 @@ if (typeof window !== 'undefined') {
       data.peers.forEach(function (peer, index) {
         var row = body.rows[index] || body.insertRow();
         var delta = peer.snrDelta;
-        var values = [peer.name, peer.total.toLocaleString(), peer.shared.toLocaleString(),
+        var values = [observerLabel(peer.name, peer.id, names), peer.total.toLocaleString(), peer.shared.toLocaleString(),
           pct(peer.shared, data.referenceTotal), pct(peer.shared, peer.total),
           delta == null ? '—' : (delta > 0 ? '+' : '') + delta.toFixed(1) + ' dB', peer.snrPairs.toLocaleString()];
         values.forEach(function (value, col) {
@@ -348,12 +376,6 @@ if (typeof window !== 'undefined') {
 
     content.innerHTML = '<div class="text-center text-muted" style="padding:40px">Fetching packets\u2026</div>';
 
-    // Update URL for shareability
-    var base = '#/compare?a=' + encodeURIComponent(selA) + '&b=' + encodeURIComponent(selB);
-    if (location.hash.split('?')[0] === '#/compare') {
-      history.replaceState(null, '', base);
-    }
-
     try {
       var since24h = sinceISO(24);
       var results = await Promise.all([
@@ -362,8 +384,8 @@ if (typeof window !== 'undefined') {
       ]);
 
       if (ticket !== requestID) return;
-      packetsA = results[0].packets || [];
-      packetsB = results[1].packets || [];
+      var packetsA = results[0].packets || [];
+      var packetsB = results[1].packets || [];
 
       // Apply flood/direct filter (#928)
       var filteredA = filterPacketsByRoute(packetsA, routeFilter);
