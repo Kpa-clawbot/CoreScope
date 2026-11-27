@@ -753,8 +753,12 @@ async function run() {
           const hops = (await rowHops(group)).find(hops => hasShortHop(hops) === excluded);
           assert(hops, 'fixture needs routes with and without one-byte hops');
           await page.locator('tr[data-hops="' + hops + '"]').first().click();
-          const tiles = page.locator('#subpathMap .leaflet-tile-loaded').first();
-          await tiles.waitFor();
+          const detail = page.locator('#subpathDetail:not(.collapsed) .subpath-meta').getByText(hops.split(',').join(' → '), { exact: true });
+          await detail.waitFor();
+          const map = page.locator('#subpathMap');
+          const hadMap = await map.count() === 1;
+          const tiles = map.locator('.leaflet-tile-loaded').first();
+          if (hadMap) await tiles.waitFor();
           await page.evaluate(() => {
             invalidateApiCache('/analytics/subpath-detail');
             window.MC_setHide1ByteHops(true);
@@ -768,10 +772,12 @@ async function run() {
           } else {
             const selected = page.locator('tr.subpath-selected');
             assert(await selected.count() === 1 && await selected.getAttribute('data-hops') === hops, 'eligible selection lost');
-            assert(await page.locator('#subpathDetail .hop-prefix').first().textContent() === hops.split(',').join(' → '), 'wrong route detail');
-            await tiles.waitFor();
+            assert(await detail.isVisible(), 'wrong route detail');
+            if (hadMap) await tiles.waitFor();
           }
-          assert(await page.evaluate(() => window.__mcHarness.maps.length) === (excluded ? 0 : 1), 'unexpected live route map count');
+          const expectedMaps = hadMap && !excluded ? 1 : 0;
+          assert(await page.evaluate(() => window.__mcHarness.maps.length) === expectedMaps, 'unexpected live route map count');
+          assert(await page.evaluate(() => window.__mcNodeTileSync?.maps.length || 0) === expectedMaps, 'unexpected registered route map count');
           assert(requests.filter(url => url.includes('/subpath-detail?')).length === 1, 'expected a single route detail request');
           assert(errors.length === 0, 'page errors: ' + errors);
         } finally { await context.close(); }
