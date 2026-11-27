@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -15,6 +17,7 @@ type observerComparisonPeer struct {
 	Shared   int      `json:"shared"`
 	SNRPairs int      `json:"snrPairs"`
 	SNRDelta *float64 `json:"snrDelta"`
+	iata     string
 }
 
 type observerComparisonResponse struct {
@@ -22,12 +25,127 @@ type observerComparisonResponse struct {
 	Peers          []observerComparisonPeer `json:"peers"`
 }
 
+const (
+	comparisonTTL          = 30 * time.Second
+	comparisonCacheSize    = 16
+	comparisonScanLimit    = 2 // Leave half of the four-reader pool available.
+	comparisonQueryTimeout = 30 * time.Second
+)
+
+var errComparisonBusy = errors.New("other reference comparisons are running")
+
+type comparisonLoad struct {
+	done    chan struct{}
+	result  *observerComparisonResponse
+	err     error
+	expires time.Time
+}
+
+type observerComparisonCache struct {
+	mu      sync.Mutex
+	entries *lru[string, *comparisonLoad]
+	loading map[string]*comparisonLoad
+}
+
 func (s *Server) handleObserverComparison(w http.ResponseWriter, r *http.Request) {
-	ref := r.URL.Query().Get("ref")
+	q := r.URL.Query()
+	ref := q.Get("ref")
 	if ref == "" {
 		writeError(w, http.StatusBadRequest, "Reference observer is required")
 		return
 	}
+	if s.cfg.IsObserverBlacklisted(ref) {
+		writeError(w, http.StatusNotFound, "Observer not found")
+		return
+	}
+	// Check the indexed active reference even on a hit: a deactivated pin
+	// must stop working immediately, independent of the traffic snapshot.
+	var active int
+	err := s.db.conn.QueryRowContext(r.Context(), "SELECT 1 FROM observers WHERE id=? AND COALESCE(inactive,0)=0", ref).Scan(&active)
+	var fleet *observerComparisonResponse
+	if err == nil {
+		fleet, err = s.cachedObserverComparison(r.Context(), ref)
+	}
+	switch {
+	case r.Context().Err() != nil:
+		return
+	case errors.Is(err, sql.ErrNoRows):
+		writeError(w, http.StatusNotFound, "Observer not found")
+	case errors.Is(err, errComparisonBusy):
+		w.Header().Set("Retry-After", "2")
+		writeError(w, http.StatusTooManyRequests, err.Error())
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	default:
+		writeJSON(w, fleet.visiblePeers(normalizeRegionCodes(q.Get("region")), s.cfg))
+	}
+}
+
+func (fleet *observerComparisonResponse) visiblePeers(codes []string, cfg *Config) *observerComparisonResponse {
+	if len(codes) == 0 && (cfg == nil || len(cfg.ObserverBlacklist) == 0) {
+		return fleet
+	}
+	regions := make(map[string]bool, len(codes))
+	for _, code := range codes {
+		regions[code] = true
+	}
+	resp := &observerComparisonResponse{ReferenceTotal: fleet.ReferenceTotal, Peers: []observerComparisonPeer{}}
+	for _, p := range fleet.Peers {
+		if (len(regions) == 0 || regions[p.iata]) && !cfg.IsObserverBlacklisted(p.ID) {
+			resp.Peers = append(resp.Peers, p)
+		}
+	}
+	return resp
+}
+
+// One completion channel per cold reference, shared by all region requests.
+// A disconnected caller leaves immediately without canceling other readers
+// or leaving a private channel in the flight. Excess distinct pins retry.
+func (s *Server) cachedObserverComparison(ctx context.Context, ref string) (*observerComparisonResponse, error) {
+	c := &s.comparisons
+	c.mu.Lock()
+	if c.entries == nil {
+		c.entries = newLRU[string, *comparisonLoad](comparisonCacheSize, 0, nil)
+		c.loading = make(map[string]*comparisonLoad)
+	}
+	if hit, ok := c.entries.Get(ref); ok && time.Now().Before(hit.expires) {
+		c.mu.Unlock()
+		return hit.result, nil
+	}
+	load := c.loading[ref]
+	if load == nil {
+		if len(c.loading) >= comparisonScanLimit {
+			c.mu.Unlock()
+			return nil, errComparisonBusy
+		}
+		load = &comparisonLoad{done: make(chan struct{})}
+		c.loading[ref] = load
+		go func() {
+			// A region switch can disconnect the first caller. The shared
+			// scan still fills the cache and has its own bounded SQL lifetime.
+			scanCtx, cancel := context.WithTimeout(context.Background(), comparisonQueryTimeout)
+			defer cancel()
+			load.result, load.err = s.queryObserverComparison(scanCtx, ref)
+			c.mu.Lock()
+			if load.err == nil {
+				load.expires = time.Now().Add(comparisonTTL)
+				c.entries.Put(ref, load)
+			}
+			delete(c.loading, ref)
+			close(load.done)
+			c.mu.Unlock()
+		}()
+	}
+	c.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-load.done:
+		return load.result, load.err
+	}
+}
+
+func (s *Server) queryObserverComparison(ctx context.Context, ref string) (*observerComparisonResponse, error) {
 	key, receiver := "idx", "observer_idx"
 	end := time.Now().Unix() + 1 // Include the current observation second.
 	start := end - 24*60*60
@@ -43,17 +161,6 @@ func (s *Server) handleObserverComparison(w http.ResponseWriter, r *http.Request
 		afterDate := time.Unix(end, 0).UTC().AddDate(0, 0, 2).Format(time.DateOnly)
 		args = append(args, firstDate, afterDate, start, end-1)
 	}
-	var refKey any
-	ctx := r.Context()
-	err := s.db.conn.QueryRowContext(ctx, "SELECT "+key+" FROM observers WHERE id=? AND COALESCE(inactive,0)=0", ref).Scan(&refKey)
-	if errors.Is(err, sql.ErrNoRows) || s.cfg.IsObserverBlacklisted(ref) {
-		writeError(w, http.StatusNotFound, "Observer not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 
 	// Count each transmission once per receiver. Pair their mean non-null SNR
 	// values so extra receptions of one transmission cannot give it more weight.
@@ -62,44 +169,41 @@ func (s *Server) handleObserverComparison(w http.ResponseWriter, r *http.Request
 		FROM observations WHERE ` + window + ` AND direction IS NOT 'tx'
 		GROUP BY transmission_id, ` + receiver + `
 	), baseline AS MATERIALIZED (
-		SELECT tx, snr FROM received WHERE receiver = ?
+		SELECT tx, snr FROM received WHERE receiver = (SELECT ` + key + ` FROM observers WHERE id=?)
 	), totals AS (
 		SELECT p.receiver, COUNT(*) AS total, COUNT(b.tx) AS shared,
 			COUNT(p.snr-b.snr) AS pairs, AVG(p.snr-b.snr) AS delta
 		FROM received p LEFT JOIN baseline b ON b.tx=p.tx GROUP BY p.receiver
 	)
 	SELECT ob.id, COALESCE(NULLIF(ob.name,''),ob.id) AS label, COALESCE(t.total,0),
-		COALESCE(t.shared,0) AS shared_count, COALESCE(t.pairs,0), t.delta
+		COALESCE(t.shared,0) AS shared_count, COALESCE(t.pairs,0), t.delta, COALESCE(ob.iata,'')
 	FROM observers ob LEFT JOIN totals t ON t.receiver=ob.` + key + `
-	WHERE COALESCE(ob.inactive,0)=0`
-	args = append(args, refKey)
-	if codes := normalizeRegionCodes(r.URL.Query().Get("region")); len(codes) != 0 {
-		regions, _ := json.Marshal(codes)
-		query += ` AND (ob.id=? OR UPPER(TRIM(ob.iata)) IN (SELECT value FROM json_each(?)))`
-		args = append(args, ref, string(regions))
-	}
-	rows, err := s.db.conn.QueryContext(ctx, query+" ORDER BY shared_count DESC, label COLLATE NOCASE, ob.id", args...)
+	WHERE COALESCE(ob.inactive,0)=0 ORDER BY shared_count DESC, label COLLATE NOCASE, ob.id`
+	rows, err := s.db.conn.QueryContext(ctx, query, append(args, ref)...)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, err
 	}
 	defer rows.Close()
-	resp := observerComparisonResponse{Peers: []observerComparisonPeer{}}
+	resp := &observerComparisonResponse{Peers: []observerComparisonPeer{}}
+	found := false
 	for rows.Next() {
 		var peer observerComparisonPeer
-		if err := rows.Scan(&peer.ID, &peer.Name, &peer.Total, &peer.Shared, &peer.SNRPairs, &peer.SNRDelta); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+		if err := rows.Scan(&peer.ID, &peer.Name, &peer.Total, &peer.Shared, &peer.SNRPairs, &peer.SNRDelta, &peer.iata); err != nil {
+			return nil, err
 		}
 		if peer.ID == ref {
+			found = true
 			resp.ReferenceTotal = peer.Total
-		} else if !s.cfg.IsObserverBlacklisted(peer.ID) {
+		} else {
+			peer.iata = strings.ToUpper(strings.TrimSpace(peer.iata))
 			resp.Peers = append(resp.Peers, peer)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, err
 	}
-	writeJSON(w, resp)
+	if !found {
+		return nil, sql.ErrNoRows
+	}
+	return resp, nil
 }

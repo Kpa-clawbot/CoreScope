@@ -238,7 +238,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/analytics/rf":    {Summary: "RF analytics", Description: "SNR/RSSI distributions and statistics.", Tag: "analytics"},
 		"GET /api/analytics/observer-comparison": {
 			Summary: "Compare receivers with a reference observer", Tag: "analytics",
-			Description: "Distinct received transmissions during the last 24 hours. Shared counts include transmissions with missing SNR. snrDelta is the mean peer minus reference SNR in dB over snrPairs shared transmissions with both measurements, averaging each receiver's repeated receptions first. Returns an empty peers array when only the reference is visible.",
+			Description: "Distinct received transmissions during the last 24 hours. Regions share a reference snapshot for up to 30 seconds. When other references occupy the comparison readers, HTTP 429 includes Retry-After. Shared counts include transmissions with missing SNR. snrDelta is the mean peer minus reference SNR in dB over snrPairs shared transmissions with both measurements, averaging each receiver's repeated receptions first. Returns an empty peers array when only the reference is visible.",
 			QueryParams: []paramMeta{{Name: "ref", Type: "string", Required: true, Description: "Reference observer ID."}, {Name: "region", Type: "string", Description: "Optional comma-separated IATA codes for peers. The reference is independent of this filter."}},
 			Response:    schemaRef("ObserverComparisonResponse"),
 		},

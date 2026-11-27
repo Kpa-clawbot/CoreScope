@@ -1405,7 +1405,10 @@ Before the first successful fetch, including when fetching is disabled, the resp
 Compare one reference observer with the other visible observers over the last 24 hours.
 Pass its ID in the required `ref` parameter. Optional `region` takes comma-separated IATA
 codes for the peers. The reference can belong to any region. An absent `ref` returns
-400. An unknown, inactive or blacklisted reference returns 404.
+400. An unknown, inactive or blacklisted reference returns 404. Region selections
+share the same reference snapshot for up to 30 seconds. Two different references
+can refresh at once. A request for another uncached reference during that time
+returns 429 with a `Retry-After` header in seconds.
 
 `referenceTotal` is the number of distinct transmissions received by the reference.
 `peers` lists each peer's `id`, `name`, distinct `total`, and number `shared` with the

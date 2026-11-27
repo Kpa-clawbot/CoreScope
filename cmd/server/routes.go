@@ -128,6 +128,7 @@ type Server struct {
 	// to prevent thundering-herd SQL stampedes. Issue #1481 P0-3 +
 	// #1483 follow-up (singleflight + monotonic time).
 	observersCacheV2 observersCacheField
+	comparisons      observerComparisonCache
 
 	// Cached default-shape /api/analytics/neighbor-graph response,
 	// recomputed every 5 min in a background goroutine. Issue #1481 P0-1.
