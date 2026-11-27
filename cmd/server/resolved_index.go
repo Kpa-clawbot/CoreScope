@@ -44,22 +44,29 @@ func (s *PacketStore) addToResolvedPubkeyIndex(txID int, resolvedPubkeys []strin
 		}
 		seen[h] = true
 
-		// Cross-call dedup: check if (h, txID) already exists in forward index.
-		existing := s.resolvedPubkeyIndex[h]
-		alreadyPresent := false
-		for _, id := range existing {
-			if id == txID {
-				alreadyPresent = true
-				break
-			}
-		}
-		if alreadyPresent {
+		// Cross-call dedup: is (h, txID) already indexed? Checked on the
+		// tx's short reverse list, not h's forward list (see txHasResolvedHash).
+		if s.txHasResolvedHash(txID, h) {
 			continue
 		}
 
-		s.resolvedPubkeyIndex[h] = append(existing, txID)
+		s.resolvedPubkeyIndex[h] = append(s.resolvedPubkeyIndex[h], txID)
 		s.resolvedPubkeyReverse[txID] = append(s.resolvedPubkeyReverse[txID], h)
 	}
+}
+
+// txHasResolvedHash reports whether (h, txID) is in the index. It reads the
+// tx's own reverse list (a handful of hashes, one per resolved hop) rather
+// than h's forward list, which for a busy repeater holds most txIDs in the
+// store. The two maps are only written together (add/remove below), so the
+// answers are the same. Must be called under s.mu (read or write).
+func (s *PacketStore) txHasResolvedHash(txID int, h uint64) bool {
+	for _, x := range s.resolvedPubkeyReverse[txID] {
+		if x == h {
+			return true
+		}
+	}
+	return false
 }
 
 // removeFromResolvedPubkeyIndex removes all index entries for a txID using the reverse map.
@@ -131,21 +138,14 @@ func (s *PacketStore) nodeInResolvedPathViaIndex(tx *StoreTx, targetPK string) b
 		return true
 	}
 
-	h := resolvedPubkeyHash(targetPK)
-	txIDs := s.resolvedPubkeyIndex[h]
-
-	// Check if this tx's ID is in the candidate list
-	for _, id := range txIDs {
-		if id == tx.ID {
-			// Found in index. Collision-safety: verify with SQL.
-			if s.db != nil && s.db.conn != nil {
-				return s.confirmResolvedPathContains(tx.ID, targetPK)
-			}
-			return true // no DB, trust the index
-		}
+	if !s.txHasResolvedHash(tx.ID, resolvedPubkeyHash(targetPK)) {
+		return false
 	}
-
-	return false
+	// Found in index. Collision-safety: verify with SQL.
+	if s.db != nil && s.db.conn != nil {
+		return s.confirmResolvedPathContains(tx.ID, targetPK)
+	}
+	return true // no DB, trust the index
 }
 
 // confirmResolvedPathContains verifies an exact pubkey match in resolved_path
