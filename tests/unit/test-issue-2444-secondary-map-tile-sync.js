@@ -50,7 +50,7 @@ function must(file, re) {
 
 const HELPER = must('nodes.js', /function _applyTilesToNodeMap\s*\(map\)\s*\{/);
 const HOME = [
-  must('home.js', /async function loadHealth\s*\(pubkey\)\s*\{/),
+  must('home.js', /async function loadHealth\s*\([^)]*\)\s*\{/),
   must('home.js', /function destroy\s*\(\)\s*\{/),
   must('home.js', /function renderHome\s*\(container\)\s*\{/),
   must('home.js', /function showChooser\s*\(container\)\s*\{/),
@@ -58,7 +58,7 @@ const HOME = [
 ].join('\n');
 const ANALYTICS = [
   must('analytics.js', /function renderSubpathDetail\s*\(panel, data\)\s*\{/),
-  must('analytics.js', /async function loadSubpathDetail\s*\(hopsStr\)\s*\{/),
+  must('analytics.js', /async function loadSubpathDetail\s*\([^)]*\)\s*\{/),
   must('analytics.js', /function destroy\s*\(\)\s*\{/),
   must('analytics.js', /async function renderTab\s*\(tab\)\s*\{/),
   extract('analytics.js', /function removeSubpathMap\s*\(\)\s*\{/),

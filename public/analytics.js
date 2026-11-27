@@ -312,6 +312,7 @@
       // from window.ROLE_COLORS, role swatches use CSS tokens, and the one
       // cached value (_labelColor) is re-read on restart.
       if (_currentTab === 'neighbor-graph' && _ngState) { startGraphRenderer(); return; }
+      if (_currentTab === 'subpaths') { refreshSubpaths(); return; }
       // Before the answers land there is nothing to re-render; loadAnalytics()
       // renders the tab with the current theme when they do.
       if (!_analyticsData.rfData) return;
@@ -2242,7 +2243,37 @@
       <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> Distant</strong> &gt;${t200}: beyond 915MHz range — internet bridge, MQTT gateway, or separate networks
     </div>`;
   }
-    async function renderSubpaths(el) {
+  function subpathFilters() {
+    return { hideShort: !!window.MC_getHide1ByteHops?.(), trust: window.MC_getPathTrustThreshold?.() ?? 1 };
+  }
+
+  async function refreshSubpaths() {
+    const list = document.getElementById('subpathList');
+    if (!list) {
+      if (document.getElementById('subpathListError')) return renderTab('subpaths');
+      return; // A pending render reads the current settings when it lands.
+    }
+    const refresh = document.getElementById('subpathDetail')?.refreshRoute;
+    const filters = subpathFilters();
+    // Rows use CSS theme colours. Only a change to the hop filters changes the list.
+    if (filters.hideShort === list.routeFilters.hideShort && filters.trust === list.routeFilters.trust) {
+      if (refresh) refresh();
+      return;
+    }
+    const hops = list.querySelector('.subpath-selected')?.dataset.hops;
+    const rendered = renderTab('subpaths');
+    const gen = _subpathGen;
+    await rendered;
+    if (!hops || !refresh || gen !== _subpathGen) return;
+    const row = document.querySelector('#subpathList tr[data-hops="' + CSS.escape(hops) + '"]');
+    if (row && row.style.display !== 'none') {
+      row.classList.add('subpath-selected');
+      refresh();
+    }
+  }
+
+  async function renderSubpaths(el) {
+    const gen = _subpathGen;
     el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Analyzing route patterns…</div>';
     try {
       const rq = RegionFilter.regionQueryString();
@@ -2252,7 +2283,9 @@
       const twVal = twEl ? twEl.value : '';
       const tws = twVal ? '&window=' + encodeURIComponent(twVal) : '';
       const bulk = await api('/analytics/subpaths-bulk?groups=2-2:50,3-3:30,4-4:20,5-8:15' + rq + tws, { ttl: CLIENT_TTL.analyticsRF });
+      if (gen !== _subpathGen) return;
       const [d2, d3, d4, d5] = bulk.results;
+      const filters = subpathFilters();
 
       function renderTable(data, title) {
         if (!data.subpaths.length) return `<h4>${title}</h4><div class="text-muted">No data</div>`;
@@ -2260,11 +2293,11 @@
         // whose underlying rawHops contain any 1-byte hex token. We filter
         // INPUT (not just CSS-hide) so the displayed % and ordering reflect
         // the surviving population.
-        const _hide1 = !!(typeof window !== 'undefined' && window.MC_getHide1ByteHops && window.MC_getHide1ByteHops());
+        const _hide1 = filters.hideShort;
         // #1784 — path trust threshold: filter patterns whose hops are below
         // the configured minimum hash bytes for mapping. Operators set this
         // via pathTrust.minHashBytesForMapping in config.json (default 2).
-        const _trustTT = (typeof window !== 'undefined' && window.MC_getPathTrustThreshold) ? window.MC_getPathTrustThreshold() : 1;
+        const _trustTT = filters.trust;
         const _hop1 = function (h) { return String(h || '').length === 2; };
         const _meetsTrust = function (h) {
           if (_trustTT <= 1) return true;
@@ -2341,6 +2374,7 @@
 
       // Bind to this render's list. The analytics container survives tab changes.
       const list = el.querySelector('#subpathList');
+      list.routeFilters = filters;
       list.addEventListener('click', e => {
         const tr = e.target.closest('tr[data-hops]');
         if (!tr) return;
@@ -2368,18 +2402,21 @@
       toggle.addEventListener('change', applyCollisionFilter);
       applyCollisionFilter();
     } catch (e) {
-      el.innerHTML = `<div class="text-muted">Error loading subpath data: ${e.message}</div>`;
+      if (gen !== _subpathGen) return;
+      el.innerHTML = `<div id="subpathListError" class="text-muted">Error loading subpath data: ${e.message}</div>`;
     }
   }
 
-  async function loadSubpathDetail(hopsStr) {
+  async function loadSubpathDetail(hopsStr, previousRequest) {
     const gen = ++_subpathGen;
     const panel = document.getElementById('subpathDetail');
     removeSubpathMap(); // its container goes with the panel's content
     panel.classList.remove('collapsed');
     panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
     try {
-      const data = await api('/analytics/subpath-detail?hops=' + encodeURIComponent(hopsStr), { ttl: CLIENT_TTL.analyticsRF });
+      const request = previousRequest || api('/analytics/subpath-detail?hops=' + encodeURIComponent(hopsStr), { ttl: CLIENT_TTL.analyticsRF });
+      panel.refreshRoute = () => loadSubpathDetail(hopsStr, request);
+      const data = await request;
       if (gen !== _subpathGen) return;
       renderSubpathDetail(panel, data);
     } catch (e) {

@@ -129,7 +129,7 @@ const DESC = { url: 'https://sat.example/{z}/{x}/{y}', maxZoom: 19, invertFilter
 
   console.log('── home mini-map ──');
   const healthSrc = extract('home.js', /function removeMiniMap\s*\(\)\s*\{/) + '\n' +
-    extract('home.js', /async function loadHealth\s*\(pubkey\)\s*\{/);
+    extract('home.js', /async function loadHealth\s*\([^)]*\)\s*\{/);
   async function runHome(builder) {
     const { L, log, pane } = makeL();
     const card = {
