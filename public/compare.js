@@ -90,6 +90,7 @@ if (typeof window !== 'undefined') {
   var pinKey = 'corescope.compare.reference';
   var regionContainer, regionListener;
   var requestID = 0;
+  var fleetRetryTimer;
 
   function comparisonHash(params) {
     return URLState.updateHashParams(Object.assign({ a: null, b: null, ref: null, mode: null, region: null }, params), location.hash);
@@ -160,6 +161,7 @@ if (typeof window !== 'undefined') {
 
   function destroy() {
     requestID++;
+    clearTimeout(fleetRetryTimer);
     if (regionListener) RegionFilter.offChange(regionListener);
     if (regionContainer) RegionFilter.destroy(regionContainer);
     regionListener = regionContainer = null;
@@ -332,6 +334,7 @@ if (typeof window !== 'undefined') {
 
   async function runFleetComparison() {
     var ticket = ++requestID;
+    clearTimeout(fleetRetryTimer);
     var content = document.getElementById('compareContent');
     var status = content.querySelector('[role="status"]');
     var table = content.querySelector('table');
@@ -364,7 +367,23 @@ if (typeof window !== 'undefined') {
       });
       table.parentElement.hidden = !data.peers.length;
     } catch (e) {
-      if (ticket === requestID) status.textContent = 'Error loading receiver comparison: ' + e.message;
+      if (ticket !== requestID) return;
+      if (e.status !== 429) {
+        status.textContent = 'Error loading receiver comparison: ' + e.message;
+        return;
+      }
+      status.innerHTML = 'Other receiver comparisons are running. <button type="button" class="btn-secondary">Retry comparison</button>';
+      var retry = status.querySelector('button');
+      retry.onclick = function () { if (ticket === requestID) runFleetComparison(); };
+      var seconds = Number(e.retryAfter);
+      if (seconds > 0) {
+        retry.disabled = true;
+        retry.textContent = 'Retry in ' + seconds + ' s';
+        fleetRetryTimer = setTimeout(function () {
+          retry.textContent = 'Retry comparison';
+          retry.disabled = false;
+        }, seconds * 1000);
+      }
     }
   }
 
