@@ -69,7 +69,13 @@
     }
     _themeRefreshHandler = function() {
       if (!localStorage.getItem(PREF_KEY)) showChooser(container);
-      else renderHome(container);
+      else {
+        const refresh = container.querySelector('#homeHealth.visible')?.refreshHealth;
+        const journey = container.querySelector('#homeJourney.visible');
+        renderHome(container);
+        if (refresh) refresh();
+        if (journey) container.querySelector('#homeJourney').replaceWith(journey);
+      }
     };
     window.addEventListener('theme-refresh', _themeRefreshHandler);
   }
@@ -462,7 +468,7 @@
   }
 
   // ==================== HEALTH DETAIL ====================
-  async function loadHealth(pubkey) {
+  async function loadHealth(pubkey, previousRequest) {
     const card = document.getElementById('homeHealth');
     const journey = document.getElementById('homeJourney');
     if (!card) return;
@@ -473,7 +479,10 @@
     if (journey) journey.classList.remove('visible');
 
     try {
-      const h = await api('/nodes/' + encodeURIComponent(pubkey) + '/health', { ttl: CLIENT_TTL.nodeHealth });
+      const request = previousRequest || api('/nodes/' + encodeURIComponent(pubkey) + '/health', { ttl: CLIENT_TTL.nodeHealth });
+      // A theme refresh reuses even an in-flight answer for this selection.
+      card.refreshHealth = () => loadHealth(pubkey, request);
+      const h = await request;
       if (gen !== _healthGen) return;
       const node = h.node || {};
       const stats = h.stats || {};
@@ -557,7 +566,7 @@
       }
 
       // Scroll to health card
-      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (!previousRequest) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
       // Timeline click/keyboard → journey
       card.querySelectorAll('.timeline-item').forEach(item => {
