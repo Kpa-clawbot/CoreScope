@@ -511,6 +511,32 @@ async function main() {
   await live.clock.runFor(2050);
   await checkClearance(live, lastObserver, 'observers rotated after leaving Live');
 
+  // #2499: the Observers request can finish before the next CSS animation
+  // frame. Hold the real padding transition, if one starts, so that first
+  // frame can be measured even when the fixture response arrives later.
+  for (const motion of ['no-preference', 'reduce']) {
+    await live.emulateMedia({ reducedMotion: motion });
+    await enterLive();
+    const held = await live.evaluateHandle(() => {
+      const transitions = [];
+      window.addEventListener('hashchange', () => {
+        for (const animation of document.getElementById('app').getAnimations()) {
+          if (animation.transitionProperty === 'padding-bottom') {
+            animation.pause();
+            animation.currentTime = 0;
+            transitions.push(animation);
+          }
+        }
+      }, { once: true });
+      return transitions;
+    });
+    await leaveLive('resize');
+    await live.clock.runFor(50);
+    await checkClearance(live, lastObserver, `observers on first frame after Live resize (${motion})`);
+    await held.evaluate(transitions => transitions.forEach(animation => animation.play()));
+    await held.dispose();
+  }
+
   await browser.close();
 
   console.log(`\ntest-bottom-nav-1061-e2e.js: ${passes} passed, ${failures} failed`);

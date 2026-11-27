@@ -95,6 +95,12 @@
   }
 }
 
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  /* The global reduced-motion duration would transition the padding from
+   * zero on leaving a fixed page. Reserve the nav on the first frame. */
+  #app:not(.app-fixed) { transition-property: none; }
+}
+
 /* Tab — anchor element. Each tab is a column with icon over label, sized
  * to ≥48px tall (the Apple/Google touch-target floor confirmed by
  * issue #1060). */
