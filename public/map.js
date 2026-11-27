@@ -2199,6 +2199,7 @@
       marker._nodeKey = m.node.public_key || m.node.id || null;
       marker._role = (m.node && m.node.role) || 'companion';
       marker.bindPopup(m.popupFn(), { maxWidth: 280 });
+      if (window.LocationPrivacy) window.LocationPrivacy.bindUncertainty(map, marker, m.latLng);
       m._leafletMarker = marker;
       m._leafletLine = null;
       m._leafletDot = null;

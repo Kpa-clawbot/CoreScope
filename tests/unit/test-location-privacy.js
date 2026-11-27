@@ -189,6 +189,108 @@ test('drawUncertainty skips a removed map and a failing addTo', () => {
   assert.strictEqual(made, 0);
   assert.strictEqual(LP.drawUncertainty({ _loaded: true }, [1, 2]), null, 'addTo throwing is swallowed');
 });
+function focusSandbox() {
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/location-privacy.js');
+  const LP = ctx.window.LocationPrivacy;
+  ctx.document.documentElement = {};
+  ctx.window.getComputedStyle = () => ({ getPropertyValue: () => 'rgb(1, 2, 3)' });
+  const made = [];
+  const map = {
+    _loaded: true,
+    layers: new Set(),
+    hasLayer(l) { return this.layers.has(l); },
+    removeLayer(l) { this.layers.delete(l); }
+  };
+  ctx.window.L = focusSandbox.lastL = { circle: (ll, o) => {
+    const c = { ll, o, setLatLng(x) { c.ll = x; return c; }, addTo(m) { m.layers.add(c); return c; }, setStyle() {} };
+    made.push(c);
+    return c;
+  } };
+  const marker = () => {
+    const h = {};
+    return { h, on(ev, fn) { h[ev] = fn; }, fire(ev) { const m = this; h[ev]({ target: m }); } };
+  };
+  return { LP, map, made, marker };
+}
+test('bindUncertainty: hover shows one moving circle, mouseout hides it', () => {
+  const { LP, map, made, marker } = focusSandbox();
+  const a = marker(), b = marker();
+  const llA = [1, 2], llB = [3, 4];
+  LP.bindUncertainty(map, a, llA);
+  LP.bindUncertainty(map, b, llB);
+  a.fire('mouseover');
+  assert.strictEqual(made.length, 0, 'off: no circle');
+  LP.fromClientConfig({ locationPrivacy: { enabled: true, radiusM: 1000 } });
+  a.fire('mouseover');
+  assert.strictEqual(made.length, 1);
+  const c = made[0];
+  assert.strictEqual(c.ll, llA);
+  assert.strictEqual(c.o.radius, 1000);
+  assert(map.hasLayer(c));
+  a.fire('mouseout');
+  assert(!map.hasLayer(c), 'hidden after mouseout');
+  b.fire('mouseover');
+  assert.strictEqual(made.length, 1, 'the one circle is reused');
+  assert.strictEqual(c.ll, llB);
+  assert(map.hasLayer(c));
+});
+test('bindUncertainty: an open popup pins the circle through other hovers', () => {
+  const { LP, map, made, marker } = focusSandbox();
+  LP.fromClientConfig({ locationPrivacy: { enabled: true, radiusM: 500 } });
+  const a = marker(), b = marker();
+  const llA = [1, 2], llB = [3, 4];
+  LP.bindUncertainty(map, a, llA);
+  LP.bindUncertainty(map, b, llB);
+  a.fire('popupopen');
+  const c = made[0];
+  assert.strictEqual(c.ll, llA);
+  a.fire('mouseout');
+  assert(map.hasLayer(c), 'pinned circle stays after mouseout');
+  b.fire('mouseover');
+  assert.strictEqual(c.ll, llB);
+  b.fire('mouseout');
+  assert.strictEqual(c.ll, llA, 'back to the pinned marker');
+  assert(map.hasLayer(c));
+  b.fire('popupclose');
+  assert(map.hasLayer(c), 'closing another marker popup keeps the pin');
+  a.fire('popupclose');
+  assert(!map.hasLayer(c));
+});
+test('pinUncertainty pins and clears; no-op off or on a removed map', () => {
+  const { LP, map, made } = focusSandbox();
+  assert.strictEqual(LP.pinUncertainty(map, [1, 2]), null, 'off');
+  assert.strictEqual(made.length, 0);
+  LP.fromClientConfig({ locationPrivacy: { enabled: true, radiusM: 1000 } });
+  const c = LP.pinUncertainty(map, [1, 2]);
+  assert(c && map.hasLayer(c));
+  LP.pinUncertainty(map, null);
+  assert(!map.hasLayer(c));
+  assert.strictEqual(map._lpPinned, null);
+  assert.strictEqual(LP.pinUncertainty({ _loaded: false }, [1, 2]), null);
+  assert.strictEqual(LP.pinUncertainty(null, [1, 2]), null);
+  LP.bindUncertainty(map, null, [1, 2]);
+  LP.bindUncertainty(map, {}, [1, 2]);
+});
+test('circles share one no-pointer SVG pane under the overlay pane', () => {
+  const { LP, map } = focusSandbox();
+  const panes = {};
+  map.getPane = (n) => panes[n];
+  map.createPane = (n) => (panes[n] = { style: {} });
+  const svgs = [];
+  LP.fromClientConfig({ locationPrivacy: { enabled: true, radiusM: 1000 } });
+  const L = focusSandbox.lastL;
+  L.svg = (o) => { const r = { o }; svgs.push(r); return r; };
+  const fixed = LP.drawUncertainty(map, [1, 2]);
+  const focus = LP.pinUncertainty(map, [3, 4]);
+  assert.notStrictEqual(fixed, focus, 'detail circle and focus circle are separate');
+  assert.strictEqual(svgs.length, 1, 'one renderer per map');
+  assert.strictEqual(svgs[0].o.pane, 'lpUncertainty');
+  assert.strictEqual(fixed.o.renderer, svgs[0]);
+  assert.strictEqual(focus.o.pane, 'lpUncertainty');
+  assert.strictEqual(panes.lpUncertainty.style.pointerEvents, 'none');
+  assert.strictEqual(panes.lpUncertainty.style.zIndex, '390');
+});
 test('circle colour follows the theme', () => {
   const ctx = makeSandbox();
   loadInCtx(ctx, 'public/location-privacy.js');

@@ -165,11 +165,38 @@
   }
 
   function draw(map, latlng) {
+    if (map && map._lpCircle) return map._lpCircle;
+    var circle = makeCircle(map, latlng);
+    if (circle) map._lpCircle = circle;
+    return circle;
+  }
+
+  var PANE = 'lpUncertainty';
+
+  // Circles go in their own SVG pane under the overlay pane (z-index 400),
+  // with no pointer events: on a canvas map (the live map) they stay SVG, so
+  // they look the same everywhere and never sit over a canvas path's clicks.
+  function paneRenderer(map) {
+    if (map._lpRenderer !== undefined) return map._lpRenderer;
+    var r = null;
+    try {
+      if (root.L.svg && typeof map.createPane === 'function') {
+        var pane = (map.getPane && map.getPane(PANE)) || map.createPane(PANE);
+        pane.style.zIndex = '390';
+        pane.style.pointerEvents = 'none';
+        r = root.L.svg({ pane: PANE });
+      }
+    } catch (e) { r = null; }
+    map._lpRenderer = r;
+    return r;
+  }
+
+  // A radiusM circle at latlng, added to map and tracked for theme changes.
+  function makeCircle(map, latlng) {
     if (!state.radiusM || !latlng || !root.L || !root.L.circle || !mapAlive(map)) return null;
-    if (map._lpCircle) return map._lpCircle;
     var accent = accentColor();
     try {
-      var circle = root.L.circle(latlng, {
+      var opts = {
         radius: state.radiusM,
         color: accent,
         weight: 2,
@@ -178,16 +205,74 @@
         fillOpacity: 0.12,
         interactive: false,
         className: 'lp-uncertainty'
-      });
+      };
+      var renderer = paneRenderer(map);
+      if (renderer) { opts.renderer = renderer; opts.pane = PANE; }
+      var circle = root.L.circle(latlng, opts);
       circle.addTo(map);
       circle._lpMap = map;
-      map._lpCircle = circle;
       circles.push(circle);
       wireTheme();
       return circle;
     } catch (e) {
       return null; // the map was torn down between the check and the add
     }
+  }
+
+  // The main and live maps show one circle at a time: around the marker under
+  // the pointer, else around the pinned one (open popup or detail panel).
+  function showFocus(map, latlng) {
+    if (!state.enabled || !latlng || !mapAlive(map)) return null;
+    var c = map._lpFocus;
+    if (!c) {
+      c = map._lpFocus = makeCircle(map, latlng);
+      return c;
+    }
+    try {
+      c.setLatLng(latlng);
+      if (!map.hasLayer(c)) c.addTo(map);
+    } catch (e) { return null; }
+    return c;
+  }
+
+  function hideFocus(map) {
+    var c = map && map._lpFocus;
+    if (!c) return;
+    try { if (map.hasLayer(c)) map.removeLayer(c); } catch (e) { /* map gone */ }
+  }
+
+  // Pins the circle at latlng, or with null clears the pin and hides it.
+  function pinUncertainty(map, latlng) {
+    if (!map) return null;
+    map._lpPinned = latlng || null;
+    if (latlng) return showFocus(map, latlng);
+    hideFocus(map);
+    return null;
+  }
+
+  function onMarkerOver(e) { var t = e.target; showFocus(t._lpMap, t._lpLatLng); }
+  function onMarkerOut(e) {
+    var map = e.target._lpMap;
+    if (map && map._lpPinned) showFocus(map, map._lpPinned); else hideFocus(map);
+  }
+  function onPopupOpen(e) { var t = e.target; pinUncertainty(t._lpMap, t._lpLatLng); }
+  function onPopupClose(e) {
+    var t = e.target, map = t._lpMap;
+    if (map && map._lpPinned === t._lpLatLng) pinUncertainty(map, null);
+  }
+
+  // Shows the circle around a marker on hover and while its popup is open.
+  // latlng is the served position, not a decluttered display position. The
+  // listeners are shared functions and do nothing while the feature is off,
+  // so a marker drawn before /api/config/client answers still gets them.
+  function bindUncertainty(map, marker, latlng) {
+    if (!map || !marker || typeof marker.on !== 'function' || !latlng) return;
+    marker._lpMap = map;
+    marker._lpLatLng = latlng;
+    marker.on('mouseover', onMarkerOver);
+    marker.on('mouseout', onMarkerOut);
+    marker.on('popupopen', onPopupOpen);
+    marker.on('popupclose', onPopupClose);
   }
 
   root.LocationPrivacy = {
@@ -204,6 +289,8 @@
     hiddenBytesHtml: hiddenBytesHtml,
     addAttribution: addAttribution,
     drawUncertainty: drawUncertainty,
+    bindUncertainty: bindUncertainty,
+    pinUncertainty: pinUncertainty,
     _restyle: restyle
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.LocationPrivacy;

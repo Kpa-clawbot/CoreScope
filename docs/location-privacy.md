@@ -76,7 +76,11 @@ The server reads this block; the ingestor does not need it. See also the `locati
 - **Geo filter and areas.** `geo_filter`, area membership (`?area=`) and the admin geo-filter prune
   still classify nodes by their exact position. Nodes are never shown at that position.
 - **UI.** The map legend and attribution, node detail, coverage pages and exports say that
-  positions are approximate, and the packet detail says when raw bytes are hidden.
+  positions are approximate, and the packet detail says when raw bytes are hidden. A dashed
+  circle of radius `radiusM` around the served point shows where the node can be: always on the
+  node detail map, and on the main and live maps around the node under the pointer and the
+  selected node (open popup or detail panel). The circle is drawn around the served point, so the
+  real position is anywhere inside it, not at its centre.
   `GET /api/config/client` reports `locationPrivacy: {enabled, radiusM}` for this; the key is
   absent when the feature is off.
 

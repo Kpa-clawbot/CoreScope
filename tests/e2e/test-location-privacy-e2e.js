@@ -6,6 +6,8 @@
  *   - node detail says "Approximate location (within …)" and the mini-map
  *     draws the uncertainty circle;
  *   - the main map's attribution carries "Positions approximate";
+ *   - a main map pin shows its uncertainty circle on hover and while its
+ *     popup is open, and a live map node while its detail panel is open;
  *   - the planner shows the approximate-positions notice (when the planner
  *     is enabled on this server);
  *   - a packet served with location_hidden shows the hidden-bytes message and
@@ -88,6 +90,56 @@ async function main() {
   await page.waitForSelector('.leaflet-control-attribution .lp-attr', { state: 'attached', timeout: 15000 }).catch(() => {});
   const attr = await page.locator('.leaflet-control-attribution .lp-attr').first().textContent().catch(() => '');
   check(/^Positions approximate \(within .+\)$/.test((attr || '').trim()), 'map legend note present: ' + JSON.stringify(attr));
+
+  // Main map pins: the circle follows the pointer and stays while a popup is open.
+  const circles = () => page.locator('#leaflet-map path.lp-uncertainty, .leaflet-container path.lp-uncertainty').count();
+  // A pin whose centre is on top (not under the map controls or another pin).
+  const topmostPin = (sel) => page.waitForFunction((s) => {
+    const els = Array.from(document.querySelectorAll(s));
+    for (let i = 0; i < els.length; i++) {
+      const r = els[i].getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      if (r.width && x > 0 && y > 0 && x < innerWidth && y < innerHeight) {
+        const hit = document.elementFromPoint(x, y);
+        if (hit && (hit === els[i] || els[i].contains(hit))) return i + 1;
+      }
+    }
+    return 0;
+  }, sel, { timeout: 15000 }).then((h) => h.jsonValue(), () => 0);
+  // Markers are rebuilt as the node list settles, which closes any popup.
+  await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+  const pinIdx = await topmostPin('.leaflet-marker-icon.meshcore-marker');
+  if (!pinIdx) {
+    console.log('  SKIP: no map pin to hover');
+  } else {
+    const pin = page.locator('.leaflet-marker-icon.meshcore-marker').nth(pinIdx - 1);
+    check(await circles() === 0, 'no circle before a pin is hovered');
+    await pin.hover();
+    check(await circles() === 1, 'hovering a pin draws its uncertainty circle');
+    await page.mouse.move(2, 2);
+    check(await circles() === 0, 'circle goes when the pointer leaves the pin');
+    await pin.click();
+    await page.waitForSelector('.leaflet-popup', { timeout: 5000 }).catch(() => {});
+    await page.mouse.move(2, 2);
+    const popups = await page.locator('.leaflet-popup').count();
+    check(await circles() === 1, 'circle stays while the pin popup is open (popups open: ' + popups + ')');
+    await page.locator('.leaflet-popup-close-button').first().click({ force: true });
+    check(await circles() === 0, 'circle goes when the popup closes');
+  }
+
+  // Live map: the selected node's circle stays while its detail panel is open.
+  await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+  const liveIdx = await topmostPin('.live-node-marker');
+  if (!liveIdx) {
+    console.log('  SKIP: no live map node to select');
+  } else {
+    await page.locator('.live-node-marker').nth(liveIdx - 1).click();
+    await page.waitForSelector('#liveNodeDetail:not(.hidden)', { timeout: 5000 }).catch(() => {});
+    await page.mouse.move(2, 2);
+    check(await circles() === 1, 'live map: selected node keeps its circle');
+    await page.locator('#nodeDetailClose').click({ force: true });
+    check(await circles() === 0, 'live map: circle goes when the detail panel closes');
+  }
 
   // Planner notice (the planner is opt-in).
   await page.goto(`${BASE}/#/planner`, { waitUntil: 'domcontentloaded' });

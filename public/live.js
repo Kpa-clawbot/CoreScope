@@ -2255,6 +2255,7 @@
     function closeNodeDetail() {
       activeNodeDetailKey = null;
       nodeDetailPanel.classList.add('hidden');
+      if (window.LocationPrivacy) window.LocationPrivacy.pinUncertainty(map, null);
       nodeDetailBackdrop.classList.remove('active');
     }
     document.getElementById('nodeDetailClose').addEventListener('click', closeNodeDetail);
@@ -2551,6 +2552,10 @@
 
   async function showNodeDetail(pubkey) {
     activeNodeDetailKey = pubkey;
+    if (window.LocationPrivacy) {
+      const mk = nodeMarkers[pubkey];
+      window.LocationPrivacy.pinUncertainty(map, (mk && mk._lpLatLng) || null);
+    }
     const panel = document.getElementById('liveNodeDetail');
     const content = document.getElementById('nodeDetailContent');
     panel.classList.remove('hidden');
@@ -3055,6 +3060,7 @@
     });
 
     marker.on('click', () => showNodeDetail(n.public_key));
+    if (window.LocationPrivacy) window.LocationPrivacy.bindUncertainty(map, marker, [n.lat, n.lon]);
 
     marker._baseColor = color;
     marker._baseSize = sizePx;
