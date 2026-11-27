@@ -131,7 +131,7 @@ func (s *PacketStore) nodeFewestHopsByRegion(obsIATA map[string]string) map[stri
 		var m map[string]int
 		for _, obs := range tx.Observations {
 			iata := obsIATA[obs.ObserverID]
-			if iata == "" {
+			if iata == "" || obs.isOwnTransmission() {
 				continue
 			}
 			h, known := pathHopCount(obs.PathJSON)

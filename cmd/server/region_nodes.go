@@ -85,7 +85,7 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 	for _, tx := range s.byPayloadType[PayloadADVERT] {
 		heard := false
 		for _, obs := range tx.Observations {
-			if inRegion[obs.ObserverID] {
+			if inRegion[obs.ObserverID] && !obs.isOwnTransmission() {
 				heard = true
 				break
 			}

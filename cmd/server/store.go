@@ -4264,8 +4264,8 @@ func (s *PacketStore) computeNodeHomeRegions(obsIATA map[string]string) map[stri
 	return out
 }
 
-// nodeZeroHopRegionCounts tallies, per pubkey, how many observations of its
-// zero-hop DIRECT adverts each region's observers made (the #804 rule; see
+// nodeZeroHopRegionCounts tallies, per pubkey, how often each region's
+// observers heard its zero-hop DIRECT adverts (the #804 rule; see
 // computeNodeHomeRegions). Nodes without such an advert are absent. Caller
 // must hold s.mu (read or write); obsIATA is loaded before it, as above.
 func (s *PacketStore) nodeZeroHopRegionCounts(obsIATA map[string]string) map[string]map[string]int {
@@ -4298,7 +4298,7 @@ func (s *PacketStore) nodeZeroHopRegionCounts(obsIATA map[string]string) map[str
 
 		for _, obs := range tx.Observations {
 			iata := obsIATA[obs.ObserverID]
-			if iata == "" {
+			if iata == "" || obs.isOwnTransmission() {
 				continue
 			}
 			if per[pk] == nil {
