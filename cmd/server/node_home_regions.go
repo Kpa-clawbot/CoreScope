@@ -2,9 +2,9 @@
 //
 // The region filter used to put a node in every region where any observer
 // heard any of its adverts. Adverts are flooded, so a node leaked into each
-// region its adverts were relayed into. A zero-hop DIRECT advert is not
-// relayed, so an observer that hears one is within RF range of the node (#804).
-// This recomputer turns those hearings into a set of home regions per node.
+// region its adverts were relayed into. The #804 home-region rule uses
+// receptions of DIRECT adverts with an empty remaining path. This recomputer
+// turns those observations into a set of home regions per node.
 //
 // A node never heard zero-hop goes in the regions that heard it in the fewest
 // hops, and in no region when even that is over regionFallback.maxHops (it still
@@ -34,6 +34,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 const nodeHomeRegionsRecomputerDefaultInterval = 5 * time.Minute
@@ -131,10 +133,10 @@ func (s *PacketStore) nodeFewestHopsByRegion(obsIATA map[string]string) map[stri
 		var m map[string]int
 		for _, obs := range tx.Observations {
 			iata := obsIATA[obs.ObserverID]
-			if iata == "" || obs.isOwnTransmission() {
+			if iata == "" || !obs.receivedForRegion() {
 				continue
 			}
-			h, known := pathHopCount(obs.PathJSON)
+			h, known := obs.regionHopCount()
 			if !known {
 				continue
 			}
@@ -157,20 +159,115 @@ func (s *PacketStore) nodeFewestHopsByRegion(obsIATA map[string]string) map[stri
 	return per
 }
 
-// pathHopCount counts the hops in an observation's path_json without decoding
-// it: the elements are hop-hash hex strings, so they hold no commas. Run over
-// every advert observation per recompute, under s.mu, where pathLen's
-// json.Unmarshal would allocate per observation. known is false for a missing
-// path (legacy rows with NULL path_json): "[]" is a direct hearing, "" is not.
-func pathHopCount(pathJSON string) (hops int, known bool) {
-	p := strings.TrimSpace(pathJSON)
-	switch p {
-	case "", "null":
-		return 0, false
-	case "[]":
-		return 0, true
+// The stored direction still describes the first observer/path row. A legacy
+// duplicate can independently prove a reception without changing that row.
+type advertReception struct {
+	kind            uint8
+	wireHopsPlusOne uint8 // zero when the frame supplied no hop count
+}
+
+const (
+	advertMissingFrame uint8 = iota
+	advertTX
+	advertReceived
+	advertReceivedDirect
+)
+
+// Read the two observation-level facts while raw_hex is in the scan window.
+// Validated relay paths already establish the flood hop count.
+func observedFrameEvidence(raw, path, direction string) (uint8, advertReception) {
+	width := observedRelayHopHexLen(raw, path)
+	if direction == "tx" {
+		return width, advertReception{kind: advertTX}
 	}
-	return strings.Count(p, ",") + 1, true
+	if raw == "" {
+		return width, advertReception{kind: advertMissingFrame}
+	}
+	if width != 0 {
+		_, pathByte, _ := packetpath.PathByte(raw)
+		return width, advertReception{kind: advertReceived, wireHopsPlusOne: (pathByte & 63) + 1}
+	}
+	// A nonempty observation path rules out direct-empty, even if the
+	// frame disagrees. Ordinary relayed reports need no extra packet decode.
+	if !emptyOrMissingPath(path) {
+		return width, advertReception{kind: advertReceived}
+	}
+	switch packetpath.AdvertRouteEvidence(raw) {
+	case packetpath.AdvertDirectEmptyPath:
+		return width, advertReception{kind: advertReceivedDirect, wireHopsPlusOne: 1}
+	case packetpath.AdvertFlood:
+		_, pathByte, _ := packetpath.PathByte(raw)
+		return width, advertReception{kind: advertReceived, wireHopsPlusOne: (pathByte & 63) + 1}
+	}
+	return width, advertReception{kind: advertReceived}
+}
+
+func emptyOrMissingPath(path string) bool {
+	if strings.HasPrefix(path, `["`) {
+		return false
+	}
+	p := strings.TrimSpace(path)
+	if p == "" || p == "null" || p == "[]" {
+		return true
+	}
+	n, ok := countStringArray(p)
+	return ok && n == 0
+}
+
+func (o *StoreObs) receivedForRegion() bool {
+	return o.reception.kind != advertTX && (o.reception.kind != advertMissingFrame || !o.isOwnTransmission())
+}
+
+func (o *StoreObs) regionHopCount() (int, bool) {
+	if n := o.reception.wireHopsPlusOne; n > 0 {
+		return int(n) - 1, true
+	}
+	n, ok := countStringArray(o.PathJSON)
+	if !ok || n > 63 {
+		return 0, false
+	}
+	for pos, i := 0, 0; i < n; i++ {
+		hop, next, _ := nextPathHop(o.PathJSON, pos)
+		if _, valid := hopKey(hop); !valid || len(hop) > 6 {
+			return 0, false
+		}
+		pos = next
+	}
+	return n, true
+}
+
+func (o *StoreObs) receivedDirectAdvert(tx *StoreTx) bool {
+	if o.reception.kind == advertReceivedDirect {
+		return true
+	}
+	// Without observation frames, the representative is attributable only
+	// to a sole reception whose path does not contradict an empty one.
+	// A recorded flood for this content makes even a single retained row
+	// ambiguous. The transmission-wide union cannot identify who heard it.
+	return o.reception.kind == advertMissingFrame && len(tx.Observations) == 1 &&
+		tx.AdvertRouteEvidence&packetpath.AdvertFlood == 0 &&
+		!o.isOwnTransmission() && emptyOrMissingPath(o.PathJSON) &&
+		packetpath.AdvertRouteEvidence(tx.RawHex) == packetpath.AdvertDirectEmptyPath
+}
+
+// A later TX cannot supply direct evidence for a reception. Folding two
+// reports also makes borrowing the canonical frame for a legacy row unsafe.
+func (o *StoreObs) mergeAdvertReception(id int, b advertReception) {
+	// A poll retry can read the very same legacy row again.
+	if id == o.ID && b.kind == advertMissingFrame {
+		return
+	}
+	a := &o.reception
+	if a.kind == advertMissingFrame {
+		a.kind = advertReceived
+	}
+	if b.kind == advertMissingFrame {
+		b.kind = advertReceived
+	}
+	a.kind = max(a.kind, b.kind)
+	if n := b.wireHopsPlusOne; n > 0 && (a.wireHopsPlusOne == 0 || n < a.wireHopsPlusOne) {
+		a.wireHopsPlusOne = n
+	}
 }
 
 // RegionBasis names the rule that decided a node's regions for ?region=.

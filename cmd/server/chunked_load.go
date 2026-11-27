@@ -621,8 +621,9 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 			obsIDStr := nullStrVal(observerID)
 			obsPJ := nullStrVal(pathJSON)
 
-			n := observedRelayHopHexLen(nullStrVal(obsRawHex), obsPJ)
+			n, reception := observedFrameEvidence(nullStrVal(obsRawHex), obsPJ, nullStrVal(direction))
 			if obs := tx.mergeObservationEvidence(obsIDStr, obsPJ, n); obs != nil {
+				obs.mergeAdvertReception(oid, reception)
 				s.noteCertainRelays(tx, obs, relayPM)
 				continue
 			}
@@ -641,6 +642,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				// Keep only this frame's relay eligibility, not its raw bytes.
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 				relayHopHexLen: n,
+				reception:      reception,
 			}
 
 			rpStr := nullStrVal(resolvedPathStr)
