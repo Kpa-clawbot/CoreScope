@@ -182,5 +182,108 @@ assert(tbody.indexOf('0x40') > iEnc, 'encrypted section contains 0x40');
 // feature that was removed on purpose. It survived because nothing runs
 // test-all.sh in CI (#1858).
 
-console.log('\n' + (failed ? '✗ ' + failed + ' failed, ' : '') + passed + ' passed');
-process.exit(failed ? 1 : 0);
+// ── A local key the server already decrypts with ────────────────────────────
+// Undecrypted packets on the byte of a channel the server decrypts are ones
+// that channel's key did not open, so a local copy of that key must not name
+// their bucket, however the key was saved (by #name, or as hex / QR, which
+// stores it as "psk:<hex8>" with the name only as a label). Runs the real
+// channel-decrypt.js; hash bytes come from it, and the server sends `hash`
+// as a string.
+async function localKeyChecks() {
+  console.log('\n=== Local key the server already decrypts with ===');
+  eval(fs.readFileSync(path.join(REPO_ROOT, 'public/channel-decrypt.js'), 'utf8'));
+  const CD = global.ChannelDecrypt;
+  const build = global._analyticsBuildHashKeyMap;
+  assert(typeof build === 'function', '_analyticsBuildHashKeyMap exposed for testing');
+  if (typeof build !== 'function') return;
+
+  const PUBLIC_HEX = '8b3387e9c5cdea6ac9e5edbaa115cd72';
+  const driveHex = CD.bytesToHex(await CD.deriveKey('#coredrive'));
+  const privHex = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+  const hb = async (hex) => CD.computeChannelHash(CD.hexToBytes(hex));
+  const bPub = await hb(PUBLIC_HEX), bDrive = await hb(driveHex), bPriv = await hb(privHex);
+  const rows = [
+    { hash: String(bPub),   name: 'Public',     messages: 3102, senders: 600, encrypted: false },
+    { hash: String(bPub),   name: 'ch' + bPub,  messages: 153,  senders: 0,   encrypted: true  },
+    { hash: String(bDrive), name: '#coredrive', messages: 1632, senders: 36,  encrypted: false },
+    { hash: String(bDrive), name: 'ch' + bDrive, messages: 3349, senders: 0,  encrypted: true  },
+    { hash: String(bPriv),  name: '#elsewhere', messages: 50,   senders: 4,   encrypted: false },
+    { hash: String(bPriv),  name: 'ch' + bPriv, messages: 20,   senders: 0,   encrypted: true  },
+  ];
+  const hex2 = (b) => b.toString(16).toUpperCase().padStart(2, '0');
+  const enc = (out, b) => out.find(c => c.hash === String(b) && c.encrypted);
+
+  async function run(stored, labels) {
+    localStorage.setItem('corescope_channel_keys', JSON.stringify(stored));
+    return decorate(rows, await build(rows, CD), labels);
+  }
+
+  let out = await run({ '#coredrive': driveHex }, {});
+  assert(enc(out, bDrive).displayName === 'Encrypted (0x' + hex2(bDrive) + ')' && enc(out, bDrive).group === 'encrypted',
+    'key saved as #coredrive: the undecrypted bucket on its byte stays Encrypted');
+
+  out = await run({ ['psk:' + driveHex.slice(0, 8)]: driveHex }, { ['psk:' + driveHex.slice(0, 8)]: '#coredrive' });
+  assert(enc(out, bDrive).group === 'encrypted',
+    'same key saved as psk:<hex8> with a label (QR): bucket stays Encrypted');
+
+  out = await run({ ['psk:' + driveHex.slice(0, 8)]: driveHex }, {});
+  assert(enc(out, bDrive).group === 'encrypted',
+    'same key saved as psk:<hex8> without a label: bucket stays Encrypted');
+
+  out = await run({ ['psk:' + PUBLIC_HEX.slice(0, 8)]: PUBLIC_HEX }, { ['psk:' + PUBLIC_HEX.slice(0, 8)]: 'Public' });
+  assert(enc(out, bPub).group === 'encrypted',
+    'the Public key saved locally: the undecrypted bucket on its byte stays Encrypted');
+
+  out = await run({ 'private-room': privHex }, {});
+  assert(enc(out, bPriv).displayName === 'private-room' && enc(out, bPriv).group === 'mine',
+    'a private key the server does not hold still names the bucket next to another decrypted channel');
+
+  out = await run({ '#coredrive': driveHex.toUpperCase() }, {});
+  assert(enc(out, bDrive).group === 'encrypted',
+    'key hex compared case-insensitively');
+
+  // A second local key on the same byte as a server-decrypted one: dropping
+  // the server's key must not drop this one, whatever order they were saved.
+  let mateHex = null;
+  for (let i = 0; i < 4096 && !mateHex; i++) {
+    const h = i.toString(16).padStart(32, 'f');
+    if (await hb(h) === bDrive) mateHex = h;
+  }
+  assert(mateHex, 'found a second key on the #coredrive byte');
+  out = await run({ 'drive-mate': mateHex, '#coredrive': driveHex }, {});
+  assert(enc(out, bDrive).displayName === 'drive-mate' && enc(out, bDrive).group === 'mine',
+    'another local key on that byte still names the bucket when the server key was saved last');
+  out = await run({ '#coredrive': driveHex, 'drive-mate': mateHex }, {});
+  assert(enc(out, bDrive).displayName === 'drive-mate',
+    '... and when it was saved first');
+
+  // Compared per byte: a server #name row is matched against local keys on
+  // that row's byte only. Here the server shows "#coredrive" on the private
+  // key's byte (an operator key under a hashtag name that does not derive
+  // it); the local #coredrive key sits on its own byte and must stay.
+  const oddRows = [
+    { hash: String(bPriv), name: '#coredrive', messages: 5, senders: 1, encrypted: false },
+    { hash: String(bPriv), name: 'ch' + bPriv, messages: 2, senders: 0, encrypted: true },
+    { hash: String(bDrive), name: 'ch' + bDrive, messages: 9, senders: 0, encrypted: true },
+  ];
+  localStorage.setItem('corescope_channel_keys', JSON.stringify({ '#coredrive': driveHex, 'private-room': privHex }));
+  const oddMap = await build(oddRows, CD);
+  assert(oddMap[bDrive] === '#coredrive',
+    'a server #name on another byte does not drop the local key of that name');
+
+  // Not covered, by design: a channel the operator configured under a private
+  // name. The client cannot know that key, so a local copy keeps naming the
+  // bucket (the behaviour from before this fix).
+  const privRows = rows.map(r => r.hash === String(bPriv) && !r.encrypted ? Object.assign({}, r, { name: 'Club' }) : r);
+  localStorage.setItem('corescope_channel_keys', JSON.stringify({ ['psk:' + privHex.slice(0, 8)]: privHex }));
+  out = decorate(privRows, await build(privRows, CD), {});
+  assert(enc(out, bPriv).group === 'mine',
+    'operator key under a private name: a local copy still names the bucket (known limit)');
+
+  localStorage.removeItem('corescope_channel_keys');
+}
+
+localKeyChecks().catch(e => { failed++; console.error('  ✗ local key checks threw: ' + e.message); }).then(() => {
+  console.log('\n' + (failed ? '✗ ' + failed + ' failed, ' : '') + passed + ' passed');
+  process.exit(failed ? 1 : 0);
+});

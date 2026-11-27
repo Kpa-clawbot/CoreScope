@@ -63,34 +63,68 @@ func makeGrpTxWithStatus(channelHash int, channel, text, sender, decryptionStatu
 	}
 }
 
-// TestComputeAnalyticsChannels_MergesEncryptedAndDecrypted verifies that packets
-// with the same hash byte but different decryption status merge into ONE bucket.
-func TestComputeAnalyticsChannels_MergesEncryptedAndDecrypted(t *testing.T) {
+// TestComputeAnalyticsChannels_UndecryptedNotCountedAsNamedChannel verifies
+// that packets the ingestor could not decrypt do not count toward a decrypted
+// channel that shares their hash byte. The byte has 256 values, so private
+// channels collide with hashtag channels: on a live instance 5203 undecrypted
+// 0x76 packets were shown as #coredrive messages next to its 1365 real ones.
+func TestComputeAnalyticsChannels_UndecryptedNotCountedAsNamedChannel(t *testing.T) {
 	// Hash 129 is the real hash for #wardriving: SHA256(SHA256("#wardriving")[:16])[0] = 129
-	// Some packets are decrypted (have channel name), some are not (encrypted)
 	packets := []*StoreTx{
 		makeGrpTx(129, "#wardriving", "hello", "alice"),
 		makeGrpTx(129, "#wardriving", "world", "bob"),
-		makeGrpTx(129, "", "", ""), // encrypted — no channel name
-		makeGrpTx(129, "", "", ""), // encrypted
+		makeGrpTx(129, "", "", ""), // undecrypted: some other channel with byte 129
+		makeGrpTx(129, "", "", ""),
+		makeGrpTx(129, "", "", ""),
 	}
 
 	store := newChannelTestStore(packets)
 	result := store.computeAnalyticsChannels("", "", TimeWindow{})
 
 	channels := result["channels"].([]map[string]interface{})
-	if len(channels) != 1 {
-		t.Fatalf("expected 1 channel bucket, got %d: %+v", len(channels), channels)
+	if len(channels) != 2 {
+		t.Fatalf("expected 2 channel buckets, got %d: %+v", len(channels), channels)
 	}
-	ch := channels[0]
-	if ch["name"] != "#wardriving" {
-		t.Errorf("expected name '#wardriving', got %q", ch["name"])
+	var named, enc map[string]interface{}
+	for _, ch := range channels {
+		if ch["name"] == "#wardriving" {
+			named = ch
+		} else if ch["name"] == "ch129" {
+			enc = ch
+		}
 	}
-	if ch["messages"] != 4 {
-		t.Errorf("expected 4 messages, got %v", ch["messages"])
+	if named == nil || enc == nil {
+		t.Fatalf("expected a #wardriving and a ch129 bucket, got %+v", channels)
 	}
-	if ch["encrypted"] != false {
-		t.Errorf("expected encrypted=false (some packets decrypted), got %v", ch["encrypted"])
+	if named["messages"] != 2 || named["encrypted"] != false || named["senders"] != 2 {
+		t.Errorf("#wardriving bucket: want 2 messages, encrypted=false, 2 senders; got %+v", named)
+	}
+	if enc["messages"] != 3 || enc["encrypted"] != true || enc["hash"] != "129" {
+		t.Errorf("ch129 bucket: want 3 messages, encrypted=true, hash 129; got %+v", enc)
+	}
+}
+
+// TestComputeAnalyticsChannels_DecryptedChannelsSharingHashStaySeparate: two
+// channels the ingestor decrypted with different keys can share a hash byte.
+func TestComputeAnalyticsChannels_DecryptedChannelsSharingHashStaySeparate(t *testing.T) {
+	packets := []*StoreTx{
+		makeGrpTxWithStatus(17, "Public", "hi", "alice", "decrypted"),
+		makeGrpTxWithStatus(17, "Club", "yo", "bob", "decrypted"),
+		makeGrpTxWithStatus(17, "Club", "yo2", "bob", "decrypted"),
+	}
+
+	store := newChannelTestStore(packets)
+	result := store.computeAnalyticsChannels("", "", TimeWindow{})
+
+	channels := result["channels"].([]map[string]interface{})
+	if len(channels) != 2 {
+		t.Fatalf("expected 2 channel buckets, got %d: %+v", len(channels), channels)
+	}
+	for _, ch := range channels {
+		want := map[string]int{"Public": 1, "Club": 2}[ch["name"].(string)]
+		if ch["messages"] != want {
+			t.Errorf("%v: want %d messages, got %v", ch["name"], want, ch["messages"])
+		}
 	}
 }
 
