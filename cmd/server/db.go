@@ -1248,6 +1248,7 @@ func (db *DB) GetNodes(nq NodeQuery) ([]map[string]interface{}, int, map[string]
 				JOIN observations o ON o.transmission_id = t.id
 				JOIN observers obs ON %s
 				WHERE t.payload_type = 4
+				AND o.direction IS NOT 'tx'
 				AND UPPER(TRIM(obs.iata)) IN (%s)
 			)`, joinCond, strings.Join(placeholders, ","))
 			where = append(where, subq)

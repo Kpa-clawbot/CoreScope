@@ -36,7 +36,8 @@ func newHomeRegionStore(t *testing.T) *PacketStore {
 		mkHomeRegionAdvert(1, "pk_aus", homeZeroHopDirect, "o-aus"),
 		mkHomeRegionAdvert(2, "pk_aus", homeRelayedFlood, "o-sat"),
 		// On the boundary: heard zero-hop in both regions.
-		mkHomeRegionAdvert(3, "pk_edge", homeZeroHopDirect, "o-aus", "o-sat"),
+		mkHomeRegionAdvert(3, "pk_edge", homeZeroHopDirect, "o-aus"),
+		mkHomeRegionAdvert(5, "pk_edge", homeZeroHopDirect, "o-sat"),
 		// Never heard zero-hop: only the fallback can place it.
 		mkPathAdvert(4, "pk_far", map[string]string{"o-sat": `["aa"]`}),
 	)

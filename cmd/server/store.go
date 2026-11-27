@@ -99,6 +99,7 @@ type StoreObs struct {
 	// the 160-byte allocation class. Zero includes missing legacy headers.
 	// Read/write under the owning store's mu after publication.
 	relayHopHexLen uint8
+	reception      advertReception // per-observation evidence for advert region placement
 
 	// #1481 P0-2: cached parsed timestamp. The legacy handlers parse
 	// Timestamp as RFC3339Nano/RFC3339/"2006-01-02 15:04:05" with a
@@ -1074,9 +1075,10 @@ func (s *PacketStore) Load() error {
 			obsIDStr := nullStrVal(observerID)
 			obsPJ := nullStrVal(pathJSON)
 
-			n := observedRelayHopHexLen(nullStrVal(obsRawHex), obsPJ)
+			n, reception := observedFrameEvidence(nullStrVal(obsRawHex), obsPJ, nullStrVal(direction))
 			// Dedup the observation, but retain a later eligible frame's evidence.
 			if obs := tx.mergeObservationEvidence(obsIDStr, obsPJ, n); obs != nil {
+				obs.mergeAdvertReception(oid, reception)
 				s.noteCertainRelays(tx, obs, relayPM)
 				continue
 			}
@@ -1094,6 +1096,7 @@ func (s *PacketStore) Load() error {
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 				relayHopHexLen: n,
+				reception:      reception,
 			}
 
 			// Decode-window: extract resolved pubkeys for index, don't store on struct.
@@ -1404,8 +1407,9 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			obsIDStr := nullStrVal(observerID)
 			obsPJ := nullStrVal(pathJSON)
 
-			n := observedRelayHopHexLen(nullStrVal(obsRawHex), obsPJ)
-			if tx.mergeObservationEvidence(obsIDStr, obsPJ, n) != nil {
+			n, reception := observedFrameEvidence(nullStrVal(obsRawHex), obsPJ, nullStrVal(direction))
+			if obs := tx.mergeObservationEvidence(obsIDStr, obsPJ, n); obs != nil {
+				obs.mergeAdvertReception(oid, reception)
 				continue
 			}
 
@@ -1422,6 +1426,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 				relayHopHexLen: n,
+				reception:      reception,
 			}
 
 			tx.addObservation(obs)
@@ -3087,6 +3092,7 @@ func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, er
 		obsID                                                              *int
 		observerID, observerName, observerIATA, direction, pathJSON, obsTS string
 		relayHopHexLen                                                     uint8
+		reception                                                          advertReception
 		scopeName                                                          *string
 		snr, rssi                                                          *float64
 		score                                                              *int
@@ -3129,6 +3135,7 @@ func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, er
 			lastTxID = txID
 		}
 
+		n, reception := observedFrameEvidence(nullStrVal(obsRawHex), nullStrVal(pathJSON), nullStrVal(direction))
 		tr := tempRow{
 			txID:           txID,
 			rawHex:         nullStrVal(rawHex),
@@ -3143,7 +3150,8 @@ func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, er
 			direction:      internStr(nullStrVal(direction)),
 			pathJSON:       nullStrVal(pathJSON),
 			obsTS:          nullStrVal(obsTimestamp),
-			relayHopHexLen: observedRelayHopHexLen(nullStrVal(obsRawHex), nullStrVal(pathJSON)),
+			relayHopHexLen: n,
+			reception:      reception,
 			scopeName:      nullStrPtr(scopeName),
 			snr:            nullFloatPtr(snrVal),
 			rssi:           nullFloatPtr(rssiVal),
@@ -3246,6 +3254,7 @@ func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, er
 		if r.obsID != nil {
 			oid := *r.obsID
 			if obs := tx.mergeObservationEvidence(r.observerID, r.pathJSON, r.relayHopHexLen); obs != nil {
+				obs.mergeAdvertReception(oid, r.reception)
 				s.noteCertainRelays(tx, obs, cachedPM)
 				continue
 			}
@@ -3263,6 +3272,7 @@ func (s *PacketStore) ingestNewFromDB(sinceID, limit int) (wsPacketMaps, int, er
 				PathJSON:       r.pathJSON,
 				Timestamp:      normalizeTimestamp(r.obsTS),
 				relayHopHexLen: r.relayHopHexLen,
+				reception:      r.reception,
 			}
 
 			// Resolve path at ingest time using neighbor graph — decode-window discipline:
@@ -3505,6 +3515,7 @@ func (s *PacketStore) ingestNewObservations(sinceObsID, limit int) (wsPacketMaps
 		score          *int
 		pathJSON       string
 		relayHopHexLen uint8
+		reception      advertReception
 		timestamp      string
 	}
 
@@ -3525,6 +3536,7 @@ func (s *PacketStore) ingestNewObservations(sinceObsID, limit int) (wsPacketMaps
 			continue
 		}
 
+		n, reception := observedFrameEvidence(nullStrVal(obsRawHex), nullStrVal(pathJSON), nullStrVal(direction))
 		obsRows = append(obsRows, obsRow{
 			obsID:          oid,
 			txID:           txID,
@@ -3536,7 +3548,8 @@ func (s *PacketStore) ingestNewObservations(sinceObsID, limit int) (wsPacketMaps
 			rssi:           nullFloatPtr(rssi),
 			score:          nullIntPtr(score),
 			pathJSON:       nullStrVal(pathJSON),
-			relayHopHexLen: observedRelayHopHexLen(nullStrVal(obsRawHex), nullStrVal(pathJSON)),
+			relayHopHexLen: n,
+			reception:      reception,
 			timestamp:      nullStrVal(ts),
 		})
 	}
@@ -3576,6 +3589,7 @@ func (s *PacketStore) ingestNewObservations(sinceObsID, limit int) (wsPacketMaps
 		}
 
 		if obs := tx.mergeObservationEvidence(r.observerID, r.pathJSON, r.relayHopHexLen); obs != nil {
+			obs.mergeAdvertReception(r.obsID, r.reception)
 			s.noteCertainRelays(tx, obs, pm)
 			continue
 		}
@@ -3593,6 +3607,7 @@ func (s *PacketStore) ingestNewObservations(sinceObsID, limit int) (wsPacketMaps
 			PathJSON:       r.pathJSON,
 			Timestamp:      normalizeTimestamp(r.timestamp),
 			relayHopHexLen: r.relayHopHexLen,
+			reception:      r.reception,
 		}
 
 		// Resolve path at ingest time for late-arriving observations (review item #2).
@@ -4231,10 +4246,7 @@ func (s *PacketStore) observerIATAs() map[string]string {
 }
 
 // computeNodeHomeRegions returns a pubkey → IATA map deriving each node's
-// HOME region from zero-hop DIRECT adverts. A zero-hop direct advert is the
-// most authoritative location signal because the path byte is set locally on
-// the originating radio and the packet has not been relayed: the observer
-// that hears it is necessarily within direct RF range of the originator.
+// HOME region from observations of DIRECT adverts with an empty remaining path.
 //
 // When a node has zero-hop direct adverts heard by observers from multiple
 // regions, the most-frequently-observed region wins (geographic plurality).
@@ -4264,8 +4276,8 @@ func (s *PacketStore) computeNodeHomeRegions(obsIATA map[string]string) map[stri
 	return out
 }
 
-// nodeZeroHopRegionCounts tallies, per pubkey, how many observations of its
-// zero-hop DIRECT adverts each region's observers made (the #804 rule; see
+// nodeZeroHopRegionCounts tallies, per pubkey, how often each region's
+// observers heard its zero-hop DIRECT adverts (the #804 rule; see
 // computeNodeHomeRegions). Nodes without such an advert are absent. Caller
 // must hold s.mu (read or write); obsIATA is loaded before it, as above.
 func (s *PacketStore) nodeZeroHopRegionCounts(obsIATA map[string]string) map[string]map[string]int {
@@ -4275,36 +4287,26 @@ func (s *PacketStore) nodeZeroHopRegionCounts(obsIATA map[string]string) map[str
 	}
 	// Adverts only: the full packet list is mostly other traffic.
 	for _, tx := range s.byPayloadType[PayloadADVERT] {
-		if tx.RawHex == "" || len(tx.RawHex) < 4 {
-			continue
-		}
-		if tx.DecodedJSON == "" {
-			continue
-		}
-		// Transport-direct carries four transport-code bytes before the
-		// path byte; PathByte reads it at the right offset (#2225).
-		routeType, pathByte, ok := packetpath.PathByte(tx.RawHex)
-		if !ok || (routeType != RouteDirect && routeType != RouteTransportDirect) {
-			continue
-		}
-		if pathByte&0x3F != 0 {
-			continue
-		}
-
-		pk := advertPubkey(tx)
-		if pk == "" {
-			continue
-		}
-
+		var m map[string]int
 		for _, obs := range tx.Observations {
+			if !obs.receivedDirectAdvert(tx) {
+				continue
+			}
 			iata := obsIATA[obs.ObserverID]
 			if iata == "" {
 				continue
 			}
-			if per[pk] == nil {
-				per[pk] = map[string]int{}
+			if m == nil {
+				pk := advertPubkey(tx)
+				if pk == "" {
+					break
+				}
+				if m = per[pk]; m == nil {
+					m = map[string]int{}
+					per[pk] = m
+				}
 			}
-			per[pk][iata]++
+			m[iata]++
 		}
 	}
 
@@ -8729,10 +8731,8 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// #804: derive each node's HOME region from zero-hop direct adverts (the
-	// most authoritative location signal — those packets cannot have been
-	// relayed). When non-empty, multi-byte node attribution prefers this
-	// over observer-region. Falls back to observer-region when unknown.
+	// #804: multi-byte node attribution uses the node's home region when
+	// there is a direct empty-path reception and the observer's region otherwise.
 	nodeHomeRegion := s.computeNodeHomeRegions(obsIATA)
 	attributionMethod := "observer"
 	if region != "" && len(nodeHomeRegion) > 0 {

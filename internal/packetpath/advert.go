@@ -15,12 +15,17 @@ const (
 // routes carry four bytes before path_len (firmware Packet.cpp / Mesh.cpp).
 // The fixed buffer bounds both work and allocation to a radio-sized frame.
 func AdvertRouteEvidence(raw string) uint8 {
+	// Observation readers also see ordinary messages. Reject their header
+	// before decoding the full frame.
+	if header, ok := hexByteAt(raw, 0); !ok || (header>>2)&15 != PayloadADVERT {
+		return 0
+	}
 	var frame [256]byte
 	if len(raw)%2 != 0 || len(raw) > len(frame)*2 {
 		return 0
 	}
 	n, err := hex.Decode(frame[:], []byte(raw))
-	if err != nil || n < 3 || (frame[0]>>2)&15 != 4 {
+	if err != nil || n < 3 {
 		return 0
 	}
 	route := int(frame[0] & 3)
