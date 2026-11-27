@@ -122,11 +122,19 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     }
   });
 
+  // Let the startup theme refresh finish on Home before opening the sortable table.
+  await page.addInitScript(() => {
+    window.addEventListener('theme-refresh', () => {
+      if (window._customizerV2?.initDone) window.__heardByThemeReady = true;
+    });
+  });
   for (const width of [1400, 390]) {
     await step('#2062 full Heard By table aligns and sorts supported fields at ' + width + 'px', async () => {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto(BASE + '/#/nodes/' + encodeURIComponent(pubkey), { waitUntil: 'domcontentloaded' });
+      await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
       await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => window.__heardByThemeReady);
+      await page.goto(BASE + '/#/nodes/' + encodeURIComponent(pubkey), { waitUntil: 'domcontentloaded' });
       const card = page.locator('#node-observers');
       const table = card.locator('table');
       await table.waitFor({ state: 'visible' });
