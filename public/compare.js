@@ -86,13 +86,23 @@ if (typeof window !== 'undefined') {
   var packetsB = [];
   var currentView = 'summary';
   var routeFilter = 'all';
+  var fleetMode = false;
+  var reference = '';
+  var pinKey = 'corescope.compare.reference';
+  var regionContainer, regionListener;
+  var requestID = 0;
 
-  function init(app, routeParam) {
+  function init(app) {
     // Parse preselected observers from URL: #/compare?a=ID1&b=ID2
     var hashParams = location.hash.split('?')[1] || '';
     var params = new URLSearchParams(hashParams);
     selA = params.get('a') || null;
     selB = params.get('b') || null;
+    fleetMode = !selA && !selB && (params.has('ref') || params.get('mode') === 'fleet');
+    reference = params.get('ref') || '';
+    if (fleetMode && !params.has('ref')) {
+      try { reference = localStorage.getItem(pinKey) || ''; } catch (_) { /* Storage is optional. */ }
+    }
     comparisonResult = null;
     packetsA = [];
     packetsB = [];
@@ -103,14 +113,16 @@ if (typeof window !== 'undefined') {
       '<div class="page-header">' +
         '<a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">\u2190</a>' +
         '<h2>\uD83D\uDD0D Observer Comparison</h2>' +
+        (fleetMode ? '<a href="#/compare">Pairwise comparison</a>' : '<a href="#/compare?mode=fleet">Reference comparison</a>') +
       '</div>' +
       '<nav data-role="compare-breadcrumbs" aria-label="Compare breadcrumbs" class="compare-breadcrumbs"></nav>' +
       '<div id="compareControls" class="compare-controls"><div class="text-center text-muted" style="padding:20px">Loading observers\u2026</div></div>' +
+      (fleetMode ? '<section aria-label="Peer regions"><div id="compareRegions" class="region-filter-container"></div></section>' : '') +
       '<div id="compareContent"></div>' +
     '</div>';
 
     // #209 — Keyboard accessibility for compare table rows
-    app.addEventListener('keydown', function (e) {
+    document.getElementById('compareContent').addEventListener('keydown', function (e) {
       var row = e.target.closest('tr[data-action="navigate"]');
       if (!row) return;
       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -118,10 +130,15 @@ if (typeof window !== 'undefined') {
       location.hash = row.dataset.value;
     });
 
-    loadObservers();
+    regionContainer = fleetMode ? document.getElementById('compareRegions') : null;
+    loadObservers(regionContainer && RegionFilter.init(regionContainer));
   }
 
   function destroy() {
+    requestID++;
+    if (regionListener) RegionFilter.offChange(regionListener);
+    if (regionContainer) RegionFilter.destroy(regionContainer);
+    regionListener = regionContainer = null;
     observers = [];
     selA = null;
     selB = null;
@@ -138,17 +155,22 @@ if (typeof window !== 'undefined') {
     return !!(selA && selB && selA !== selB);
   }
 
-  async function loadObservers() {
+  async function loadObservers(regionReady) {
+    var controls = document.getElementById('compareControls');
+    var ticket = requestID;
     try {
-      var data = await api('/observers', { ttl: CLIENT_TTL.observers });
-      observers = (data.observers || []).sort(function (a, b) {
+      var result = await Promise.all([api('/observers', { ttl: CLIENT_TTL.observers }), regionReady]);
+      if (ticket !== requestID) return;
+      observers = (result[0].observers || []).slice().sort(function (a, b) {
         return (a.name || a.id).localeCompare(b.name || b.id);
       });
       renderControls();
-      if (isComparisonReady()) runComparison();
+      if (fleetMode) {
+        regionListener = RegionFilter.onChange(runFleetComparison);
+        runFleetComparison();
+      } else if (isComparisonReady()) runComparison();
     } catch (e) {
-      document.getElementById('compareControls').innerHTML =
-        '<div class="text-muted" style="padding:20px">Error loading observers: ' + escapeHtml(e.message) + '</div>';
+      if (ticket === requestID) controls.textContent = 'Error loading observers: ' + e.message;
     }
   }
 
@@ -162,6 +184,30 @@ if (typeof window !== 'undefined') {
         var region = o.iata ? ' (' + escapeHtml(o.iata) + ')' : '';
         return '<option value="' + escapeHtml(o.id) + '">' + label + region + '</option>';
       }).join('');
+
+    if (fleetMode) {
+      el.innerHTML = '<div class="compare-select-group"><label for="compareReference">Reference observer</label>' +
+        '<select id="compareReference" class="compare-select">' + optionsHtml + '</select></div>' +
+        '<small>Choosing a reference pins it for future comparisons.</small>';
+      var picker = document.getElementById('compareReference');
+      picker.value = reference;
+      picker.addEventListener('change', function () {
+        reference = picker.value;
+        try {
+          if (reference) localStorage.setItem(pinKey, reference);
+          else localStorage.removeItem(pinKey);
+        } catch (_) { /* The shareable URL still works. */ }
+        runFleetComparison();
+      });
+      document.getElementById('compareContent').innerHTML =
+        '<p role="status"></p><div class="analytics-table-scroll" hidden>' +
+        '<table class="data-table compare-table" aria-label="Reference comparison"><thead><tr>' +
+        ['Observer', 'Received', 'Shared', '% of reference', '% of peer', 'SNR Δ', 'SNR pairs'].map(function (label) {
+          return '<th scope="col">' + label + '</th>';
+        }).join('') + '</tr></thead><tbody></tbody></table>' +
+        '<small>SNR Δ is peer minus reference in dB. Each shared transmission with SNR at both receivers counts once.</small></div>';
+      return;
+    }
 
     el.innerHTML =
       '<div class="compare-selector">' +
@@ -212,6 +258,7 @@ if (typeof window !== 'undefined') {
       renderBreadcrumbs();
     }
     function onChange() {
+      requestID++;
       updateBtn();
       // change events only fire when value actually changes, so any
       // ready transition that lands here came from a real user action.
@@ -254,10 +301,50 @@ if (typeof window !== 'undefined') {
     return new Date(Date.now() - hours * 3600000).toISOString();
   }
 
+  async function runFleetComparison() {
+    var ticket = ++requestID;
+    var content = document.getElementById('compareContent');
+    var status = content.querySelector('[role="status"]');
+    var table = content.querySelector('table');
+    var region = RegionFilter.regionQueryString();
+    var state = reference ? 'ref=' + encodeURIComponent(reference) : 'mode=fleet';
+    history.replaceState(null, '', '#/compare?' + state + (region || '&region=All'));
+    table.parentElement.hidden = true;
+    if (!reference || document.getElementById('compareReference').value !== reference) {
+      status.textContent = reference ? 'Reference observer unavailable. Choose another reference.' : 'Choose a reference to compare receivers.';
+      return;
+    }
+    status.textContent = 'Loading receiver comparison…';
+    try {
+      var data = await api('/analytics/observer-comparison?' + state + region);
+      if (ticket !== requestID) return;
+      status.textContent = obsName(reference) + ' received ' + data.referenceTotal.toLocaleString() +
+        ' distinct transmissions in the last 24 hours.' + (data.peers.length ? '' : ' No other observers in the selected regions.');
+      var body = table.tBodies[0];
+      while (body.rows.length > data.peers.length) body.deleteRow(-1);
+      function pct(shared, total) { return total ? (100 * shared / total).toFixed(1) + '%' : '—'; }
+      data.peers.forEach(function (peer, index) {
+        var row = body.rows[index] || body.insertRow();
+        var delta = peer.snrDelta;
+        var values = [peer.name, peer.total.toLocaleString(), peer.shared.toLocaleString(),
+          pct(peer.shared, data.referenceTotal), pct(peer.shared, peer.total),
+          delta == null ? '—' : (delta > 0 ? '+' : '') + delta.toFixed(1) + ' dB', peer.snrPairs.toLocaleString()];
+        values.forEach(function (value, col) {
+          var cell = row.cells[col] || row.insertCell();
+          if (cell.textContent !== value) cell.textContent = value;
+        });
+      });
+      table.parentElement.hidden = !data.peers.length;
+    } catch (e) {
+      if (ticket === requestID) status.textContent = 'Error loading receiver comparison: ' + e.message;
+    }
+  }
+
   async function runComparison() {
     if (!selA || !selB || selA === selB) return;
     var content = document.getElementById('compareContent');
     if (!content) return;
+    var ticket = ++requestID;
 
     content.innerHTML = '<div class="text-center text-muted" style="padding:40px">Fetching packets\u2026</div>';
 
@@ -274,6 +361,7 @@ if (typeof window !== 'undefined') {
         api('/packets?observer=' + encodeURIComponent(selB) + '&excludeTx=true&limit=' + MAX_PACKETS + '&since=' + encodeURIComponent(since24h))
       ]);
 
+      if (ticket !== requestID) return;
       packetsA = results[0].packets || [];
       packetsB = results[1].packets || [];
 
@@ -295,7 +383,7 @@ if (typeof window !== 'undefined') {
       currentView = 'summary';
       renderComparison();
     } catch (e) {
-      content.innerHTML = '<div class="text-muted" style="padding:40px">Error: ' + escapeHtml(e.message) + '</div>';
+      if (ticket === requestID) content.innerHTML = '<div class="text-muted" style="padding:40px">Error: ' + escapeHtml(e.message) + '</div>';
     }
   }
 

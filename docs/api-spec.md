@@ -43,6 +43,7 @@
 - [GET /api/planner/viewshed](#get-apiplannerviewshed)
 - [GET /api/planner/coverage](#get-apiplannercoverage)
 - [GET /api/analytics/rf](#get-apianalyticsrf)
+- [GET /api/analytics/observer-comparison](#get-apianalyticsobserver-comparison)
 - [GET /api/analytics/topology](#get-apianalyticstopology)
 - [GET /api/analytics/retransmissions](#get-apianalyticsretransmissions)
 - [GET /api/analytics/channels](#get-apianalyticschannels)
@@ -1398,6 +1399,25 @@ Before the first successful fetch, including when fetching is disabled, the resp
 ```
 
 ---
+
+## GET /api/analytics/observer-comparison
+
+Compare one reference observer with the other visible observers over the last 24 hours.
+Pass its ID in the required `ref` parameter. Optional `region` takes comma-separated IATA
+codes for the peers. The reference can belong to any region. An absent `ref` returns
+400. An unknown, inactive or blacklisted reference returns 404.
+
+`referenceTotal` is the number of distinct transmissions received by the reference.
+`peers` lists each peer's `id`, `name`, distinct `total`, and number `shared` with the
+reference, in descending order of shared transmissions. Divide `shared` by
+`referenceTotal` or `total` for the respective overlap percentages. A zero
+denominator has no defined percentage.
+
+Only stored observations within the window count. Explicit TX observations are
+excluded. For each shared transmission, average the available SNR separately at
+each receiver. `snrDelta` is the mean of the peer minus reference differences in
+dB for the `snrPairs` transmissions with measurements at both receivers. With no
+pairs, `snrDelta` is `null`.
 
 ## GET /api/analytics/rf
 

@@ -234,8 +234,14 @@ func routeDescriptions() map[string]routeMeta {
 			}},
 
 		// Analytics
-		"GET /api/analytics/roles":           {Summary: "Node roles and clock-skew statistics", Description: "Groups this instance's cached node roster by role. Query parameters do not filter the result. Results may lag newly loaded data. An unavailable store or empty roster returns totalNodes: 0 and roles: []. Responses use Cache-Control: no-store.", Tag: "analytics", Response: schemaRef("RoleAnalyticsResponse")},
-		"GET /api/analytics/rf":              {Summary: "RF analytics", Description: "SNR/RSSI distributions and statistics.", Tag: "analytics"},
+		"GET /api/analytics/roles": {Summary: "Node roles and clock-skew statistics", Description: "Groups this instance's cached node roster by role. Query parameters do not filter the result. Results may lag newly loaded data. An unavailable store or empty roster returns totalNodes: 0 and roles: []. Responses use Cache-Control: no-store.", Tag: "analytics", Response: schemaRef("RoleAnalyticsResponse")},
+		"GET /api/analytics/rf":    {Summary: "RF analytics", Description: "SNR/RSSI distributions and statistics.", Tag: "analytics"},
+		"GET /api/analytics/observer-comparison": {
+			Summary: "Compare receivers with a reference observer", Tag: "analytics",
+			Description: "Distinct received transmissions during the last 24 hours. Shared counts include transmissions with missing SNR. snrDelta is the mean peer minus reference SNR in dB over snrPairs shared transmissions with both measurements, averaging each receiver's repeated receptions first. Returns an empty peers array when only the reference is visible.",
+			QueryParams: []paramMeta{{Name: "ref", Type: "string", Required: true, Description: "Reference observer ID."}, {Name: "region", Type: "string", Description: "Optional comma-separated IATA codes for peers. The reference is independent of this filter."}},
+			Response:    schemaRef("ObserverComparisonResponse"),
+		},
 		"GET /api/analytics/topology":        {Summary: "Network topology", Description: "Hop-count distribution and route analysis.", Tag: "analytics"},
 		"GET /api/analytics/channels":        {Summary: "Channel analytics", Description: "Message counts and activity per channel.", Tag: "analytics"},
 		"GET /api/analytics/distance":        {Summary: "Distance analytics", Description: "Geographic distance calculations between nodes.", Tag: "analytics"},
@@ -328,6 +334,20 @@ func componentSchemas() map[string]interface{} {
 		return m
 	}
 	return map[string]interface{}{
+		"ObserverComparisonResponse": openAPISchema{
+			Type: "object", Required: []string{"referenceTotal", "peers"},
+			Properties: map[string]openAPISchema{
+				"referenceTotal": {Type: "integer"},
+				"peers": {Type: "array", Items: &openAPISchema{
+					Type: "object", Required: []string{"id", "name", "total", "shared", "snrPairs", "snrDelta"},
+					Properties: map[string]openAPISchema{
+						"id": {Type: "string"}, "name": {Type: "string"},
+						"total": {Type: "integer"}, "shared": {Type: "integer"},
+						"snrPairs": {Type: "integer"}, "snrDelta": {Type: "number", Nullable: true},
+					},
+				}},
+			},
+		},
 		"ConfigAreasResponse": openAPISchema{
 			Type: "array", Items: &openAPISchema{
 				Type: "object", Required: []string{"key", "label"},
