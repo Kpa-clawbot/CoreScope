@@ -57,6 +57,7 @@ type Config struct {
 	HashChannels         []string                    `json:"hashChannels,omitempty"`
 	HashRegions          []string                    `json:"hashRegions,omitempty"`
 	AutoRegionKeys       *AutoRegionKeysConfig       `json:"autoRegionKeys,omitempty"`
+	CatalogKeys          *CatalogKeysConfig          `json:"catalogKeys,omitempty"`
 	Retention            *RetentionConfig            `json:"retention,omitempty"`
 	Metrics              *MetricsConfig              `json:"metrics,omitempty"`
 	Runtime              *RuntimeConfig              `json:"runtime,omitempty"`
@@ -753,4 +754,107 @@ func (c *Config) AutoRegionKeysRefreshMinutes() int {
 		return autoRegionKeysDefaultRefreshMinutes
 	}
 	return c.AutoRegionKeys.RefreshMinutes
+}
+
+// CatalogKeysConfig controls the opt-in catalogue key tier (#2107): channel
+// and region names from a public catalogue become keys only once traffic
+// already stored on this instance confirms them. Default off; an absent block
+// leaves behaviour unchanged.
+//
+// TOP-LEVEL BLOCK, a sibling of hashChannels/hashRegions — config loading is
+// plain json.Unmarshal, so a mis-nested key is silently ignored.
+type CatalogKeysConfig struct {
+	Enabled bool `json:"enabled"`
+	// URL is an https URL or a local file path (plain http is accepted and
+	// logged as a warning). Read up to 8 MiB. Accepted shapes: the
+	// knownChannelsUrl catalogue ({"countries":{...}}) and
+	// {"channels":[{"n","s"}],"regions":[...]}.
+	URL            string `json:"url"`
+	RefreshMinutes int    `json:"refreshMinutes"`
+	// Channels / Regions switch the two gates separately; both default on
+	// when the block is enabled.
+	Channels *bool `json:"channels,omitempty"`
+	Regions  *bool `json:"regions,omitempty"`
+	// AutoPromoteRegions puts confirmed region names in force. Off by
+	// default: they are recorded as proposed and an operator confirms them
+	// by adding them to hashRegions. Turning it off later does not demote
+	// regions already promoted; docs/catalogue-keys.md has how to revert one.
+	AutoPromoteRegions bool `json:"autoPromoteRegions"`
+	// IncludeExplicitSecrets admits catalogue channels whose key is not
+	// derived from "#name" (shared private keys). Off by default. When on,
+	// private channels whose secrets a public catalogue lists are decrypted
+	// and shown in plaintext once traffic confirms them.
+	IncludeExplicitSecrets bool    `json:"includeExplicitSecrets"`
+	ChannelMinHits         int     `json:"channelMinHits"`
+	RegionMinHits          int     `json:"regionMinHits"`
+	RegionWindowDays       int     `json:"regionWindowDays"`
+	RegionAlpha            float64 `json:"regionAlpha"`
+	MaxPromoted            int     `json:"maxPromoted"`
+}
+
+const (
+	catalogKeysDefaultRefreshMinutes = 1440
+	catalogKeysDefaultChannelMinHits = 1
+	catalogKeysDefaultRegionMinHits  = 3
+	catalogKeysDefaultWindowDays     = 14
+	// catalogKeysDefaultAlpha is the expected number of wrongly confirmed
+	// region names per gate run that the threshold allows (see
+	// regionEvidenceThreshold).
+	catalogKeysDefaultAlpha = 0.05
+	// catalogKeysDefaultMaxPromoted caps each promoted tier, for the same
+	// reason autoRegionKeysDefaultMaxDerived caps the derived one: every key
+	// is one more HMAC per packet.
+	catalogKeysDefaultMaxPromoted = 256
+)
+
+// catalogKeySettings is CatalogKeysConfig with every default resolved.
+type catalogKeySettings struct {
+	url                    string
+	refresh                time.Duration
+	channels, regions      bool
+	autoPromoteRegions     bool
+	includeExplicitSecrets bool
+	channelMinHits         int
+	regionMinHits          int
+	regionWindow           time.Duration
+	regionAlpha            float64
+	maxPromoted            int
+}
+
+// CatalogKeysEnabled reports whether the catalogue tier runs: the block is
+// enabled and names a source.
+func (c *Config) CatalogKeysEnabled() bool {
+	return c.CatalogKeys != nil && c.CatalogKeys.Enabled && strings.TrimSpace(c.CatalogKeys.URL) != ""
+}
+
+// CatalogKeysSettings resolves the block. Zero or negative numbers mean the
+// default: after json.Unmarshal they are indistinguishable from "omitted".
+func (c *Config) CatalogKeysSettings() catalogKeySettings {
+	k := CatalogKeysConfig{}
+	if c.CatalogKeys != nil {
+		k = *c.CatalogKeys
+	}
+	pick := func(v, def int) int {
+		if v <= 0 {
+			return def
+		}
+		return v
+	}
+	s := catalogKeySettings{
+		url:                    strings.TrimSpace(k.URL),
+		refresh:                time.Duration(pick(k.RefreshMinutes, catalogKeysDefaultRefreshMinutes)) * time.Minute,
+		channels:               k.Channels == nil || *k.Channels,
+		regions:                k.Regions == nil || *k.Regions,
+		autoPromoteRegions:     k.AutoPromoteRegions,
+		includeExplicitSecrets: k.IncludeExplicitSecrets,
+		channelMinHits:         pick(k.ChannelMinHits, catalogKeysDefaultChannelMinHits),
+		regionMinHits:          pick(k.RegionMinHits, catalogKeysDefaultRegionMinHits),
+		regionWindow:           time.Duration(pick(k.RegionWindowDays, catalogKeysDefaultWindowDays)) * 24 * time.Hour,
+		regionAlpha:            k.RegionAlpha,
+		maxPromoted:            pick(k.MaxPromoted, catalogKeysDefaultMaxPromoted),
+	}
+	if !(s.regionAlpha > 0 && s.regionAlpha < 1) {
+		s.regionAlpha = catalogKeysDefaultAlpha
+	}
+	return s
 }

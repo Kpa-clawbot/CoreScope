@@ -7,6 +7,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +41,13 @@ type channelKeySet struct {
 	db       *sql.DB // opened lazily, read-only
 	failing  bool    // the last read failed; logged once per failure streak
 	approved int     // approved keys in the current snapshot
+
+	// mu serialises the two writers, refresh (approved channels) and
+	// setCatalog (catalogue worker, #2107), so neither drops the other's
+	// tier. Readers never take it.
+	mu            sync.Mutex
+	approvedNames []string          // last successful read, re-merged by setCatalog
+	catalog       map[string]string // promoted catalogue tier (lowest)
 }
 
 // newChannelKeySet starts with the configured keys (the very map
@@ -60,6 +70,8 @@ func (s *channelKeySet) current() *map[string]string { return s.cur.Load() }
 // A failed read keeps the current snapshot: only a successful read changes
 // the set, so a locked or missing users.db never drops a key.
 func (s *channelKeySet) refresh() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	names, err := s.readApproved()
 	if err != nil {
 		if !s.failing {
@@ -77,7 +89,64 @@ func (s *channelKeySet) refresh() {
 		log.Printf("[channels] %d approved hashtag channel(s) in force", added)
 	}
 	s.approved = added
+	s.approvedNames = names
+	mergeCatalogChannels(next, s.catalog)
 	s.cur.Store(&next)
+}
+
+// setCatalog replaces the catalogue tier (name -> key hex) and swaps in a new
+// snapshot: configured, then approved, then the catalogue. Returns the
+// catalogue names newly in force.
+func (s *channelKeySet) setCatalog(keys map[string]string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.Snapshot()
+	cat := make(map[string]string, len(keys))
+	for name, key := range keys {
+		cat[name] = key
+	}
+	s.catalog = cat
+	next, _ := mergeApprovedKeys(s.configured, s.approvedNames)
+	inForce := mergeCatalogChannels(next, cat)
+	var added []string
+	for _, name := range inForce {
+		if _, had := old[name]; !had {
+			added = append(added, name)
+		}
+	}
+	s.cur.Store(&next)
+	return added
+}
+
+// mergeCatalogChannels adds the catalogue tier to keys in place. A name that
+// is already there keeps its key, and a catalogue key whose secret is already
+// in force under another name is skipped: the higher tier owns that channel
+// and its decrypted rows keep the name the operator gave it. Returns the
+// catalogue names added, sorted.
+func mergeCatalogChannels(keys map[string]string, catalog map[string]string) []string {
+	if len(catalog) == 0 {
+		return nil
+	}
+	secrets := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		secrets[strings.ToLower(k)] = true
+	}
+	names := make([]string, 0, len(catalog))
+	for name := range catalog {
+		names = append(names, name)
+	}
+	sort.Strings(names) // deterministic when two catalogue names share a secret
+	var added []string
+	for _, name := range names {
+		k := catalog[name]
+		if _, exists := keys[name]; exists || secrets[strings.ToLower(k)] {
+			continue
+		}
+		keys[name] = k
+		secrets[strings.ToLower(k)] = true
+		added = append(added, name)
+	}
+	return added
 }
 
 func (s *channelKeySet) readApproved() ([]string, error) {

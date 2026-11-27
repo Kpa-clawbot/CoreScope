@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -190,12 +191,31 @@ func keySetFingerprint(fps []string) string {
 // (MeshCore firmware, GroupChannel::hash). ok is false for a malformed key.
 func channelKeyHashByte(keyHex string) (byte, bool) {
 	key, err := hex.DecodeString(keyHex)
-	if err != nil || len(key) != 16 {
+	if err != nil || (len(key) != 16 && len(key) != 32) {
 		return 0, false
 	}
-	h := sha256.Sum256(key)
+	h := sha256.Sum256(trimChannelSecret(key))
 	return h[0], true
 }
+
+// trimChannelSecret returns the bytes the firmware hashes for the channel
+// hash: a 32-byte secret whose upper half is zero is a 128-bit key and hashes
+// as 16 bytes, any other 32-byte secret hashes whole (BaseChatMesh::
+// setChannel).
+func trimChannelSecret(key []byte) []byte {
+	if len(key) == 32 && bytes.Equal(key[16:], make([]byte, 16)) {
+		return key[:16]
+	}
+	return key
+}
+
+// unknownScopeWindowSQL selects the rows of one id window whose scope is still
+// unknown. The region backfill and the catalogue region gate read the same
+// rows; the third column is the unresolved value the backfill's UPDATE checks.
+const unknownScopeWindowSQL = `
+	SELECT id, COALESCE(raw_hex,''), '' FROM transmissions
+	WHERE id > ? AND id <= ? AND scope_name = ''
+	ORDER BY id`
 
 // keyBackfillPlan is what one kind needs to run: every key fingerprint in
 // force, the subset never given a full pass, and for channels the hash bytes
@@ -484,10 +504,7 @@ func (b *keyBackfiller) batchOnce(ctx context.Context, kind string, p keyBackfil
 			  AND channel_hash IN (`+strings.TrimSuffix(strings.Repeat("?,", len(p.channelHash)), ",")+`)
 			ORDER BY id`, args...)
 	case keyBackfillKindRegion:
-		rows, err = db.QueryContext(ctx, `
-			SELECT id, COALESCE(raw_hex,''), '' FROM transmissions
-			WHERE id > ? AND id <= ? AND scope_name = ''
-			ORDER BY id`, cursor, hi)
+		rows, err = db.QueryContext(ctx, unknownScopeWindowSQL, cursor, hi)
 	default:
 		return cursor, 0, fmt.Errorf("unknown backfill kind %q", kind)
 	}
