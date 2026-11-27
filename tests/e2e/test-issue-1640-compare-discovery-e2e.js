@@ -28,6 +28,7 @@ async function step(name, fn) {
   catch (e) { failed++; console.error('  \u274c ' + name + ': ' + e.message); }
 }
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
+function bookmark(page) { return new URLSearchParams(new URL(page.url()).hash.split('?')[1]); }
 
 async function pickTwoObserverIds(page) {
   await page.goto(BASE + '/#/observers', { waitUntil: 'domcontentloaded' });
@@ -189,6 +190,237 @@ async function run() {
       await comparisonPage.close();
     }
   });
+
+  for (const invalidB of ['', idA]) {
+    await step((invalidB ? 'Duplicating' : 'Clearing') + ' a pending pair clears obsolete results and updates its bookmark', async () => {
+      const pair = await ctx.newPage();
+      let release;
+      const paused = new Promise(resolve => { release = resolve; });
+      const isFor = (request, id) => {
+        const url = new URL(request.url());
+        return url.pathname === '/api/packets' && url.searchParams.get('observer') === id;
+      };
+      await pair.route('**/api/packets?**', async route => {
+        if (![idA, idB].some(id => isFor(route.request(), id))) return route.continue();
+        await paused;
+        return route.fulfill({ json: { packets: [] } });
+      });
+      try {
+        await Promise.all([
+          pair.waitForRequest(r => isFor(r, idA)), pair.waitForRequest(r => isFor(r, idB)),
+          pair.goto(BASE + '/#/compare?a=' + idA + '&b=' + idB + '&theme=dark', { waitUntil: 'domcontentloaded' })
+        ]);
+        const picker = pair.locator('#compareObsB');
+        const content = pair.locator('#compareContent');
+        await picker.selectOption(invalidB);
+        const pendingText = await content.innerText();
+        release();
+        await pair.waitForLoadState('networkidle');
+        assert(/(?:choose|select).*observers?/i.test(pendingText), 'expected an idle prompt while requests are pending, got: ' + pendingText);
+        assert(await content.innerText() === pendingText, 'late packets replaced the idle prompt');
+        const params = bookmark(pair);
+        assert(params.get('a') === idA && params.get('b') === (invalidB || null) && params.get('theme') === 'dark',
+          'bookmark must restore the current selections and shared theme, got: ' + params);
+
+        await picker.selectOption(idB);
+        await pair.locator('.compare-summary-text').waitFor();
+        await picker.selectOption(invalidB);
+        assert(await content.innerText() === pendingText, 'invalidating a completed pair must also clear its results');
+      } finally {
+        release();
+        await pair.close();
+      }
+    });
+  }
+
+  await step('Pin a reference, compare every peer and keep explicit pair links (#671)', async () => {
+    const fleet = await ctx.newPage();
+    const requests = [];
+    const packets = [];
+    const roster = [{ id: 'ref', name: 'Reference' }, { id: 'peer', name: 'Peer' }, { id: 'quiet', name: 'Quiet' }];
+    await fleet.route('**/api/observers', route => route.fulfill({ json: { observers: roster } }));
+    await fleet.route('**/api/packets?**', route => {
+      const q = new URL(route.request().url()).searchParams;
+      if (q.has('observer')) packets.push(q.get('observer'));
+      return route.fulfill({ json: { packets: [] } });
+    });
+    await fleet.route('**/api/analytics/observer-comparison?**', route => {
+      const ref = new URL(route.request().url()).searchParams.get('ref');
+      requests.push(ref);
+      return route.fulfill({ json: ref === 'ref' ? { referenceTotal: 5, peers: [
+        { id: 'peer', name: 'Peer', total: 6, shared: 4, snrDelta: 1, snrPairs: 2 },
+        { id: 'quiet', name: 'Quiet', total: 0, shared: 0, snrDelta: null, snrPairs: 0 }
+      ] } : { referenceTotal: 0, peers: [
+        { id: 'ref', name: 'Reference', total: 5, shared: 0, snrDelta: null, snrPairs: 0 }
+      ] } });
+    });
+    const rows = fleet.getByRole('table', { name: 'Reference comparison' }).locator('tbody tr');
+    try {
+      await fleet.goto(BASE + '/#/compare');
+      await fleet.waitForSelector('#compareObsA');
+      const enter = fleet.getByRole('link', { name: 'Reference comparison', exact: true });
+      assert(await enter.count() === 1, 'Compare must offer a keyboard-accessible reference comparison');
+      await enter.focus();
+      await enter.press('Enter');
+      const picker = fleet.getByLabel('Reference observer', { exact: true });
+      await picker.selectOption('ref');
+      await rows.first().waitFor();
+      assert(bookmark(fleet).get('ref') === 'ref', 'missing shareable reference');
+      const cells = i => rows.nth(i).locator('td').allTextContents();
+      assert(JSON.stringify(await cells(0)) === JSON.stringify(['Peer','6','4','80.0%','66.7%','+1.0 dB','2']), 'peer overlaps or paired SNR are incorrect');
+      assert(JSON.stringify(await cells(1)) === JSON.stringify(['Quiet','0','0','0.0%','—','—','0']), 'quiet observer or missing denominator/SNR handled incorrectly');
+      assert(requests.join() === 'ref' && !packets.length, 'fleet must use a single aggregate request');
+
+      await fleet.goto(BASE + '/#/compare?a=peer&b=ref');
+      await fleet.waitForSelector('.compare-summary-text');
+      assert((await fleet.inputValue('#compareObsA')) === 'peer' && (await fleet.inputValue('#compareObsB')) === 'ref', 'saved pin must preserve explicit pair links');
+      await fleet.getByRole('link', { name: 'Reference comparison', exact: true }).click();
+      await rows.first().waitFor();
+      assert((await picker.inputValue()) === 'ref', 'returning to fleet must restore the pinned reference');
+      await fleet.goto(BASE + '/#/compare?ref=quiet');
+      await rows.first().waitFor();
+      assert((await picker.inputValue()) === 'quiet' && (await cells(0))[3] === '—', 'an explicit empty reference must override a saved pin and keep its zero denominator undefined');
+    } finally {
+      await fleet.close();
+    }
+  });
+
+  const regional = await browser.newPage();
+  const ids = ['1', '2'].map(suffix => 'a'.repeat(63) + suffix);
+  const stations = ids.map(id => ({ id, name: 'Station', iata: 'BBB' }));
+  const roster = [{ id: 'ref', name: 'Reference', iata: 'AAA' }, ...stations, { id: 'quiet', name: 'Quiet', iata: 'BBB' }];
+  const peers = [
+    { ...stations[0], total: 3, shared: 2, snrPairs: 2, snrDelta: 0 },
+    { ...stations[1], total: 1, shared: 1, snrPairs: 1, snrDelta: -3 },
+    { id: 'quiet', name: 'Quiet', total: 0, shared: 0, snrPairs: 0, snrDelta: null }
+  ];
+  const requests = [];
+  let rejectNext = 0;
+  await regional.route('**/api/observers', r => r.fulfill({ json: { observers: roster } }));
+  await regional.route('**/api/config/regions', r => r.fulfill({ json: { AAA: 'Reference only', BBB: 'Other receivers' } }));
+  await regional.route('**/api/analytics/observer-comparison?**', route => {
+    const params = new URL(route.request().url()).searchParams;
+    requests.push(params);
+    if (rejectNext) {
+      const status = rejectNext;
+      rejectNext = 0;
+      return route.fulfill({ status, headers: status === 429 ? { 'Retry-After': '60' } : {},
+        json: { error: status === 429 ? 'other reference comparisons are running' : 'Observer not found' } });
+    }
+    return route.fulfill({ json: { referenceTotal: 5, peers: params.get('region') === 'AAA' ? [] : peers } });
+  });
+  const table = regional.getByRole('table', { name: 'Reference comparison' });
+  const reference = regional.getByLabel('Reference observer', { exact: true });
+  try {
+    await step('Fleet choices and measurements distinguish observers sharing a name and region', async () => {
+      await regional.goto(BASE + '/#/compare?ref=ref&region=All');
+      await table.waitFor();
+      const rows = await table.locator('tbody tr').evaluateAll(trs => trs.map(tr => Array.from(tr.cells, td => td.textContent)));
+      assert(rows[0][5] === '0.0 dB' && rows[1][5] === '-3.0 dB' && rows[2][5] === '—', 'zero, negative and missing SNR must remain distinct');
+      const options = await reference.locator('option').evaluateAll(opts => Object.fromEntries(opts.map(o => [o.value, o.text])));
+      for (const [i, id] of ids.entries()) {
+        const suffix = id.slice(-1);
+        assert([options[id], rows[i][0]].every(label => label.includes('Station') && label.includes(suffix) && !label.includes(ids[1 - i].slice(-1))),
+          'each same-name picker option and result row must identify its receiver, got ' + options[id] + ' and ' + rows[i][0]);
+      }
+    });
+
+    await step('A region with no peers keeps the reference total, bookmark and shared display settings on reload', async () => {
+      await regional.goto(BASE + '/#/compare?ref=ref&region=All&theme=dark&embed=1');
+      await table.waitFor();
+      const region = regional.getByRole('checkbox', { name: 'Reference only' });
+      const empty = regional.locator('#compareContent [role="status"]').filter({ hasText: 'No other observers in the selected regions' });
+      await region.click();
+      await empty.waitFor();
+      const checkEmpty = async () => {
+        const q = requests[requests.length - 1];
+        assert(q.get('ref') === 'ref' && q.get('region') === 'AAA', 'wrong aggregate request: ' + q);
+        assert(await reference.inputValue() === 'ref' && await region.getAttribute('aria-checked') === 'true', 'reference and region must match the bookmark');
+        assert((await empty.innerText()).includes('Reference received 5 distinct transmissions') && await table.isHidden(), 'empty region must show the reference total and hide the table');
+      };
+      await checkEmpty();
+      assert(bookmark(regional).get('region') === 'AAA', 'chosen region must be in the bookmark');
+      // A shared link must work even when the recipient has no saved region or pin.
+      await regional.evaluate(() => localStorage.clear());
+      const beforeReload = requests.length;
+      await regional.reload({ waitUntil: 'domcontentloaded' });
+      await empty.waitFor();
+      await checkEmpty();
+      assert(requests.length === beforeReload + 1, 'reloading the bookmark must issue one regional comparison');
+      const hasDisplaySettings = () => bookmark(regional).get('theme') === 'dark' && bookmark(regional).get('embed') === '1';
+      assert(hasDisplaySettings() && await regional.locator('html').getAttribute('data-theme') === 'dark',
+        'reloaded comparison lost its shareable display settings: ' + regional.url());
+      await regional.getByRole('link', { name: 'Pairwise comparison' }).click();
+      await regional.locator('#compareObsA').waitFor();
+      assert(hasDisplaySettings() && !bookmark(regional).has('ref'), 'switching to pairwise must preserve shared settings and clear the reference');
+      await regional.getByRole('link', { name: 'Reference comparison' }).click();
+      await reference.waitFor();
+      assert(hasDisplaySettings(), 'switching back to the fleet must preserve shared settings');
+    });
+
+    await regional.clock.install();
+    const status = regional.locator('#compareContent [role="status"]');
+    const retry = regional.getByRole('button', { name: /retry|try again/i });
+    async function expectBusy() {
+      await status.filter({ hasText: /busy|running|429/i }).waitFor();
+      assert(/busy|running/i.test(await status.innerText()) && await retry.isVisible(),
+        'expected a busy status and a retry button, got: ' + await status.innerText());
+    }
+
+    await step('Retry a busy comparison after the advertised wait with the same pin and region', async () => {
+      const before = requests.length;
+      await regional.goto(BASE + '/#/compare?ref=&region=BBB&theme=dark');
+      rejectNext = 429;
+      await reference.selectOption('ref');
+      await expectBusy();
+      const pinned = regional.url();
+      await regional.clock.fastForward(30000);
+      assert(await retry.isDisabled(), 'retry must stay disabled during the advertised 60-second wait');
+      await regional.clock.fastForward(31000);
+      assert(await retry.isEnabled() && requests.length === before + 1, 'retry must become available without polling');
+      await retry.press('Enter');
+      await table.waitFor();
+      const attempts = requests.slice(before);
+      assert(attempts.length === 2 && attempts.every(q => q.get('ref') === 'ref' && q.get('region') === 'BBB'),
+        'one retry must request the same reference and region: ' + attempts);
+      assert(await reference.inputValue() === 'ref' && regional.url() === pinned && bookmark(regional).get('theme') === 'dark' &&
+        (await status.innerText()).includes('Reference received 5') && await retry.isHidden(), 'retry must restore the pinned comparison');
+    });
+
+    for (const change of ['pin', 'region', 'mode', 'page']) {
+      await step('Discard the busy comparison retry after changing ' + change, async () => {
+        const before = requests.length;
+        rejectNext = 429;
+        await regional.goto(BASE + '/#/compare?ref=ref&region=BBB');
+        await expectBusy();
+        if (change === 'pin') {
+          rejectNext = 404;
+          await reference.selectOption('quiet');
+          await status.filter({ hasText: /Error loading receiver comparison.*404/ }).waitFor();
+        } else if (change === 'region') {
+          await regional.clock.fastForward(30000);
+          rejectNext = 429;
+          await regional.getByRole('checkbox', { name: 'Other receivers' }).click();
+          await expectBusy();
+          await regional.clock.fastForward(31000);
+          assert(await retry.isDisabled(), 'the old deadline must not enable retry for the new region');
+          await regional.clock.fastForward(30000);
+          assert(await retry.isEnabled() && requests.length === before + 2, 'the new region must get its own retry');
+          return;
+        } else {
+          const pairwise = change === 'mode';
+          await regional.getByRole('link', { name: pairwise ? 'Pairwise comparison' : 'Back', exact: true }).click();
+          await regional.locator(pairwise ? '#compareObsA' : '#obsTable').waitFor();
+        }
+        await regional.clock.fastForward(61000);
+        const expected = change === 'pin' ? 2 : 1;
+        assert(await retry.isHidden() && requests.length === before + expected,
+          'old retry reappeared or issued an extra comparison after changing ' + change);
+      });
+    }
+  } finally {
+    await regional.close();
+  }
 
   await browser.close();
   console.log('\n' + passed + ' passed, ' + failed + ' failed');

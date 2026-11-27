@@ -26,6 +26,7 @@ function makeSandbox() {
     setTimeout, clearTimeout,
     location: { hash: '#/compare', href: '' },
     history: { replaceState: () => {} },
+    URLState: require('../../public/url-state.js'),
     URLSearchParams,
     Map, Set, Date, Promise,
     escapeHtml: (s) => s,
