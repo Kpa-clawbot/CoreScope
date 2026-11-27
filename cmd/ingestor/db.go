@@ -1043,14 +1043,17 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertNode, err = s.db.Prepare(`
-		INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, foreign_advert)
+		VALUES (?, ?, ?, ?, ?, ?, ?, EXISTS (
+			SELECT 1 FROM inactive_nodes WHERE public_key = ?1 AND foreign_advert = 1
+		))
 		ON CONFLICT(public_key) DO UPDATE SET
 			name = COALESCE(?, name),
 			role = COALESCE(?, role),
 			lat = COALESCE(?, lat),
 			lon = COALESCE(?, lon),
-			last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?)
+			last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
+			foreign_advert = CASE WHEN excluded.foreign_advert = 1 THEN 1 ELSE nodes.foreign_advert END
 	`)
 	if err != nil {
 		return err
@@ -2268,6 +2271,15 @@ func (s *Store) MoveStaleNodes(nodeDays int) (int64, error) {
 	}
 	defer tx.Rollback()
 
+	// An older ingestor may have reactivated a node with foreign_advert=0.
+	// Preserve its archived evidence before REPLACE can overwrite it.
+	_, err = tx.Exec(`UPDATE nodes SET foreign_advert = 1
+		WHERE last_seen < ? AND foreign_advert IS NOT 1 AND EXISTS (
+			SELECT 1 FROM inactive_nodes WHERE public_key = nodes.public_key AND foreign_advert = 1
+		)`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("restore archived foreign flag: %w", err)
+	}
 	_, err = tx.Exec(`INSERT OR REPLACE INTO inactive_nodes SELECT * FROM nodes WHERE last_seen < ?`, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("insert inactive: %w", err)
