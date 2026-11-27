@@ -295,11 +295,18 @@ async function run() {
     { id: 'quiet', name: 'Quiet', total: 0, shared: 0, snrPairs: 0, snrDelta: null }
   ];
   const requests = [];
+  let rejectNext = 0;
   await regional.route('**/api/observers', r => r.fulfill({ json: { observers: roster } }));
   await regional.route('**/api/config/regions', r => r.fulfill({ json: { AAA: 'Reference only', BBB: 'Other receivers' } }));
   await regional.route('**/api/analytics/observer-comparison?**', route => {
     const params = new URL(route.request().url()).searchParams;
     requests.push(params);
+    if (rejectNext) {
+      const status = rejectNext;
+      rejectNext = 0;
+      return route.fulfill({ status, headers: status === 429 ? { 'Retry-After': '60' } : {},
+        json: { error: status === 429 ? 'other reference comparisons are running' : 'Observer not found' } });
+    }
     return route.fulfill({ json: { referenceTotal: 5, peers: params.get('region') === 'AAA' ? [] : peers } });
   });
   const table = regional.getByRole('table', { name: 'Reference comparison' });
@@ -350,6 +357,67 @@ async function run() {
       await reference.waitFor();
       assert(hasDisplaySettings(), 'switching back to the fleet must preserve shared settings');
     });
+
+    await regional.clock.install();
+    const status = regional.locator('#compareContent [role="status"]');
+    const retry = regional.getByRole('button', { name: /retry|try again/i });
+    async function expectBusy() {
+      await status.filter({ hasText: /busy|running|429/i }).waitFor();
+      assert(/busy|running/i.test(await status.innerText()) && await retry.isVisible(),
+        'expected a busy status and a retry button, got: ' + await status.innerText());
+    }
+
+    await step('Retry a busy comparison after the advertised wait with the same pin and region', async () => {
+      const before = requests.length;
+      await regional.goto(BASE + '/#/compare?ref=&region=BBB&theme=dark');
+      rejectNext = 429;
+      await reference.selectOption('ref');
+      await expectBusy();
+      const pinned = regional.url();
+      await regional.clock.fastForward(30000);
+      assert(await retry.isDisabled(), 'retry must stay disabled during the advertised 60-second wait');
+      await regional.clock.fastForward(31000);
+      assert(await retry.isEnabled() && requests.length === before + 1, 'retry must become available without polling');
+      await retry.press('Enter');
+      await table.waitFor();
+      const attempts = requests.slice(before);
+      assert(attempts.length === 2 && attempts.every(q => q.get('ref') === 'ref' && q.get('region') === 'BBB'),
+        'one retry must request the same reference and region: ' + attempts);
+      assert(await reference.inputValue() === 'ref' && regional.url() === pinned && bookmark(regional).get('theme') === 'dark' &&
+        (await status.innerText()).includes('Reference received 5') && await retry.isHidden(), 'retry must restore the pinned comparison');
+    });
+
+    for (const change of ['pin', 'region', 'mode', 'page']) {
+      await step('Discard the busy comparison retry after changing ' + change, async () => {
+        const before = requests.length;
+        rejectNext = 429;
+        await regional.goto(BASE + '/#/compare?ref=ref&region=BBB');
+        await expectBusy();
+        if (change === 'pin') {
+          rejectNext = 404;
+          await reference.selectOption('quiet');
+          await status.filter({ hasText: /Error loading receiver comparison.*404/ }).waitFor();
+        } else if (change === 'region') {
+          await regional.clock.fastForward(30000);
+          rejectNext = 429;
+          await regional.getByRole('checkbox', { name: 'Other receivers' }).click();
+          await expectBusy();
+          await regional.clock.fastForward(31000);
+          assert(await retry.isDisabled(), 'the old deadline must not enable retry for the new region');
+          await regional.clock.fastForward(30000);
+          assert(await retry.isEnabled() && requests.length === before + 2, 'the new region must get its own retry');
+          return;
+        } else {
+          const pairwise = change === 'mode';
+          await regional.getByRole('link', { name: pairwise ? 'Pairwise comparison' : 'Back', exact: true }).click();
+          await regional.locator(pairwise ? '#compareObsA' : '#obsTable').waitFor();
+        }
+        await regional.clock.fastForward(61000);
+        const expected = change === 'pin' ? 2 : 1;
+        assert(await retry.isHidden() && requests.length === before + expected,
+          'old retry reappeared or issued an extra comparison after changing ' + change);
+      });
+    }
   } finally {
     await regional.close();
   }
