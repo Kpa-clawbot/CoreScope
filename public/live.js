@@ -1366,6 +1366,7 @@
             <li><span class="live-ring live-ring--repeater" aria-hidden="true"></span> Bright white ring — repeater</li>
             <li><span class="live-ring live-ring--other" aria-hidden="true"></span> Faded ring — companion / sensor / room</li>
           </ul>
+          ${window.LocationPrivacy ? window.LocationPrivacy.slotHtml('legend') : ''}
           </div>
         </div>
 
@@ -2001,6 +2002,7 @@
     // Legend toggle for mobile (#60)
     const legendEl = document.getElementById('liveLegend');
     const legendToggleBtn = document.getElementById('legendToggleBtn');
+    if (window.LocationPrivacy && legendEl) window.LocationPrivacy.hydrate(legendEl);
 
     // ── Live header / controls toggles (#1178, #1179) ──────────────────────
     // At narrow viewports (≤768px) the header collapses to a single
@@ -2253,6 +2255,7 @@
     function closeNodeDetail() {
       activeNodeDetailKey = null;
       nodeDetailPanel.classList.add('hidden');
+      if (window.LocationPrivacy) window.LocationPrivacy.pinUncertainty(map, null);
       nodeDetailBackdrop.classList.remove('active');
     }
     document.getElementById('nodeDetailClose').addEventListener('click', closeNodeDetail);
@@ -2549,6 +2552,10 @@
 
   async function showNodeDetail(pubkey) {
     activeNodeDetailKey = pubkey;
+    if (window.LocationPrivacy) {
+      const mk = nodeMarkers[pubkey];
+      window.LocationPrivacy.pinUncertainty(map, (mk && mk._lpLatLng) || null);
+    }
     const panel = document.getElementById('liveNodeDetail');
     const content = document.getElementById('nodeDetailContent');
     panel.classList.remove('hidden');
@@ -3053,6 +3060,7 @@
     });
 
     marker.on('click', () => showNodeDetail(n.public_key));
+    if (window.LocationPrivacy) window.LocationPrivacy.bindUncertainty(map, marker, [n.lat, n.lon]);
 
     marker._baseColor = color;
     marker._baseSize = sizePx;
@@ -3323,7 +3331,7 @@
     for (var i = 0; i < packets.length; i++) {
       var p = packets[i];
       var size = window.MC_packetHashSize
-        ? window.MC_packetHashSize(p.raw_hex, p.route_type)
+        ? window.MC_packetHashSize(p.raw_hex || p.frame_head, p.route_type)
         : 0;
       if (size > 0) return size >= 2;
     }

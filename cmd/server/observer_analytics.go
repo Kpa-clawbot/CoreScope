@@ -229,5 +229,6 @@ func txAnalyticsFields(tx *StoreTx) *StoreTx {
 		PayloadType: tx.PayloadType,
 		RouteType:   tx.RouteType,
 		DecodedJSON: tx.DecodedJSON,
+		hidden:      tx.hidden, // written under store.mu, like DecodedJSON
 	}
 }

@@ -601,6 +601,8 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				DecodedJSON: nullStrVal(decodedJSON),
 				ScopeName:   nullStrPtr(scopeName),
 			}
+			// Location privacy: keep only the served form (packet_redact.go).
+			redactStoreTx(s.db.locationFuzzer(), tx)
 			s.byHash[hashStr] = tx
 			s.packets = append(s.packets, tx)
 			s.byTxID[txID] = tx

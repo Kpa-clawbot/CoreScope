@@ -1,10 +1,12 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 // Pure-Go hexagonal binning for RX coverage display. We deliberately avoid the
@@ -118,4 +120,193 @@ func parseHexCell(id string) (res, q, r int, ok bool) {
 		return 0, 0, 0, false
 	}
 	return a, b, c, true
+}
+
+// ─── Location privacy: companion GPS fixes as cells ─────────────────────────
+//
+// With location privacy on (location_privacy.go), a companion GPS fix
+// (client_receptions, client_rf_samples) is never used as it is: every route
+// built on those tables first replaces each fix by the centre of its privacy
+// cell (fixGrid.centre) and only then filters, bins and measures. Everything
+// such a route serves is therefore a function of cell centres, whatever the
+// request (bbox, zoom), so no combination of requests places a fix better
+// than its cell. The display hexes are binned from those centres and are
+// themselves no smaller than the radius (maxHexResForRadius).
+//
+// The two guarantees differ in kind: a node position is served with a
+// MAXIMUM error (|served − exact| ≤ R, location_privacy.go), whereas a
+// companion fix is given a MINIMUM uncertainty: its cell is at least
+// fixCellFrac·R × fixCellFrac·R (2R × 2R) on the ground, and a fix may sit
+// anywhere in it, centre included.
+//
+// The grid: rows fixCellFrac·R high and, per row, a whole number of columns at
+// least fixCellFrac·R wide at the row's poleward edge (so the antimeridian is
+// no seam). Its origin comes from the secret: a row offset and a column
+// offset (fractions of a row / column in [0, 1)) from HMAC-SHA256(secret,
+// "fixgrid"), independent of the node grid's "grid" offsets.
+//
+// What the secret origin does NOT do: keep the cell edges hidden. A served
+// row is its cell centre and the bbox filters on centres, so about 40
+// bisection requests per axis recover a centre to float precision, and the
+// centres form a regular lattice: every edge then follows. The origin only
+// keeps the grid from being known without asking. The edges matter for one
+// case: a parked companion whose GPS jitters across an edge shows in two
+// adjacent cells, which pins it to that edge line within GPS noise (threat
+// model T4). That needs one companion's fixes on their own, so with privacy
+// on the per-companion views (?rx=) are restricted to the companion's owner
+// or an admin (requireCompanionView, rx_dashboard.go). The public views do
+// not attribute a cell to a companion; where a single companion is the only
+// contributor in an area, though, its two edge cells still show there (a
+// residual risk the cell size, not the origin, bounds: within GPS noise across
+// the edge, at least 2R along it).
+
+// fixCellFrac is the privacy cell side as a multiple of the radius.
+const fixCellFrac = 2.0
+
+// fixCellMaxLat keeps the column width finite next to the poles.
+const fixCellMaxLat = 89.9
+
+// fixGrid is the companion fix grid of one fuzzer. A nil *fixGrid means
+// location privacy is off: every method is then the identity.
+type fixGrid struct {
+	radiusM    float64
+	side, h    float64 // cell side (metres) and row height (degrees)
+	fLat, fLon float64 // secret row / column offsets, fractions in [0, 1)
+}
+
+// fixGridCache holds the grid of the last fuzzer asked for: production has
+// one fuzzer, so the HMAC runs once; another fuzzer (tests) just recomputes.
+// Bounded at one entry.
+var fixGridCache atomic.Pointer[struct {
+	f *locationFuzzer
+	g *fixGrid
+}]
+
+// fixGridFor returns the fix grid of f, nil when f is nil (privacy off).
+// Callers fetch it once per request, never per row.
+func fixGridFor(f *locationFuzzer) *fixGrid {
+	if f == nil {
+		return nil
+	}
+	if c := fixGridCache.Load(); c != nil && c.f == f {
+		return c.g
+	}
+	var sum [sha256.Size]byte
+	f.mac([]byte("fixgrid"), &sum)
+	side := fixCellFrac * f.RadiusM()
+	g := &fixGrid{
+		radiusM: f.RadiusM(), side: side, h: side / locMetresPerDeg,
+		fLat: unitFloat(sum[0:8]), fLon: unitFloat(sum[8:16]),
+	}
+	fixGridCache.Store(&struct {
+		f *locationFuzzer
+		g *fixGrid
+	}{f, g})
+	return g
+}
+
+// RadiusM is the fuzzing radius, 0 when g is nil.
+func (g *fixGrid) RadiusM() float64 {
+	if g == nil {
+		return 0
+	}
+	return g.radiusM
+}
+
+// cols is the number of columns of a row whose poleward edge is at latitude edge.
+func (g *fixGrid) cols(edge float64) float64 {
+	edge = math.Min(math.Abs(edge), fixCellMaxLat)
+	return math.Max(1, math.Floor(360*math.Cos(edge*math.Pi/180)*locMetresPerDeg/g.side))
+}
+
+// rowAt is the row holding latitude lat, with its centre and poleward edge.
+func (g *fixGrid) rowAt(lat float64) (row, latC, edge float64) {
+	row = math.Floor(lat/g.h + g.fLat)
+	lo, hi := (row-g.fLat)*g.h, (row+1-g.fLat)*g.h
+	return row, math.Max(-90, math.Min(90, (lo+hi)/2)), math.Max(math.Abs(lo), math.Abs(hi))
+}
+
+// centre returns the centre of the privacy cell that holds the fix (lat, lon);
+// the fix itself when g is nil (privacy off) or the fix is not finite. Pure
+// maths, no allocation: it runs once per row of a scan. A centre that would
+// read as (0, 0), "no fix", is moved off it as Fuzz does (avoidNullIsland).
+func (g *fixGrid) centre(lat, lon float64) (float64, float64) {
+	if g == nil || math.IsNaN(lat) || math.IsNaN(lon) || math.IsInf(lat, 0) || math.IsInf(lon, 0) {
+		return lat, lon
+	}
+	lat = math.Max(-90, math.Min(90, lat))
+	lon = wrapLon(lon)
+	_, latC, edge := g.rowAt(lat)
+	ncol := g.cols(edge)
+	dLon := 360 / ncol
+	col := math.Mod(math.Floor((lon+180)/dLon-g.fLon), ncol)
+	if col < 0 {
+		col += ncol
+	}
+	return avoidNullIsland(latC, wrapLon(-180+(col+0.5+g.fLon)*dLon))
+}
+
+// widenForFixCells grows b so it holds every fix whose privacy cell centre
+// lies in b: the SQL prefilter still uses the (lat, lon) index, and
+// binFixesInBBox then keeps exactly the fixes whose centre is inside b. A
+// widened range that reaches the antimeridian takes every longitude, since a
+// cell there can straddle it (its centre then wraps to the other side).
+func (b bbox) widenForFixCells(g *fixGrid) bbox {
+	if g == nil {
+		return b
+	}
+	// Columns only get wider poleward: the width at two rows beyond the
+	// bbox bounds every cell whose centre is inside it.
+	edge := math.Max(math.Abs(b.MinLat), math.Abs(b.MaxLat)) + 2*g.h
+	dLon := 360 / g.cols(edge)
+	w := bbox{MinLat: b.MinLat - g.h, MaxLat: b.MaxLat + g.h, MinLon: b.MinLon - dLon, MaxLon: b.MaxLon + dLon}
+	if w.MinLon < -180 || w.MaxLon >= 180 {
+		w.MinLon, w.MaxLon = -180, 180
+	}
+	return w
+}
+
+// contains reports whether (lat, lon) lies in b, bounds included (the SQL
+// BETWEEN semantics).
+func (b bbox) contains(lat, lon float64) bool {
+	return lat >= b.MinLat && lat <= b.MaxLat && lon >= b.MinLon && lon <= b.MaxLon
+}
+
+// binFixesInBBox replaces, in place, every fix of rows by its privacy cell
+// centre (pos returns pointers to a row's lat and lon) and keeps the rows
+// whose centre lies in b; rows unchanged when g is nil (privacy off). O(n),
+// no allocation: the result reuses rows.
+func binFixesInBBox[T any](rows []T, g *fixGrid, b bbox, pos func(*T) (lat, lon *float64)) []T {
+	if g == nil {
+		return rows
+	}
+	out := rows[:0]
+	for i := range rows {
+		la, lo := pos(&rows[i])
+		*la, *lo = g.centre(*la, *lo)
+		if b.contains(*la, *lo) {
+			out = append(out, rows[i])
+		}
+	}
+	return out
+}
+
+// maxHexResForRadius is the finest display resolution whose hexes, anywhere
+// within one cell of latitude lat (poleward), have a ground circumradius of at
+// least radiusM. Web Mercator shrinks a hex on the ground by cos(latitude),
+// so the bound is taken at the poleward edge, and ground metres are those of
+// the earthRadiusKm sphere every CoreScope distance uses. 0 when even that is
+// too fine.
+func maxHexResForRadius(radiusM, lat float64) int {
+	a := math.Min(math.Abs(lat), hexMaxLat)
+	const ground = earthRadiusKm * 1000 / hexEarthRadius // metres per Mercator unit at the equator
+	for res := 18; res > 0; res-- {
+		size := hexSizeForRes(res)
+		// A Mercator unit spans at most 1/hexEarthRadius rad of latitude.
+		edge := math.Min(hexMaxLat, a+size/hexEarthRadius*180/math.Pi)
+		if size*ground*math.Cos(edge*math.Pi/180) >= radiusM {
+			return res
+		}
+	}
+	return 0
 }

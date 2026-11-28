@@ -266,6 +266,8 @@
     "pages": "readonly",
     "parseViewportHash": "readonly",
     "pathHashSize": "readonly",
+    "frameHex": "readonly",
+    "frameSize": "readonly",
     "payloadTypeColor": "readonly",
     "payloadTypeName": "readonly",
     "process": "readonly",

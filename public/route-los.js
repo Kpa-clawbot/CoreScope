@@ -673,7 +673,7 @@
   }
 
   function panelBodyHtml(leg, an, st) {
-    return UI.profileHtml({
+    return (window.LocationPrivacy ? window.LocationPrivacy.approxNoteHtml('positions') : '') + UI.profileHtml({
       an: an,
       km: leg.result && leg.result.distanceKm != null ? leg.result.distanceKm : legKm(leg),
       nameA: leg.nameA,

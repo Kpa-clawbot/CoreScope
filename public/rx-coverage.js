@@ -60,10 +60,13 @@
 
   // coverageReply judges a layer reply. Only the newest request counts
   // (an older, unfiltered reply must not overwrite "My coverage"); a 401/403
-  // to mine=1 means the session is gone, which is not "no coverage".
-  function coverageReply(seq, latest, status, mineSent) {
+  // to mine=1 means the session is gone, which is not "no coverage". A 403
+  // to one companion's view (rxSent) means location privacy keeps it to its
+  // owner or an admin, which is not "no coverage" either.
+  function coverageReply(seq, latest, status, mineSent, rxSent) {
     if (seq !== latest) return 'ignore';
     if (mineSent && (status === 401 || status === 403)) return 'mine-refused';
+    if (rxSent && status === 403) return 'rx-refused';
     return status >= 200 && status < 300 ? 'draw' : 'error';
   }
 
@@ -203,6 +206,7 @@
     return '<div style="max-width:1100px;margin:0 auto;padding:12px 16px">' +
       '<h2 style="margin:4px 0 2px;font-size:18px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Mobile RX coverage</h2>' +
       '<div style="color:var(--text-muted);font-size:11px" id="rxSubtitle">' + subtitleHtml() + '</div>' +
+      (window.LocationPrivacy ? window.LocationPrivacy.approxNoteHtml('coverage') : '') +
       appPanelHtml(window.MC_CLIENT_RX_APP_URL, window.qrcode) +
       '<div class="analytics-time-range" id="rxDays" style="margin:8px 0">' + dayBtn(1) + dayBtn(7) + dayBtn(14) + dayBtn(30) + '</div>' +
       '<div class="analytics-time-range" id="rxMineBar" style="margin:8px 0" hidden></div>' +
@@ -210,6 +214,8 @@
       legendHtml() +
       '<div style="position:relative">' +
       '<div id="rxMap" style="height:60vh;min-height:360px;border:1px solid var(--border,#d0d7de);border-radius:6px;margin:8px 0"></div>' +
+      '<div id="rxRefused" class="lp-notice lp-map-notice" role="status" hidden>' +
+        'Only this companion\u2019s owner or an admin can see its coverage. Choose All to see everyone\u2019s.</div>' +
       '<div id="rxNoiseEmpty" class="nq-msg" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1000;pointer-events:none">No RF samples in this view yet.</div>' +
       '</div>' +
       '<div class="nq-group-h">Top mobile observers</div>' +
@@ -285,8 +291,13 @@
   function fetchLayer(path, bbox, extra, seq) {
     var sentMine = mineSent();
     return CSApi.fetch(coverageUrl(path, bbox, map.getZoom(), days, selectedRx, sentMine) + extra).then(function (r) {
-      var verdict = coverageReply(seq, drawSeq, r.status, sentMine);
+      var verdict = coverageReply(seq, drawSeq, r.status, sentMine, !!selectedRx);
       if (verdict === 'ignore') return null;
+      setRxRefused(verdict === 'rx-refused');
+      if (verdict === 'rx-refused') {
+        if (!destroyed && covLayer) covLayer.clearLayers();
+        return null;
+      }
       if (verdict === 'mine-refused') {
         if (!destroyed && map) { mine = false; renderMine(); drawCoverage(); syncHash(); }
         return null;
@@ -348,6 +359,12 @@
       covLayer.clearLayers();
       setNoiseEmpty(true, 'Could not load noise samples. Pan or zoom to retry.');
     });
+  }
+
+  // setRxRefused shows or hides the notice for a refused per-companion view.
+  function setRxRefused(show) {
+    var el = document.getElementById('rxRefused');
+    if (el) el.hidden = !show;
   }
 
   // setNoiseEmpty toggles the "no samples in this view" message. Only shown

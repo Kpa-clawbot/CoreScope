@@ -619,6 +619,33 @@ jobs:
             sleep 1
           done
 
+      - name: Start location-privacy E2E server
+        # A second stock server with locationPrivacy on: the UI labels
+        # approximate positions and hides located advert bytes. Own fixture copy.
+        if: matrix.shard == 1
+        env:
+          CORESCOPE_LOCATION_SECRET: e2e-location-privacy-secret-0123456789abcdef
+        run: |
+          fuser -k 13583/tcp 2>/dev/null || true
+          rm -rf /tmp/cs-lp
+          mkdir -p /tmp/cs-lp
+          cp test-fixtures/e2e-fixture.db /tmp/cs-lp/lp.db
+          cat > /tmp/cs-lp/config.json <<'JSON'
+          {
+            "port": 13583,
+            "locationPrivacy": { "enabled": true, "radiusM": 1000 },
+            "clientRxCoverage": { "enabled": true },
+            "planner": { "enabled": true }
+          }
+          JSON
+          ./corescope-server -config-dir /tmp/cs-lp -port 13583 -db /tmp/cs-lp/lp.db -public public-instrumented &
+          echo $! > .server-lp.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:13583/api/healthz > /dev/null 2>&1; then echo "location-privacy server ready after ${i}s"; break; fi
+            if [ "$i" -eq 30 ]; then echo "location-privacy server failed to start within 30s"; exit 1; fi
+            sleep 1
+          done
+
       - name: Start split frontend (static build + API-only server)
         # The anonymous static build on :8788 against a stock server on :13591
         # that lists that origin in CORS_ALLOWED_ORIGINS, the way a static
@@ -846,6 +873,7 @@ jobs:
           suite 1 test-issue-1522-trace-url-sync-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-marker-outline-weight.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-node-reach-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-location-privacy-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13583 LOCPRIV_REQUIRE=1
           suite 3 test-packets-compact-columns-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-packets-node-filter-e2e.js BASE_URL=$B
           suite 3 test-packets-scope-column.js CHROMIUM_REQUIRE=1 BASE_URL=$B
@@ -927,7 +955,7 @@ jobs:
             kill $(cat .server-um.pid) 2>/dev/null || true
             rm -f .server-um.pid
           fi
-          for f in .server-split.pid .static-split.pid .server-ducting.pid .fake-ducting.pid; do
+          for f in .server-split.pid .static-split.pid .server-lp.pid .server-ducting.pid .fake-ducting.pid; do
             if [ -f "$f" ]; then kill $(cat "$f") 2>/dev/null || true; rm -f "$f"; fi
           done
 

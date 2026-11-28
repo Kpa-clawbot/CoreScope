@@ -52,7 +52,7 @@ func (s *PacketStore) pollTxRewrites(limit int) error {
 		scopeCol = "t.scope_name"
 	}
 	rows, err := s.db.conn.Query(`
-		SELECT f.id, f.tx_id, t.decoded_json, `+scopeCol+`
+		SELECT f.id, f.tx_id, t.decoded_json, `+scopeCol+`, t.payload_type, t.raw_hex
 		FROM tx_rewrite_feed f LEFT JOIN transmissions t ON t.id = f.tx_id
 		WHERE f.id > ? ORDER BY f.id LIMIT ?`, s.txRewriteCursor, limit)
 	if err != nil {
@@ -63,14 +63,24 @@ func (s *PacketStore) pollTxRewrites(limit int) error {
 		txID    int
 		decoded sql.NullString
 		scope   sql.NullString
+		ptype   sql.NullInt64
+		raw     sql.NullString
+		// Served form (location privacy, packet_redact.go), computed
+		// before s.mu is taken.
+		hidden *hiddenFrame
 	}
+	locFuzz := s.db.locationFuzzer()
 	var batch []rewrite
 	for rows.Next() {
 		var r rewrite
-		if err := rows.Scan(&r.id, &r.txID, &r.decoded, &r.scope); err != nil {
+		if err := rows.Scan(&r.id, &r.txID, &r.decoded, &r.scope, &r.ptype, &r.raw); err != nil {
 			rows.Close()
 			return err
 		}
+		if r.decoded.Valid {
+			_, r.decoded.String, r.hidden = redactLocatedAdvert(locFuzz, nullIntPtr(r.ptype), r.raw.String, r.decoded.String)
+		}
+		r.raw = sql.NullString{}
 		batch = append(batch, r)
 	}
 	err = rows.Err()
@@ -89,6 +99,10 @@ func (s *PacketStore) pollTxRewrites(limit int) error {
 		}
 		if r.decoded.Valid && r.decoded.String != tx.DecodedJSON {
 			tx.DecodedJSON = r.decoded.String
+			if r.hidden != nil && tx.hidden == nil {
+				// The rewrite revealed a location the loaded JSON did not.
+				tx.RawHex, tx.hidden = "", r.hidden
+			}
 			// ParsedDecoded caches behind a sync.Once; reset both under the
 			// write lock so the next reader parses the new JSON.
 			tx.decodedOnce = sync.Once{}

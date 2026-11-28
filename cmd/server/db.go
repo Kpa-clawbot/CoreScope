@@ -16,7 +16,6 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/dbschema"
-	"github.com/meshcore-analyzer/geofilter"
 	"github.com/meshcore-analyzer/packetpath"
 	"golang.org/x/sync/singleflight"
 )
@@ -44,11 +43,12 @@ const contentHashMigrationName = "content_hash_payload_bits_v1"
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
 	advertEvidenceTable     atomic.Bool
-	txRewriteFeedTable      atomic.Bool // tx_rewrite_feed present (#2107); re-probed while absent
-	clientNodeNamesTable    atomic.Bool // client_node_names present; re-probed while absent (clientNodeNamesPresent)
-	inactiveNodesTable      atomic.Bool // inactive_nodes present; re-probed while absent (clientNameHeard)
-	hashMigrationDone       atomic.Bool // ingestor's content-hash migration seen done; latched (hashMigrationComplete)
-	advertEvidenceReadHook  func()      // test-only: immediately before a bulk mask query
+	txRewriteFeedTable      atomic.Bool                    // tx_rewrite_feed present (#2107); re-probed while absent
+	clientNodeNamesTable    atomic.Bool                    // client_node_names present; re-probed while absent (clientNodeNamesPresent)
+	inactiveNodesTable      atomic.Bool                    // inactive_nodes present; re-probed while absent (clientNameHeard)
+	hashMigrationDone       atomic.Bool                    // ingestor's content-hash migration seen done; latched (hashMigrationComplete)
+	locFuzz                 atomic.Pointer[locationFuzzer] // location privacy; nil: off (node_coords.go)
+	advertEvidenceReadHook  func()                         // test-only: immediately before a bulk mask query
 	conn                    *sql.DB
 	path                    string // filesystem path to the database file
 	isV3                    bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
@@ -358,20 +358,6 @@ func schemaColumns(ctx context.Context, q rowQuerier, table string) (map[string]
 	return cols, rows.Err()
 }
 
-// nodeSelectCols returns the SELECT column list for nodes queries.
-// When hasDefaultScope is true, default_scope is appended as the last column.
-func (db *DB) nodeSelectCols() string {
-	cols := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert"
-	if db.hasDefaultScope {
-		cols += ", default_scope"
-	}
-	// #1865: confirmed scopes appended after default_scope; scan order must match.
-	if db.hasConfiguredScope {
-		cols += ", configured_scope, configured_scope_at"
-	}
-	return cols
-}
-
 // transmissionBaseSQL returns the SELECT columns and JOIN clause for transmission-centric queries.
 func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 	if db.isV3 {
@@ -440,6 +426,7 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 	if db.hasScopeName {
 		m["scope_name"] = nullStr(scopeName)
 	}
+	redactPacketMap(db.locationFuzzer(), m) // location privacy (packet_redact.go)
 	return m
 }
 
@@ -883,6 +870,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	}
 	defer rows.Close()
 
+	locFuzz := db.locationFuzzer()
 	packets := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var hash, firstSeen, rawHex, decodedJSON, latest, observerID, observerName, observerIATA, pathJSON, distinctIatasCSV sql.NullString
@@ -901,7 +889,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			continue
 		}
 
-		packets = append(packets, map[string]interface{}{
+		p := map[string]interface{}{
 			"hash":              nullStr(hash),
 			"first_seen":        nullStr(firstSeen),
 			"count":             count,
@@ -920,7 +908,9 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			"snr":               nullFloat(snr),
 			"rssi":              nullFloat(rssi),
 			"scope_name":        nullStr(scopeName),
-		})
+		}
+		redactPacketMap(locFuzz, p) // location privacy (packet_redact.go)
+		packets = append(packets, p)
 	}
 
 	return &PacketResult{Packets: packets, Total: total}, nil
@@ -1159,6 +1149,7 @@ func (db *DB) ObservationRawHexForHash(hash string) map[int]string {
 		return nil
 	}
 	defer rows.Close()
+	locFuzz := db.locationFuzzer()
 	out := make(map[int]string)
 	for rows.Next() {
 		var id int
@@ -1166,8 +1157,9 @@ func (db *DB) ObservationRawHexForHash(hash string) map[int]string {
 		if err := rows.Scan(&id, &hx); err != nil {
 			continue
 		}
-		if hx.Valid && hx.String != "" {
-			out[id] = hx.String
+		// Location privacy: a located advert's frame is not served.
+		if v := redactObservationFrame(locFuzz, hx.String); v != "" {
+			out[id] = v
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -2508,13 +2500,14 @@ func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]inte
 	}
 	defer rows.Close()
 
+	locFuzz := db.locationFuzzer()
 	var result []map[string]interface{}
 	for rows.Next() {
 		var id int
 		var rawHex, hash, firstSeen, decodedJSON sql.NullString
 		var routeType, payloadType, payloadVersion sql.NullInt64
 		rows.Scan(&id, &rawHex, &hash, &firstSeen, &routeType, &payloadType, &payloadVersion, &decodedJSON)
-		result = append(result, map[string]interface{}{
+		m := map[string]interface{}{
 			"id":              id,
 			"raw_hex":         nullStr(rawHex),
 			"hash":            nullStr(hash),
@@ -2523,7 +2516,9 @@ func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]inte
 			"payload_type":    nullInt(payloadType),
 			"payload_version": nullInt(payloadVersion),
 			"decoded_json":    nullStr(decodedJSON),
-		})
+		}
+		redactPacketMap(locFuzz, m) // location privacy (packet_redact.go)
+		result = append(result, m)
 	}
 	return result, nil
 }
@@ -2588,64 +2583,6 @@ func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
 		counts[id] = cnt
 	}
 	return counts
-}
-
-// GetNodeLocations returns a map of lowercase public_key → {lat, lon, role} for node geo lookups.
-func (db *DB) GetNodeLocations() map[string]map[string]interface{} {
-	result := make(map[string]map[string]interface{})
-	rows, err := db.conn.Query("SELECT public_key, lat, lon, role FROM nodes")
-	if err != nil {
-		return result
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var pk string
-		var role sql.NullString
-		var lat, lon sql.NullFloat64
-		rows.Scan(&pk, &lat, &lon, &role)
-		result[strings.ToLower(pk)] = map[string]interface{}{
-			"lat":  nullFloat(lat),
-			"lon":  nullFloat(lon),
-			"role": nullStr(role),
-		}
-	}
-	return result
-}
-
-// GetNodeLocationsByKeys returns location data only for the given public keys.
-// This avoids fetching ALL nodes when only a few keys need to be matched.
-func (db *DB) GetNodeLocationsByKeys(keys []string) map[string]map[string]interface{} {
-	result := make(map[string]map[string]interface{})
-	if len(keys) == 0 {
-		return result
-	}
-	placeholders := make([]string, len(keys))
-	args := make([]interface{}, len(keys))
-	for i, k := range keys {
-		placeholders[i] = "?"
-		args[i] = strings.ToLower(k)
-	}
-	// #1481 P0-3: drop LOWER(public_key) — that wrap is non-sargable and
-	// forces a full scan. Nodes are stored lowercase already; we lowercase
-	// args in Go above so a plain IN matches the index on public_key.
-	query := "SELECT public_key, lat, lon, role FROM nodes WHERE public_key IN (" + strings.Join(placeholders, ",") + ")"
-	rows, err := db.conn.Query(query, args...)
-	if err != nil {
-		return result
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var pk string
-		var role sql.NullString
-		var lat, lon sql.NullFloat64
-		rows.Scan(&pk, &lat, &lon, &role)
-		result[strings.ToLower(pk)] = map[string]interface{}{
-			"lat":  nullFloat(lat),
-			"lon":  nullFloat(lon),
-			"role": nullStr(role),
-		}
-	}
-	return result
 }
 
 // QueryMultiNodePackets returns transmissions referencing any of the given pubkeys.
@@ -2743,63 +2680,6 @@ func scanPacketRow(rows *sql.Rows) map[string]interface{} {
 		"decoded_json":    nullStr(decodedJSON),
 		"created_at":      nullStr(createdAt),
 	}
-}
-
-// scanNodeRow scans a node row. When hasDefaultScope is true the SELECT must
-// include default_scope as the last column.
-func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
-	var pk string
-	var name, role, lastSeen, firstSeen sql.NullString
-	var lat, lon sql.NullFloat64
-	var advertCount int
-	var batteryMv sql.NullInt64
-	var temperatureC sql.NullFloat64
-	var foreign sql.NullInt64
-	var defaultScope sql.NullString
-	var configuredScope, configuredScopeAt sql.NullString
-
-	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign}
-	if db.hasDefaultScope {
-		scanArgs = append(scanArgs, &defaultScope)
-	}
-	if db.hasConfiguredScope {
-		scanArgs = append(scanArgs, &configuredScope, &configuredScopeAt)
-	}
-	if err := rows.Scan(scanArgs...); err != nil {
-		return nil
-	}
-	m := map[string]interface{}{
-		"public_key":             pk,
-		"name":                   nullStr(name),
-		"role":                   nullStr(role),
-		"lat":                    nullFloat(lat),
-		"lon":                    nullFloat(lon),
-		"last_seen":              nullStr(lastSeen),
-		"first_seen":             nullStr(firstSeen),
-		"advert_count":           advertCount,
-		"last_heard":             nullStr(lastSeen),
-		"hash_size":              nil,
-		"hash_size_inconsistent": false,
-		"foreign":                foreign.Valid && foreign.Int64 != 0,
-	}
-	if batteryMv.Valid {
-		m["battery_mv"] = int(batteryMv.Int64)
-	} else {
-		m["battery_mv"] = nil
-	}
-	if temperatureC.Valid {
-		m["temperature_c"] = temperatureC.Float64
-	} else {
-		m["temperature_c"] = nil
-	}
-	if db.hasDefaultScope {
-		m["default_scope"] = nullStr(defaultScope)
-	}
-	if db.hasConfiguredScope {
-		m["configured_scope"] = nullStr(configuredScope)
-		m["configured_scope_at"] = nullStr(configuredScopeAt)
-	}
-	return m
 }
 
 func nullStr(ns sql.NullString) interface{} {
@@ -3273,44 +3153,6 @@ func (db *DB) GetDroppedPackets(limit int, observerID, nodePubkey string) ([]map
 	return results, nil
 }
 
-// GetNodePubkeysInArea returns public keys of nodes whose GPS coordinates
-// fall inside the given area polygon or bounding box.
-func (db *DB) GetNodePubkeysInArea(entry AreaEntry) ([]string, error) {
-	rows, err := db.conn.Query("SELECT public_key, lat, lon FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	gf := &geofilter.Config{
-		Polygon: entry.Polygon,
-		LatMin:  entry.LatMin,
-		LatMax:  entry.LatMax,
-		LonMin:  entry.LonMin,
-		LonMax:  entry.LonMax,
-	}
-
-	var result []string
-	for rows.Next() {
-		var pk string
-		var lat, lon sql.NullFloat64
-		if err := rows.Scan(&pk, &lat, &lon); err != nil {
-			continue
-		}
-		if !lat.Valid || !lon.Valid {
-			continue
-		}
-		// Skip (0,0) — PassesFilter allows it but these nodes have no real GPS.
-		if lat.Float64 == 0 && lon.Float64 == 0 {
-			continue
-		}
-		if geofilter.PassesFilter(lat.Float64, lon.Float64, gf) {
-			result = append(result, pk)
-		}
-	}
-	return result, rows.Err()
-}
-
 // GetSignatureDropCount returns the total number of dropped packets.
 func (db *DB) GetSignatureDropCount() int64 {
 	var count int64
@@ -3481,45 +3323,6 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	}
 
 	return resp, nil
-}
-
-// NodeForGeoPrune holds the minimal fields needed for geo-filter pruning.
-type NodeForGeoPrune struct {
-	PubKey string
-	Name   string
-	Lat    *float64
-	Lon    *float64
-}
-
-// GetNodesForGeoPrune returns all nodes with their coordinates for geo-filter evaluation.
-// Read-only — safe on the server's mode=ro handle.
-func (db *DB) GetNodesForGeoPrune() ([]NodeForGeoPrune, error) {
-	rows, err := db.conn.Query("SELECT public_key, name, lat, lon FROM nodes ORDER BY name")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var nodes []NodeForGeoPrune
-	for rows.Next() {
-		var pk string
-		var name sql.NullString
-		var lat, lon sql.NullFloat64
-		if err := rows.Scan(&pk, &name, &lat, &lon); err != nil {
-			continue
-		}
-		n := NodeForGeoPrune{PubKey: pk, Name: name.String}
-		if lat.Valid {
-			v := lat.Float64
-			n.Lat = &v
-		}
-		if lon.Valid {
-			v := lon.Float64
-			n.Lon = &v
-		}
-		nodes = append(nodes, n)
-	}
-	return nodes, rows.Err()
 }
 
 // DeleteNodesByPubkeys was removed in PR #738 follow-up: server is read-only

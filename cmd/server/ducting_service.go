@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -553,37 +552,4 @@ func ductingParseLastSeen(v string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
-}
-
-// ductingNodeCoords returns [lat, lon] of the nodes with a position fix,
-// a last_seen within ductingNodeMaxAgeDays of now (missing or unparsable:
-// left out) and that visible accepts (nil accepts all). Read-only.
-func (db *DB) ductingNodeCoords(visible func(n *nodeInfo) bool, now time.Time) ([][2]float64, error) {
-	rows, err := db.conn.Query("SELECT public_key, name, lat, lon, last_seen FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL AND last_seen IS NOT NULL")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	cutoff := now.Add(-ductingNodeMaxAgeDays * 24 * time.Hour)
-	var out [][2]float64
-	for rows.Next() {
-		var pk string
-		var name, lastSeen sql.NullString
-		var lat, lon float64
-		if err := rows.Scan(&pk, &name, &lat, &lon, &lastSeen); err != nil {
-			return nil, err
-		}
-		if lat == 0 && lon == 0 {
-			continue // no real fix
-		}
-		if seen, ok := ductingParseLastSeen(lastSeen.String); !ok || seen.Before(cutoff) {
-			continue // stale, or no usable timestamp
-		}
-		n := nodeInfo{PublicKey: pk, Name: name.String, Lat: lat, Lon: lon, HasGPS: true}
-		if visible != nil && !visible(&n) {
-			continue
-		}
-		out = append(out, [2]float64{lat, lon})
-	}
-	return out, rows.Err()
 }

@@ -822,6 +822,7 @@
             '<button type="button" class="mc-pl-icon-btn mc-pl-sheet-toggle" aria-expanded="true" aria-controls="mc-pl-side-body" aria-label="Hide planner panel">' +
               icon('ph-caret-down') + '</button>' +
           '</div>' +
+          (window.LocationPrivacy ? window.LocationPrivacy.slotHtml('positions') : '') +
           '<div class="mc-pl-tabs" role="tablist" aria-label="Planner mode">' + tabs + '</div>' +
         '</div>' +
         '<div class="mc-pl-side-body" id="mc-pl-side-body">' +
@@ -879,6 +880,7 @@
     var p = parseParams(location.hash);
     container.innerHTML = pageHtml(cfg);
     var root = container.querySelector('.mc-pl-page');
+    if (window.LocationPrivacy) window.LocationPrivacy.hydrate(root);
     S = {
       gen: pageGen, cfg: cfg, rawCfg: rawCfg, container: container, root: root,
       map: null, tiles: null, layers: {}, nodeRenderer: null,

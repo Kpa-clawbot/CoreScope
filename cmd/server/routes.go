@@ -197,6 +197,11 @@ func NewServer(db *DB, cfg *Config, hub *Hub) *Server {
 	if cfg != nil {
 		cfg.applyListLimitsDefaults()
 	}
+	// Node coordinates are fuzzed as they are read (node_coords.go). main
+	// installs the fuzzer on both right after OpenDB, before the store
+	// loads; a server built without main (tests) gets the one side copied
+	// to the other here. Never nil over a fuzzer; two different ones panic.
+	reconcileLocationFuzzer(db, cfg)
 	return &Server{
 		db:        db,
 		cfg:       cfg,
@@ -577,6 +582,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		UserManagement:                 s.clientUserManagement(),
 		LOS:                            s.cfg.LOS.clientConfig(),
 		Planner:                        s.cfg.Planner.clientConfig(s.cfg.LOS),
+		LocationPrivacy:                clientLocationPrivacy(s.cfg.LocationFuzzer()),
 		Ducting:                        s.cfg.Ducting.clientConfig(),
 	})
 }
@@ -1404,7 +1410,18 @@ func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 	// raw_hex would skip every one of them and leave the bug in place on the
 	// main path. Only where no frame is stored does the canonical value stand.
 	canonicalHex, _ := packet["raw_hex"].(string)
-	if s.db != nil && hash != "" && len(observations) > 0 {
+	// Location privacy: a located advert's observations are served like the
+	// packet (raw_hex null, marked, frame size and head), and no observation
+	// or canonical frame is filled in for it: each observation frame carries
+	// the same position and signature.
+	if hidden, _ := packet["location_hidden"].(bool); hidden {
+		for _, obs := range observations {
+			obs["raw_hex"] = nil
+			obs["location_hidden"] = true
+			obs["frame_bytes"] = packet["frame_bytes"]
+			obs["frame_head"] = packet["frame_head"]
+		}
+	} else if s.db != nil && hash != "" && len(observations) > 0 {
 		byObsID := s.db.ObservationRawHexForHash(hash)
 		for _, obs := range observations {
 			if id, ok := obs["id"].(int); ok {
@@ -1724,6 +1741,10 @@ func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 	// the API surface, so observer history (paths, hops, distances) remains
 	// intact for analytics.
 	if vis := s.nodeVisibility(); vis.filters() {
+		exact, err := s.geoFilterNodePositions(vis, nodes)
+		if err != nil {
+			return NodeListResponse{}, err
+		}
 		filtered := nodes[:0]
 		for _, node := range nodes {
 			pk, _ := node["public_key"].(string)
@@ -1731,6 +1752,16 @@ func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 			foreign, _ := node["foreign"].(bool)
 			lat, okLat := toFloat64(node["lat"])
 			lon, okLon := toFloat64(node["lon"])
+			if exact != nil {
+				// Location privacy: the row holds the approximate
+				// position; classify by the stored one. A node gone
+				// since the page query is dropped.
+				p, ok := exact[pk]
+				if !ok {
+					continue
+				}
+				lat, lon, okLat, okLon = p.lat, p.lon, p.ok, p.ok
+			}
 			if !okLat || !okLon {
 				lat, lon = 0, 0 // no fix: the geo_filter keeps it
 			}
@@ -3114,9 +3145,7 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 		}
 		var lat, lon, nodeRole interface{}
 		if nodeLoc, ok := nodeLocations[strings.ToLower(o.ID)]; ok {
-			lat = nodeLoc["lat"]
-			lon = nodeLoc["lon"]
-			nodeRole = nodeLoc["role"]
+			lat, lon, nodeRole = nodeLoc.Lat, nodeLoc.Lon, nodeLoc.Role
 		}
 
 		resp := ObserverResp{
@@ -3450,8 +3479,15 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		// Use in-memory store (matches Node.js pktStore.packets approach)
 		s.store.mu.RLock()
-		byType := map[string][]*StoreTx{}
+		// The frame length is read here, under the lock: the rewrite feed
+		// may clear RawHex of an advert it finds located (packet_redact.go).
+		type audioPick struct {
+			tx    *StoreTx
+			bytes int
+		}
+		byType := map[string][]audioPick{}
 		for _, tx := range s.store.packets {
+			// A located advert has no frame to play (location privacy).
 			if tx.RawHex == "" {
 				continue
 			}
@@ -3468,18 +3504,17 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 					typeName = name
 				}
 			}
-			byType[typeName] = append(byType[typeName], tx)
+			byType[typeName] = append(byType[typeName], audioPick{tx, len(tx.RawHex)})
 		}
 		s.store.mu.RUnlock()
 
-		// RawHex never changes once a tx is in the store, so the sort runs
-		// outside the lock.
+		// The sort runs outside the lock, on the lengths read under it.
 		for typeName, pkts := range byType {
 			sort.Slice(pkts, func(i, j int) bool {
-				return len(pkts[i].RawHex) < len(pkts[j].RawHex)
+				return pkts[i].bytes < pkts[j].bytes
 			})
 			count := min(8, len(pkts))
-			picks := make([]*StoreTx, count)
+			picks := make([]audioPick, count)
 			for i := range picks {
 				picks[i] = pkts[(i*len(pkts))/count]
 			}
@@ -3491,7 +3526,11 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 		s.store.mu.RLock()
 		for typeName, picks := range byType {
 			picked := make([]AudioLabPacket, 0, len(picks))
-			for _, tx := range picks {
+			for _, pick := range picks {
+				tx := pick.tx
+				if tx.RawHex == "" {
+					continue // cleared by the rewrite feed since the scan
+				}
 				pt := 0
 				if tx.PayloadType != nil {
 					pt = *tx.PayloadType
@@ -3665,6 +3704,9 @@ func mapSliceToTransmissions(maps []map[string]interface{}) []TransmissionResp {
 		tx.PathJSON = m["path_json"]
 		tx.Direction = m["direction"]
 		tx.Score = m["score"]
+		tx.LocationHidden, _ = m["location_hidden"].(bool)
+		tx.FrameBytes, _ = m["frame_bytes"].(int)
+		tx.FrameHead, _ = m["frame_head"].(string)
 		result = append(result, tx)
 	}
 	return result
@@ -3690,6 +3732,9 @@ func mapSliceToObservations(maps []map[string]interface{}) []ObservationResp {
 		obs.Direction = m["direction"]
 		obs.RawHex = m["raw_hex"]
 		obs.Timestamp = m["timestamp"]
+		obs.LocationHidden, _ = m["location_hidden"].(bool)
+		obs.FrameBytes, _ = m["frame_bytes"].(int)
+		obs.FrameHead, _ = m["frame_head"].(string)
 		result = append(result, obs)
 	}
 	return result

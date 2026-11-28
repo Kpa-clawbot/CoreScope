@@ -215,7 +215,7 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		// payload bytes from RawHex (2 hex chars per byte). Score is
 		// LoRa Time-on-Air (nanoseconds) × distinct relays — see
 		// resolveLoRaPreset for the assumed PHY block (issue #1768).
-		payloadBytes := len(tx.RawHex) / 2
+		payloadBytes := tx.frameBytes() // a located advert keeps its length
 		relays := s.distinctRelayCount(tx)
 		toa := lora.TimeOnAir(payloadBytes, preset)
 		score := int64(toa) * int64(relays)

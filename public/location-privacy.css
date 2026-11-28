@@ -1,0 +1,34 @@
+/* Location privacy notices — theme variables only. */
+.lp-slot[hidden] { display: none; }
+.lp-notice,
+.lp-hidden-bytes {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent-strong);
+  border-radius: 6px;
+  background: var(--surface-2, var(--card-bg));
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.lp-hidden-bytes { font-size: 13px; }
+/* Over a map: centred, above the tiles, never catching map gestures. */
+.lp-map-notice {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1000;
+  width: max-content;
+  max-width: min(420px, 85%);
+  margin: 0;
+  box-shadow: 0 2px 8px var(--shadow);
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+.lp-map-notice[hidden] { display: none; }
+.lp-attr { color: var(--text); font-weight: 600; }
+.leaflet-container .lp-attr { color: inherit; }
+.lp-loc { display: block; color: var(--text-muted); font-size: 12px; }

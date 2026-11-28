@@ -80,6 +80,7 @@ Off by default, enabled in `config.json`:
 
 - **User Accounts**: registration with email activation, settings sync, an admin area, hashtag channel proposals, mail notifications for watched nodes, and a personal data export. The dashboard stays public. See [docs/user-guide/accounts.md](docs/user-guide/accounts.md)
 - **Mobile RX Coverage**: crowdsourced coverage from phones connected to a companion radio, drawn as hex bins on the RX Coverage page and on each node's Reach page. See [docs/client-rx-coverage.md](docs/client-rx-coverage.md)
+- **Location Privacy**: serve approximate node positions (within a configurable radius) instead of exact ones, and hide the raw bytes of adverts that carry a location. See [docs/location-privacy.md](docs/location-privacy.md)
 
 ## Quick Start
 

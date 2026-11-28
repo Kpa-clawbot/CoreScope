@@ -149,6 +149,9 @@
 
   // isInitial=true shows the centred loader (first paint); time-range changes
   // pass false so the current report stays on screen until the swap (no flash).
+  // Config is awaited before any report renders, so the flag is known here.
+  function lpNote() { return window.LocationPrivacy ? window.LocationPrivacy.approxNoteHtml('positions') : ''; }
+
   async function load(container, pubkey, days, isInitial) {
     var myGen = ++loadGen;
     // Wait for server config so the coverage flag (read just below and in the
@@ -221,7 +224,7 @@
 
     // Identifiable, but no path adjacency observed in this window.
     if (!d.links.length) {
-      container.innerHTML = '<div id="nq-report">' + statsHtml +
+      container.innerHTML = '<div id="nq-report">' + lpNote() + statsHtml +
         '<div class="nq-empty">No observed RF links in the last ' + d.window.days +
         ' days — this node advertises but hasn’t been seen relaying traffic (or no observers captured it). Try a longer window.</div>' +
         '</div></div>';
@@ -229,7 +232,7 @@
       return;
     }
 
-    container.innerHTML = '<div id="nq-report">' + statsHtml +
+    container.innerHTML = '<div id="nq-report">' + lpNote() + statsHtml +
       '<div class="nq-actions nq-noprint">' +
       '<fieldset class="nq-filter"><legend>Show one-way links</legend>' +
       '<label for="nqIncoming"><input type="checkbox" id="nqIncoming"> incoming <span class="nq-dir">(we hear them)</span></label>' +

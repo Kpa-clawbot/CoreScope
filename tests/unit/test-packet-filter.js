@@ -364,5 +364,21 @@ test('#1869: radio fields are listed in FIELDS', () => {
   ['radio', 'freq', 'bw', 'sf', 'cr'].forEach(f => assert(names.indexOf(f) !== -1, f + ' missing from FIELDS'));
 });
 
+// --- Hidden packets (location privacy): raw_hex null, frame_bytes/frame_head instead ---
+const hiddenPkt = { ...pkt, payload_type: 4, raw_hex: null, location_hidden: true, frame_bytes: 150, frame_head: '1100' };
+test('hidden packet: size filters use frame_bytes', () => {
+  assert(PF.compile('size > 100').filter(hiddenPkt));
+  assert(PF.compile('size == 150').filter(hiddenPkt));
+  assert(!PF.compile('size < 100').filter(hiddenPkt));
+});
+test('hidden packet: payload_bytes derives from frame_bytes', () => {
+  assert(PF.compile('payload_bytes == 148').filter(hiddenPkt));
+});
+test('hidden packet: raw / payload_hex are empty, nothing throws', () => {
+  assert(!PF.compile('raw contains "aa"').filter(hiddenPkt));
+  assert(PF.compile('size == 0').filter({ ...hiddenPkt, frame_bytes: undefined }));
+  assert(PF.compile('size == 0').filter({ ...hiddenPkt, frame_bytes: 'x' }));
+});
+
 console.log(`\n=== Results: ${pass} passed, ${fail} failed ===`);
 process.exit(fail > 0 ? 1 : 0);

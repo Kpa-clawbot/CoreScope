@@ -652,6 +652,7 @@
 
   // ─── Fetch server overrides ───
   window.MeshConfigReady = CSApi.fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
+    if (window.LocationPrivacy) window.LocationPrivacy.fromClientConfig(cfg);
     window.MC_CLIENT_RX_COVERAGE = cfg.clientRxCoverage === true;
     window.MC_CLIENT_RF_SAMPLES = cfg.clientRfSamples === true;
     window.MC_CLIENT_RX_APP_URL = typeof cfg.clientRxAppUrl === 'string' ? cfg.clientRxAppUrl : '';

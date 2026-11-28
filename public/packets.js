@@ -1570,6 +1570,7 @@
                 path_json: p.path_json,
                 payload_type: p.payload_type,
                 raw_hex: p.raw_hex,
+                frame_bytes: p.frame_bytes, frame_head: p.frame_head, location_hidden: p.location_hidden,
                 decoded_json: p.decoded_json,
                 radio: p.radio, // #1869: the filter's radio/sf fields read it
               };
@@ -2595,12 +2596,12 @@
     const groupPathStr = renderPath(groupPath, headerObserverId, { summary: true });
     const groupTypeName = payloadTypeName(p.payload_type);
     const groupTypeClass = payloadTypeColor(p.payload_type);
-    const groupSize = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
+    const groupSize = frameSize(p);
     // #1849: TRACE (payload_type=9) header path bytes are per-hop SNR readings,
     // not truncated hop hashes (see internal/packetpath/route.go PathBytesAreHops).
     // The (>>6)+1 derivation is meaningless for TRACE — render — with a tooltip.
     const _grpIsTrace = p.payload_type === 9;
-    const groupHashBytes = _grpIsTrace ? '—' : hashBytesText(p.raw_hex);
+    const groupHashBytes = _grpIsTrace ? '—' : hashBytesText(frameHex(p));
     const _grpHashSizeTitle = _grpIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
     const isSingle = p.count <= 1;
     // Channel color highlighting (#271)
@@ -2630,14 +2631,14 @@
       for (const c of visibleChildren) {
         const typeName = payloadTypeName(c.payload_type);
         const typeClass = payloadTypeColor(c.payload_type);
-        const size = c.raw_hex ? Math.floor(c.raw_hex.length / 2) : 0;
+        const size = frameSize(c);
         const childPath = getParsedPath(c);
         // #1849: TRACE header path bytes are SNR readings, not hop hashes.
         const _cIsTrace = c.payload_type === 9;
         const childHashBytes = _cIsTrace
           ? '—'
-          : (c.raw_hex
-            ? hashBytesText(c.raw_hex)
+          : (frameHex(c)
+            ? hashBytesText(frameHex(c))
             : (childPath.length > 0 ? childPath[0].length / 2 : 0));
         const _cHashSizeTitle = _cIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
         const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
@@ -2670,10 +2671,10 @@
     const typeClass = payloadTypeColor(p.payload_type);
     // Channel color highlighting (#271)
     const _chanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(decoded.type || typeName, decoded.channel) : '';
-    const size = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
+    const size = frameSize(p);
     // #1849: TRACE path bytes = SNR readings, not hop hashes.
     const _flatIsTrace = p.payload_type === 9;
-    const hashBytes = _flatIsTrace ? '—' : hashBytesText(p.raw_hex);
+    const hashBytes = _flatIsTrace ? '—' : hashBytesText(frameHex(p));
     const _flatHashSizeTitle = _flatIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
     const pathStr = renderPath(pathHops, p.observer_id, { summary: true });
     const detail = getDetailPreview(decoded);
@@ -3636,7 +3637,7 @@
       : [];
 
     // Cross-check: hop count from raw_hex path_len byte vs path_json length
-    const obsRawHex = effectivePkt.raw_hex || pkt.raw_hex || '';
+    const obsRawHex = effectivePkt.raw_hex || pkt.raw_hex || effectivePkt.frame_head || pkt.frame_head || '';
     let rawHopCount = null;
     if (obsRawHex.length >= 4) {
       // path_len byte position depends on route type
@@ -3700,14 +3701,13 @@
     }
 
     // Same rule as the Channels view: a flood heard at 0 hops still has a size.
-    const hashSize = pathHashSize(pkt.raw_hex);
+    const hashSize = pathHashSize(frameHex(effectivePkt) || frameHex(pkt));
 
-    const size = effectivePkt.raw_hex ? Math.floor(effectivePkt.raw_hex.length / 2) : (pkt.raw_hex ? Math.floor(pkt.raw_hex.length / 2) : 0);
+    const size = frameSize(effectivePkt) || frameSize(pkt);
     const typeName = payloadTypeName(pkt.payload_type);
 
     const snr = effectivePkt.snr ?? decoded.SNR ?? decoded.snr ?? null;
     const rssi = effectivePkt.rssi ?? decoded.RSSI ?? decoded.rssi ?? null;
-    const hasRawHex = !!(effectivePkt.raw_hex || pkt.raw_hex);
 
     // Build message preview
     let messageHtml = '';
@@ -3868,13 +3868,7 @@
         <button class="replay-live-btn" title="Replay this packet on the live map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-play"/></svg> Replay</button>
       </div>
 
-      ${(hasRawHex || Object.keys(decoded).length) ? `<details class="detail-technical"${(typeof window !== 'undefined' && window.innerWidth > 480) ? ' open' : ''}>
-        <summary>Show raw bytes</summary>
-        ${hasRawHex ? `<div class="hex-legend">${buildHexLegend(ranges)}</div>
-        <div class="hex-dump">${createColoredHexDump(effectivePkt.raw_hex || pkt.raw_hex, ranges)}</div>` : ''}
-
-        ${hasRawHex ? buildFieldTable(effectivePkt.raw_hex ? effectivePkt : pkt, decoded, pathHops, ranges, pathEntries) : buildDecodedTable(decoded)}
-      </details>` : ''}
+      ${rawBytesHtml(effectivePkt, pkt, decoded, ranges, pathHops, pathEntries)}
 
       ${observations.length > 1 ? `
       <div class="detail-observations" style="margin-top:16px">
@@ -4048,6 +4042,32 @@
       rows += `<tr><td style="font-weight:600;padding:4px 8px">${escapeHtml(k)}</td><td style="padding:4px 8px">${escapeHtml(String(v))}</td></tr>`;
     }
     return rows ? `<table class="detail-decoded" style="width:100%;border-collapse:collapse;margin-top:8px">${rows}</table>` : '';
+  }
+
+  // Raw-bytes section of the detail pane. An ADVERT with a location is served
+  // without raw_hex when location privacy is on (location_hidden): say so
+  // instead of showing an empty hex view. Never assumes raw_hex is a string.
+  function rawBytesHtml(effectivePkt, pkt, decoded, ranges, pathHops, pathEntries) {
+    const eff = effectivePkt || pkt || {};
+    const hasRawHex = !!(eff.raw_hex || (pkt && pkt.raw_hex));
+    const LP = window.LocationPrivacy;
+    const hidden = !hasRawHex && !!LP && (LP.rawHexHidden(eff) || LP.rawHexHidden(pkt));
+    const hasDecoded = Object.keys(decoded || {}).length > 0;
+    if (!hasRawHex && !hasDecoded && !hidden) return '';
+    const open = (typeof window !== 'undefined' && window.innerWidth > 480) ? ' open' : '';
+    const summary = hidden ? '<summary>Show decoded fields</summary>' : '<summary>Show raw bytes</summary>';
+    const body = hasRawHex
+      ? `<div class="hex-legend">${buildHexLegend(ranges)}</div>
+        <div class="hex-dump">${createColoredHexDump(eff.raw_hex || pkt.raw_hex, ranges)}</div>
+
+        ${buildFieldTable(eff.raw_hex ? eff : pkt, decoded, pathHops, ranges, pathEntries)}`
+      : buildDecodedTable(decoded);
+    const details = (hasRawHex || hasDecoded)
+      ? `<details class="detail-technical"${open}>
+        ${summary}
+        ${body}
+      </details>` : '';
+    return (hidden ? LP.hiddenBytesHtml() : '') + details;
   }
 
   // hopEntries — optional inferPath entries aligned with pathHops.
@@ -4493,6 +4513,8 @@
   }
 
   let _themeRefreshHandler = null;
+
+  window.__meshcorePacketsInternals = { rawBytesHtml: rawBytesHtml };
 
   registerPage('packets', {
     init: function(app, routeParam) {

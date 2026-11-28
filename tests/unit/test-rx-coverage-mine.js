@@ -68,8 +68,18 @@ assert.strictEqual(t.coverageReply(1, 2, 401, true), 'ignore');
 // Any other failure is an error, never parsed as a FeatureCollection.
 assert.strictEqual(t.coverageReply(2, 2, 401, false), 'error');
 assert.strictEqual(t.coverageReply(2, 2, 500, true), 'error');
-assert.ok(/coverageReply\(seq, drawSeq, r\.status, sentMine\)/.test(code),
+// One companion's view refused (location privacy: owner or admin only):
+// say so instead of leaving a blank map (#2458 review). mine wins when both
+// were sent, and only a 403 means refused; 401 and 404 stay errors.
+assert.strictEqual(t.coverageReply(2, 2, 403, false, true), 'rx-refused');
+assert.strictEqual(t.coverageReply(2, 2, 403, true, true), 'mine-refused');
+assert.strictEqual(t.coverageReply(2, 2, 403, false, false), 'error');
+assert.strictEqual(t.coverageReply(2, 2, 404, false, true), 'error');
+assert.strictEqual(t.coverageReply(2, 2, 200, false, true), 'draw');
+assert.strictEqual(t.coverageReply(1, 2, 403, false, true), 'ignore');
+assert.ok(/coverageReply\(seq, drawSeq, r\.status, sentMine, !!selectedRx\)/.test(code),
   'fetchLayer must judge each reply with coverageReply');
+assert.ok(/id="rxRefused"[^>]*role="status"/.test(code), 'the refusal notice must be announced');
 
 // The headers can be newest while the body is still on its way: a newer
 // request started in between must win when the old body lands (#2326).

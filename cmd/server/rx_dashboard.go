@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/meshcore-analyzer/users"
 )
 
 // scanCoverageRows reads (lat,lon,snr,rssi,heard_key,rx_at) rows into coverageRow values.
@@ -115,8 +117,10 @@ func (s *Server) queryCoverageFiltered(node, rx string, rxIn []string, days int,
 	if rxIn != nil && len(rxIn) == 0 {
 		return nil, nil
 	}
+	grid := fixGridFor(s.cfg.LocationFuzzer())
+	qb := b.widenForFixCells(grid)
 	where := []string{"lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?"}
-	args := []interface{}{b.MinLat, b.MaxLat, b.MinLon, b.MaxLon}
+	args := []interface{}{qb.MinLat, qb.MaxLat, qb.MinLon, qb.MaxLon}
 	if node != "" {
 		// Sargable heard_key IN-list (see coverageHeardKeyCandidates) so the
 		// (heard_key, …) composite index is used instead of a substr() scan (#5).
@@ -137,7 +141,11 @@ func (s *Server) queryCoverageFiltered(node, rx string, rxIn []string, days int,
 		return nil, err
 	}
 	defer rows.Close()
-	return scanCoverageRows(rows)
+	out, err := scanCoverageRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return binCoverageRows(out, grid, b), nil
 }
 
 // appendRxFilter narrows a client_* table query to one companion (rx) and/or
@@ -196,12 +204,16 @@ func (s *Server) handleRxCoverage(w http.ResponseWriter, r *http.Request) {
 	days := clampDays(atoiDefault(r.URL.Query().Get("days"), 7))
 	z, _ := strconv.Atoi(r.URL.Query().Get("z"))
 	node, rx := r.URL.Query().Get("node"), r.URL.Query().Get("rx")
+	if !s.requireCompanionView(w, r, rx) {
+		return
+	}
 	rows, err := s.queryCoverageFiltered(node, rx, mine, days, b)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
-	fc := aggregateCoverage(rows, zoomToHexRes(z), s.heardKeyResolverFor(rows))
+	res := s.coverageHexRes(z, b)
+	fc := aggregateCoverage(rows, res, s.heardKeyResolverFor(rows))
 	// "Nothing received" cells need the track, so only with the RF sample
 	// stream on; with ?node= the question would be "this node not heard",
 	// which these cells do not answer. Not with ?mine=1 either: the track
@@ -212,10 +224,59 @@ func (s *Server) handleRxCoverage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "query failed", http.StatusInternalServerError)
 			return
 		}
-		fc.Gaps, fc.GapsTruncated = aggregateGaps(track, rows, zoomToHexRes(z))
+		fc.Gaps, fc.GapsTruncated = aggregateGaps(track, rows, res)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fc)
+}
+
+// requireCompanionView gates a per-companion view (?rx=<pubkey>: one
+// companion's fixes on their own). With location privacy on it is served only
+// to the companion's linked owner (browser session) or an admin (a strong
+// X-API-Key, judged on the key alone as requireAdmin does, or an admin
+// session); anyone else gets a 403. One companion's cells over time give its
+// whereabouts away, and a parked companion seen in two adjacent cells is
+// pinned to their shared edge, whose position bisection on the bbox reveals
+// (hexgrid.go). With privacy off, or without ?rx=, it always passes.
+func (s *Server) requireCompanionView(w http.ResponseWriter, r *http.Request, rx string) bool {
+	if rx == "" || !s.cfg.LocationFuzzer().Enabled() {
+		return true
+	}
+	deny := func() bool {
+		writeError(w, http.StatusForbidden, "this companion's coverage is visible only to its owner or an admin")
+		return false
+	}
+	if key := r.Header.Get("X-API-Key"); key != "" {
+		if s.cfg.APIKey != "" && constantTimeEqual(key, s.cfg.APIKey) && !IsWeakAPIKey(key) {
+			return true
+		}
+		return deny()
+	}
+	if s.auth == nil {
+		return deny()
+	}
+	if _, ok := bearerToken(r); ok {
+		return deny()
+	}
+	u, _ := s.auth.currentUser(w, r)
+	if u == nil {
+		return deny()
+	}
+	if u.Role == users.RoleAdmin {
+		return true // a GET: no CSRF check applies (adminSessionOK)
+	}
+	links, err := s.auth.st.ListCompanionLinks(u.ID)
+	if err != nil {
+		log.Printf("[users] coverage rx view for user #%d: %v", u.ID, err)
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return false
+	}
+	for _, l := range links {
+		if strings.EqualFold(l.Pubkey, rx) {
+			return true
+		}
+	}
+	return deny()
 }
 
 // myCompanionPubkeys resolves ?mine=1 to the caller's linked companions
@@ -268,7 +329,10 @@ type RxLeaderboardResp struct {
 // "cells visited" for the frontier-weighted score. ~150 m ground cells at our
 // latitude: coarse enough that a parked node's GPS jitter stays in one cell,
 // fine enough that real driving paints many. Independent of the coverage map's
-// zoom-dependent render resolution so the ranking is stable across views.
+// zoom-dependent render resolution so the ranking is stable across views. With
+// location privacy on, fixes are binned to their privacy cell centres first and
+// the resolution is capped at maxHexResForRadius: sharing a cell with another
+// observer (the frontier weight) must not place a fix better than the radius.
 const leaderboardHexRes = 13
 
 // leaderboardScanCap bounds how many rows the leaderboard aggregates in memory.
@@ -290,7 +354,13 @@ func (s *Server) rxLeaderboard(ctx context.Context, days, limit int) ([]LeaderOb
 	// Name preference: the node's advertised name, else the companion's
 	// self-reported name (client_observers), else empty (UI shows the prefix).
 	// Hard LIMIT bounds memory; ORDER BY rx_at DESC so a truncated window keeps
-	// the most recent receptions.
+	// the most recent receptions. The resolution is read first: the read
+	// connection may be a single one, held by the scan until it ends.
+	grid := fixGridFor(s.cfg.LocationFuzzer())
+	res, err := s.leaderboardRes(ctx, grid, since)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.conn.QueryContext(ctx, `
 		SELECT cr.rx_pubkey, COALESCE(NULLIF(n.name,''), NULLIF(co.name,''), ''),
 		       cr.lat, cr.lon, cr.heard_key
@@ -334,7 +404,8 @@ func (s *Server) rxLeaderboard(ctx context.Context, days, limit int) ([]LeaderOb
 		}
 		a.receptions++
 		a.nodes[heardKey] = struct{}{}
-		cell := hexCellAt(lat, lon, leaderboardHexRes)
+		lat, lon = grid.centre(lat, lon) // identity with privacy off
+		cell := hexCellAt(lat, lon, res)
 		a.cells[cell] = struct{}{}
 		set := cellObservers[cell]
 		if set == nil {
@@ -411,6 +482,26 @@ func (s *Server) rxLeaderboard(ctx context.Context, days, limit int) ([]LeaderOb
 		}
 	}
 	return filtered, nil
+}
+
+// leaderboardRes is the leaderboard's hex resolution for one request:
+// leaderboardHexRes, and with location privacy on no finer than hexes of the
+// radius at the window's poleward fix (plus a row, for its cell centre). One
+// resolution for every row, computed once, like the coverage layers.
+func (s *Server) leaderboardRes(ctx context.Context, grid *fixGrid, since string) (int, error) {
+	if grid == nil {
+		return leaderboardHexRes, nil
+	}
+	var maxAbsLat sql.NullFloat64
+	if err := s.db.conn.QueryRowContext(ctx,
+		`SELECT MAX(ABS(lat)) FROM client_receptions WHERE rx_at >= ?`, since).Scan(&maxAbsLat); err != nil {
+		return 0, err
+	}
+	res := leaderboardHexRes
+	if c := maxHexResForRadius(grid.RadiusM(), maxAbsLat.Float64+grid.h); c < res {
+		res = c
+	}
+	return res, nil
 }
 
 func (s *Server) handleRxLeaderboard(w http.ResponseWriter, r *http.Request) {

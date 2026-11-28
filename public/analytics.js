@@ -3135,7 +3135,7 @@
       }
 
       const s = data.summary;
-      let html = `<div class="analytics-grid">
+      let html = (window.LocationPrivacy ? window.LocationPrivacy.slotHtml('positions') : '') + `<div class="analytics-grid">
         <div class="stat-card"><div class="stat-value">${s.totalHops.toLocaleString()}</div><div class="stat-label">Total Hops Analyzed</div></div>
         <div class="stat-card"><div class="stat-value">${s.totalPaths.toLocaleString()}</div><div class="stat-label">Paths Analyzed</div></div>
         <div class="stat-card"><div class="stat-value">${formatDistance(s.avgDist)}</div><div class="stat-label">Avg Hop Distance</div></div>
@@ -3195,6 +3195,7 @@
       }
 
       el.innerHTML = html;
+      if (window.LocationPrivacy) window.LocationPrivacy.hydrate(el);
 
       // Wire up map buttons
       el.querySelectorAll('.dist-map-hop').forEach(btn => {
