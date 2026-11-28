@@ -14,7 +14,7 @@ import (
 // servedNodePos, which applies the location fuzzer (identity when the feature
 // is off), so everything served or computed from it — node lists, observer
 // positions, distances, neighbor graph, path inspect, planner, reach, route
-// LOS — sees the approximate position only.
+// LOS, the ducting overlay's cells — sees the approximate position only.
 //
 // The exceptions read the exact position for classification and never serve
 // it or compute with it:
@@ -213,6 +213,54 @@ func (s *PacketStore) bulkHealthNodes(limit int, regionFilter bool, areaNodes ma
 		}
 	}
 	return nodes, nil
+}
+
+// ductingNodeCoords returns the served [lat, lon] of the nodes with a
+// position fix, a last_seen within ductingNodeMaxAgeDays of now (missing or
+// unparsable: left out) and that visible accepts (nil accepts all). The
+// ducting overlay places its cells around these, serves the cells in
+// /api/ducting and names them to the weather API, so with location privacy
+// on they are the approximate positions; visible still classifies by the
+// stored one (nodeInfo.geoFilterPos). Read-only.
+func (db *DB) ductingNodeCoords(visible func(n *nodeInfo) bool, now time.Time) ([][2]float64, error) {
+	rows, err := db.conn.Query("SELECT public_key, name, lat, lon, last_seen FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL AND last_seen IS NOT NULL")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cutoff := now.Add(-ductingNodeMaxAgeDays * 24 * time.Hour)
+	fuzzed := db.locationFuzzer() != nil
+	var out [][2]float64
+	for rows.Next() {
+		var pk string
+		var name, lastSeen sql.NullString
+		var lat, lon sql.NullFloat64
+		if err := rows.Scan(&pk, &name, &lat, &lon, &lastSeen); err != nil {
+			return nil, err
+		}
+		if !lat.Valid || !lon.Valid {
+			continue // no position
+		}
+		if lat.Float64 == 0 && lon.Float64 == 0 {
+			continue // no real fix
+		}
+		if seen, ok := ductingParseLastSeen(lastSeen.String); !ok || seen.Before(cutoff) {
+			continue // stale, or no usable timestamp
+		}
+		sLat, sLon := db.servedNodePos(pk, lat, lon)
+		if !sLat.Valid || !sLon.Valid {
+			continue // privacy on and no servable position (malformed key)
+		}
+		n := nodeInfo{PublicKey: pk, Name: name.String, Lat: sLat.Float64, Lon: sLon.Float64, HasGPS: true}
+		if fuzzed {
+			n.exactLat, n.exactLon, n.hasExact = lat.Float64, lon.Float64, true
+		}
+		if visible != nil && !visible(&n) {
+			continue
+		}
+		out = append(out, [2]float64{n.Lat, n.Lon})
+	}
+	return out, rows.Err()
 }
 
 // nodeSelectCols returns the SELECT column list for nodes queries.

@@ -59,6 +59,7 @@ The server reads this block; the ingestor does not need it. See also the `locati
   without a position.
 - **Distances and analysis.** The repeater planner, line of sight, distances, reach and neighbour
   distances are computed from the approximate positions. Treat their results as indicative.
+  The ducting overlay's forecast cells are placed around the approximate positions too.
 - **RX coverage and RF noise.** Cells built from companion GPS fixes are coarser. Each fix is
   replaced by the centre of a cell at least 2 x `radiusM` on a side, and the hexes drawn from those
   are no smaller than `radiusM` (circumradius).

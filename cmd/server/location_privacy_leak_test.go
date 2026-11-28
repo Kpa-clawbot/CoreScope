@@ -871,6 +871,9 @@ func leakRouteParams(f *lkFixture) map[string][]lkRequest {
 		"/api/elevation/profile": {
 			{path: "/api/elevation/profile?pts=" + url.QueryEscape(fz("repeater")+","+fz("relay")), want: `"legs"`, skip: ownPoints},
 		},
+		// Ducting is off in the fixture (it would call the weather API), so
+		// this is the 404; its node read is TestDuctingNodeCoordsFuzzed.
+		"/api/ducting": {{path: "/api/ducting", status: http.StatusNotFound, want: `"error"`}},
 		"/api/planner/profile": {
 			{path: "/api/planner/profile?pts=" + pt(lkProbeA) + "," + pt(lkProbeB), want: `"elev_m"`, skip: ownPoints,
 				probes: []geoPoint{lkProbeA, lkProbeB}},

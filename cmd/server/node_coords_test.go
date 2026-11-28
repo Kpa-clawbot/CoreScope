@@ -374,3 +374,90 @@ func BenchmarkNodeCoordGetAllNodes(b *testing.B) {
 		})
 	}
 }
+
+// The ducting overlay computes its cells around node positions: with
+// location privacy on those are the approximate ones, while the visibility
+// rule still classifies by the stored position.
+func TestDuctingNodeCoordsFuzzed(t *testing.T) {
+	f := newTestLocFuzzer(t, 1000, testLocSecret)
+	in, out := edgeNodes(t, f)
+	plain := visNode{pubkey: fmt.Sprintf("ab%062x", 1), name: "Plain", lat: 30.2671, lon: -97.7431}
+	all := []visNode{in, out, plain}
+	db := setupTestDB(t)
+	now := time.Now().UTC()
+	seen := now.Add(-time.Hour).Format(time.RFC3339)
+	for _, n := range all {
+		if _, err := db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES (?, ?, ?, ?, ?)`,
+			n.pubkey, n.name, n.lat, n.lon, seen); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Half a position is no position, with privacy off or on.
+	if _, err := db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES (?, 'No lat', NULL, -97.5, ?), (?, 'No lon', 29.5, NULL, ?)`,
+		fmt.Sprintf("cd%062x", 1), seen, fmt.Sprintf("cd%062x", 2), seen); err != nil {
+		t.Fatal(err)
+	}
+	// A rule like the geo_filter: south of the edge (lat 31) only.
+	stored := map[string][2]float64{}
+	visible := func(n *nodeInfo) bool {
+		lat, lon := n.geoFilterPos()
+		stored[n.PublicKey] = [2]float64{lat, lon}
+		return lat < 31
+	}
+	check := func(name string, rule func(n *nodeInfo) bool, wantNodes ...visNode) {
+		t.Helper()
+		want := map[[2]float64]bool{}
+		for _, n := range wantNodes {
+			la, lo := n.lat, n.lon
+			if fz := db.locationFuzzer(); fz != nil {
+				var ok bool
+				if la, lo, ok = fz.Fuzz(n.pubkey, n.lat, n.lon); !ok {
+					t.Fatalf("%s: no fuzzed position for %s", name, n.name)
+				}
+				if la == n.lat && lo == n.lon {
+					t.Fatalf("%s: %s is not moved by the fuzzer", name, n.name)
+				}
+			}
+			want[[2]float64{la, lo}] = true
+		}
+		coords, err := db.ductingNodeCoords(rule, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(coords) != len(want) {
+			t.Fatalf("%s: coords %v, want %v", name, coords, want)
+		}
+		for _, c := range coords {
+			if !want[c] {
+				t.Fatalf("%s: coords %v, want %v", name, coords, want)
+			}
+		}
+		if rule == nil {
+			return
+		}
+		for _, n := range all {
+			if stored[n.pubkey] != [2]float64{n.lat, n.lon} {
+				t.Fatalf("%s: rule saw %v for %s, want the stored position", name, stored[n.pubkey], n.name)
+			}
+		}
+		clear(stored)
+	}
+
+	check("privacy off", nil, all...)
+	check("privacy off, rule", visible, in, plain)
+	db.setLocationFuzzer(f)
+	// Every point is the served position, none the stored one.
+	check("privacy on", nil, all...)
+	// in's approximate position is north of the edge and out's south of it:
+	// the rule must not follow them.
+	check("privacy on, rule", visible, in, plain)
+
+	// A node whose key is not 64 hex digits has no served position: it is
+	// left out, never placed at (0, 0).
+	if _, err := db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon, last_seen) VALUES ('abcd', 'Short', 29.5, -97.5, ?)`, seen); err != nil {
+		t.Fatal(err)
+	}
+	check("privacy on, malformed key", nil, all...)
+	db.setLocationFuzzer(nil)
+	check("privacy off, malformed key", nil, append([]visNode{{pubkey: "abcd", name: "Short", lat: 29.5, lon: -97.5}}, all...)...)
+}
