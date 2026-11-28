@@ -311,6 +311,25 @@ test('circle colour follows the theme', () => {
   LP._restyle();
   assert.strictEqual(styles.length, 1, 'a removed map is dropped, not restyled');
 });
+test('a new circle drops the circles of removed maps', () => {
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/location-privacy.js');
+  const LP = ctx.window.LocationPrivacy;
+  ctx.document.documentElement = {};
+  ctx.window.getComputedStyle = () => ({ getPropertyValue: () => 'rgb(1, 1, 1)' });
+  ctx.window.L = { circle: () => { const c = { setStyle() {}, addTo() { return c; } }; return c; } };
+  LP.fromClientConfig({ locationPrivacy: { enabled: true, radiusM: 1000 } });
+  // Node detail opened three times: each visit draws on a new map, the last stays.
+  const maps = [{ _loaded: true }, { _loaded: true }, { _loaded: true }];
+  maps.forEach((m, i) => {
+    if (i > 0) maps[i - 1]._loaded = false;
+    assert(LP.drawUncertainty(m, [1, 2]));
+  });
+  assert.strictEqual(LP._circleCount(), 1, 'only the open map keeps its circle reachable');
+  maps[2]._container = { isConnected: false };
+  assert(LP.drawUncertainty({ _loaded: true }, [3, 4]));
+  assert.strictEqual(LP._circleCount(), 1, 'a detached container counts as removed');
+});
 test('addAttribution adds the legend line once', () => {
   const LP = loadLP();
   LP.fromClientConfig({ locationPrivacy: { enabled: true, radiusM: 1000 } });

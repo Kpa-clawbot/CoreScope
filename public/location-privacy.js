@@ -131,9 +131,14 @@
   var circles = [];
   var themeWired = false;
 
+  // Drops the circles of removed maps, so a page left is not kept reachable.
+  function pruneCircles() {
+    circles = circles.filter(function (c) { return mapAlive(c._lpMap); });
+  }
+
   // Re-reads the theme colour for every live circle; drops those of removed maps.
   function restyle() {
-    circles = circles.filter(function (c) { return mapAlive(c._lpMap); });
+    pruneCircles();
     if (!circles.length) return;
     var accent = accentColor();
     circles.forEach(function (c) { try { c.setStyle({ color: accent, fillColor: accent }); } catch (e) { /* map gone */ } });
@@ -211,6 +216,7 @@
       var circle = root.L.circle(latlng, opts);
       circle.addTo(map);
       circle._lpMap = map;
+      pruneCircles();
       circles.push(circle);
       wireTheme();
       return circle;
@@ -291,7 +297,8 @@
     drawUncertainty: drawUncertainty,
     bindUncertainty: bindUncertainty,
     pinUncertainty: pinUncertainty,
-    _restyle: restyle
+    _restyle: restyle,
+    _circleCount: function () { return circles.length; }
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.LocationPrivacy;
 })(typeof window !== 'undefined' ? window : globalThis);
