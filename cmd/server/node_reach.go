@@ -365,6 +365,14 @@ type reachState struct {
 
 	degreeMu   sync.Mutex
 	degreeSnap *degreeSnapshot
+
+	// rankView is the visible, ranked population built from degreeSnap (see
+	// neighbor_rank.go). Guarded by degreeMu; rebuilt only when the snapshot
+	// pointer or the node-visibility generation changes.
+	rankView *neighborRankView
+	// beforeRankStore is a test hook run after a view is built, before it is
+	// stored; nil in production.
+	beforeRankStore func()
 }
 
 // reachCacheGet returns the cached marshalled JSON for key. The returned slice
@@ -498,7 +506,10 @@ func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 	// up to the TTL. Cheap: one map reset under the cache mutex, only when
 	// the gen actually moved (#1629 round-2, adversarial #5).
 	s.reachPurgeIfBlacklistGenChanged(gen)
-	cacheKey := pubkey + "|" + strconv.Itoa(days) + "|g" + strconv.FormatUint(gen, 10)
+	// The visibility generation (hidden prefixes, geo_filter, blacklist) is
+	// part of the key too: the card's rank is placed among visible nodes, so
+	// a rule change must not serve a rank computed under the old rules.
+	cacheKey := pubkey + "|" + strconv.Itoa(days) + "|g" + strconv.FormatUint(gen, 10) + "|v" + s.nodeVisibilityGen()
 	if raw, ok := s.reachCacheGet(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(raw)
@@ -695,32 +706,25 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 // --- neighbor-degree snapshot ---------------------------------------------
 // The degree/rank importance is identical across all reach requests except the
 // pubkey match, so the full neighbor_edges aggregate is computed once and shared
-// behind a coarse TTL. Rank is a binary search over the descending degree list.
+// behind a coarse TTL. Placement among visible nodes is the rank view built
+// from it (neighbor_rank.go).
 const reachDegreeTTL = 60 * time.Second
 
 type degreeSnapshot struct {
-	at         time.Time
-	total      int            // nodes that have any edge
-	deg        map[string]int // lowercase pubkey → neighbour count
-	sortedDesc []int          // degrees sorted descending, for rank
+	at  time.Time
+	deg map[string]int // lowercase pubkey → neighbour count
 }
 
+// reachDegreeRank returns the node's own all-time degree (counted even when a
+// neighbour is hidden), its placement in the shared visible rank view (0 when
+// it is not in the view: no edges, or hidden), and the view size. The same
+// view serves /api/nodes/neighbor-rank, so the card and the list agree.
 func (s *Server) reachDegreeRank(ctx context.Context, pubkey string) (degree, rank, total int) {
-	snap := s.getDegreeSnapshot(ctx)
-	if snap == nil {
+	view := s.getNeighborRankView(ctx)
+	if view == nil {
 		return 0, 0, 0
 	}
-	degree = snap.deg[pubkey]
-	if degree == 0 {
-		// No edges → not ranked. rank=0 is the documented "off-the-list" value;
-		// avoids the nonsensical "#N+1 / N" the binary search would produce.
-		return 0, 0, snap.total
-	}
-	// rank = 1 + (number of nodes with strictly higher degree). sortedDesc is
-	// descending, so the count of entries > degree is the first index whose
-	// value is <= degree.
-	rank = 1 + sort.Search(len(snap.sortedDesc), func(i int) bool { return snap.sortedDesc[i] <= degree })
-	return degree, rank, snap.total
+	return view.snap.deg[pubkey], view.rankOf(pubkey), len(view.rows)
 }
 
 func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
@@ -737,10 +741,14 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 	// Rebuild WITHOUT holding the lock so concurrent reach requests aren't
 	// serialized behind the aggregate query. A brief cold-start herd may run a
 	// few redundant queries; the last writer wins.
+	// Only edges whose both ends are 64-char pubkeys count: rows with an empty
+	// or short key would otherwise inflate real nodes' degrees and surface a
+	// nameless entry. length() is portable across SQLite and Postgres; hex-ness
+	// is checked per key below.
 	rows, err := s.db.conn.QueryContext(ctx, `
 		SELECT pk, COUNT(*) neigh FROM (
-			SELECT node_a pk FROM neighbor_edges
-			UNION ALL SELECT node_b FROM neighbor_edges
+			SELECT node_a pk FROM neighbor_edges WHERE length(node_a) = 64 AND length(node_b) = 64
+			UNION ALL SELECT node_b FROM neighbor_edges WHERE length(node_a) = 64 AND length(node_b) = 64
 		) GROUP BY pk`)
 	if err != nil {
 		log.Printf("[reach] degree snapshot query failed: %v (serving stale)", err)
@@ -748,7 +756,6 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 	}
 	defer rows.Close()
 	deg := make(map[string]int)
-	var sortedDesc []int
 	for rows.Next() {
 		var pk string
 		var neigh int
@@ -756,15 +763,15 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 			log.Printf("[reach] degree snapshot scan failed: %v (serving stale)", err)
 			return stale
 		}
-		deg[strings.ToLower(pk)] = neigh
-		sortedDesc = append(sortedDesc, neigh)
+		if pk = strings.ToLower(pk); isHexPubkey(pk) {
+			deg[pk] += neigh // += : mixed-case spellings of one key merge
+		}
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("[reach] degree snapshot iteration failed: %v (serving stale)", err)
 		return stale
 	}
-	sort.Sort(sort.Reverse(sort.IntSlice(sortedDesc)))
-	snap := &degreeSnapshot{at: time.Now(), total: len(deg), deg: deg, sortedDesc: sortedDesc}
+	snap := &degreeSnapshot{at: time.Now(), deg: deg}
 	s.reach.degreeMu.Lock()
 	s.reach.degreeSnap = snap
 	s.reach.degreeMu.Unlock()

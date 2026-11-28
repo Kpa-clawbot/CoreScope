@@ -147,8 +147,8 @@ func newReachFailureServer(t *testing.T) (*Server, *reachFailureDB, string) {
 }
 
 func completeReachDegreeSnapshot() *degreeSnapshot {
-	return &degreeSnapshot{at: time.Now().Add(-2 * reachDegreeTTL), total: 2,
-		deg: map[string]int{pk64("01fa"): 10, pk64("aabb"): 8}, sortedDesc: []int{10, 8}}
+	return &degreeSnapshot{at: time.Now().Add(-2 * reachDegreeTTL),
+		deg: map[string]int{pk64("01fa"): 10, pk64("aabb"): 8}}
 }
 
 func TestReachDegreeRefreshFailurePreservesSnapshot(t *testing.T) {
@@ -179,7 +179,7 @@ func TestReachDegreeRefreshFailurePreservesSnapshot(t *testing.T) {
 				}
 				f.degreeErr, f.cancel, f.degreeBadScan = nil, nil, false
 				got := s.getDegreeSnapshot(context.Background())
-				if got == stale || got.total != 2 || got.deg[pk64("01fa")] != 4 || got.deg[pk64("aabb")] != 2 {
+				if got == stale || len(got.deg) != 2 || got.deg[pk64("01fa")] != 4 || got.deg[pk64("aabb")] != 2 {
 					t.Fatalf("successful retry did not publish the complete snapshot: %+v", got)
 				}
 			})
@@ -207,7 +207,7 @@ func TestNodeReachFollowupFailureDoesNotCache(t *testing.T) {
 					s.db.hasDefaultScope, s.db.hasConfiguredScope = false, false
 					f.degreeErr, f.cancel = context.Canceled, cancel
 				}
-				key := pk + "|7|g0"
+				key := pk + "|7|g0|v" + s.nodeVisibilityGen()
 				old := reachCacheEntry{at: time.Now().Add(-2 * reachCacheTTL), raw: []byte("previous complete response")}
 				if cached {
 					s.reach.cache = map[string]reachCacheEntry{key: old}

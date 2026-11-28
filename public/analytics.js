@@ -193,6 +193,7 @@
             <button class="tab-btn" data-tab="repeater-metrics">Repeater Metrics</button>
             <button class="tab-btn" data-tab="distance">Distance</button>
             <button class="tab-btn" data-tab="neighbor-graph">Neighbor Graph</button>
+            <button class="tab-btn" data-tab="neighbor-rank">Neighbor Rank</button>
             <button class="tab-btn" data-tab="rf-health">RF Health</button>
             <button class="tab-btn" data-tab="clock-health">Clock Health</button>
             <!-- #1085 — Roles tab folded in from former /#/roles standalone page.
@@ -232,6 +233,11 @@
       if (_currentTab !== 'rf-health') {
         var cleared = ['range', 'observer', 'from', 'to'];
         for (var i = 0; i < cleared.length; i++) updates[cleared[i]] = '';
+      }
+      // Neighbor Rank (#2100) owns 'q', 'role', 'page' and 'focus'.
+      if (_currentTab !== 'neighbor-rank') {
+        var nrKeys = ['q', 'role', 'page', 'focus'];
+        for (var j = 0; j < nrKeys.length; j++) updates[nrKeys[j]] = '';
       }
       var newHash = URLState.updateHashParams(updates, location.hash);
       if (newHash !== location.hash) history.replaceState(null, '', newHash);
@@ -418,6 +424,7 @@
       case 'repeater-metrics': await renderRepeaterMetricsTab(el); break;
       case 'distance': await renderDistanceTab(el); break;
       case 'neighbor-graph': await renderNeighborGraphTab(el); break;
+      case 'neighbor-rank': NeighborRank.render(el); break;
       case 'rf-health': await renderRFHealthTab(el); break;
       case 'clock-health': await renderClockHealthTab(el); break;
       case 'roles': await renderRolesTab(el); break;
