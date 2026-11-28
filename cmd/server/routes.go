@@ -2089,6 +2089,7 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// a snapshot of each candidate's observations instead of tx.Observations,
 	// which ingest appends to under the write lock.
 	rpSnapshots := make(map[int][]rpObs, len(candidates))
+	targetHash := resolvedPubkeyHash(lowerPK)
 	for i, tx := range candidates {
 		cc := candidateCheck{tx: tx}
 		if !s.store.useResolvedPathIndex {
@@ -2096,14 +2097,8 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		} else if _, hasRev := s.store.resolvedPubkeyReverse[tx.ID]; !hasRev {
 			cc.inIndex = true // no indexed pubkeys — keep (conservative)
 		} else {
-			h := resolvedPubkeyHash(lowerPK)
-			for _, id := range s.store.resolvedPubkeyIndex[h] {
-				if id == tx.ID {
-					cc.hasReverse = true // needs SQL confirmation
-					break
-				}
-			}
-			// If not in index at all, it's a definite no
+			// In the index needs SQL confirmation; not in it is a definite no.
+			cc.hasReverse = s.store.txHasResolvedHash(tx.ID, targetHash)
 		}
 		checks[i] = cc
 		if cc.inIndex || cc.hasReverse {

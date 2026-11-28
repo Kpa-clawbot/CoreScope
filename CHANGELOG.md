@@ -7,6 +7,7 @@
 
 ### Fixed
 - **Pinned maps** (#2444) - a load with a saved map pick no longer starts the theme's Auto tiles first; a pick made in another tab reaches the maps already open there (the Home mini-map, Analytics route maps and node maps follow it, and **Auto** in one tab clears it in the others).
+- **Startup load on a busy mesh no longer goes quadratic** - the resolved-path index checked for duplicates by scanning a repeater's whole list of packets, so each packet through a busy repeater cost more than the last. It now checks the packet's own few hops: 200K packets through three repeaters index in 0.23 s instead of 14.8 s. Path queries for a node use the same check.
 
 ## [3.19.0] - 2026-11-24
 
