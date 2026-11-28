@@ -250,6 +250,10 @@ type Config struct {
 	// enabled=false fetches no terrain tiles and /api/planner/* answers 404.
 	Planner *PlannerConfig `json:"planner,omitempty"`
 
+	// Tropospheric ducting overlay (ducting_types.go). OPT-IN: nil or
+	// enabled=false makes no Open-Meteo calls and exposes nothing.
+	Ducting *DuctingConfig `json:"ducting,omitempty"`
+
 	// SRTM terrain tiles shared by route LOS and the planner
 	// (terrain_config.go). Read only while one of them is enabled.
 	Terrain *TerrainConfig `json:"terrain,omitempty"`

@@ -24,6 +24,22 @@
  *      home (cycles = clamp(ITER * 2.5, 5, 50)). A visit to the route the
  *      page is already on rebuilds nothing, so a basemap picked on the last
  *      visit is still expected.
+ *   h  two picker tabs alternate rapid base-map picks (mc-tile-pinned) with a
+ *      node detail map open in a third: every tab ends on the same stored
+ *      pin, each picker keeps its own last pick, the node map follows the
+ *      pin, and every write is one of a tab's own picks (no echo)
+ *
+ *   g  tropospheric ducting overlay (only when /api/config/client has a
+ *      `ducting` block; otherwise noted and skipped): per iteration 25-45
+ *      seeded actions, 0-150 ms apart (some 0.3-1.2 s): the overlay on/off
+ *      through the public API and through the picker, theme flips, map <->
+ *      live <-> planner navigation right after enabling (mid-fetch), forecast
+ *      timeline scrolls (scrollLeft, as a user scroll); /api/ducting answers are delayed 0-2.5 s through
+ *      page.route and some are turned into 'pending' / HTTP 500. Then a
+ *      differential phase (overlay off, on, off, on with real answers): the
+ *      'theme-changed' listener count must be exactly +1 while on and
+ *      identical on every repeat. Needs ducting configured against a fake
+ *      Open-Meteo (see tests/e2e/test-map-ducting-e2e.js).
  *
  * The planner is opt-in: when /api/config/client has no `planner` block (the
  * CI fixture server), planner steps navigate to #/map instead.
@@ -34,7 +50,11 @@
  * layer on the map, the tile-pane filter and the overlays all match the last
  * requested state; live WebGL contexts <= maps showing a vector basemap;
  * window listener counts back at the post-first-load level after returning
- * to the same page.
+ * to the same page. Scenario g adds: at most one .mc-duct-legend and one
+ * .mc-duct-time per map; none (and no cells or field image) when the overlay
+ * is off or the page has no map; one field image per map when on with data; the picker's checkbox, the stored preference and the layers
+ * on the maps agree with the last request; no ducting layer or cell on a
+ * removed map and no refresh timer left; no 'theme-changed' listener growth.
  *
  * Env:
  *   BASE_URL          default http://localhost:13581
@@ -113,18 +133,20 @@ function stressInit() {
   /* eslint-disable no-var */
   if (window.__mcStress) return;
   var TYPES = { 'mc-tile-provider-changed': 1, 'mc-tile-overlays-changed': 1, 'storage': 1 };
-  var WATCH_KEYS = { 'mc-tile-overlays': 1, 'mc-dark-tile-provider': 1, 'mc-light-tile-provider': 1 };
+  var WATCH_KEYS = { 'mc-tile-overlays': 1, 'mc-dark-tile-provider': 1, 'mc-light-tile-provider': 1, 'mc-tile-pinned': 1 };
   var S = window.__mcStress = {
     listeners: {},      // type -> Map(fn -> { caps: {true/false: 1}, site })
     events: {},         // dispatched on window, by type
     storageIn: {},      // storage events received, by key
     setItem: {},        // localStorage.setItem calls, by watched key
+    removeItem: {},     // localStorage.removeItem calls, by watched key
     gl: [],             // { ctx: WeakRef, canvas: WeakRef }
     glCreated: 0,
     autoHandles: [],    // { map, destroyed, group }
     controls: [],       // L.Control.Layers instances
     maps: [],           // every L.Map created
     warns: [],          // console.warn texts from the map modules
+    ductRecs: [],       // { layer } for every MC_createDuctingLayer result
   };
   var origAdd = EventTarget.prototype.addEventListener;
   var origRemove = EventTarget.prototype.removeEventListener;
@@ -138,8 +160,14 @@ function stressInit() {
     }
     return '?';
   }
+  S.tl = new Map();     // 'theme-changed' listeners on window: fn -> { caps }
   window.addEventListener = function (type, fn, opts) {
     var target = this || window;
+    if (target === window && type === 'theme-changed' && fn && !(opts && opts.once)) {
+      var te = S.tl.get(fn) || { caps: {} };
+      te.caps[capOf(opts)] = 1;
+      S.tl.set(fn, te);
+    }
     if (target === window && TYPES[type] && fn && !(opts && opts.once)) {
       var m = S.listeners[type] || (S.listeners[type] = new Map());
       var e = m.get(fn) || { caps: {}, site: site() };
@@ -150,6 +178,11 @@ function stressInit() {
   };
   window.removeEventListener = function (type, fn, opts) {
     var target = this || window;
+    if (target === window && type === 'theme-changed' && S.tl.has(fn)) {
+      var tr = S.tl.get(fn);
+      delete tr.caps[capOf(opts)];
+      if (!Object.keys(tr.caps).length) S.tl.delete(fn);
+    }
     if (target === window && TYPES[type] && S.listeners[type]) {
       var m = S.listeners[type];
       var e = m.get(fn);
@@ -167,6 +200,11 @@ function stressInit() {
   Storage.prototype.setItem = function (k, v) {
     if (this === window.localStorage && WATCH_KEYS[k]) S.setItem[k] = (S.setItem[k] || 0) + 1;
     return origSet.apply(this, arguments);
+  };
+  var origRemoveItem = Storage.prototype.removeItem;
+  Storage.prototype.removeItem = function (k) {
+    if (this === window.localStorage && WATCH_KEYS[k]) S.removeItem[k] = (S.removeItem[k] || 0) + 1;
+    return origRemoveItem.apply(this, arguments);
   };
   var origWarn = console.warn;
   console.warn = function () {
@@ -199,6 +237,11 @@ function stressInit() {
     });
     return { live: live, attached: attached, detached: detached, created: S.glCreated };
   };
+  S.themeListeners = function () {
+    var n = 0;
+    S.tl.forEach(function (e) { n += Object.keys(e.caps).length; });
+    return n;
+  };
   S.listenerCounts = function () {
     var out = {};
     Object.keys(TYPES).forEach(function (t) {
@@ -225,6 +268,14 @@ function stressInit() {
       L.Map.prototype.remove = function () { this._mcRemoved = true; return origMapRemove.apply(this, arguments); };
       L.Map.addInitHook(function () { S.prune(); S.maps.push(this); });
       L.Control.Layers.addInitHook(function () { S.controls.push(this); });
+    }
+    var mkDuct = window.MC_createDuctingLayer;
+    if (typeof mkDuct === 'function') {
+      window.MC_createDuctingLayer = function () {
+        var layer = mkDuct.apply(this, arguments);
+        if (layer && S.ductRecs.length < 300) S.ductRecs.push({ layer: layer });
+        return layer;
+      };
     }
     var attach = window.MC_attachAutoTiles;
     if (typeof attach === 'function') {
@@ -266,6 +317,72 @@ function stressInit() {
     });
   };
   function controlOf(m) { return S.controls.filter(function (c) { return c._map === m; }); }
+  // Ducting invariants. wantOn: the overlay is requested; expectRects: number
+  // of cells that must be drawn when on (null = not checked; when > 0 the map
+  // must also show exactly one field image). Returns problems.
+  S.ductCheck = function (wantOn, expectRects) {
+    var p = [];
+    var maps = S.liveMaps();
+    var domLeg = document.querySelectorAll('.mc-duct-legend').length;
+    var domTime = document.querySelectorAll('.mc-duct-time').length;
+    var inLeg = 0, inTime = 0, pickers = S.pickerMaps().length;
+    maps.forEach(function (m) {
+      var c = m.getContainer();
+      var l = c.querySelectorAll('.mc-duct-legend').length, t = c.querySelectorAll('.mc-duct-time').length;
+      inLeg += l; inTime += t;
+      if (l > 1 || t > 1) p.push('map has ' + l + ' legends and ' + t + ' time boxes');
+      var cells = 0, fields = 0, edges = 0, loras = 0, live = 0;
+      m.eachLayer(function (ly) {
+        if (ly._mcDuct) cells += (ly._cells || []).length;
+        if (ly._mcField) fields++;
+        if (ly._mcEdge) edges++;
+        if (ly._mcLora) loras++;
+        // Nothing of the overlay may take clicks (they belong to the page: Planner, Live paths).
+        if ((ly._mcEdge || ly._mcLora || ly._mcCell) && ly.options.interactive !== false) p.push('interactive ducting layer on the map');
+        if (ly._mcDuct && ly._map === m) live++;
+      });
+      if (edges > 1 || (!wantOn && edges)) p.push('map has ' + edges + ' edge outlines (overlay ' + (wantOn ? 'on' : 'off') + ')');
+      if (loras > 1 || (!wantOn && loras)) p.push('map has ' + loras + ' LoRa outline layers (overlay ' + (wantOn ? 'on' : 'off') + ')');
+      var lineCv = c.querySelectorAll('.leaflet-mcDuctLine-pane canvas').length;
+      if (lineCv > live) p.push('map has ' + lineCv + ' ducting line canvases for ' + live + ' ducting layers');
+      var clicks = (m._events && m._events.click) || [];
+      var ductClicks = clicks.filter(function (h) { return S.ductRecs.some(function (r) { return r.layer._onMapClick === h.fn; }); }).length;
+      if (ductClicks !== live) p.push('map has ' + ductClicks + ' ducting click handlers for ' + live + ' ducting layers');
+      var fieldDom = c.querySelectorAll('.mc-duct-field').length;
+      if (!wantOn && (l || t || cells || fields || fieldDom)) p.push('overlay off but map has legend=' + l + ' time=' + t + ' cells=' + cells + ' fields=' + fields + '/' + fieldDom);
+      if (wantOn && pickers && (l !== 1 || t !== 1)) p.push('overlay on but map has legend=' + l + ' time=' + t);
+      if (fields > 1 || fieldDom > 1 || fields !== fieldDom) p.push('map has ' + fields + ' field layers, ' + fieldDom + ' field images in the DOM');
+      if (wantOn && expectRects != null && cells !== expectRects) p.push('cells drawn=' + cells + ' want ' + expectRects);
+      if (wantOn && expectRects && fields !== 1) p.push('overlay on with data but ' + fields + ' field images');
+    });
+    if (domLeg !== inLeg || domTime !== inTime) p.push('legend/time boxes outside live maps: dom=' + domLeg + '/' + domTime + ' in maps=' + inLeg + '/' + inTime);
+    if (!maps.length && (domLeg || domTime)) p.push('no map but ' + domLeg + ' legends / ' + domTime + ' time boxes in the page');
+    var inField = 0;
+    maps.forEach(function (m) { inField += m.getContainer().querySelectorAll('.mc-duct-field').length; });
+    var domField = document.querySelectorAll('.mc-duct-field').length;
+    if (domField !== inField) p.push('field images outside live maps: dom=' + domField + ' in maps=' + inField);
+    var live = 0;
+    S.ductRecs.forEach(function (r, i) {
+      var ly = r.layer;
+      if (ly._map) {
+        if (!isLive(ly._map)) p.push('ducting layer #' + i + ' still attached to a removed map');
+        else live++;
+        if (ly._map && !wantOn) p.push('ducting layer #' + i + ' attached although the overlay is off');
+      } else {
+        if (ly._timer != null) p.push('ducting layer #' + i + ' removed with its refresh timer running');
+        if (ly._cells && ly._cells.length) p.push('ducting layer #' + i + ' removed but holds ' + ly._cells.length + ' cells');
+        if (ly._group || ly._renderer || ly._field || ly._lora || ly._onMapClick) p.push('ducting layer #' + i + ' removed but keeps its group/renderer/field/outline/click handler');
+      }
+    });
+    if (wantOn && live !== pickers) p.push('live ducting layers=' + live + ' maps=' + pickers);
+    S.maps.forEach(function (m) {
+      if (isLive(m)) return;
+      var n = 0;
+      try { m.eachLayer(function (ly) { if (ly._mcDuct || ly._mcField || ly._mcEdge || ly._mcLora) n++; }); } catch (_) {}
+      if (n) p.push('removed map still holds ' + n + ' ducting layers/field images/outlines');
+    });
+    return p;
+  };
   S.pickerMaps = function () {
     return S.liveMaps().filter(function (m) {
       return S.autoHandles.some(function (r) { return r.map === m && r.picker && !r.destroyed; });
@@ -322,7 +439,7 @@ function stressInit() {
     // What should be drawn.
     var exp, entry, layer;
     if (want === '__auto__') {
-      var r = window.MC_resolveTile(dark);
+      var r = window.MC_resolveTile(dark, { ignorePin: true }); // a picker's Auto ignores the pin
       entry = REG[r.id] || null;
       exp = { url: r.url, format: r.format, id: r.id, refUrl: r.refUrl };
       layer = autos[0].group;
@@ -380,7 +497,8 @@ function stressInit() {
     // Every overlay layer on the map is one the control lists (no orphan stacked overlays).
     var paneEl = m.getPane('mcOverlayPane');
     if (paneEl) {
-      var listed = c._layers.filter(function (x) { return x.overlay && m.hasLayer(x.layer); }).length;
+      // Ducting draws its own vector layer (canvas renderer, no tile pane): not a pane layer.
+      var listed = c._layers.filter(function (x) { return x.overlay && x.name !== 'ducting' && m.hasLayer(x.layer); }).length;
       var inPane = 0;
       m.eachLayer(function (l) { if (l.options && l.options.pane === 'mcOverlayPane') inPane++; });
       if (inPane !== listed) probs.push(tag + 'layers in overlay pane=' + inPane + ' listed=' + listed);
@@ -442,6 +560,7 @@ function stressInit() {
       events: Object.assign({}, S.events),
       storageIn: Object.assign({}, S.storageIn),
       setItem: Object.assign({}, S.setItem),
+      removeItem: Object.assign({}, S.removeItem),
     };
   };
 
@@ -580,6 +699,8 @@ async function gotoFirst(page, route) {
 // it is off, planner steps go to the map page instead; the seeded action
 // sequence is the same either way.
 let PLANNER = true;
+// The ducting overlay is opt-in too (config `ducting`); scenario g needs it.
+let DUCTING = false;
 const PLANNER_ROUTE = '#/tools/planner';
 async function detectPlanner() {
   const r = await fetch(BASE + '/api/config/client', { signal: AbortSignal.timeout(30000) });
@@ -587,6 +708,8 @@ async function detectPlanner() {
   const cfg = await r.json();
   PLANNER = !!(cfg && cfg.planner);
   if (!PLANNER) results.notes.push('planner disabled on this server: planner steps use #/map');
+  DUCTING = !!(cfg && cfg.ducting);
+  if (!DUCTING) results.notes.push('ducting disabled on this server: scenario g skipped');
 }
 function effectiveRoute(route) {
   return (!PLANNER && route === PLANNER_ROUTE) ? '#/map' : route;
@@ -1193,6 +1316,96 @@ async function scenarioE(browser) {
   sc.durationMs = Date.now() - t0;
 }
 
+// ── Scenario h: cross-tab saved pick ────────────────────────────────────────
+async function scenarioH(browser) {
+  const sc = scen('h', 'cross-tab saved pick');
+  const t0 = Date.now();
+  const nodes = await findNodes();
+  if (!nodes.node) results.notes.push('h: no located node; the picker-less tab is skipped');
+  for (const it of iterationsFor('h')) {
+    await runIteration(browser, 'h', it, async ({ rng, open }) => {
+      const theme = rng.pick(['light', 'dark']);
+      const A = await open({ preset: { theme, provider: 'auto', overlays: [] } });
+      const B = await open({});
+      const C = nodes.node ? await open({}) : null;
+      await gotoFirst(A, '#/map');
+      await waitPicker(A);
+      await gotoFirst(B, rng.pick(['#/map', '#/live']));
+      await waitPicker(B);
+      if (C) {
+        await gotoFirst(C, '#/nodes/' + encodeURIComponent(nodes.node.public_key));
+        await C.waitForFunction(() => window.__mcNodeTileSync && window.__mcNodeTileSync.maps.length > 0, null, { timeout: 15000 });
+      }
+      const tabs = C ? { A, B, C } : { A, B };
+      await Promise.all(Object.values(tabs).map(p => p.waitForFunction(() => window.MC_MAP_CFG, null, { timeout: 15000 })));
+      await sleep(300);
+      const ids = await A.evaluate(() => window.__mcStress.baseIds().filter(x => !window.__mcStress.vectorIds().includes(x)));
+      const before = {};
+      for (const [k, P] of Object.entries(tabs)) before[k] = await snapshot(P);
+      const shown = { A: '__auto__', B: '__auto__' }; // each picker's own selection
+      const writes = { A: 0, B: 0 };
+      let stored = null; // the last pick written by either tab
+      const log = [];
+      const n = rng.int(10, 24);
+      for (let i = 0; i < n; i++) {
+        const who = rng.chance(0.5) ? 'A' : 'B';
+        const id = rng.chance(0.2) ? '__auto__' : rng.pick(ids);
+        const res = await tabs[who].evaluate((x) => window.__mcStress.clickBase(x), id);
+        // Clicking the radio that is already selected changes (and writes) nothing.
+        if (res === 'ok' && shown[who] !== id) {
+          shown[who] = id;
+          writes[who]++;
+          stored = id === '__auto__' ? null : id;
+        }
+        log.push(`${who} ${id} -> ${res}`);
+        await sleep(rng.int(0, 120));
+      }
+      const probs = [];
+      for (const k of ['A', 'B']) {
+        const intent = { mode: shown[k] === '__auto__' ? 'auto' : 'explicit', id: shown[k] === '__auto__' ? null : shown[k], theme, overlays: null, pickers: 1 };
+        const r = await settleCheck(tabs[k], intent, { minMs: k === 'A' ? 800 : 0, maxMs: 5000 });
+        probs.push(...r.problems.map(p => `tab ${k}: ${p}`));
+      }
+      for (const [k, P] of Object.entries(tabs)) {
+        const got = await P.evaluate(() => ({ raw: localStorage.getItem('mc-tile-pinned'), pin: window.MC_getPinnedTileProvider() }));
+        if (got.raw !== stored || got.pin !== stored) probs.push(`tab ${k}: stored pin ${JSON.stringify(got)} want ${JSON.stringify(stored)}`);
+      }
+      if (C) {
+        // The node map converges on what MC_resolveTile gives for the pin.
+        let last = null;
+        const tEnd = Date.now() + 5000;
+        for (;;) {
+          last = await C.evaluate(() => {
+            const st = window.__mcNodeTileSync;
+            const rec = st && st.maps.filter(r => r.map && r.map._container && r.map._container.isConnected)[0];
+            if (!rec || !rec.layer) return { err: 'no node map' };
+            const l = typeof rec.layer.getLayers === 'function' ? rec.layer.getLayers()[0] : rec.layer;
+            return { got: l && l._url, want: window.MC_resolveTile(window.MC_isDarkTheme()).url };
+          });
+          if ((last.got && last.got === last.want) || Date.now() >= tEnd) break;
+          await sleep(150);
+        }
+        if (last.err || last.got !== last.want) probs.push('tab C node map ' + JSON.stringify(last));
+      }
+      const after = {};
+      for (const [k, P] of Object.entries(tabs)) after[k] = await snapshot(P);
+      const d = (k, f) => ((after[k][f] || {})['mc-tile-pinned'] || 0) - ((before[k][f] || {})['mc-tile-pinned'] || 0);
+      for (const k of Object.keys(tabs)) {
+        const own = writes[k] || 0;
+        const w = d(k, 'setItem') + d(k, 'removeItem');
+        if (w !== own) probs.push(`tab ${k} wrote mc-tile-pinned ${w}x for ${own} own picks (echo loop)`);
+        const others = writes.A + writes.B - own;
+        const got = d(k, 'storageIn');
+        if (got > others) probs.push(`tab ${k} received ${got} pin storage events for ${others} writes in the other tabs`);
+      }
+      if (probs.length) probs.push('actions: ' + log.slice(-12).join(' | '));
+      sc.details.maxWrites = Math.max(sc.details.maxWrites || 0, writes.A + writes.B);
+      return probs;
+    });
+  }
+  sc.durationMs = Date.now() - t0;
+}
+
 // ── Scenario f: navigation churn ────────────────────────────────────────────
 async function findNodes() {
   const out = { node: null, repeater: null };
@@ -1329,6 +1542,173 @@ async function scenarioF(browser) {
   sc.durationMs = Date.now() - t0;
 }
 
+// ── Scenario g: ducting overlay ─────────────────────────────────────────────
+/** Cells the overlay draws for the server's /api/ducting (null if no data). */
+async function ductExpectedRects() {
+  const t0 = Date.now();
+  for (;;) {
+    try {
+      const r = await fetch(BASE + '/api/ducting', { signal: AbortSignal.timeout(20000) });
+      const d = await r.json();
+      if (d && d.status === 'ok') return d.cells.filter(c => Array.isArray(c.c) && c.c.some(v => v >= 1)).length;
+    } catch (_) { /* retry */ }
+    if (Date.now() - t0 > 20000) return null;
+    await sleep(500);
+  }
+}
+
+async function scenarioG(browser) {
+  const sc = scen('g', 'ducting overlay');
+  const t0 = Date.now();
+  if (!DUCTING) { console.log('  (skipped: /api/config/client has no ducting block)'); return; }
+  const iters = iterationsFor('g');
+  if (!iters.length) return;
+  const expectRects = await ductExpectedRects();
+  if (expectRects == null) results.notes.push('g: /api/ducting never reached status ok; cell counts not checked');
+  sc.details.expectRects = expectRects;
+
+  for (const it of iters) {
+    await runIteration(browser, 'g', it, async ({ rng, open, meta }) => {
+      const theme0 = rng.pick(['light', 'dark']);
+      let route = rng.pick(PICKER_ROUTES);
+      const startOn = rng.chance(0.3);
+      const page = await open({ preset: { theme: theme0, provider: 'auto', overlays: startOn ? ['ducting'] : [] } });
+      // /api/ducting: delayed, sometimes pending or HTTP 500 during the random phase.
+      // real[n]: request n got the server's answer (false: a chaos 500 or
+      // pending). Handlers finish out of order, so the attached layer's answer
+      // is the one to the newest request, not the last one to finish.
+      const st = { n: 0, real: {}, chaos: true, maxDelay: 2500 };
+      const lastReal = () => st.real[st.n] !== false;
+      await page.route('**/api/ducting', async (rt) => {
+        const n = ++st.n;
+        const rr = makeRng('g', it, 'req', n);
+        const delay = rr.chance(0.3) ? rr.int(0, 200) : rr.int(0, st.maxDelay);
+        const roll = rr.next();
+        await sleep(delay);
+        try {
+          if (st.chaos && roll < 0.1) { st.real[n] = false; await rt.fulfill({ status: 500, json: { error: 'stress' } }); return; }
+          if (st.chaos && roll < 0.18) { st.real[n] = false; await rt.fulfill({ status: 200, json: { status: 'pending', times: [], cells: [] } }); return; }
+          st.real[n] = true;
+          await rt.continue();
+        } catch (_) { /* page closed */ }
+      });
+      await gotoFirst(page, route);
+      await waitPicker(page);
+      await page.waitForFunction(() => window.MC_MAP_CFG && window.MC_TILE_OVERLAYS && window.MC_TILE_OVERLAYS.ducting, null, { timeout: 15000 });
+      let wantOn = startOn;
+      const n = rng.int(25, 45);
+      const log = [];
+      const toggleApi = async (on) => {
+        const ok = await page.evaluate((o) => window.MC_setTileOverlay('ducting', o), on);
+        if (ok) wantOn = on;
+        log.push(`api ${on}->${ok}`);
+      };
+      const togglePicker = async () => {
+        const res = await page.evaluate(() => window.__mcStress.clickOverlay('ducting'));
+        if (res === true || res === false) wantOn = res;
+        log.push(`picker->${res}`);
+      };
+      const navigate = async () => {
+        route = rng.pick(PICKER_ROUTES.filter(r => effectiveRoute(r) !== effectiveRoute(route)));
+        await hashNav(page, route);
+        log.push('nav ' + route);
+        await waitPicker(page);
+      };
+      for (let i = 0; i < n; i++) {
+        const roll = rng.next();
+        if (roll < 0.28) await toggleApi(rng.chance(0.5));
+        else if (roll < 0.43) await togglePicker();
+        else if (roll < 0.55) { const th = await page.evaluate(() => window.__mcStress.flipTheme()); log.push('theme ' + th); }
+        else if (roll < 0.70) await navigate();
+        else if (roll < 0.85) {
+          const v = rng.next();
+          // Scroll the forecast timeline to a random place, as a user does
+          // (the browser fires 'scroll'; the overlay picks the time under the
+          // centre on the next frame).
+          const res = await page.evaluate((x) => {
+            const t = document.querySelector('.mc-duct-timeline');
+            if (!t) return 'none';
+            t.scrollLeft = Math.round(x * Math.max(t.scrollWidth - t.clientWidth, 0));
+            return String(t.scrollLeft);
+          }, v);
+          log.push('timeline ' + res);
+        } else {
+          // Enable and leave straight away, then flip the preference again.
+          await toggleApi(true);
+          await sleep(rng.int(0, 60));
+          await navigate();
+          await sleep(rng.int(0, 60));
+          await toggleApi(rng.chance(0.5));
+        }
+        await sleep(rng.chance(0.1) ? rng.int(300, 1200) : rng.int(0, 150));
+      }
+      Object.assign(meta, { route, wantOn, requests: st.n, lastReal: lastReal() });
+      await waitPicker(page);
+
+      // Settle (the slowest delayed answer has landed), then judge.
+      const judge = async (on, rects, extra) => {
+        let probs = [];
+        const t1 = Date.now();
+        for (;;) {
+          probs = await page.evaluate((a) => {
+            const S = window.__mcStress;
+            const p = S.ductCheck(a.on, a.rects);
+            const pref = window.MC_getTileOverlays().indexOf('ducting') >= 0;
+            if (pref !== a.on) p.push('stored preference ducting=' + pref + ' want ' + a.on);
+            if (a.picker) {
+              const lab = document.querySelector('.leaflet-control-layers-overlays label[data-tile-overlay-id="ducting"] input');
+              if (!lab) p.push('no picker entry'); else if (lab.checked !== a.on) p.push('picker checkbox=' + lab.checked + ' want ' + a.on);
+            }
+            return p;
+          }, { on, rects, picker: true });
+          if (!probs.length || Date.now() - t1 >= 10000) break;
+          await sleep(200);
+        }
+        return probs.map(x => (extra || '') + x);
+      };
+      await sleep(st.maxDelay + 500);
+      let probs = await judge(wantOn, (wantOn && lastReal()) ? expectRects : null, 'after random phase: ');
+      if (probs.length) return probs.concat(['actions: ' + log.slice(-14).join(' | ')]);
+
+      // Differential phase, real answers: listeners +1 while on, no growth.
+      st.chaos = false;
+      st.maxDelay = 300;
+      const count = () => page.evaluate(() => window.__mcStress.themeListeners());
+      const setOn = async (on) => {
+        await page.evaluate((o) => window.MC_setTileOverlay('ducting', o), on);
+        return judge(on, on ? expectRects : null, `set ${on}: `);
+      };
+      const seq = [];
+      for (const on of [false, true, false, true]) {
+        probs = probs.concat(await setOn(on));
+        seq.push(await count());
+      }
+      meta.themeListeners = seq;
+      const layers = await page.evaluate(() => window.__mcStress.pickerMaps().length);
+      if (seq[1] - seq[0] !== layers) probs.push(`theme-changed listeners off=${seq[0]} on=${seq[1]}, want +${layers}`);
+      if (seq[2] !== seq[0]) probs.push(`theme-changed listeners grew while off: ${seq[0]} -> ${seq[2]}`);
+      if (seq[3] !== seq[1]) probs.push(`theme-changed listeners grew while on: ${seq[1]} -> ${seq[3]}`);
+      if (probs.length) return probs;
+
+      // A page without a map: nothing of the overlay may remain, preference on.
+      await hashNav(page, '#/tools');
+      await page.waitForFunction(() => window.__mcStress.liveMaps().length === 0, null, { timeout: 15000, polling: 50 });
+      await sleep(600);
+      const away = await page.evaluate(() => window.__mcStress.ductCheck(false, null));
+      probs = away.map(x => 'no-map page: ' + x);
+      if (probs.length) return probs;
+      // Back on the same route: a single legend again, listeners as before.
+      await hashNav(page, route);
+      await waitPicker(page);
+      probs = await judge(true, expectRects, 'after return: ');
+      const back = await count();
+      if (back !== seq[3]) probs.push(`theme-changed listeners after return=${back} want ${seq[3]}`);
+      return probs;
+    });
+  }
+  sc.durationMs = Date.now() - t0;
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 async function run() {
   const tStart = Date.now();
@@ -1341,12 +1721,16 @@ async function run() {
   try {
     await detectPlanner();
     console.log(`planner ${PLANNER ? 'enabled' : 'disabled (planner steps use #/map)'}`);
-    const table = [['a', scenarioA], ['b', scenarioB], ['c', scenarioC], ['d', scenarioD], ['e', scenarioE], ['f', scenarioF]];
+    console.log(`ducting ${DUCTING ? 'enabled' : 'disabled (scenario g skipped)'}`);
+    const table = [['a', scenarioA], ['b', scenarioB], ['c', scenarioC], ['d', scenarioD], ['e', scenarioE], ['f', scenarioF], ['g', scenarioG]];
     for (const [k, fn] of table) {
       if (ONLY && !ONLY[k] && !(k === 'b' && ONLY['b-timeout'])) continue;
       console.log(`--- ${k} ---`);
       await fn(browser);
     }
+    // Kept out of the table above so this scenario's registration never
+    // touches the lines other scenarios add there.
+    if (!ONLY || ONLY.h) { console.log('--- h ---'); await scenarioH(browser); }
   } finally {
     await browser.close().catch(() => {});
   }

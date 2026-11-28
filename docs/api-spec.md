@@ -891,6 +891,11 @@ the **bottleneck** (weaker direction) rates two-way stability. Read-only; bounde
 to a recent window. Identifies nodes only by **unique 2–3 byte** path prefixes
 (1-byte prefixes collide and are excluded).
 
+The windowed links, relay counts and direct-observer signal averages exclude
+observations whose direction is `tx` before the scan cap. Other observers can
+still contribute reception evidence for the same transmission. Legacy reports
+with missing or empty direction remain eligible.
+
 ### Query Parameters
 
 | Param  | Type   | Default | Description                          |
@@ -1249,7 +1254,9 @@ Single observer detail.
 
 ## GET /api/observers/:id/analytics
 
-Per-observer analytics.
+The packet timeline, packet type counts and recent packets include the observer's
+TX and RX reports. The unique-node timeline and SNR distribution exclude reports
+marked `tx`. Reports without a recorded direction remain eligible for both charts.
 
 ### Query Parameters
 

@@ -1156,6 +1156,8 @@ type ClientConfigResponse struct {
 	// Present only when locationPrivacy is on: served positions are
 	// approximate, within radiusM (location_privacy.go).
 	LocationPrivacy *ClientLocationPrivacy `json:"locationPrivacy,omitempty"`
+	// Present only when ducting.enabled (ducting_config.go).
+	Ducting *DuctingClientConfig `json:"ducting,omitempty"`
 }
 
 // ClientUserManagement tells the frontend that accounts exist, and whether

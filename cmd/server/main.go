@@ -491,6 +491,16 @@ func main() {
 	// answers 404, without planner.enabled /api/planner/* does, and with
 	// neither no terrain tile is ever fetched.
 	srv.elevation, srv.planner = newTerrainServices(cfg, srv)
+	logDuctingConfig(cfg.Ducting)
+
+	// Tropospheric ducting overlay (ducting_service.go). OPT-IN: without
+	// ducting.enabled /api/ducting answers 404 and Open-Meteo is never called.
+	if cfg.Ducting.enabled() {
+		srv.ducting = newDuctingService(cfg.Ducting, srv.ductingNodes)
+		dCtx, stopDucting := context.WithCancel(context.Background())
+		srv.ducting.run(dCtx)
+		defer stopDucting()
+	}
 
 	// Steady-state repeater-enrichment recomputer (issue #1262).
 	// Prewarms the bulk caches feeding handleNodes so the very first

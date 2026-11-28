@@ -208,11 +208,9 @@
     return ev.declared || ev.observed;
   }
 
-  // nodeFiltersNarrowed says whether a node filter that also removes
-  // non-forwarding roles is active. The observer layer stands down while it
-  // is (see observerLayerShown).
+  // Plain observer pins have no node scope, region or foreign-advert evidence.
   function nodeFiltersNarrowed(f) {
-    return (!!f.scopeState && f.scopeState !== 'all') || !!f.regionScope;
+    return (!!f.scopeState && f.scopeState !== 'all') || !!f.regionScope || !!f.foreignOnly;
   }
 
   // observerLayerShown decides whether _renderMarkersInner draws the plain
@@ -227,11 +225,15 @@
     return !!f.observer && !nodeFiltersNarrowed(f);
   }
 
+  function isMappableNode(n, foreignOnly) {
+    return !!(n.lat && n.lon) && (!foreignOnly || n.foreign === true);
+  }
+
   // nodePassesMapFilters is the marker filter _renderMarkersInner runs over
   // the loaded nodes. ctx carries the neighbor-filter state
   // ({ selectedReferenceNode, neighborPubkeys }).
   function nodePassesMapFilters(n, f, ctx) {
-    if (!n.lat || !n.lon) return false;
+    if (!isMappableNode(n, f.foreignOnly)) return false;
     if (!f[n.role || 'companion']) return false;
     // Byte size filter (applies only to repeaters). A node with no observed
     // size is its own bucket: folding it into "1-byte" made that bucket a
@@ -569,7 +571,7 @@
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
             <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
             <label for="mcScopeOverlay" title="Colour repeater markers by their region-scope configuration"><input type="checkbox" id="mcScopeOverlay"> Scope config colours</label>
-            <label for="mcEstimated" title="Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Follows the repeater role filter only, not the area, region or last-heard filters."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
+            <label for="mcEstimated" title="Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Hidden when filtering for past foreign adverts or excluding repeaters. Independent of area, region and last-heard filters."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
             <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
           </fieldset>
           <div id="mapAreaFilter"></div>
@@ -591,6 +593,7 @@
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
+            <label for="mcForeignOnly" title="${FOREIGN_ADVERT_DESCRIPTION}"><input type="checkbox" id="mcForeignOnly"> Only nodes with a past foreign advert</label>
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
             <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Ref: <span id="mcNeighborRefName">—</span></div>
             <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Click a node marker to set the reference node</div>
@@ -812,6 +815,17 @@
     const heatEl = document.getElementById('mcHeatmap');
     if (localStorage.getItem('meshcore-map-heatmap') === 'true') { heatEl.checked = true; }
     heatEl.addEventListener('change', e => { localStorage.setItem('meshcore-map-heatmap', e.target.checked); toggleHeatmap(e.target.checked); });
+    const foreignEl = document.getElementById('mcForeignOnly');
+    filters.foreignOnly = urlParams.get('foreign') === 'true';
+    foreignEl.checked = filters.foreignOnly;
+    foreignEl.addEventListener('change', () => {
+      filters.foreignOnly = foreignEl.checked;
+      const hash = URLState.updateHashParams({ foreign: filters.foreignOnly ? 'true' : null }, location.hash);
+      history.replaceState(history.state, '', hash);
+      renderMarkers();
+      renderEstimated();
+      if (heatEl.checked) toggleHeatmap(true);
+    });
     document.getElementById('mcNeighbors').addEventListener('change', e => {
       filters.neighbors = e.target.checked;
       const hintEl = document.getElementById('mcNeighborHint');
@@ -2083,12 +2097,11 @@
     }
   }
 
-  // renderEstimated draws the estimated positions, hidden with the toggle or
-  // when repeaters are filtered out (they are all repeaters).
+  // Reported-only repeaters have never advertised, so they cannot carry the flag.
   function renderEstimated() {
     if (!estimatedLayer || !window.MapEstimated) return;
     estimatedLayer.clearLayers();
-    if (filters.estimated && filters.repeater) window.MapEstimated.addTo(estimatedLayer, L, reported.nodes, reported.method);
+    if (filters.estimated && filters.repeater && !filters.foreignOnly) window.MapEstimated.addTo(estimatedLayer, L, reported.nodes, reported.method);
   }
 
   function renderMarkers() {
@@ -2103,7 +2116,15 @@
     if (markerLayer) {
       markerLayer.clearLayers();
     }
-    if (clusterGroup) clusterGroup.clearLayers();
+    if (clusterGroup && clusterGroup._chunkPending) {
+      // A queued addLayers chunk can repopulate a cleared group. Retire it
+      // before rebuilding, preserving visibility if a route hid the clusters.
+      const visible = map.hasLayer(clusterGroup);
+      retireClusterGroup(clusterGroup);
+      clusterGroup.remove();
+      clusterGroup = createClusterGroup();
+      if (visible) clusterGroup.addTo(map);
+    } else if (clusterGroup) clusterGroup.clearLayers();
     _currentMarkerData = [];
 
     const filterCtx = { selectedReferenceNode, neighborPubkeys };
@@ -2489,7 +2510,7 @@
   // no handle for (addLayers' bound closure), and clearLayers() does not stop
   // them. Once the map is gone the next chunk throws in this._map.getMinZoom()
   // (_addLayer per marker, _recursivelyAddChildrenToMap after the last one).
-  // The group is thrown away with the page, so shadow those two with no-ops on
+  // The retired group is thrown away, so shadow those two with no-ops on
   // this instance. Its zoom-animation queue does have a handle: drop it, its
   // callbacks only finish an animation on a map that no longer exists.
   function retireClusterGroup(group) {
@@ -2531,27 +2552,36 @@
   }
 
   function toggleHeatmap(on) {
-    if (!on || !map) {
-      if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; window._meshcoreHeatLayer = null; }
+    // A packet route can temporarily hide the base map layers.
+    if (on && heatLayer && map && !map.hasLayer(heatLayer)) return;
+    const points = [];
+    if (on && map) {
+      for (const n of nodes) {
+        if (filters.foreignOnly ? isMappableNode(n, true) : n.lat != null && n.lon != null) {
+          points.push([n.lat, n.lon, n.advert_count || 1]);
+        }
+      }
+    }
+    if (!points.length) {
+      if (heatLayer) { heatLayer.remove(); heatLayer = null; window._meshcoreHeatLayer = null; }
       return;
     }
-    const points = nodes
-      .filter(n => n.lat != null && n.lon != null)
-      .map(n => {
-        const weight = n.advert_count || 1;
-        return [n.lat, n.lon, weight];
-      });
-    if (!points.length || typeof L.heatLayer !== 'function') return;
-    var savedOpacity = parseFloat(localStorage.getItem('meshcore-heatmap-opacity'));
-    if (isNaN(savedOpacity)) savedOpacity = 0.25;
     // Update existing layer data without recreating (avoids opacity flash)
     if (heatLayer) {
       heatLayer.setLatLngs(points);
       return;
     }
+    if (typeof L.heatLayer !== 'function') return;
+    var savedOpacity = parseFloat(localStorage.getItem('meshcore-heatmap-opacity'));
+    if (isNaN(savedOpacity)) savedOpacity = 0.25;
     heatLayer = L.heatLayer(points, {
       radius: 25, blur: 15, maxZoom: 14, minOpacity: 0.05,
       gradient: { 0.2: '#0d47a1', 0.4: '#1565c0', 0.6: '#42a5f5', 0.8: '#ffca28', 1.0: '#ff5722' }
+    });
+    heatLayer.on('remove', function () {
+      // Leaflet.heat leaves its queued redraw pointing at the detached map.
+      L.Util.cancelAnimFrame(this._frame);
+      this._frame = null;
     });
     // Set opacity on canvas BEFORE it's visible — hook the 'add' event
     heatLayer.on('add', function() {
@@ -2792,10 +2822,11 @@
       console.warn('[map] L.markerClusterGroup not loaded — clustering disabled');
       return null;
     }
-    return L.markerClusterGroup({
+    const group = L.markerClusterGroup({
       chunkedLoading: true,
       chunkInterval: 100,
       chunkDelay: 25,
+      chunkProgress(done, total) { group._chunkPending = done < total; },
       removeOutsideVisibleBounds: true,
       maxClusterRadius: 60,
       spiderfyOnMaxZoom: true,
@@ -2807,6 +2838,7 @@
       animateAddingMarkers: false,
       iconCreateFunction: makeClusterIcon,
     });
+    return group;
   }
 
   function makeClusterIcon(cluster) {

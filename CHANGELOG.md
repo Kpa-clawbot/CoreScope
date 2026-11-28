@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- **Tropospheric ducting overlay** - off by default; enable with `"ducting": { "enabled": true }`. The server fetches a pressure-level forecast from Open-Meteo (the public API works for non-commercial sites within its free limits; a self-hosted Open-Meteo set in `ducting.baseUrl` is recommended, has no call limits, and is required only for commercial sites), computes refractivity and duct type per grid cell, and serves it at `GET /api/ducting`. A new "Tropospheric ducting" overlay on the Map, Live and Repeater Planner pages draws colour bands of the mean refractivity gradient over the lowest 1.5 km above ground across the bounding box of your nodes plus a margin (clear for normal air, then above normal, high and very high), outlines the cells that may carry LoRa at the site's frequency (`los.frequencyMhz`, else 868 and 915 MHz) with a dashed line (a model estimate: thin ducts are not visible to it), marks the edge of the forecast area with a dotted line, has a forecast-time slider, and flags a forecast that is out of date. Keys: `model` (`gfs`, `icon`, `rrfs-conus`), `area`, `marginDeg` (default 5 degrees around the nodes' bounding box), `gridStepDeg`, `maxPoints` (default 450), `refreshMinutes`, `forecastHours`, `baseUrl`. See docs/deployment.md.
+
+### Fixed
+- **Pinned maps** (#2444) - a load with a saved map pick no longer starts the theme's Auto tiles first; a pick made in another tab reaches the maps already open there (the Home mini-map, Analytics route maps and node maps follow it, and **Auto** in one tab clears it in the others).
+
 ## [3.19.0] - 2026-11-24
 
 See [docs/release-notes/v3.19.0.md](docs/release-notes/v3.19.0.md) for the full notes. 32 commits since v3.18.0: 14 fix, 8 feat, 5 test, 2 ci, 2 docs, 1 refactor.

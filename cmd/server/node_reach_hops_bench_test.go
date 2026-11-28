@@ -37,7 +37,7 @@ func BenchmarkScanReachRows(b *testing.B) {
 		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, from_pubkey TEXT, payload_type INTEGER, route_type INTEGER DEFAULT 1)`,
 		`CREATE TABLE observers (idx INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, inactive INTEGER)`,
 		`INSERT INTO observers (id) VALUES ('OBS1')`,
-		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, snr REAL, path_json TEXT, timestamp INTEGER)`,
+		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, direction TEXT, snr REAL, path_json TEXT, timestamp INTEGER)`,
 		`CREATE INDEX idx_observations_timestamp ON observations(timestamp)`,
 	} {
 		if _, err := conn.Exec(s); err != nil {

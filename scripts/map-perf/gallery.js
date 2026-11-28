@@ -17,6 +17,15 @@
  * The 'custom' entries inject one raster provider through /api/config/client
  * and answer its tiles from a labelled fake tile server routed in Playwright
  * (no network).
+ *
+ * The 'ducting' entries (tropospheric ducting overlay) need a server with a
+ * `ducting` config block and a finished /api/ducting; they are skipped, with
+ * the reason in index.json, otherwise. Their views come from the cells of
+ * /api/ducting, not from VIEWS (so a fixture server works), and a view whose
+ * nodes are missing skips its entries instead of failing the run. Start such a
+ * server with the fake Open-Meteo described in tests/e2e/test-map-ducting-e2e.js.
+ * Run only them: --only ducting-map-light,ducting-map-dark,ducting-zoom-light,
+ * ducting-popup-light,ducting-live-light
  */
 'use strict';
 const fs = require('fs');
@@ -36,6 +45,15 @@ const CUSTOM = { id: 'gallery', label: 'Gallery fake tiles', type: 'light', cate
 const VIEWS = {
   mountains: { label: 'Denver / Front Range', bbox: { lat: [39, 41], lon: [-106.5, -104] }, zoom: 10 },
   city: { label: 'New York', bbox: { lat: [40.3, 41.2], lon: [-74.5, -73.5] }, zoom: 11 },
+};
+
+// Views for the ducting entries, resolved from /api/ducting (resolveDuctingViews).
+// 'ducting' = the densest cluster of coloured cells at continental zoom (the
+// whole field and its surroundings), 'ducting-surface' = a duct cell that can
+// carry LoRa (surface-based when there is one), close enough for its outline.
+const DUCTING_VIEWS = {
+  ducting: { label: 'Ducting field', zoom: 5 },
+  'ducting-surface': { label: 'A LoRa duct cell', zoom: 7 },
 };
 
 // ── Data table ──────────────────────────────────────────────────────────────
@@ -86,6 +104,18 @@ for (const theme of ['light', 'dark']) {
 for (const theme of ['light', 'dark']) {
   add('picker', `picker-${theme}`, `Layer picker open (${theme})`, { theme, provider: 'auto', picker: true });
 }
+// Tropospheric ducting overlay (opt-in, server needs `ducting`). On the
+// keyless OSM Gray raster basemap: neutral under a colour field, and the
+// shots work on a server without a Carto key.
+// Groups off unless map.tiles.providers.<group>.enabled is true.
+const OPT_IN_GROUPS = ['eox', 'osmfr', 'openfreemap', 'versatiles', 'hillshade'];
+const DUCT_BASE = { light: 'osmfr-gray', dark: 'osmfr-gray-dark' };
+for (const theme of ['light', 'dark']) {
+  add('ducting', `ducting-map-${theme}`, `Ducting overlay with legend (${theme})`, { theme, provider: DUCT_BASE[theme], overlays: ['ducting'], view: 'ducting', ducting: true });
+}
+add('ducting', 'ducting-zoom-light', 'Ducting overlay, zoomed on a LoRa duct (light)', { theme: 'light', provider: DUCT_BASE.light, overlays: ['ducting'], view: 'ducting-surface', ducting: true });
+add('ducting', 'ducting-popup-light', 'Ducting overlay, popup on a duct (light)', { theme: 'light', provider: DUCT_BASE.light, overlays: ['ducting'], view: 'ducting-surface', ducting: true, ductPopup: true });
+add('ducting', 'ducting-live-light', 'Live page with the ducting overlay (light)', { theme: 'light', route: '#/live', provider: DUCT_BASE.light, overlays: ['ducting'], view: 'ducting', ducting: true });
 add('custom', 'custom-map', 'Custom raster provider on the map', { theme: 'light', provider: 'custom-' + CUSTOM.id, custom: true });
 add('custom', 'custom-picker', 'Custom raster provider in the picker', { theme: 'light', provider: 'custom-' + CUSTOM.id, custom: true, picker: true });
 
@@ -106,9 +136,85 @@ async function resolveViews(baseUrl) {
   for (const k of Object.keys(VIEWS)) {
     const v = VIEWS[k];
     const inside = nodes.filter((n) => n.lat >= v.bbox.lat[0] && n.lat <= v.bbox.lat[1] && n.lon >= v.bbox.lon[0] && n.lon <= v.bbox.lon[1]);
-    if (!inside.length) throw new Error(`no nodes in the ${v.label} box; edit VIEWS in gallery.js`);
+    if (!inside.length) { out[k] = null; continue; }   // entries using it are skipped
     out[k] = { label: v.label, lat: +median(inside.map((n) => n.lat)).toFixed(4), lon: +median(inside.map((n) => n.lon)).toFixed(4), zoom: v.zoom, nodes: inside.length };
   }
+  return out;
+}
+
+/**
+ * The ducting views, from the cells of /api/ducting: { views, reason }.
+ * `reason` is why the ducting entries cannot be captured ('' = they can).
+ */
+async function resolveDuctingViews(baseUrl) {
+  const out = { views: {}, reason: '' };
+  let cfg;
+  try { cfg = await fetchJson(baseUrl + '/api/config/client'); } catch (err) { out.reason = 'cannot read /api/config/client: ' + err.message; return out; }
+  if (!cfg || !cfg.ducting) { out.reason = 'the server has no ducting block in /api/config/client (ducting.enabled is off)'; return out; }
+  let d = null;
+  for (let i = 0; i < 40; i++) {
+    try { d = await fetchJson(baseUrl + '/api/ducting'); } catch (_) { d = null; }
+    if (d && d.status === 'ok') break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!d || d.status !== 'ok' || !d.cells || !d.cells.length) { out.reason = `/api/ducting has no data (status ${d && d.status}${d && d.error ? ': ' + d.error : ''})`; return out; }
+  // The field's value per cell and hour: `n` (mean gradient, lowest 1.5 km),
+  // or `g` from a server that predates it. A cell counts as coloured from the
+  // first band (-44 N/km for n) and as strong from -54 (n) / -157 (g).
+  const hasN = d.cells.some((c) => Array.isArray(c.n));
+  const val = (c, i) => (hasN ? (c.n && c.n[i]) || 0 : c.g[i]);
+  const strong = (c, i) => c.c[i] >= 1 && val(c, i) !== 0 && val(c, i) <= (hasN ? -54 : -157);
+  const tinted = (c, i) => c.c[i] >= 1 && val(c, i) !== 0 && val(c, i) <= (hasN ? -44 : -79);
+  // The forecast hour with the most strong cells: the shots set the timeline
+  // there and say which time they show.
+  const idx = (() => {
+    let b = 0, most = -1;
+    d.times.forEach((t, i) => {
+      const n = d.cells.filter((c) => strong(c, i)).length;
+      if (n > most) { most = n; b = i; }
+    });
+    return b;
+  })();
+  // Centre on the densest cluster of coloured cells (tinted, see above) at the
+  // current hour: with nodes worldwide, the median of all cells is often in
+  // an empty area. Falls back to that median when nothing is coloured.
+  const step = Number(d.stepDeg) || 0.5;
+  const coloured = d.cells.filter((c) => tinted(c, idx));
+  let lat = median(d.cells.map((c) => c.lat)), lon = median(d.cells.map((c) => c.lon));
+  let best = null;
+  coloured.forEach((c) => {
+    const near = coloured.filter((o) => Math.abs(o.lat - c.lat) <= 4 * step && Math.abs(o.lon - c.lon) <= 4 * step);
+    if (!best || near.length > best.length) best = near;
+  });
+  if (best) {
+    lat = best.reduce((a, c) => a + c.lat, 0) / best.length;
+    lon = best.reduce((a, c) => a + c.lon, 0) / best.length;
+  }
+  // Frame the coverage when it is regional (else the cells within 12 degrees
+  // of that centre) so the field fills the whole 1280x800 map (Map Controls
+  // collapsed): the smallest zoom at which the view lies inside the forecast
+  // area, centred on it, like a regional forecast map.
+  const span = (k) => Math.max(...d.cells.map((c) => c[k])) - Math.min(...d.cells.map((c) => c[k]));
+  const region = (span('lon') <= 40 && span('lat') <= 30) ? d.cells
+    : d.cells.filter((c) => Math.abs(c.lat - lat) <= 12 && Math.abs(c.lon - lon) <= 12);
+  let zoom = DUCTING_VIEWS.ducting.zoom;
+  if (region.length > 1) {
+    const h = step / 2;
+    const s = Math.min(...region.map((c) => c.lat)) - h, n = Math.max(...region.map((c) => c.lat)) + h;
+    const w = Math.min(...region.map((c) => c.lon)) - h, e = Math.max(...region.map((c) => c.lon)) + h;
+    const merc = (a) => Math.log(Math.tan(Math.PI / 4 + a * Math.PI / 360));
+    const fit = (px, frac) => Math.log2(px / (256 * frac));
+    zoom = Math.max(3, Math.min(8, Math.ceil(Math.max(fit(1280, (e - w) / 360), fit(748, (merc(n) - merc(s)) / (2 * Math.PI))))));
+    lat = Math.atan(Math.sinh((merc(n) + merc(s)) / 2)) * 180 / Math.PI;
+    lon = (w + e) / 2;
+  }
+  out.views.ducting = { label: DUCTING_VIEWS.ducting.label, lat: +lat.toFixed(4), lon: +lon.toFixed(4), zoom, nodes: best ? best.length : d.cells.length, ductIdx: idx };
+  // A duct that can carry LoRa (fmin <= 1000 MHz, so it has the dashed
+  // outline), surface-based when there is one, else any surface duct.
+  const lora = (c) => c.c[idx] >= 3 && c.f[idx] > 0 && c.f[idx] <= 1000;
+  const surf = d.cells.find((c) => c.c[idx] === 4 && lora(c)) || d.cells.find(lora) ||
+    d.cells.find((c) => c.c[idx] === 4) || d.cells.find((c) => c.c.indexOf(4) >= 0) || d.cells[0];
+  out.views['ducting-surface'] = { label: DUCTING_VIEWS['ducting-surface'].label, lat: surf.lat, lon: surf.lon, zoom: DUCTING_VIEWS['ducting-surface'].zoom, nodes: 1, ductIdx: idx };
   return out;
 }
 
@@ -175,6 +281,11 @@ async function openPicker(page) {
 async function capture(browser, e, views, outDir, base) {
   const rec = { id: e.id, file: null, thumb: null, title: e.title, category: e.category, theme: e.theme, provider: e.provider, overlays: e.overlays, route: e.route, view: null, status: 'ok', failures: [], tiles: null, vectorPath: null };
   const v = views[e.view];
+  if (!v) {
+    rec.status = 'skipped';
+    rec.failures.push(e.ducting ? `ducting entries skipped: ${views.__ductingReason || 'no view'}` : `no nodes in the '${e.view}' view box`);
+    return rec;
+  }
   rec.view = { name: v.label, lat: v.lat, lon: v.lon, zoom: v.zoom };
   // The open picker is taller than 800 px (its Overlays group is below the fold).
   const context = await browser.newContext({ viewport: e.picker ? { width: VIEWPORT.width, height: 1100 } : VIEWPORT, deviceScaleFactor: 1, serviceWorkers: 'block' });
@@ -186,10 +297,13 @@ async function capture(browser, e, views, outDir, base) {
     await MH.installCollectors(page);
     if (e.vector) await page.addInitScript(VECTOR_PROBE);
     await MH.installTileStub(page, { mode: 'live', baseUrl: base });
+    // The #2428 groups are opt-in: switch on the ones this shot shows.
+    const groups = [e.provider].concat(e.overlays || []).map((id) => String(id || '').split('-')[0]).filter((g) => OPT_IN_GROUPS.includes(g));
+    if (groups.length) e = Object.assign({}, e, { enable: (e.enable || []).concat(groups) });
     if (e.custom || e.enable) await installConfig(page, e);
     await MH.presetStorage(page, {
       theme: e.theme, provider: e.provider, overlays: e.overlays,
-      extra: { 'map-view': JSON.stringify({ lat: v.lat, lng: v.lon, zoom: v.zoom }), 'live-controls-expanded': 'true' },
+      extra: { 'map-view': JSON.stringify({ lat: v.lat, lng: v.lon, zoom: v.zoom }), 'live-map-view': JSON.stringify({ lat: v.lat, lng: v.lon, zoom: v.zoom }), 'live-controls-expanded': 'true' },
     });
     await page.goto(base + '/' + e.route, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForSelector('.leaflet-container', { timeout: 60000 });
@@ -201,10 +315,60 @@ async function capture(browser, e, views, outDir, base) {
       if (!ok) { rec.status = 'skipped'; rec.failures.push(`overlay '${o}' is not registered`); return rec; }
     }
     await MH.waitForMarkers(page, { timeout: 30000 });
+    if (e.ducting) {
+      const drawn = await page.waitForFunction(() => {
+        const maps = ((window.__mcHarness && window.__mcHarness.maps) || []).filter((m) => m && m._container && m._container.isConnected && m._loaded);
+        let n = 0; maps.forEach((m) => m.eachLayer((l) => { if (l._mcDuct) n += (l._cells || []).length; }));
+        return n > 0 && !!document.querySelector('.mc-duct-legend');
+      }, null, { timeout: 20000 }).then(() => true, () => false);
+      if (!drawn) rec.failures.push('ducting cells or legend not drawn');
+      // A forecast-map shot: Map Controls collapsed, timeline at the chosen hour.
+      await page.evaluate(() => {
+        const b = document.getElementById('mapControlsToggle');
+        if (b && b.getAttribute('aria-expanded') === 'true') b.click();
+      });
+      if (v.ductIdx != null) {
+        rec.ductTime = await page.evaluate((i) => {
+          // The timeline's keys: Home, then one step right per hour.
+          const s = document.querySelector('.mc-duct-timeline');
+          if (!s) return null;
+          const key = (k) => s.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+          key('Home');
+          for (let k = 0; k < i; k++) key('ArrowRight');
+          const l = document.querySelector('.mc-duct-time-label');
+          return l ? l.textContent.trim() : null;
+        }, v.ductIdx);
+      }
+      await page.waitForTimeout(400);
+    }
     if (e.vector) {
       await page.waitForFunction(() => { const p = window.__mcVector; return p && (p.glIdleMs != null || p.fallback); }, null, { timeout: 45000, polling: 100 }).catch(() => {});
     }
     const t = await settle(page, e.vector ? 0 : MIN_TILES);
+    if (e.ductPopup) {
+      const opened = await page.evaluate(() => {
+        const m = window.__mcHarness.maps.filter((x) => x._container && x._container.isConnected && x._loaded)[0];
+        const s = document.querySelector('.mc-duct-timeline');
+        const idx = s ? parseInt(s.getAttribute('aria-valuenow'), 10) || 0 : 0;
+        // The duct cell nearest the view centre (the view's own cell; the
+        // restored view need not be exactly on the cell centre), opened the
+        // way a map click opens it.
+        const c = m.getCenter();
+        let layer = null, hit = null, best = Infinity;
+        m.eachLayer((l) => { if (l._mcDuct) layer = l; });
+        if (!layer) return false;
+        (layer._cells || []).forEach((cell) => {
+          if (cell.c[idx] < 3) return;
+          const d = Math.pow(cell.lat - c.lat, 2) + Math.pow(cell.lon - c.lng, 2);
+          if (d < best) { best = d; hit = cell; }
+        });
+        if (!hit) return false;
+        layer.openCellPopup(L.latLng(hit.lat, hit.lon));
+        return !!document.querySelector('.leaflet-popup .mc-duct-popup');
+      });
+      if (!opened) rec.failures.push('no duct cell popup could be opened');
+      await page.waitForTimeout(300);
+    }
     if (e.picker) await openPicker(page);
     const probe = e.vector ? await page.evaluate(() => window.__mcVector) : null;
     const log = MH.getRequestLog(page);
@@ -216,7 +380,10 @@ async function capture(browser, e, views, outDir, base) {
     if (t.timedOut) rec.failures.push('tiles did not settle within 45 s');
     if (t.failed) rec.failures.push(`${t.failed} tile(s) failed to load`);
     if (bad.length) rec.failures.push(`${bad.length} tile request(s) with HTTP >= 400 (first: ${bad[0].status} ${MH.redactUrl(bad[0].url)})`);
-    if (log.failed.length) rec.failures.push(`${log.failed.length} request(s) failed (first: ${log.failed[0].error})`);
+    // The live page builds its map at a default view and then jumps to the saved
+    // one, so Chromium cancels the first view's tile requests: not a failure.
+    const failedReq = log.failed.filter((r) => !(e.route === '#/live' && /ERR_ABORTED/.test(r.error)));
+    if (failedReq.length) rec.failures.push(`${failedReq.length} request(s) failed (first: ${failedReq[0].error})`);
     if (e.vector && rec.vectorPath !== 'maplibre-gl') rec.failures.push(`vector path: ${rec.vectorPath}${probe && probe.fallbackReason ? ' (' + probe.fallbackReason + ')' : ''}`);
     if (!e.vector && log.maplibre.length) rec.failures.push('raster entry requested MapLibre');
     if (resolved && e.provider !== 'auto' && resolved !== e.provider) rec.failures.push(`resolved provider is '${resolved}', expected '${e.provider}'`);
@@ -274,7 +441,7 @@ function writeIndex(outDir, base, views, entries) {
   const fresh = new Map(entries.map((x) => [x.id, x]));
   const prev = new Map(old.map((x) => [x.id, x]));
   const merged = E.map((e) => fresh.get(e.id) || prev.get(e.id)).filter(Boolean);
-  fs.writeFileSync(file, JSON.stringify({ meta: { baseUrl: base, generatedAt: new Date().toISOString(), viewport: VIEWPORT, mode: 'live', views }, entries: merged }, null, 2));
+  fs.writeFileSync(file, JSON.stringify({ meta: { baseUrl: base, generatedAt: new Date().toISOString(), viewport: VIEWPORT, mode: 'live', views: Object.fromEntries(Object.entries(views).filter(([k]) => !k.startsWith('__'))) }, entries: merged }, null, 2));
 }
 
 async function main() {
@@ -284,6 +451,9 @@ async function main() {
   const outDir = path.resolve(a.out);
   fs.mkdirSync(path.join(outDir, 'thumbs'), { recursive: true });
   const views = await resolveViews(base);
+  const dv = await resolveDuctingViews(base);
+  Object.assign(views, dv.views);
+  if (dv.reason) views.__ductingReason = dv.reason;
   let list = E;
   if (a.only) { const want = new Set(a.only.split(',')); list = E.filter((e) => want.has(e.id)); if (!list.length) throw new Error('--only matches nothing'); }
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] });

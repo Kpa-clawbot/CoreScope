@@ -701,6 +701,9 @@
       if (cfg.map.tiles.darkUrl) window.TILE_DARK = cfg.map.tiles.darkUrl;
       if (cfg.map.tiles.lightUrl) window.TILE_LIGHT = cfg.map.tiles.lightUrl;
     }
+    // Tropospheric ducting map overlay: present only when the server enables
+    // it. Set before the registry rebuild below, which registers the overlay.
+    window.MC_DUCTING_CFG = (cfg.ducting && typeof cfg.ducting === 'object') ? cfg.ducting : null;
     // Rebuild the registry from the new config without notifying maps yet:
     // MC_tileUrlById below needs it (keyed Carto URLs), but maps must not
     // re-sync before the legacy override and keyed constants are set.

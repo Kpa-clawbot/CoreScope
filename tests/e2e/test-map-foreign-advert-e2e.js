@@ -56,6 +56,13 @@ async function toggle(page, id, checked) {
   }, { id, checked });
 }
 
+async function revisitMap(page, navigate) {
+  const oldMap = await page.locator('#leaflet-map').elementHandle();
+  await navigate();
+  await oldMap.waitForElementState('hidden');
+  await page.waitForSelector('#leaflet-map[data-loaded="true"]');
+}
+
 async function scenario(browser, width, theme) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme });
   const page = await context.newPage();
@@ -65,16 +72,19 @@ async function scenario(browser, width, theme) {
   const nodes = keys.map((public_key, i) => ({
     public_key, name: i ? 'Fixture ' + i : 'Flagged <b>fixture</b>', role: 'repeater',
     lat: i === 3 ? 0 : 51 + i * 0.0001, lon: i === 3 ? 0 : 5 + i * 0.0001,
-    last_seen: new Date().toISOString(), hash_size: 1,
+    last_seen: new Date().toISOString(), hash_size: 1, advert_count: i + 2,
     scope_config_state: 'full', multi_byte_status: 'confirmed',
     ...(i === 2 ? {} : { foreign: i !== 1 }),
   }));
+  const mapHash = '#/map?theme=' + theme;
+  const sharedHash = mapHash + '&foreign=true';
+  let testingFilter = true;
   let includeObserver = true;
   let socket;
   await page.routeWebSocket('**', ws => { socket = ws; });
   await page.addInitScript(() => {
     localStorage.setItem('meshcore-map-clustering', 'false');
-    localStorage.setItem('meshcore-map-estimated', 'false');
+    localStorage.setItem('meshcore-map-heatmap', 'true');
     window.addEventListener('theme-refresh', () => { window.fixtureThemeReady = true; });
   });
   // Map tiles are unrelated to the flag and must not require an external API key.
@@ -89,11 +99,18 @@ async function scenario(browser, width, theme) {
     // Let a WS advert exercise loadNodes immediately, without the normal list TTL.
     if (url.pathname === '/api/config/cache') return json({ nodeList: 0, observers: 0 });
     if (url.pathname === '/api/stats') return json({ totalPackets: 0, totalNodes: nodes.length, totalObservers: 1 });
-    if (url.pathname === '/api/observers') return json({ observers: includeObserver ? [{ id: keys[0], name: 'Fixture observer', lat: 51, lon: 5 }] : [] });
+    if (url.pathname === '/api/observers') {
+      const observers = includeObserver ? [{ id: keys[0], name: 'Fixture observer', lat: 51, lon: 5 }] : [];
+      if (testingFilter) observers.push({ id: 'observer-only', name: 'Observer only', lat: 51, lon: 5 });
+      return json({ observers });
+    }
+    if (url.pathname === '/api/nodes/reported') return json({ nodes: [{
+      pubkey: 'ee'.repeat(32), name: 'Reported only', estimate: { lat: 51, lon: 5, radius_m: 500 },
+    }] });
     if (url.pathname === '/api/config/map') return json({ center: [51, 5], zoom: 16 });
     return json({});
   });
-  await page.goto(BASE + '/#/map?theme=' + theme, { waitUntil: 'load' });
+  await page.goto(BASE + '/' + sharedHash, { waitUntil: 'load' });
   await page.waitForSelector('#leaflet-map[data-loaded="true"]');
   // Initial theme application rebuilds the markers after its debounce.
   await page.waitForFunction(() => window.fixtureThemeReady);
@@ -116,6 +133,76 @@ async function scenario(browser, width, theme) {
     await page.waitForFunction(expected => JSON.stringify(window.__mc_nodes) === expected, JSON.stringify(nodes));
     assert.equal(requests.filter(p => p === '/api/nodes').length, previous + 1, 'one bulk node fetch per live refresh');
   };
+
+  await step(width + 'px ' + theme + ': heat follows the historical filter on load, toggle and live refresh', async () => {
+    const heatPoints = () => page.evaluate(() => {
+      const layer = window._meshcoreHeatLayer;
+      return layer && window.__mc_map.hasLayer(layer) ? layer._latlngs : [];
+    });
+    const positioned = nodes.slice(0, 3).map(n => [n.lat, n.lon, n.advert_count]);
+    assert.deepEqual(await heatPoints(), [positioned[0]], 'saved heat on a shared link shows only positioned, flagged nodes');
+    await toggle(page, 'mcHeatmap', false);
+    assert.deepEqual(await heatPoints(), [], 'switching off heat removes the overlay');
+    await toggle(page, 'mcHeatmap', true);
+    assert.deepEqual(await heatPoints(), [positioned[0]], 'freshly enabled heat respects the flag');
+    nodes[0].foreign = false;
+    try {
+      await refresh();
+      assert.deepEqual(await heatPoints(), [], 'an empty live result clears previously visible heat');
+      assert.ok(await page.locator('#mcHeatmap').isChecked(), 'the heat preference survives an empty result');
+      await toggle(page, 'mcForeignOnly', false);
+      assert.deepEqual((await heatPoints()).filter(([lat, lon]) => lat || lon), positioned, 'clearing restores ordinary weighted points');
+      await toggle(page, 'mcForeignOnly', true);
+      assert.deepEqual(await heatPoints(), [], 'enabling the filter clears unflagged heat');
+    } finally {
+      nodes[0].foreign = true;
+      await refresh();
+    }
+    assert.deepEqual(await heatPoints(), [positioned[0]], 'a new match restores heat on live refresh');
+  });
+  await toggle(page, 'mcHeatmap', false);
+  await toggle(page, 'mcForeignOnly', true);
+
+  await step(width + 'px ' + theme + ': share, clear and revisit the historical advert filter', async () => {
+    const drawn = () => page.evaluate(ids => ids.filter(id => !!window.fixtureMarker(id)), [...keys, 'observer-only']);
+    assert.deepEqual(await drawn(), [keys[0]], 'the fresh shared link must draw only positioned nodes with a past foreign advert');
+    const filter = page.getByLabel('Only nodes with a past foreign advert', { exact: true });
+    const gear = page.getByRole('button', { name: 'Toggle map controls' });
+    if (await gear.getAttribute('aria-expanded') === 'false') await gear.click();
+    const section = page.getByRole('button', { name: /^Filters\b/i });
+    if (await section.getAttribute('aria-expanded') === 'false') await section.click();
+    assert.ok(await filter.isChecked());
+    const bulkReads = requests.filter(p => p === '/api/nodes').length;
+    await filter.uncheck();
+    assert.equal(new URL(page.url()).hash, mapHash, 'clearing the flag preserves the other shared parameters');
+    assert.deepEqual(await drawn(), [...keys.slice(0, 3), 'observer-only']);
+    await page.locator('.mc-est-marker').waitFor();
+    await filter.check();
+    assert.equal(new URL(page.url()).hash, sharedHash);
+    assert.deepEqual(await drawn(), [keys[0]]);
+    assert.equal(await page.locator('.mc-est-marker, .mc-est-area').count(), 0, 'repeaters without adverts cannot match the flag');
+    if (process.env.SCREENSHOT_DIR) {
+      fs.mkdirSync(process.env.SCREENSHOT_DIR, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.SCREENSHOT_DIR, 'map-foreign-filter-' + width + '-' + theme + '.png') });
+    }
+    await toggle(page, 'mcRole_repeater', false);
+    assert.deepEqual(await drawn(), [], 'a role-filtered repeater must not reappear as a plain observer');
+    await toggle(page, 'mcRole_repeater', true);
+    await toggle(page, 'mcClusters', true);
+    assert.deepEqual(await drawn(), [keys[0]], 'the cluster layer receives the same filtered markers');
+    await toggle(page, 'mcClusters', false);
+    assert.equal(requests.filter(p => p === '/api/nodes').length, bulkReads, 'checkbox changes use the loaded node list');
+    await revisitMap(page, () => page.goto(BASE + '/#/map'));
+    assert.deepEqual(await drawn(), [...keys.slice(0, 3), 'observer-only'], 'the ordinary map clears the shared filter');
+    assert.equal(await filter.isChecked(), false);
+    await revisitMap(page, () => page.goBack());
+    assert.equal(new URL(page.url()).hash, sharedHash);
+    assert.ok(await filter.isChecked());
+    assert.deepEqual(await drawn(), [keys[0]], 'Back restores the shared filter');
+  });
+  testingFilter = false;
+  await toggle(page, 'mcEstimated', false);
+  await revisitMap(page, () => page.goto(BASE + '/' + mapHash));
 
   for (const labels of [true, false]) {
     const label = width + 'px ' + theme + ' ' + (labels ? 'hash labels' : 'dots');
@@ -302,6 +389,53 @@ async function scenario(browser, width, theme) {
           await page.waitForFunction(() => window.fixtureRepositioned);
         }
       }
+    }
+    includeObserver = false;
+    await toggle(page, 'mcClusters', true);
+    const fixture = nodes[0];
+    nodes.splice(0, nodes.length, ...Array.from({ length: 220 }, (_, i) => ({
+      ...fixture, public_key: (i + 1).toString(16).padStart(64, '0'), role: 'companion',
+    })));
+    await page.evaluate(() => {
+      window.fixtureClusterGroup = () => Object.values(window.__mc_map._layers).find(l => l instanceof L.MarkerClusterGroup);
+      window.fixtureHoldClusterChunk = () => {
+        const group = window.fixtureClusterGroup(), add = group._addLayer;
+        group._addLayer = function (...args) {
+          group._addLayer = add;
+          // Exhaust the real plugin's time budget after its first marker.
+          // Hold its continuation so a filter change or WS reload can finish first.
+          const time = Date.prototype.getTime, schedule = window.setTimeout;
+          Date.prototype.getTime = function () { return time.call(this) + group.options.chunkInterval + 1; };
+          window.setTimeout = (fn, delay, ...args) => {
+            if (delay !== group.options.chunkDelay) return schedule(fn, delay, ...args);
+            Date.prototype.getTime = time;
+            window.setTimeout = schedule;
+            window.fixtureResumeChunk = fn;
+            return 0;
+          };
+          return add.apply(this, args);
+        };
+      };
+    });
+    for (const change of ['enable', 'live refresh', 'clear']) {
+      await step('an unfinished cluster batch cannot overwrite the historical filter on ' + change, async () => {
+        nodes.forEach((node, i) => { node.foreign = change === 'enable' ? i === 0 : i < nodes.length - 1; });
+        await page.evaluate(() => window.fixtureHoldClusterChunk());
+        await refresh();
+        assert.equal(await page.evaluate(() => window.fixtureClusterGroup().getLayers().length), 200, 'first chunk yielded');
+        if (change === 'live refresh') {
+          nodes.forEach((node, i) => { node.foreign = i === 0; });
+          await refresh();
+        } else await toggle(page, 'mcForeignOnly', change === 'enable');
+        const expected = (change === 'clear' ? nodes : nodes.slice(0, 1)).map(n => n.public_key);
+        await page.waitForFunction(n => window.fixtureClusterGroup().getLayers().length >= n, expected.length);
+        const actual = await page.evaluate(() => {
+          window.fixtureResumeChunk();
+          return window.fixtureClusterGroup().getLayers().map(m => m._nodeKey).sort();
+        });
+        assert.equal(actual.length, expected.length, 'superseded chunks must not add extra markers');
+        assert.deepEqual(actual, expected);
+      });
     }
   }
   await step(width + 'px ' + theme + ': no per-node requests or page errors', async () => {
