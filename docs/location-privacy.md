@@ -152,8 +152,10 @@ Does not protect against:
   `CORESCOPE_LOCATION_SECRET` is set, or when the raw file may turn location privacy on: a
   `locationPrivacy` block that does not read as off on its own (a quoted `"true"`, a second
   `enabled` or a second block saying `true`, or a block that is itself broken), or one the server
-  cannot find its way to because a broken string earlier in the file hides it. A file whose every
-  block reads as off (for example a copy of `config.example.json`, whose block is disabled, with a
+  cannot find its way to because a broken string earlier in the file hides it. Any other mention of
+  `locationPrivacy` refuses too, unless it is plain text inside a string value such as a comment:
+  a key that lost its colon or closing quote, or a misspelt key such as `locationPrivacyX`. A file
+  whose every block reads as off (for example a copy of `config.example.json`, whose block is disabled, with a
   typo elsewhere) starts as before, as does a file without the block, or a missing or unreadable
   file without the env secret. To get past a refusal, fix the file, or set
   `"enabled": false` in the block.

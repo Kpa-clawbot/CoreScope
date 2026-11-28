@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -9,8 +10,11 @@ import (
 	"hash"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf16"
 )
 
 // Location privacy ("fuzzy location"): when locationPrivacy.enabled is set,
@@ -484,23 +488,40 @@ func locationPrivacyFailClosed(loadErr error, cfgPath string, getenv func(string
 }
 
 // rawLocationPrivacyMayEnable reads a config file that json.Unmarshal
-// rejected and reports whether it may turn location privacy on. It walks the
-// file's string tokens (escapes included, so braces and quotes inside
-// strings are skipped). Every key that decodes to locationPrivacy, matched
-// case-insensitively as encoding/json does, has its value decoded on its own
-// through LocationPrivacyConfig.UnmarshalJSON, so duplicate keys, escapes and
-// a quoted "true" read exactly as a clean load would read them. Any block
-// that does not decode, or decodes as enabled, may enable.
+// rejected and reports whether it may turn location privacy on. A file with
+// a NUL byte (UTF-16, as PowerShell 5.1 writes by default) cannot be read
+// and may enable. Otherwise it walks the file's string tokens (escapes
+// included, so braces and quotes inside strings are skipped) and accounts
+// for every token that holds the name "locationprivacy" in any letter case,
+// written out or with JSON escapes (jsonUnescapeLower), or reports true:
+//
+//   - A token followed by ':' is a key. One that decodes to locationPrivacy,
+//     matched case-insensitively as encoding/json does, has its value decoded
+//     on its own through LocationPrivacyConfig.UnmarshalJSON, so duplicate
+//     keys, escapes and a quoted "true" read exactly as a clean load would
+//     read them. The block must be off and well-formed where it sits: a
+//     value that does not decode, decodes as enabled, or is not followed by
+//     ',' or '}' (a block closed too early leaves its fields outside it) may
+//     enable. Any other key holding the name (a misspelt block) may enable.
+//   - A token not followed by ':' that holds the name must be a string
+//     value: the byte before it is ':' or '[' and the byte after it is ',',
+//     '}' or ']' (JSON whitespace skipped). Anything else, such as a key
+//     that lost its colon or its closing quote, may enable.
 //
 // A syntax error can also hide a block from the walk: an unescaped quote
 // pairs the following strings up wrongly, an unterminated one ends the walk.
-// So every case-insensitive "locationprivacy" in the raw bytes must lie
-// inside a string token the walk read; one outside them may enable.
+// So every "locationprivacy" in the file must lie inside a token accounted
+// for above; one outside them may enable. Both counts are taken on the
+// unescaped text. The name holds no quote or backslash, so an occurrence
+// never spans a token boundary and the two counts stay comparable.
 func rawLocationPrivacyMayEnable(raw []byte) bool {
 	const name = "locationprivacy"
+	if bytes.IndexByte(raw, 0) >= 0 {
+		return true // valid JSON has no raw NUL
+	}
 	data := string(raw)
-	total := strings.Count(strings.ToLower(data), name)
-	seen := 0
+	total := strings.Count(jsonUnescapeLower(data), name)
+	accounted := 0
 	for i := 0; i < len(data); i++ {
 		if data[i] != '"' {
 			continue
@@ -510,18 +531,106 @@ func rawLocationPrivacyMayEnable(raw []byte) bool {
 			break // unterminated: the rest is unread
 		}
 		tok := data[i : end+1]
-		seen += strings.Count(strings.ToLower(tok), name)
-		var key string
-		if colon := skipJSONSpace(data, end+1); colon < len(data) && data[colon] == ':' &&
-			json.Unmarshal([]byte(tok), &key) == nil && strings.EqualFold(key, "locationPrivacy") {
-			var c LocationPrivacyConfig
-			if err := json.NewDecoder(strings.NewReader(data[colon+1:])).Decode(&c); err != nil || c.Enabled {
+		mentions := strings.Count(jsonUnescapeLower(tok), name)
+		next := skipJSONSpace(data, end+1)
+		if next < len(data) && data[next] == ':' {
+			var key string
+			if json.Unmarshal([]byte(tok), &key) == nil && strings.EqualFold(key, "locationPrivacy") {
+				var c LocationPrivacyConfig
+				dec := json.NewDecoder(strings.NewReader(data[next+1:]))
+				if err := dec.Decode(&c); err != nil || c.Enabled {
+					return true
+				}
+				after := skipJSONSpace(data, next+1+int(dec.InputOffset()))
+				if after >= len(data) || (data[after] != ',' && data[after] != '}') {
+					return true
+				}
+			} else if mentions > 0 {
+				return true
+			}
+		} else if mentions > 0 {
+			prev := i - 1
+			for prev >= 0 && (data[prev] == ' ' || data[prev] == '\t' || data[prev] == '\n' || data[prev] == '\r') {
+				prev--
+			}
+			if prev < 0 || (data[prev] != ':' && data[prev] != '[') ||
+				next >= len(data) || (data[next] != ',' && data[next] != '}' && data[next] != ']') {
 				return true
 			}
 		}
+		accounted += mentions
 		i = end
 	}
-	return seen != total
+	return accounted != total
+}
+
+// jsonUnescapeLower returns s lower-cased with its JSON escapes replaced by
+// the characters they stand for, wherever they are (s need not be a string
+// token, or valid). A lone surrogate \uXXXX and any backslash sequence that
+// is not a JSON escape are left as written.
+func jsonUnescapeLower(s string) string {
+	if strings.IndexByte(s, '\\') < 0 {
+		return strings.ToLower(s)
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		switch c := s[i+1]; c {
+		case '"', '\\', '/':
+			b.WriteByte(c)
+		case 'b':
+			b.WriteByte('\b')
+		case 'f':
+			b.WriteByte('\f')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		case 'u':
+			r, ok := jsonHex4(s, i+2)
+			if !ok {
+				b.WriteByte(s[i])
+				continue
+			}
+			if !utf16.IsSurrogate(r) {
+				b.WriteRune(r)
+				i += 5
+				continue
+			}
+			if i+7 < len(s) && s[i+6] == '\\' && s[i+7] == 'u' {
+				if r2, ok := jsonHex4(s, i+8); ok {
+					if dr := utf16.DecodeRune(r, r2); dr != unicode.ReplacementChar {
+						b.WriteRune(dr)
+						i += 11
+						continue
+					}
+				}
+			}
+			b.WriteString(s[i : i+6]) // lone surrogate
+			i += 5
+			continue
+		default:
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+	}
+	return strings.ToLower(b.String())
+}
+
+// jsonHex4 reads the four hex digits at s[i:i+4].
+func jsonHex4(s string, i int) (rune, bool) {
+	if i+4 > len(s) {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(s[i:i+4], 16, 16)
+	return rune(n), err == nil
 }
 
 // jsonStringEnd returns the index of the quote closing the JSON string that

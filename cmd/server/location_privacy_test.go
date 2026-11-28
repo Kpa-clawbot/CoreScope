@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf16"
 )
 
 const testLocSecret = "0123456789abcdef0123456789abcdef-test-only"
@@ -1201,6 +1202,46 @@ func TestLocationPrivacyFailClosed(t *testing.T) {
 	// A clean block is read exactly: braces in strings, duplicates resolved to false.
 	falseBraceComment := write("falsebrace.json", `{"locationPrivacy": {"_comment": "see {docs} \"quoted\"", "enabled": false}, "port": 3000,}`)
 	mentionOnly := write("mention.json", `{"_c": "set locationPrivacy to hide positions", "port": 3000,}`)
+	// #2458 review: a key that lost its colon or closing quote, or is
+	// followed by something else, is still the operator's block.
+	blockOn := `{"enabled":true,"secret":"` + testLocSecret + `"}}`
+	noColon := write("nocolon.json", `{"locationPrivacy" `+blockOn)
+	noClosingQuote := write("noclosingquote.json", `{"locationPrivacy: `+blockOn)
+	equalsSign := write("equals.json", `{"locationPrivacy" = `+blockOn)
+	commaAfterKey := write("commakey.json", `{"locationPrivacy", `+blockOn)
+	semicolon := write("semicolon.json", `{"locationPrivacy"; `+blockOn)
+	misspeltKey := write("misspelt.json", `{"locationPrivacyX": {"enabled": false}, "port": 3000,}`)
+	paddedKey := write("padded.json", `{"locationPrivacy ": {"enabled": false}, "port": 3000,}`)
+	valueThenBrace := write("valuebrace.json", `{"_c": "locationPrivacy" {"enabled": true}}`)
+	nameAtEnd := write("atend.json", `{"port": 3000, "_c": "locationPrivacy"`)
+	nameAfterComma := write("aftercomma.json", `{"port": 3000, "locationPrivacy"}`)
+	// A string value naming the feature is not a block.
+	commentValue := write("commentvalue.json", `{"_comment": "set locationPrivacy.enabled to true", "port": 3000,}`)
+	notesArray := write("notes.json", `{"_notes": ["locationPrivacy docs", "x"], "port": 3000,}`)
+	lastInArray := write("lastinarray.json", `{"_notes": ["locationPrivacy docs"], "_c": "LOCATIONPRIVACY"  ,}`)
+	falseWithComment := write("falsecomment.json", `{"locationPrivacy": {"_comment": "locationPrivacy is off", "enabled": false}, "port": 3000,}`)
+	// A UTF-16 file (PowerShell 5.1's default) has a NUL after every character.
+	utf16Body := []byte{0xFF, 0xFE}
+	for _, u := range utf16.Encode([]rune(`{"locationPrivacy": {"enabled": true}}`)) {
+		utf16Body = append(utf16Body, byte(u), byte(u>>8))
+	}
+	utf16LE := filepath.Join(dir, "utf16.json")
+	if err := os.WriteFile(utf16LE, utf16Body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// An escaped name is still the name when its separator is broken.
+	escNoColon := write("escnocolon.json", `{"location\u0050rivacy" {"enabled": true}}`)
+	escNoClosingQuote := write("escnoquote.json", `{"location\u0050rivacy: {"enabled": true}}`)
+	escEquals := write("escequals.json", `{"\u004cocationPrivac\u0079" = {"enabled": true}}`)
+	escStrayQuote := write("escstray.json", `{"a": "x", "b": "y, "location\u0050rivacy": {"enabled": true}}`)
+	escMisspeltKey := write("escmisspelt.json", `{"location\u0050rivacyX": {"enabled": false}, "port": 3000,}`)
+	// A block closed too early leaves its fields outside it.
+	closedEarly := write("closedearly.json", "{\"locationPrivacy\": {}\n  \"enabled\": true,\n  \"secret\": \"x\"\n}}")
+	closedEarlyFalse := write("closedearlyfalse.json", `{"locationPrivacy": {"enabled": false} "enabled": true}}`)
+	blockAtEnd := write("blockatend.json", `{"locationPrivacy": {"enabled": false}`)
+	// Escapes that do not spell the name change nothing.
+	escOther := write("escother.json", `{"_c": "C:\\u006cogs \u00e9 \ud83d\ude00 \ud800 \q", "locationPrivacy": {"enabled": false}, "port": 3000,}`)
+	escValue := write("escvalue.json", `{"_c": "see location\u0050rivacy", "port": 3000,}`)
 	missing := filepath.Join(dir, "missing.json")
 	parseErr := json.Unmarshal([]byte(`{"port": 3000,`), &Config{})
 	cases := []struct {
@@ -1227,6 +1268,31 @@ func TestLocationPrivacyFailClosed(t *testing.T) {
 		{"parse error, enabled false, unread tail without the name", parseErr, unterminatedNoMention, false, false},
 		{"parse error, enabled false, braces and quotes in a string", parseErr, falseBraceComment, false, false},
 		{"parse error, name only mentioned in a string", parseErr, mentionOnly, false, false},
+		{"parse error, key without a colon", parseErr, noColon, false, true},
+		{"parse error, key without a closing quote", parseErr, noClosingQuote, false, true},
+		{"parse error, key then =", parseErr, equalsSign, false, true},
+		{"parse error, key then comma", parseErr, commaAfterKey, false, true},
+		{"parse error, key then semicolon", parseErr, semicolon, false, true},
+		{"parse error, misspelt key holding the name, enabled false", parseErr, misspeltKey, false, true},
+		{"parse error, key with a trailing space, enabled false", parseErr, paddedKey, false, true},
+		{"parse error, value string then a brace", parseErr, valueThenBrace, false, true},
+		{"parse error, name-bearing string at end of input", parseErr, nameAtEnd, false, true},
+		{"parse error, name-bearing string after a comma", parseErr, nameAfterComma, false, true},
+		{"parse error, comment value names enabled, no block", parseErr, commentValue, false, false},
+		{"parse error, name in an array value", parseErr, notesArray, false, false},
+		{"parse error, name in a one-string array and a last value", parseErr, lastInArray, false, false},
+		{"parse error, enabled false, name in a string inside the block", parseErr, falseWithComment, false, false},
+		{"parse error, UTF-16 file", parseErr, utf16LE, false, true},
+		{"parse error, escaped key without a colon", parseErr, escNoColon, false, true},
+		{"parse error, escaped key without a closing quote", parseErr, escNoClosingQuote, false, true},
+		{"parse error, escaped key then =", parseErr, escEquals, false, true},
+		{"parse error, stray quote before an escaped key", parseErr, escStrayQuote, false, true},
+		{"parse error, escaped misspelt key, enabled false", parseErr, escMisspeltKey, false, true},
+		{"parse error, block closed before enabled true", parseErr, closedEarly, false, true},
+		{"parse error, enabled false, block closed before enabled true", parseErr, closedEarlyFalse, false, true},
+		{"parse error, enabled false, block ends the file", parseErr, blockAtEnd, false, true},
+		{"parse error, enabled false, other escapes in a string", parseErr, escOther, false, false},
+		{"parse error, escaped name only mentioned in a string", parseErr, escValue, false, false},
 		{"parse error, env set, enabled false", parseErr, enabledFalse, true, true},
 		{"parse error, env set, no block", parseErr, without, true, true},
 		{"parse error, env set, file missing", parseErr, missing, true, true},
