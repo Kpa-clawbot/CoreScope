@@ -88,6 +88,81 @@ t('pagerText', () => {
   assert.strictEqual(NR.pagerText(1, 0, 0), 'Showing 0 of 0');
 });
 
+// Search box limit: code points, the same count the API and the deep link use.
+const DISH = '\u{1F4E1}'; // 2 UTF-16 units, 1 character
+t('clampQuery keeps 64 code points that are 65 UTF-16 units', () => {
+  const s = 'a'.repeat(62) + DISH + 'Z';
+  assert.strictEqual(s.length, 65);
+  assert.strictEqual(NR.clampQuery(s), s);
+});
+t('clampQuery cuts 65 code points to 64', () => {
+  const s = 'a'.repeat(62) + DISH + 'Z';
+  assert.strictEqual(NR.clampQuery(s + '!'), s);
+  assert.strictEqual(NR.clampQuery('x'.repeat(65)), 'x'.repeat(64));
+});
+t('clampQuery never splits a surrogate pair at the boundary', () => {
+  const out = NR.clampQuery('a'.repeat(63) + DISH + DISH);
+  assert.strictEqual(out, 'a'.repeat(63) + DISH);
+  assert.ok(!/[\uD800-\uDBFF]$/.test(out), 'ends in a lone high surrogate');
+});
+t('clampQuery handles null/undefined and does not trim', () => {
+  assert.strictEqual(NR.clampQuery(null), '');
+  assert.strictEqual(NR.clampQuery(undefined), '');
+  assert.strictEqual(NR.clampQuery(' a '), ' a ');
+});
+
+// render() against a stub element: the markup it writes and the search box's input listener.
+function renderStub() {
+  const listeners = {};
+  const timers = [];
+  const calls = [];
+  const stub = id => ({
+    id: id, isConnected: true, dataset: {}, disabled: false, innerHTML: '', textContent: '',
+    addEventListener: (ev, fn) => { listeners[id + ':' + ev] = fn; },
+    querySelector: () => null, setAttribute: () => {},
+  });
+  const els = {};
+  const el = {
+    innerHTML: '',
+    querySelector: sel => els[sel] || (els[sel] = stub(sel)),
+    querySelectorAll: () => [],
+  };
+  const sb = load('neighbor-rank.js', {
+    location: { hash: '' },
+    api: url => { calls.push(url); return new Promise(() => {}); },
+    setTimeout: fn => { timers.push(fn); return timers.length; },
+    clearTimeout: () => {},
+  });
+  sb.window.NeighborRank.render(el);
+  return { el, calls, timers, input: listeners['#nrSearch:input'] };
+}
+t('search input has no native maxlength (it counts UTF-16 units)', () => {
+  const html = renderStub().el.innerHTML;
+  const input = /<input id="nrSearch"[^>]*>/.exec(html);
+  assert.ok(input, html);
+  assert.ok(!/maxlength/i.test(input[0]), input[0]);
+});
+t('input listener leaves 64 code points alone and searches for all of them', () => {
+  const r = renderStub();
+  const s = 'a'.repeat(62) + DISH + 'Z';
+  const target = { value: s, setSelectionRange: () => { throw new Error('caret moved'); } };
+  r.input({ target });
+  assert.strictEqual(target.value, s);
+  r.timers[r.timers.length - 1]();
+  assert.ok(r.calls[r.calls.length - 1].includes('q=' + encodeURIComponent(s)), r.calls.join(' '));
+});
+t('input listener cuts a 65th code point and puts the caret at the end', () => {
+  const r = renderStub();
+  const s = 'a'.repeat(63) + DISH;
+  let caret = null;
+  const target = { value: s + DISH, setSelectionRange: (a, b) => { caret = [a, b]; } };
+  r.input({ target });
+  assert.strictEqual(target.value, s);
+  assert.deepStrictEqual(caret, [s.length, s.length]);
+  r.timers[r.timers.length - 1]();
+  assert.ok(r.calls[r.calls.length - 1].includes('q=' + encodeURIComponent(s)), r.calls.join(' '));
+});
+
 // node-reach Rank card
 const reachSb = load('node-reach.js', { registerPage: function () {}, document: {}, location: { hash: '' } });
 const rv = reachSb.window.__meshcoreReachInternals.rankValueHtml;

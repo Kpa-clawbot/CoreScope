@@ -57,6 +57,26 @@ async function getJson(page, url) {
   check(roles.every(r => r.trim() === 'repeater'), 'role filter leaked other roles: ' + roles.join(','));
   await page.click('.nr-chip[data-role=""]');
 
+  // 4b. The search box counts characters like the API and the URL: 62 letters,
+  //     an emoji (2 UTF-16 units) and one more letter are 64, and all stay.
+  const hashQ = () => page.evaluate(() => new URLSearchParams(location.hash.split('?')[1] || '').get('q'));
+  const q64 = 'a'.repeat(62) + '\u{1F4E1}' + 'Z';
+  await page.fill('#nrSearch', q64);
+  check((await page.inputValue('#nrSearch')) === q64, 'search box dropped part of a 64-character search');
+  await page.waitForFunction(() => location.hash.includes('q='), null, { timeout: 5000 });
+  await page.waitForTimeout(500);
+  check((await hashQ()) === q64, 'hash q != the 64-character search: ' + (await hashQ()));
+  await page.focus('#nrSearch');
+  await page.keyboard.press('End');
+  await page.keyboard.type('!');
+  const cut = await page.inputValue('#nrSearch');
+  check(Array.from(cut).length === 64 && cut === q64, 'a 65th character was not cut: ' + cut);
+  await page.waitForTimeout(500);
+  check((await hashQ()) === q64, 'hash q changed after the 65th character: ' + (await hashQ()));
+  await page.fill('#nrSearch', '');
+  await page.waitForFunction(() => !location.hash.includes('q='), null, { timeout: 5000 });
+  await page.waitForTimeout(500);
+
   // 5. Paging (only if more than one page).
   if (api.total > 50) {
     await page.waitForFunction(() => !location.hash.includes('role='), null, { timeout: 5000 });

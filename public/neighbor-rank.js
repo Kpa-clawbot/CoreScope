@@ -17,10 +17,14 @@
     });
   }
 
+  // First MAX_Q code points, as the server counts them (no lone surrogate from a cut emoji).
+  function clampQuery(s) {
+    return Array.from(String(s == null ? '' : s)).slice(0, MAX_Q).join('');
+  }
+
   function normState(s) {
     s = s || {};
-    // Code points, as the server counts them (no lone surrogate from a cut emoji).
-    var q = Array.from(String(s.q == null ? '' : s.q).trim()).slice(0, MAX_Q).join('');
+    var q = clampQuery(String(s.q == null ? '' : s.q).trim());
     var role = ROLES.indexOf(s.role) >= 0 ? s.role : '';
     var page = parseInt(s.page, 10);
     if (!isFinite(page) || page < 1) page = 1;
@@ -109,7 +113,7 @@
       '<p class="nr-explain text-muted">Ranked by all-time neighbour count — a historical count, not a measure of radio quality or range.</p>' +
       '<div class="nr-controls">' +
       '<label class="nr-search-label" for="nrSearch">Search</label>' +
-      '<input id="nrSearch" class="nr-search" type="search" maxlength="' + MAX_Q + '" placeholder="Name or public key" autocomplete="off" value="' + esc(state.q) + '">' +
+      '<input id="nrSearch" class="nr-search" type="search" placeholder="Name or public key" autocomplete="off" value="' + esc(state.q) + '">' +
       '<div class="nr-chips" role="group" aria-label="Filter by role">' +
       [''].concat(ROLES).map(function (r) {
         return '<button type="button" class="nr-chip" data-role="' + r + '" aria-pressed="false">' + ROLE_LABELS[r] + '</button>';
@@ -213,6 +217,13 @@
 
     $('nrSearch').addEventListener('input', function (e) {
       var v = e.target.value;
+      // No native maxlength: it counts UTF-16 units and would drop the 64th
+      // character after an emoji. Cut to the limit the API and the URL use.
+      if (Array.from(v).length > MAX_Q) {
+        v = clampQuery(v);
+        e.target.value = v;
+        if (e.target.setSelectionRange) e.target.setSelectionRange(v.length, v.length);
+      }
       clearTimeout(timer);
       timer = setTimeout(function () { change({ q: v, page: 1, focus: '' }); }, 250);
     });
@@ -227,5 +238,5 @@
     load();
   }
 
-  window.NeighborRank = { render: render, buildQuery: buildQuery, parseHashState: parseHashState, hashUpdates: hashUpdates, rowHtml: rowHtml, pagerText: pagerText, PAGE_SIZE: PAGE_SIZE };
+  window.NeighborRank = { render: render, buildQuery: buildQuery, parseHashState: parseHashState, hashUpdates: hashUpdates, rowHtml: rowHtml, pagerText: pagerText, clampQuery: clampQuery, PAGE_SIZE: PAGE_SIZE };
 })();
